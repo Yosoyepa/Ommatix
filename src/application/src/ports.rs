@@ -117,6 +117,17 @@ pub trait AccessibilityProvider: Send {
     /// The elements whose boxes overlap `regions`. An empty result is valid (no
     /// foreground application, or nothing accessible there).
     fn snapshot(&mut self, regions: &[BBox]) -> Result<Vec<AccessibleElement>, PortError>;
+
+    /// Whether [`keyboard_focus`](Self::keyboard_focus) answers. A provider that is off
+    /// ([`NoAccessibility`]) says no, and `type` then relies on the actuator's own
+    /// window-level focus check alone (ADR-0018).
+    fn reads_keyboard_focus(&self) -> bool;
+
+    /// The element that has keyboard focus now, in the attested foreground application:
+    /// `None` when nothing has it, it is not on the captured monitor or on screen, or it
+    /// belongs to another application. A read, never an action: it does not move focus and
+    /// never reads the element's value (ADR-0017, ADR-0018).
+    fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError>;
 }
 
 /// No accessibility evidence: the default, the simulated desktops and the fixtures.
@@ -130,6 +141,14 @@ impl AccessibilityProvider for NoAccessibility {
 
     fn snapshot(&mut self, _: &[BBox]) -> Result<Vec<AccessibleElement>, PortError> {
         Ok(Vec::new())
+    }
+
+    fn reads_keyboard_focus(&self) -> bool {
+        false
+    }
+
+    fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError> {
+        Ok(None)
     }
 }
 
@@ -158,6 +177,39 @@ pub trait OsActuator: Send {
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError>;
+
+    /// Whether [`deliver_focus_click`](Self::deliver_focus_click) and
+    /// [`deliver_keys`](Self::deliver_keys) work. The engine delivers `type` in two phases
+    /// (ADR-0018) only with an actuator that does and an accessibility provider that
+    /// reads keyboard focus; otherwise `type` goes through [`deliver`](Self::deliver).
+    fn delivers_in_phases(&self) -> bool {
+        false
+    }
+
+    /// First phase of a `type` action: the pointer events that move to the target and
+    /// click it, and nothing else. Every check of [`deliver`](Self::deliver) before the
+    /// events (foreground application, integrity, held keys) applies. The receipt counts
+    /// those events only. Nothing is retried.
+    fn deliver_focus_click(
+        &mut self,
+        _action: &ValidatedAction,
+    ) -> Result<DeliveryReceipt, PortError> {
+        Err(PortError::new(
+            "actuator",
+            "this actuator does not deliver in phases",
+        ))
+    }
+
+    /// Second phase of a `type` action: its keys. The engine calls it only after the first
+    /// phase was delivered and keyboard focus on the target was confirmed; an actuator
+    /// refuses it without that preceding click, and re-checks that the attested
+    /// application is still in the foreground. The receipt counts the key events only.
+    fn deliver_keys(&mut self, _action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
+        Err(PortError::new(
+            "actuator",
+            "this actuator does not deliver in phases",
+        ))
+    }
 }
 
 /// The local policy, owned by the operator and outside the agent's reach (chapter 08).

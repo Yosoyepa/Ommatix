@@ -59,7 +59,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-01", "BDD-02", "BDD-03", "BDD-04", "BDD-05", "BDD-06", "BDD-07", "BDD-08", "BDD-09",
     "BDD-10", "BDD-11", "BDD-12", "BDD-13", "BDD-14", "BDD-15", "BDD-16", "BDD-17", "BDD-18",
     "BDD-19", "BDD-20", "BDD-21", "BDD-22", "BDD-23", "BDD-24", "BDD-25", "BDD-26", "BDD-27",
-    "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33",
+    "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35",
 ];
 
 #[derive(Debug, Default, World)]
@@ -801,6 +801,8 @@ struct Agent {
     policy: Arc<dyn PolicyStore>,
     /// The foreground the [`LiveDouble`] attests, when it is the actuator.
     foreground: Arc<Mutex<Foreground>>,
+    /// Keyboard focus and the phases of `type`, shared by the live and tree doubles.
+    typing: Arc<Mutex<Typing>>,
     /// The operator's stop file, in a directory of its own, when the scenario has one.
     stop_file: Option<PathBuf>,
     next_id: u64,
@@ -893,13 +895,35 @@ impl Default for Foreground {
     }
 }
 
+/// What the [`LiveDouble`] and the [`TreeDouble`] share about `type` in two phases
+/// (ADR-0018): the element that gets keyboard focus after the focusing click, and what
+/// happened, in order.
+#[derive(Debug, Default)]
+struct Typing {
+    /// The element that takes keyboard focus once the click is delivered, and after how
+    /// many reads of focus (`None`: it never does).
+    focus: Option<(AccessibleElement, Option<usize>)>,
+    clicked: bool,
+    reads: usize,
+    /// `click`, `focus` (one per read) and `keys`, in order.
+    log: Vec<&'static str>,
+}
+
+fn lock_typing(typing: &Mutex<Typing>) -> std::sync::MutexGuard<'_, Typing> {
+    typing.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// A test double of a live actuator (S3's `SendInput`) for the scenarios about real
 /// delivery: it is live, attests [`ALLOWED_APP`] in the foreground (unless a scenario
 /// hands the foreground to another application) and reports every event of a click
 /// (button down and up) as inserted, but it records what it is handed through the
 /// fixture desktop and sends nothing to the OS. It never changes the screen, so no action
 /// has a visible effect.
-struct LiveDouble(Box<dyn OsActuator>, Arc<Mutex<Foreground>>);
+struct LiveDouble(
+    Box<dyn OsActuator>,
+    Arc<Mutex<Foreground>>,
+    Arc<Mutex<Typing>>,
+);
 
 impl OsActuator for LiveDouble {
     fn name(&self) -> &'static str {
@@ -931,11 +955,50 @@ impl OsActuator for LiveDouble {
             inserted: 2,
         })
     }
+
+    fn delivers_in_phases(&self) -> bool {
+        true
+    }
+
+    fn deliver_focus_click(
+        &mut self,
+        action: &ValidatedAction,
+    ) -> Result<DeliveryReceipt, PortError> {
+        assert!(
+            matches!(action.kind(), ActionKind::Type { .. }),
+            "only type is delivered in phases"
+        );
+        // The fixture records the action once, for its click; the keys are logged apart.
+        self.0.deliver(action)?;
+        let mut typing = lock_typing(&self.2);
+        typing.clicked = true;
+        typing.log.push("click");
+        // A move, a press and a release.
+        Ok(DeliveryReceipt {
+            submitted: 3,
+            inserted: 3,
+        })
+    }
+
+    fn deliver_keys(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
+        assert!(
+            matches!(action.kind(), ActionKind::Type { .. }),
+            "only type has keys"
+        );
+        let mut typing = lock_typing(&self.2);
+        assert!(typing.clicked, "keys need the focusing click first");
+        typing.log.push("keys");
+        // "hola": a press and a release per character.
+        Ok(DeliveryReceipt {
+            submitted: 8,
+            inserted: 8,
+        })
+    }
 }
 
 /// A test double of the UI Automation provider (S4+, ADR-0017): the fixed tree of a window,
 /// filtered by the planned regions like the real one. It reads nothing from the OS.
-struct TreeDouble(Vec<AccessibleElement>);
+struct TreeDouble(Vec<AccessibleElement>, Arc<Mutex<Typing>>);
 
 impl AccessibilityProvider for TreeDouble {
     fn name(&self) -> &'static str {
@@ -949,6 +1012,25 @@ impl AccessibilityProvider for TreeDouble {
             .filter(|e| regions.iter().any(|r| r.overlaps(&e.bbox)))
             .cloned()
             .collect())
+    }
+
+    fn reads_keyboard_focus(&self) -> bool {
+        true
+    }
+
+    /// The configured element once the focusing click was delivered and the configured
+    /// number of reads has passed; nothing before, or ever when it never arrives.
+    fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError> {
+        let mut typing = lock_typing(&self.1);
+        typing.log.push("focus");
+        let read = typing.reads;
+        typing.reads += 1;
+        Ok(match &typing.focus {
+            Some((element, Some(after))) if typing.clicked && read >= *after => {
+                Some(element.clone())
+            }
+            _ => None,
+        })
     }
 }
 
@@ -997,8 +1079,9 @@ impl Agent {
         let desktop = FixtureDesktop::new(scene, clock.clone());
         let recorder: Box<dyn OsActuator> = Box::new(desktop.actuator());
         let foreground = Arc::new(Mutex::new(Foreground::default()));
+        let typing = Arc::new(Mutex::new(Typing::default()));
         let accessibility: Box<dyn AccessibilityProvider> = match tree {
-            Some(elements) => Box::new(TreeDouble(elements)),
+            Some(elements) => Box::new(TreeDouble(elements, typing.clone())),
             None => Box::new(NoAccessibility),
         };
         let engine = ThesisEngine::new(
@@ -1009,7 +1092,7 @@ impl Agent {
                 recognizer: Box::new(desktop.recognizer()),
                 accessibility,
                 actuator: if live {
-                    Box::new(LiveDouble(recorder, foreground.clone()))
+                    Box::new(LiveDouble(recorder, foreground.clone(), typing.clone()))
                 } else {
                     recorder
                 },
@@ -1023,6 +1106,7 @@ impl Agent {
             clock,
             policy,
             foreground,
+            typing,
             stop_file: None,
             next_id: 0,
             page: None,
@@ -1995,6 +2079,114 @@ fn role_and_label_come_from_accessibility(e: &mut Engine) {
         refused["structuredContent"]["error"]["code"],
         "NOT_ACTIONABLE"
     );
+    assert_eq!(agent.desktop.handed_actions().len(), 1);
+}
+
+// ---- 06_accion_segura.feature, type in two phases (ADR-0018) ----
+
+/// The text field of the window, as the accessibility tree reports it, also when it has
+/// keyboard focus.
+fn name_field() -> AccessibleElement {
+    AccessibleElement {
+        bbox: bx(110.0, 40.0, 360.0, 70.0),
+        role: Role::Input,
+        name: "Nombre".to_owned(),
+        enabled: true,
+        offscreen: false,
+        password: false,
+        patterns: AccessiblePatterns {
+            editable_value: true,
+            ..AccessiblePatterns::default()
+        },
+    }
+}
+
+impl Agent {
+    /// `type` into the target field with the focus arriving after `reads` reads of it, or
+    /// never (`None`); the delivery result stays in the last response.
+    fn type_with_focus_after(&mut self, reads: Option<usize>, request_id: &str) {
+        lock_typing(&self.typing).focus = Some((name_field(), reads));
+        let args = self.live_type_args(self.target(), request_id, "hola");
+        self.tool_result("execute_action", args);
+    }
+}
+
+#[given("un campo de texto accesible de una ventana permitida")]
+fn an_accessible_field_of_an_allowed_window(e: &mut Engine) {
+    let mut scene = FixtureScene::new(400, 160);
+    scene.add_word("Nombre", bx(20.0, 45.0, 90.0, 65.0));
+    scene.add_control(confirmed(Role::Input, bx(110.0, 40.0, 360.0, 70.0)));
+    let agent = e.agent.insert(Agent::live_accessible(
+        scene,
+        live_policy(),
+        vec![name_field()],
+    ));
+    agent.observe(json!({}));
+    let field = agent.only("input");
+    assert_eq!(field["label_source"], "accessibility", "{field}");
+    assert_eq!(field["actionability"], "confirmed", "{field}");
+    agent.target = Some(field);
+}
+
+#[when("el agente escribe y el foco del teclado llega al campo después del clic")]
+fn the_agent_types_and_focus_arrives_after_the_click(e: &mut Engine) {
+    // The application takes two reads of focus to handle the click: the first two find
+    // the focus nowhere, the third finds it on the field.
+    e.agent().type_with_focus_after(Some(2), "bdd34-type");
+}
+
+#[then("las teclas se envían después del clic y de confirmar el foco en ese campo")]
+fn the_keys_follow_the_click_and_the_confirmed_focus(e: &mut Engine) {
+    let agent = e.agent();
+    let outcome = agent.last_response()["result"]["structuredContent"].clone();
+    assert_eq!(outcome["status"], "input_delivered", "{outcome}");
+    assert_eq!(outcome["input_delivered"], true);
+    assert_eq!(outcome["verified"], false);
+    assert_eq!(
+        lock_typing(&agent.typing).log,
+        ["click", "focus", "focus", "focus", "keys"]
+    );
+    // The engine waited the two polls on its clock, nothing more.
+    assert_eq!(agent.clock.now(), std::time::Duration::from_millis(100));
+    assert_eq!(agent.desktop.handed_actions().len(), 1, "one click");
+    assert_eq!(agent.metric("delivered_actions"), 1);
+}
+
+#[when("el agente escribe y el foco del teclado no llega al campo antes del plazo")]
+fn the_agent_types_and_focus_never_arrives(e: &mut Engine) {
+    e.agent().type_with_focus_after(None, "bdd35-type");
+}
+
+#[then("no se envía ninguna tecla y se informa indeterminate con el clic entregado")]
+fn no_key_is_sent_and_the_click_is_reported(e: &mut Engine) {
+    let agent = e.agent();
+    let outcome = agent.last_response()["result"]["structuredContent"].clone();
+    assert_eq!(outcome["status"], "indeterminate", "{outcome}");
+    assert_eq!(outcome["error"]["code"], "INDETERMINATE_EFFECT");
+    assert_eq!(outcome["error"]["next_step"], "reconcile_effect");
+    assert_eq!(outcome["error"]["retryable"], false);
+    assert_eq!(outcome["input_delivered"], true, "the click was delivered");
+    assert_eq!(outcome["verified"], false);
+    // The click, then reads of focus until the verification window (500 ms, every 50 ms)
+    // ended; no key.
+    {
+        let typing = lock_typing(&agent.typing);
+        assert_eq!(typing.log.first(), Some(&"click"));
+        assert_eq!(typing.log.iter().filter(|e| **e == "focus").count(), 11);
+        assert!(!typing.log.contains(&"keys"), "{:?}", typing.log);
+    }
+    assert_eq!(agent.clock.now(), std::time::Duration::from_millis(500));
+    assert_eq!(agent.desktop.handed_actions().len(), 1, "one click");
+    assert_eq!(agent.metric("delivered_actions"), 1);
+    // Never retried: the snapshot is spent, so another try is refused at the gate.
+    let log = lock_typing(&agent.typing).log.len();
+    let args = agent.live_type_args(agent.target(), "bdd35-again", "hola");
+    let again = agent.tool_result("execute_action", args);
+    assert_eq!(
+        again["structuredContent"]["error"]["code"],
+        "STALE_SNAPSHOT"
+    );
+    assert_eq!(lock_typing(&agent.typing).log.len(), log);
     assert_eq!(agent.desktop.handed_actions().len(), 1);
 }
 

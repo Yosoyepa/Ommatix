@@ -5,7 +5,7 @@
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use ommatix_application::contract::ValidatedAction;
+use ommatix_application::contract::{ActionKind, ValidatedAction};
 use ommatix_application::{DeliveryReceipt, OsActuator, PortError};
 use ommatix_domain::DisplayMapping;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, POINT};
@@ -36,8 +36,8 @@ use windows::core::{PCWSTR, PWSTR};
 
 use super::{
     ADAPTER, Event, FocusFacts, HOSTED_CONTENT_CLASS, MUST_BE_UP, TopLevel, VirtualScreen, batch,
-    exe_name_utf16, first_held, focus_problem, integrity_allows, is_frame_host, normalise,
-    point_application, shown_application, split_keys,
+    exe_name_utf16, first_held, focus_problem, integrity_allows, is_frame_host, keys_problem,
+    normalise, point_application, shown_application, split_keys,
 };
 use crate::aim::frame_pixel;
 
@@ -402,12 +402,39 @@ fn to_input(event: Event) -> INPUT {
 /// A click or a scroll is one `SendInput` call; `type` is two, the click and the keys. The
 /// receipt's `submitted` is the batch length and `inserted` what `SendInput` returned (it
 /// stops at the first event it cannot insert). Nothing is retried.
+///
+/// With accessibility evidence the engine owns the pause between the two calls instead
+/// (ADR-0018): `deliver_focus_click` sends the pointer events and `deliver_keys` the keys,
+/// and the engine sends the second only once UI Automation reports keyboard focus on the
+/// target element. The keys phase still checks that the attested application is in the
+/// foreground and owns the focused window and that no modifier is held, and it refuses
+/// without the matching click.
 pub struct SendInputActuator {
     mapping: MappingSource,
     /// The integrity RID of this process.
     own_integrity: u32,
     /// The foreground process last attested to the engine; consumed by the next delivery.
     attested: Mutex<Option<u32>>,
+    /// The focusing click of a `type` whose keys are still to come.
+    pending: Mutex<Option<PendingKeys>>,
+}
+
+/// Where an action is aimed.
+struct Aim {
+    /// The virtual-desktop pixel.
+    desktop: (i32, i32),
+    /// Its normalised absolute coordinates.
+    at: (i32, i32),
+}
+
+/// What the keys phase needs from the focusing click that preceded it.
+struct PendingKeys {
+    /// The action whose click was delivered; the keys must belong to the same one.
+    action: ValidatedAction,
+    /// The foreground process the click was checked against.
+    foreground: u32,
+    /// The virtual-desktop pixel that was clicked.
+    desktop: (i32, i32),
 }
 
 impl std::fmt::Debug for SendInputActuator {
@@ -434,7 +461,22 @@ impl SendInputActuator {
             mapping: Box::new(mapping),
             own_integrity: own,
             attested: Mutex::new(None),
+            pending: Mutex::new(None),
         })
+    }
+
+    /// The virtual-desktop pixel of the action point and its normalised absolute
+    /// coordinates.
+    fn aim(&self, action: &ValidatedAction) -> Result<Aim, PortError> {
+        let mapping = (self.mapping)()?;
+        let pixel = frame_pixel(action.point())
+            .ok_or_else(|| refuse("the action point is not a frame pixel"))?;
+        let desktop = mapping.to_os(pixel);
+        let screen =
+            virtual_screen().ok_or_else(|| refuse("cannot read the virtual desktop size"))?;
+        let at = normalise(desktop, screen)
+            .ok_or_else(|| refuse("the action point is outside the virtual desktop"))?;
+        Ok(Aim { desktop, at })
     }
 
     /// Every check that must pass before the batch is sent; returns the foreground
@@ -530,14 +572,7 @@ impl OsActuator for SendInputActuator {
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
-        let mapping = (self.mapping)()?;
-        let pixel = frame_pixel(action.point())
-            .ok_or_else(|| refuse("the action point is not a frame pixel"))?;
-        let desktop = mapping.to_os(pixel);
-        let screen =
-            virtual_screen().ok_or_else(|| refuse("cannot read the virtual desktop's size"))?;
-        let at = normalise(desktop, screen)
-            .ok_or_else(|| refuse("the action point is outside the virtual desktop"))?;
+        let Aim { desktop, at } = self.aim(action)?;
         let foreground = self.preflight(desktop)?;
         let events = batch(action.kind(), at);
         let submitted = u32::try_from(events.len()).unwrap_or(u32::MAX);
@@ -548,6 +583,63 @@ impl OsActuator for SendInputActuator {
             Self::await_focus(foreground, desktop)?;
             inserted = inserted.saturating_add(send(keys));
         }
+        Ok(DeliveryReceipt {
+            submitted,
+            inserted,
+        })
+    }
+
+    fn delivers_in_phases(&self) -> bool {
+        true
+    }
+
+    fn deliver_focus_click(
+        &mut self,
+        action: &ValidatedAction,
+    ) -> Result<DeliveryReceipt, PortError> {
+        if !matches!(action.kind(), ActionKind::Type { .. }) {
+            return Err(refuse("only type is delivered in phases; nothing was sent"));
+        }
+        *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        let Aim { desktop, at } = self.aim(action)?;
+        let foreground = self.preflight(desktop)?;
+        let (pointer, keys) = split_keys(batch(action.kind(), at));
+        let submitted = u32::try_from(pointer.len()).unwrap_or(u32::MAX);
+        let inserted = send(pointer);
+        if inserted == submitted && !keys.is_empty() {
+            *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = Some(PendingKeys {
+                action: action.clone(),
+                foreground,
+                desktop,
+            });
+        }
+        Ok(DeliveryReceipt {
+            submitted,
+            inserted,
+        })
+    }
+
+    fn deliver_keys(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
+        let pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .filter(|pending| pending.action == *action)
+            .ok_or_else(|| {
+                refuse("no focusing click was delivered for this action; no key was sent")
+            })?;
+        if let Some(problem) = keys_problem(focus_facts(pending.foreground, pending.desktop)) {
+            return Err(refuse(format!("{problem}; the click was sent, no key was")));
+        }
+        if let Some(key) = held_key() {
+            return Err(refuse(format!(
+                "{key} is held down; the click was sent, no key was"
+            )));
+        }
+        let (_, keys) = split_keys(batch(action.kind(), (0, 0)));
+        let submitted = u32::try_from(keys.len()).unwrap_or(u32::MAX);
+        let inserted = send(keys);
         Ok(DeliveryReceipt {
             submitted,
             inserted,

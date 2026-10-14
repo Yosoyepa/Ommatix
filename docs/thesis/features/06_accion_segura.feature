@@ -38,3 +38,15 @@ Característica: Actuación y verificación honestas
     Dado una secuencia de prueba autorizada
     Cuando el operador activa la parada local
     Entonces no se envían nuevos eventos y se informa cualquier entrega ya realizada
+
+  @BDD-34 @RF-11 @SEC-05
+  Escenario: BDD-34 Teclas sólo con el foco confirmado
+    Dado un campo de texto accesible de una ventana permitida
+    Cuando el agente escribe y el foco del teclado llega al campo después del clic
+    Entonces las teclas se envían después del clic y de confirmar el foco en ese campo
+
+  @BDD-35 @RF-13 @SEC-05
+  Escenario: BDD-35 Foco no confirmado
+    Dado un campo de texto accesible de una ventana permitida
+    Cuando el agente escribe y el foco del teclado no llega al campo antes del plazo
+    Entonces no se envía ninguna tecla y se informa indeterminate con el clic entregado

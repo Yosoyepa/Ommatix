@@ -32,3 +32,5 @@ BDD-30,RF-14,IT-05,features/06_accion_segura.feature,Solicitud repetida,EJECUTAD
 BDD-31,RF-16,SEC-03,features/06_accion_segura.feature,Instrucción dentro de la pantalla,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-32,RF-16,SEC-02,features/06_accion_segura.feature,Parada del operador,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-33,RF-07,UT-44,features/02_fusion.feature,Evidencia de accesibilidad,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-34,RF-11,SEC-05,features/06_accion_segura.feature,Teclas sólo con el foco confirmado,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-35,RF-13,SEC-05,features/06_accion_segura.feature,Foco no confirmado,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE

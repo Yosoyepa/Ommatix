@@ -243,6 +243,12 @@ fn the_accessibility_stage_is_timed() {
             self.0.advance(Duration::from_millis(12));
             Ok(Vec::new())
         }
+        fn reads_keyboard_focus(&self) -> bool {
+            false
+        }
+        fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError> {
+            Ok(None)
+        }
     }
     let mut r = rig(form());
     r.engine.ports.accessibility = Box::new(Slow(r.clock.clone()));

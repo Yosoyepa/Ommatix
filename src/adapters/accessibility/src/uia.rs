@@ -21,6 +21,10 @@
 //!    the availability of the `Invoke`, `Toggle`, `ExpandCollapse`, `SelectionItem`,
 //!    `Value` (and whether it is read-only) and `Scroll` patterns. `Value.Value` is never
 //!    requested.
+//!
+//! `keyboard_focus` (ADR-0018) reads the same cached properties of the one element that has
+//! keyboard focus, when it belongs to the attested foreground application and lies on the
+//! captured monitor. It only asks the framework which element has focus: it never moves it.
 
 use std::fmt;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -42,12 +46,22 @@ use crate::{ADAPTER, Budget, HOSTED_WINDOW_CLASS, Spent, is_frame_host_window, r
 /// The live mapping from frame pixels to desktop coordinates (the capturer's).
 type MappingSource = Box<dyn Fn() -> Result<DisplayMapping, PortError> + Send + Sync>;
 
-struct Request {
-    mapping: DisplayMapping,
-    regions: Vec<BBox>,
+enum Request {
+    Snapshot {
+        mapping: DisplayMapping,
+        regions: Vec<BBox>,
+    },
+    Focus {
+        mapping: DisplayMapping,
+    },
 }
 
-type Reply = Result<Vec<AccessibleElement>, String>;
+enum Answer {
+    Elements(Vec<AccessibleElement>),
+    Focus(Option<AccessibleElement>),
+}
+
+type Reply = Result<Answer, String>;
 
 /// Reads the foreground application's UI Automation tree for the
 /// [`AccessibilityProvider`] port. Never sends input and never reads a value.
@@ -87,7 +101,12 @@ impl UiaProvider {
                     }
                 };
                 for request in inbox {
-                    let reply = Ok(reader.snapshot(&request.mapping, &request.regions));
+                    let reply = Ok(match request {
+                        Request::Snapshot { mapping, regions } => {
+                            Answer::Elements(reader.snapshot(&mapping, &regions))
+                        }
+                        Request::Focus { mapping } => Answer::Focus(reader.focused(&mapping)),
+                    });
                     if outbox.send(reply).is_err() {
                         return;
                     }
@@ -121,11 +140,33 @@ impl AccessibilityProvider for UiaProvider {
             return Ok(Vec::new());
         }
         let mapping = (self.mapping)()?;
+        match self.ask(Request::Snapshot {
+            mapping,
+            regions: regions.to_vec(),
+        })? {
+            Answer::Elements(elements) => Ok(elements),
+            Answer::Focus(_) => Err(PortError::new(ADAPTER, "unexpected reply")),
+        }
+    }
+
+    fn reads_keyboard_focus(&self) -> bool {
+        true
+    }
+
+    fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError> {
+        let mapping = (self.mapping)()?;
+        match self.ask(Request::Focus { mapping })? {
+            Answer::Focus(element) => Ok(element),
+            Answer::Elements(_) => Err(PortError::new(ADAPTER, "unexpected reply")),
+        }
+    }
+}
+
+impl UiaProvider {
+    /// Sends one request to the worker thread and waits for its answer.
+    fn ask(&mut self, request: Request) -> Result<Answer, PortError> {
         self.requests
-            .send(Request {
-                mapping,
-                regions: regions.to_vec(),
-            })
+            .send(request)
             .map_err(|_| PortError::new(ADAPTER, "the UI Automation thread ended"))?;
         self.replies
             .recv()
@@ -250,6 +291,12 @@ impl Reader {
     /// application.
     fn foreground_process(&self) -> Option<i32> {
         let focused = self.automation.get_focused_element().ok()?;
+        self.process_of_window_holding(focused)
+    }
+
+    /// The application whose top-level window contains `focused` (see
+    /// [`Self::foreground_process`]).
+    fn process_of_window_holding(&self, focused: UIElement) -> Option<i32> {
         let top = self
             .top_level(focused)?
             .build_updated_cache(&self.light)
@@ -294,6 +341,26 @@ impl Reader {
         self.foreground_process()
             .map(|pid| self.snapshot_of(pid, mapping, regions))
             .unwrap_or_default()
+    }
+
+    /// The element that has keyboard focus, when it belongs to the foreground application
+    /// (the one a snapshot reads), is on screen and lies on the captured monitor. The
+    /// element is read like any other, from cached properties, and its value never is.
+    fn focused(&self, mapping: &DisplayMapping) -> Option<AccessibleElement> {
+        let focused = self
+            .automation
+            .get_focused_element()
+            .ok()?
+            .build_updated_cache(&self.full)
+            .ok()?;
+        let pid = self.process_of_window_holding(focused.clone())?;
+        if focused.get_cached_process_id().ok() != Some(pid)
+            || focused.is_cached_offscreen().unwrap_or(true)
+        {
+            return None;
+        }
+        let bbox = frame_box(&focused, mapping).ok().flatten()?;
+        Self::element(&focused, bbox)
     }
 
     /// The elements of process `pid`'s visible windows inside `regions`, within the budget.
@@ -425,6 +492,31 @@ mod tests {
             elements.len(),
             t.elapsed(),
             counts(&elements)
+        );
+    }
+
+    /// Manual: reads which element has keyboard focus (ADR-0018) and prints its role, state
+    /// and size, never its name. Moves no focus and sends no input:
+    /// `cargo test -p ommatix-adapter-accessibility --features uia -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads the live desktop; run by hand"]
+    fn reads_the_element_with_keyboard_focus() {
+        let (mapping, _) = everything();
+        let source = move || Ok(mapping);
+        let mut provider = UiaProvider::new(source, Budget::default()).unwrap();
+        assert!(provider.reads_keyboard_focus());
+        let t = Instant::now();
+        let focused = provider.keyboard_focus().unwrap();
+        eprintln!(
+            "focus read in {:?}: {:?}",
+            t.elapsed(),
+            focused.map(|e| (
+                e.role,
+                e.enabled,
+                e.password,
+                e.patterns.editable_value,
+                e.bbox
+            ))
         );
     }
 

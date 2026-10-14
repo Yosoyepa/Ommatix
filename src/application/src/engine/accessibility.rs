@@ -13,6 +13,7 @@
 //! - **Names** are untrusted data: control characters are removed and whitespace is
 //!   collapsed; they label an element and nothing else.
 
+use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{AccessibleControl, Actionability, Affordance, Control, Role};
 
 use crate::ports::AccessibleElement;
@@ -71,10 +72,22 @@ pub(super) fn accessible_control(element: &AccessibleElement) -> Option<Accessib
     })
 }
 
+/// Whether `focused`, the element that has keyboard focus, is the element the target stands
+/// for (ADR-0018): an enabled, on-screen, non-password input with a writable value whose
+/// box is the target's, by the IoU that already decides that two boxes are the same
+/// control (`min_iou`, `FusionParams::accessibility_iou`). Focus in another element, in a
+/// password field or in a disabled one is not focus on the target.
+pub(super) fn focus_is_on(focused: &AccessibleElement, target: &BBox, min_iou: f64) -> bool {
+    accepted_role(focused) == Role::Input
+        && focused.patterns.editable_value
+        && focused.enabled
+        && !focused.offscreen
+        && !focused.password
+        && focused.bbox.iou(target) >= min_iou
+}
+
 #[cfg(test)]
 mod tests {
-    use ommatix_domain::bbox::BBox;
-
     use super::*;
     use crate::ports::AccessiblePatterns;
 
@@ -201,6 +214,58 @@ mod tests {
         assert_eq!(c.control.affordance.actionability, Actionability::Unknown);
         assert!(c.sensitive);
         assert_eq!(c.label, "Password");
+    }
+
+    fn field() -> AccessibleElement {
+        element(Role::Input, EDITABLE)
+    }
+
+    /// ADR-0018: only the target's own input counts as focus on the target.
+    #[test]
+    fn focus_is_on_the_target_only_for_its_own_enabled_writable_input() {
+        let target = field().bbox;
+        assert!(focus_is_on(&field(), &target, 0.5));
+        // The same control with a slightly different box (UIA and vision disagree a bit).
+        let shifted = AccessibleElement {
+            bbox: BBox::new(12.0, 11.0, 92.0, 41.0).unwrap(),
+            ..field()
+        };
+        assert!(focus_is_on(&shifted, &target, 0.5));
+    }
+
+    #[test]
+    fn focus_on_another_element_is_not_focus_on_the_target() {
+        let target = field().bbox;
+        let elsewhere = AccessibleElement {
+            bbox: BBox::new(200.0, 10.0, 280.0, 40.0).unwrap(),
+            ..field()
+        };
+        assert!(!focus_is_on(&elsewhere, &target, 0.5), "another box");
+        // A bigger container that merely contains the target is not the target.
+        let container = AccessibleElement {
+            bbox: BBox::new(0.0, 0.0, 400.0, 400.0).unwrap(),
+            ..field()
+        };
+        assert!(!focus_is_on(&container, &target, 0.5), "a container");
+        for other in [
+            AccessibleElement {
+                enabled: false,
+                ..field()
+            },
+            AccessibleElement {
+                offscreen: true,
+                ..field()
+            },
+            AccessibleElement {
+                password: true,
+                ..field()
+            },
+            element(Role::Button, INVOKE),
+            element(Role::Input, AccessiblePatterns::default()),
+            element(Role::TextNode, EDITABLE),
+        ] {
+            assert!(!focus_is_on(&other, &target, 0.5), "{other:?}");
+        }
     }
 
     #[test]

@@ -72,6 +72,20 @@ struct World {
     accessible: Vec<AccessibleElement>,
     access_calls: Vec<Vec<BBox>>,
     fail_access: bool,
+    /// The accessibility provider reads keyboard focus (UI Automation on, ADR-0018).
+    reads_focus: bool,
+    /// The element with keyboard focus once `focus_script` is used up.
+    focused: Option<AccessibleElement>,
+    /// Answers to the next keyboard-focus reads: focus that arrives after the click.
+    focus_script: VecDeque<Option<AccessibleElement>>,
+    fail_focus: bool,
+    /// The actuator delivers `type` in two phases.
+    phased: bool,
+    /// The focusing click repaints the screen (focus ring, caret), as a real UI does.
+    react_to_click: bool,
+    fail_keys: bool,
+    clicks: Vec<ValidatedAction>,
+    keys: Vec<ValidatedAction>,
 }
 
 impl Default for World {
@@ -101,6 +115,28 @@ impl Default for World {
             accessible: Vec::new(),
             access_calls: Vec::new(),
             fail_access: false,
+            reads_focus: false,
+            focused: None,
+            focus_script: VecDeque::new(),
+            fail_focus: false,
+            phased: false,
+            react_to_click: false,
+            fail_keys: false,
+            clicks: Vec::new(),
+            keys: Vec::new(),
+        }
+    }
+}
+
+impl World {
+    /// A UI that reacts to input paints a mark, at once or after a few captures.
+    fn repaint_after_input(&mut self) {
+        if self.react_to_input {
+            if self.redraw_after_captures == 0 {
+                self.reactions = self.reactions.wrapping_add(1);
+            } else {
+                self.pending_redraw = Some(self.redraw_after_captures);
+            }
         }
     }
 }
@@ -243,6 +279,22 @@ impl AccessibilityProvider for Access {
             .cloned()
             .collect())
     }
+
+    fn reads_keyboard_focus(&self) -> bool {
+        lock(&self.0).reads_focus
+    }
+
+    fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError> {
+        let mut w = lock(&self.0);
+        w.events.push("focus");
+        if w.fail_focus {
+            return Err(PortError::new("test-accessibility", "focus unavailable"));
+        }
+        Ok(match w.focus_script.pop_front() {
+            Some(answer) => answer,
+            None => w.focused.clone(),
+        })
+    }
 }
 
 struct Actuator(Shared);
@@ -269,13 +321,37 @@ impl OsActuator for Actuator {
         let mut w = lock(&self.0);
         w.events.push("deliver");
         w.delivered.push(action.clone());
-        if w.react_to_input {
-            if w.redraw_after_captures == 0 {
-                w.reactions = w.reactions.wrapping_add(1);
-            } else {
-                w.pending_redraw = Some(w.redraw_after_captures);
-            }
+        w.repaint_after_input();
+        w.receipt
+            .map_err(|()| PortError::new("test-actuator", "injection failed"))
+    }
+
+    fn delivers_in_phases(&self) -> bool {
+        lock(&self.0).phased
+    }
+
+    fn deliver_focus_click(
+        &mut self,
+        action: &ValidatedAction,
+    ) -> Result<DeliveryReceipt, PortError> {
+        let mut w = lock(&self.0);
+        w.events.push("click");
+        w.clicks.push(action.clone());
+        if w.react_to_click {
+            w.reactions = w.reactions.wrapping_add(1);
         }
+        w.receipt
+            .map_err(|()| PortError::new("test-actuator", "injection failed"))
+    }
+
+    fn deliver_keys(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
+        let mut w = lock(&self.0);
+        w.events.push("keys");
+        if w.fail_keys {
+            return Err(PortError::new("test-actuator", "injection failed"));
+        }
+        w.keys.push(action.clone());
+        w.repaint_after_input();
         w.receipt
             .map_err(|()| PortError::new("test-actuator", "injection failed"))
     }
@@ -2017,3 +2093,4 @@ mod icons {
 // ---- accessibility evidence (ADR-0017) ----
 
 mod accessibility;
+mod typing;

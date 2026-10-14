@@ -17,7 +17,10 @@
 //! foreground application's UI Automation tree on the monitor the capturer captures, so
 //! it needs a live source (`dxgi`, or `screen`) and a Windows build with the `uia`
 //! feature; with `images` it is refused (the tree would not match the frames) and the
-//! simulated desktop ignores it. Otherwise the engine gets no accessibility evidence.
+//! simulated desktop ignores it. Otherwise the engine gets no accessibility evidence. It also
+//! reads which element has keyboard focus, so with `--input sendinput` the engine delivers
+//! `type` in two phases and sends the keys only once the target field has focus (ADR-0018);
+//! without it `type` keeps the actuator's window-level focus check.
 //!
 //! Live input needs all of: `--input native` with `--source screen` (or `[engine] mode =
 //! "native"`) and the `native-input` build, or `--input sendinput` with `--source dxgi`
