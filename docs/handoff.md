@@ -58,6 +58,8 @@ La quinta ronda (1.0.21) no puntúa ninguna corrida. E2E-02 no se ejecutó: el c
 
 Después de la quinta ronda (1.0.23) se corrigió el cliente sin ejecución en vivo (SHA-256 `6dad0dc3…8e2a77`): ancla el cierre del menú, registra por qué un paso no halla objetivo y diagnostica, de sólo lectura, el menú «Editar». Decisiones del responsable del 2026-10-14: (a) las corridas de S4 usan desde ahora el manifiesto float16 de RNF-05 (`model_manifest.rnf05.json`, S0 §10); (b) no se cambia la enumeración de ventanas de ADR-0017 para llegar a la meta de dos regiones, así que RNF-05 sigue sin cumplirse por unos 3 ms con dos regiones; (c) el responsable estará presente para un clic de diagnóstico de sólo lectura sobre «Editar» (hallazgo 1) después de fusionar el PR: se usa la invocación de [`S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) con `--max-live 2` (nunca 1, que crearía `stop.flag`); ningún agente lo ejecuta. Sigue abierto el conflicto del protocolo sobre `stop.flag` (dos opciones en la revisión de la quinta ronda).
 
+La sexta ronda (1.0.24) ejecuta una corrida de diagnóstico de sólo lectura sobre «Editar» (dos solicitudes reales, cuaderno 399 → 401, no puntuada; SHA-256 del binario `11a3d792…aca9da`). El registro refuta que el identificador de «Editar» cambie al expandirse y no respalda que el clic llegara a otro control: la consulta de UI Automation por posición no devuelve «Editar» ni antes ni después del clic, así que el anclaje por posición no puede confirmarlo en este Bloc de notas. E2E-02 y E2E-03 siguen sin ejecutar y el archivo de parada no existe. Decide el responsable si el propio elemento puede dar fe del clic (ver [`S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md), «Sexta ronda»).
+
 ## Cómo está el código
 
 - **`ommatix-domain`**, el núcleo de la tesis, sin I/O:
@@ -221,7 +223,7 @@ Después de la quinta ronda (1.0.23) se corrigió el cliente sin ejecución en v
    - Protocolo de S4: el conflicto entre crear `stop.flag` tras tres corridas fallidas y dejar
      correr la serie siguiente cuando una se abortó por una causa propia (dos opciones en la
      [revisión de la quinta ronda](reviews/2026-10-14-s4-fifth-round.md)), y el clic de
-     diagnóstico sobre «Editar» con el responsable presente (hallazgo 1).
+     diagnóstico sobre «Editar» (hallazgo 1): hecho en la sexta ronda (1.0.24); queda decidir si el propio elemento puede dar fe del clic.
    - OCR: `Windows.Media.Ocr` (es-ES) funciona, pero no informa confianza y pierde signos como
      "¡"; el candidato PP-OCRv5 mobile (Apache-2.0, ONNX oficial) tampoco tiene "¡" en su
      diccionario.
