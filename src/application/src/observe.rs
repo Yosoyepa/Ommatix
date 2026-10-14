@@ -5,6 +5,9 @@ use ommatix_domain::SceneDelta;
 
 use crate::{AppError, Clock, PerceptionEngine};
 
+/// Longest accepted [`SettlePolicy::timeout`]: an observation always ends.
+pub const MAX_SETTLE_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// When the screen counts as settled after an action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SettlePolicy {
@@ -14,7 +17,8 @@ pub struct SettlePolicy {
     pub stable_frames: u32,
     /// Keep watching at least this long: applications take a moment to react to input.
     pub min_wait: Duration,
-    /// Stop watching after this long, settled or not. Not shorter than `min_wait`.
+    /// Stop watching after this long, settled or not. Not shorter than `min_wait`, not
+    /// longer than [`MAX_SETTLE_TIMEOUT`].
     pub timeout: Duration,
 }
 
@@ -46,6 +50,11 @@ impl SettlePolicy {
                 "min_wait must not exceed timeout",
             ));
         }
+        if self.timeout > MAX_SETTLE_TIMEOUT {
+            return Err(AppError::InvalidSettlePolicy(
+                "timeout must not exceed 60 s",
+            ));
+        }
         Ok(())
     }
 }
@@ -68,6 +77,17 @@ pub struct Observation {
     /// Net scene change over the whole observation.
     pub delta: SceneDelta,
     pub element_count: usize,
+}
+
+/// Observing stopped on an error. What was seen before it is kept: those frames are
+/// already part of the scene, so their changes would otherwise never be reported.
+#[derive(Debug, thiserror::Error)]
+#[error("watching the screen failed after {} frame(s)", .partial.frames)]
+pub struct ObserveError {
+    /// What was observed before the error (`frames` may be 0). Boxed to keep the
+    /// `Result` small on the happy path.
+    pub partial: Box<Observation>,
+    pub source: AppError,
 }
 
 /// Watches the screen after an action until it settles (see [`SettlePolicy`]), so the
@@ -98,18 +118,23 @@ impl Observer {
     /// Perceives until `stable_frames` consecutive frames show no change and `min_wait`
     /// has elapsed, or until `timeout`, or until the source runs out.
     ///
-    /// Fails with [`AppError::SourceExhausted`] if not even one frame could be observed.
-    /// If a tick fails, the error is returned; the scene keeps what was perceived before.
-    pub fn observe(&self, engine: &mut PerceptionEngine) -> Result<Observation, AppError> {
+    /// Fails if a tick fails, or with [`AppError::SourceExhausted`] if not even one frame
+    /// could be observed. The error carries what was observed before it.
+    pub fn observe(&self, engine: &mut PerceptionEngine) -> Result<Observation, ObserveError> {
         let start = self.clock.now();
         let mut seen = Observation::default();
         let mut stable = 0;
         loop {
-            let Some(report) = engine.tick()? else {
-                if seen.frames == 0 {
-                    return Err(AppError::SourceExhausted);
+            let report = match engine.tick() {
+                Ok(Some(report)) => report,
+                Ok(None) if seen.frames > 0 => return Ok(seen),
+                result => {
+                    seen.elapsed = self.clock.now().saturating_sub(start);
+                    return Err(ObserveError {
+                        partial: Box::new(seen),
+                        source: result.err().unwrap_or(AppError::SourceExhausted),
+                    });
                 }
-                return Ok(seen);
             };
             stable = if report.dirty_cells == 0 {
                 stable + 1
@@ -257,10 +282,44 @@ mod tests {
         let seen = observer.observe(&mut engine).unwrap();
         assert_eq!(seen.frames, 2);
         assert!(!seen.settled);
-        assert!(matches!(
-            observer.observe(&mut engine),
-            Err(AppError::SourceExhausted)
-        ));
+        let err = observer.observe(&mut engine).unwrap_err();
+        assert!(matches!(err.source, AppError::SourceExhausted));
+        assert_eq!(err.partial.frames, 0);
+    }
+
+    /// Verification N6: frames observed before a failing tick are part of the scene, so
+    /// their changes travel with the error instead of being lost.
+    #[test]
+    fn a_failing_tick_keeps_what_was_already_seen() {
+        struct Breaks(VecDeque<Frame>);
+        impl FrameSource for Breaks {
+            fn name(&self) -> &'static str {
+                "breaks"
+            }
+            fn next_frame(&mut self) -> Result<Option<Frame>, PortError> {
+                self.0
+                    .pop_front()
+                    .map(Some)
+                    .ok_or_else(|| PortError::new("breaks", "capture lost"))
+            }
+        }
+        let clock = Arc::new(ManualClock::new());
+        let config = PerceptionConfig {
+            cell_size: 16,
+            ..PerceptionConfig::default()
+        };
+        let frames = Breaks(vec![inked(&[]), inked(&[0])].into());
+        let mut engine =
+            PerceptionEngine::new(Box::new(frames), Box::new(InkBounds), clock.clone(), config)
+                .unwrap();
+        let observer = Observer::new(clock, SettlePolicy::default()).unwrap();
+        engine.tick().unwrap();
+
+        let err = observer.observe(&mut engine).unwrap_err();
+        assert!(matches!(err.source, AppError::Capture(_)));
+        assert_eq!(err.partial.frames, 1);
+        assert_eq!(err.partial.delta.added.len(), 1);
+        assert_eq!(engine.elements().len(), 1);
     }
 
     #[test]
@@ -277,6 +336,11 @@ mod tests {
             },
             SettlePolicy {
                 min_wait: Duration::from_secs(2),
+                ..SettlePolicy::default()
+            },
+            // Verification N9: a timeout that never comes.
+            SettlePolicy {
+                timeout: Duration::MAX,
                 ..SettlePolicy::default()
             },
         ] {

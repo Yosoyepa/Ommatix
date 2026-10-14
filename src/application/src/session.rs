@@ -1,8 +1,8 @@
 use ommatix_domain::{Key, MouseButton};
 
 use crate::{
-    ActionReceipt, ActuationError, ActuationService, AppError, ClickTarget, Observation, Observer,
-    PerceptionEngine, PerceptionReport,
+    ActionReceipt, ActuationError, ActuationService, AppError, ClickTarget, Observation,
+    ObserveError, Observer, PerceptionEngine, PerceptionReport,
 };
 
 /// Result of an action that was performed.
@@ -12,7 +12,7 @@ pub struct ActionOutcome {
     /// What happened on screen afterwards: `None` when no observation was requested. An
     /// observation can fail on its own (e.g. the capture broke); the action still
     /// happened and must not be retried as if it had not.
-    pub observation: Option<Result<Observation, AppError>>,
+    pub observation: Option<Result<Observation, ObserveError>>,
 }
 
 /// The use cases an agent drives, wired together: perceive, act, observe the effect.
@@ -161,7 +161,10 @@ mod tests {
         assert_eq!(performed.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert!(matches!(
             outcome.observation,
-            Some(Err(AppError::SourceExhausted))
+            Some(Err(ObserveError {
+                source: AppError::SourceExhausted,
+                ..
+            }))
         ));
         assert!(
             session

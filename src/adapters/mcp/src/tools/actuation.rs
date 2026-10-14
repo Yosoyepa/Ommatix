@@ -161,29 +161,30 @@ fn press_key(session: &mut AgentSession, args: &Value) -> ToolResult {
 }
 
 /// The action happened, so the call succeeds even if watching its effect failed: the
-/// agent must not retry an action that was performed.
+/// agent must not retry an action that was performed. What was seen before such a failure
+/// is still reported.
 fn respond(outcome: &ActionOutcome) -> ToolResult {
     let mut body = Map::new();
     body.insert(
         "performed".into(),
         to_value(ReceiptDto::from(&outcome.receipt))?,
     );
-    let mut meta = None;
-    match &outcome.observation {
-        None => {}
-        Some(Ok(observation)) => {
-            body.insert(
-                "observation".into(),
-                to_value(ObservationDto::from(observation))?,
-            );
-            meta = Some(elapsed_meta(observation.elapsed));
-        }
-        Some(Err(e)) => {
-            body.insert("observe_error".into(), error_chain(e).into());
-        }
+    let (observation, error) = match &outcome.observation {
+        None => return Ok(ToolOutput::new(Value::Object(body))),
+        Some(Ok(observation)) => (observation, None),
+        Some(Err(e)) => (e.partial.as_ref(), Some(error_chain(e))),
+    };
+    if observation.frames > 0 {
+        body.insert(
+            "observation".into(),
+            to_value(ObservationDto::from(observation))?,
+        );
+    }
+    if let Some(error) = error {
+        body.insert("observe_error".into(), error.into());
     }
     Ok(ToolOutput {
         structured: Value::Object(body),
-        meta,
+        meta: Some(elapsed_meta(observation.elapsed)),
     })
 }

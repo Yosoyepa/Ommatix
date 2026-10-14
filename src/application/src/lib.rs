@@ -25,7 +25,7 @@ pub use actuation::{
 };
 pub use clock::ManualClock;
 pub use error::{AppError, PortError, error_chain};
-pub use observe::{Observation, Observer, SettlePolicy};
+pub use observe::{MAX_SETTLE_TIMEOUT, Observation, ObserveError, Observer, SettlePolicy};
 pub use perception::{PerceptionConfig, PerceptionEngine, PerceptionReport, Timings};
 pub use ports::{Clock, ElementDetector, FrameSource, InputController};
 pub use screen_model::ScreenModel;

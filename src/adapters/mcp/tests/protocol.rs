@@ -10,8 +10,9 @@ use ommatix_adapter_sim::{SimulatedDesktop, Theme, layout, scripted_session};
 use ommatix_adapter_vision::FlatRegionDetector;
 use ommatix_application::{
     ActuationPolicy, ActuationService, AgentSession, FrameSource, InputController, ManualClock,
-    Observer, PerceptionConfig, PerceptionEngine, SettlePolicy,
+    Observer, PerceptionConfig, PerceptionEngine, PortError, SettlePolicy,
 };
+use ommatix_domain::Frame;
 use serde_json::{Value, json};
 
 fn server(source: Box<dyn FrameSource>, input: Box<dyn InputController>) -> McpServer {
@@ -221,6 +222,53 @@ fn a_performed_action_is_reported_even_if_watching_it_fails() {
             .contains("no more frames")
     );
     assert_eq!(log.snapshot().len(), 1, "the agent must not type it again");
+}
+
+/// A screen whose capture breaks after a number of frames.
+struct BreaksAfter {
+    inner: Box<dyn FrameSource>,
+    frames_left: usize,
+}
+
+impl FrameSource for BreaksAfter {
+    fn name(&self) -> &'static str {
+        "breaks-after"
+    }
+    fn next_frame(&mut self) -> Result<Option<Frame>, PortError> {
+        if self.frames_left == 0 {
+            return Err(PortError::new("breaks-after", "capture lost"));
+        }
+        self.frames_left -= 1;
+        self.inner.next_frame()
+    }
+}
+
+/// Verification N6: the dialog the click opened was seen before the capture broke; it is
+/// reported with the error instead of being lost (the next `perceive` sees no change).
+#[test]
+fn a_failure_while_watching_keeps_what_was_already_seen() {
+    let sim = SimulatedDesktop::new();
+    let source = BreaksAfter {
+        inner: Box::new(sim.screen()),
+        frames_left: 2,
+    };
+    let mut s = server(Box::new(source), Box::new(sim.input()));
+    call(&mut s, "perceive", &json!({}));
+
+    let clicked = call(&mut s, "click", &json!({ "x": 540, "y": 316 }));
+    assert!(clicked["performed"].is_object());
+    assert_eq!(clicked["observation"]["frames"], 1, "{clicked}");
+    assert_eq!(clicked["observation"]["settled"], false);
+    assert_eq!(
+        clicked["observation"]["added"].as_array().unwrap().len(),
+        2,
+        "dialog and OK"
+    );
+    let error = clicked["observe_error"].as_str().unwrap();
+    assert!(
+        error.contains("after 1 frame") && error.contains("capture lost"),
+        "{error}"
+    );
 }
 
 #[test]

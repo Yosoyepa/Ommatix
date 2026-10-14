@@ -10,7 +10,7 @@ use ommatix_adapter_sim::{SimulatedDesktop, Theme, scripted_session};
 use ommatix_adapter_vision::{FlatRegionConfig, FlatRegionDetector};
 use ommatix_application::{
     ActuationPolicy, ActuationService, AgentSession, Clock, FrameSource, InputController, Observer,
-    PerceptionConfig, PerceptionEngine, SettlePolicy,
+    PerceptionConfig, PerceptionEngine, PortError, SettlePolicy,
 };
 use ommatix_domain::DisplayMapping;
 
@@ -48,13 +48,17 @@ fn theme(kind: ThemeKind) -> Theme {
     }
 }
 
-/// The frame source, plus how its pixels map to OS input coordinates when it is a real
-/// screen (only then can native input be aimed).
+/// How a real screen's pixels map to OS input coordinates, or why native input cannot be
+/// aimed on this system.
+type ScreenMapping = std::result::Result<DisplayMapping, PortError>;
+
+/// The frame source, plus its [`ScreenMapping`] when it is a real screen (only then can
+/// native input be aimed).
 fn frame_source(
     args: &EngineArgs,
     theme: Theme,
     sim: Option<&SimulatedDesktop>,
-) -> Result<(Box<dyn FrameSource>, Option<DisplayMapping>)> {
+) -> Result<(Box<dyn FrameSource>, Option<ScreenMapping>)> {
     Ok(match args.source {
         SourceKind::Demo => {
             let s = ScriptedSource::new(scripted_session(theme));
@@ -81,7 +85,7 @@ fn frame_source(
 fn input_controller(
     kind: InputKind,
     sim: Option<&SimulatedDesktop>,
-    screen: Option<DisplayMapping>,
+    screen: Option<ScreenMapping>,
 ) -> Result<Box<dyn InputController>> {
     Ok(match (kind, sim) {
         (InputKind::Auto, Some(sim)) => Box::new(sim.input()),
@@ -92,21 +96,21 @@ fn input_controller(
             let mapping = screen.context(
                 "--input native requires --source screen: clicks must land on the screen \
                  the agent is looking at",
-            )?;
+            )??;
             native_input(mapping)?
         }
     })
 }
 
 #[cfg(feature = "screen")]
-fn screen_source() -> Result<(Box<dyn FrameSource>, DisplayMapping)> {
+fn screen_source() -> Result<(Box<dyn FrameSource>, ScreenMapping)> {
     let screen = ommatix_adapter_capture::ScreenSource::primary()?;
     let mapping = screen.display_mapping();
     Ok((Box::new(screen), mapping))
 }
 
 #[cfg(not(feature = "screen"))]
-fn screen_source() -> Result<(Box<dyn FrameSource>, DisplayMapping)> {
+fn screen_source() -> Result<(Box<dyn FrameSource>, ScreenMapping)> {
     anyhow::bail!("this build has no screen capture; rebuild with `--features screen`")
 }
 

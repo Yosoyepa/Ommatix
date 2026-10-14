@@ -45,8 +45,9 @@ impl DisplayMapping {
     /// OS input coordinates for a frame pixel, saturating at the `i32` range.
     pub fn to_os(&self, p: Point) -> (i32, i32) {
         let map = |v: u32, frame: u32, os: u32, origin: i32| -> i32 {
-            let scaled = i64::from(v) * i64::from(os) / i64::from(frame);
-            let value = i64::from(origin) + scaled;
+            // u32 · u32 fits in u64; the sum with any i32 origin fits in i128.
+            let scaled = u64::from(v) * u64::from(os) / u64::from(frame);
+            let value = i128::from(origin) + i128::from(scaled);
             i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX })
         };
         (
@@ -77,6 +78,15 @@ mod tests {
     fn secondary_monitor_left_of_primary_has_negative_origin() {
         let m = DisplayMapping::new((-1920, 0), (1920, 1080), (1920, 1080)).unwrap();
         assert_eq!(m.to_os(Point::new(10, 20)), (-1910, 20));
+    }
+
+    /// Verification #18: extreme values saturate instead of overflowing.
+    #[test]
+    fn extreme_coordinates_saturate() {
+        let huge = DisplayMapping::new((i32::MAX, i32::MIN), (1, 1), (u32::MAX, u32::MAX)).unwrap();
+        assert_eq!(huge.to_os(Point::new(u32::MAX, 0)), (i32::MAX, i32::MIN));
+        let shrink = DisplayMapping::new((0, 0), (u32::MAX, u32::MAX), (1, 1)).unwrap();
+        assert_eq!(shrink.to_os(Point::new(u32::MAX, u32::MAX)), (1, 1));
     }
 
     #[test]
