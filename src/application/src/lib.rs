@@ -13,6 +13,8 @@
 
 mod actuation;
 mod clock;
+pub mod contract;
+mod engine;
 mod error;
 mod observe;
 mod perception;
@@ -24,9 +26,13 @@ pub use actuation::{
     ActionReceipt, ActuationError, ActuationPolicy, ActuationService, ClickTarget,
 };
 pub use clock::ManualClock;
+pub use engine::{Engine, EngineConfig, Ports};
 pub use error::{AppError, PortError, error_chain};
 pub use observe::{MAX_SETTLE_TIMEOUT, Observation, ObserveError, Observer, SettlePolicy};
 pub use perception::{PerceptionConfig, PerceptionEngine, PerceptionReport, Timings};
-pub use ports::{Clock, ElementDetector, FrameSource, InputController};
+pub use ports::{
+    CapturedFrame, Clock, DeliveryReceipt, ElementDetector, FrameCapturer, FrameSource,
+    InputController, LocalPolicy, OsActuator, PolicyStore, TextRecognizer, VisionDetector,
+};
 pub use screen_model::ScreenModel;
 pub use session::{ActionOutcome, AgentSession};
