@@ -35,7 +35,7 @@ impl Default for FlatRegionConfig {
     }
 }
 
-/// Finds elements as flat-colour regions, the way GUIs are drawn (ADR-0010).
+/// Finds elements as flat-colour regions, the way GUIs are drawn (bootstrap ADR B0010).
 ///
 /// 1. **Segment**: grow 8-connected regions of pixels whose neighbours differ by at most
 ///    `tolerance` (union-find, near-linear in the area).

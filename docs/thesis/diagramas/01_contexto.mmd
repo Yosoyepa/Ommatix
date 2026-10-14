@@ -1,0 +1,7 @@
+flowchart LR
+  U[Operador local] -->|consentimiento y parada| P[Política local]
+  A[Agente / host MCP] -->|IDs y revisiones| M[Motor Ommatix]
+  M -->|snapshot minimizado| A
+  OS[Escritorio y aplicaciones] -->|pixels / contexto| M
+  M -->|eventos sólo autorizados| OS
+  P --> M

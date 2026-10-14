@@ -1,0 +1,18 @@
+digraph G { graph [rankdir=TB, bgcolor="transparent", pad="0.18", nodesep="0.30", ranksep="0.34", fontname="DejaVu Sans", fontsize=12];
+node [shape=box, style="rounded,filled", fillcolor="#EDF4F6", color="#528593", fontname="DejaVu Sans", fontsize=11, margin="0.15,0.10", penwidth=1.1];
+edge [color="#61788B", fontname="DejaVu Sans", fontsize=9, arrowsize=0.7, penwidth=1.0];
+ agent [label="Agente / host MCP
+Planifica con IDs y revisiones"];
+ motor [label="Ommatix
+Percepción • identidad • control", fillcolor="#D8E8EC",penwidth=1.6];
+ operator [label="Operador local
+Consentimiento y parada"];
+ policy [label="Política local
+Permisos fuera del control del agente"];
+ os [label="Escritorio y aplicaciones permitidas
+Contexto visual no confiable"];
+ agent -> motor [label="intención / referencias",dir=both];
+ operator -> policy; policy -> motor [label="autoriza o bloquea"];
+ motor -> os [label="sólo eventos autorizados",dir=both];
+ {rank=same; agent; operator;} {rank=same; motor; policy;}
+}

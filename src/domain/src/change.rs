@@ -26,7 +26,7 @@ impl PendingChange {
 }
 
 /// Owns the cell grid and the last committed frame's signature, and is the single place
-/// that decides what "changed" means (ADR-0005).
+/// that decides what "changed" means (bootstrap ADR B0005).
 #[derive(Debug, Clone)]
 pub struct ChangeTracker {
     grid: GridSpec,

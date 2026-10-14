@@ -1,0 +1,21 @@
+digraph G { graph [rankdir=TB, bgcolor="transparent", pad="0.18", nodesep="0.30", ranksep="0.34", fontname="DejaVu Sans", fontsize=12];
+node [shape=box, style="rounded,filled", fillcolor="#EDF4F6", color="#528593", fontname="DejaVu Sans", fontsize=11, margin="0.15,0.10", penwidth=1.1];
+edge [color="#61788B", fontname="DejaVu Sans", fontsize=9, arrowsize=0.7, penwidth=1.0];
+ obs [label="Observar y publicar snapshot"];
+ req [label="Petición con sesión, snapshot,
+target, revisión y request_id"];
+ gate [label="Validar política, vigencia y foco",shape=diamond,fillcolor="#D8E8EC"];
+ no [label="REJECTED
+Reobservar / revisar",fillcolor="#F6EBE2",color="#A87B53"];
+ sim [label="SIMULATED
+Sin inyectar entrada"];
+ yes [label="Registrar intención y entregar entrada"];
+ effect [label="Comprobar postcondición"];
+ done [label="EFFECT_OBSERVED
+Efecto declarado verificado"];
+ unknown [label="INDETERMINATE
+Sin retry ciego",fillcolor="#F6EBE2",color="#A87B53"];
+ obs->req->gate; gate->no[label="rechazo"];gate->sim[label="dry_run"];
+ gate->yes[label="autorizado"]; yes->effect;effect->done[label="verificable"];effect->unknown[label="sin certeza"];
+ {rank=same;no;sim;yes;} {rank=same;done;unknown;}
+}

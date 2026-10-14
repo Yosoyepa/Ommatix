@@ -1,0 +1,1016 @@
+{
+  "timestamp_utc": "2026-10-14T06:19:11.561345+00:00",
+  "python": "3.13.16",
+  "jsonschema_version": "4.26.0",
+  "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
+  "counts": {
+    "schemas": 7,
+    "payload_cases": 17,
+    "valid_examples": 9,
+    "invalid_examples": 8,
+    "jsonl_messages": 13,
+    "feature_files": 6,
+    "gherkin_scenarios": 32,
+    "requirements": 28,
+    "planned_tests": 76,
+    "references": 24,
+    "adrs": 14
+  },
+  "checks_run": 197,
+  "checks_failed": 0,
+  "success": true,
+  "checks": [
+    {
+      "check": "schema:contratos/esquemas/execute_action.input.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "schema:contratos/esquemas/execute_action.output.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "schema:contratos/esquemas/get_engine_metrics.input.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "schema:contratos/esquemas/get_engine_metrics.output.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "schema:contratos/esquemas/observe_screen.input.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "schema:contratos/esquemas/observe_screen.output.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "schema:contratos/esquemas/tool_error.output.schema.json",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "payload:contratos/ejemplos/observe_input.json",
+      "passed": true,
+      "detail": "válido"
+    },
+    {
+      "check": "payload:contratos/ejemplos/observe_output.json",
+      "passed": true,
+      "detail": "válido"
+    },
+    {
+      "check": "payload:contratos/ejemplos/click_input.json",
+      "passed": true,
+      "detail": "válido"
+    },
+    {
+      "check": "payload:contratos/ejemplos/type_input.json",
+      "passed": true,
+      "detail": "válido"
+    },
+    {
+      "check": "payload:contratos/ejemplos/scroll_input.json",
+      "passed": true,
+      "detail": "válido"
+    },
+    {
+      "check": "payload:contratos/ejemplos/simulated_output.json",
+      "passed": true,
+      "detail": "válido"
+    },
+    {
+      "check": "payload:contratos/ejemplos/stale_output.json",
+      "passed": true,
+      "detail": "válido"
+    },
+    {
+      "check": "payload:contratos/ejemplos/metrics_input.json",
+      "passed": true,
+      "detail": "válido"
+    },
+    {
+      "check": "payload:contratos/ejemplos/metrics_output.json",
+      "passed": true,
+      "detail": "válido"
+    },
+    {
+      "check": "payload:contratos/ejemplos_invalidos/click_con_coordenadas.json",
+      "passed": true,
+      "detail": "Additional properties are not allowed ('x', 'y' were unexpected)"
+    },
+    {
+      "check": "payload:contratos/ejemplos_invalidos/click_con_texto.json",
+      "passed": true,
+      "detail": "{'request_id': 'demo-click-001', 'session_id': 'demo-session', 'snapshot_id': 's17', 'geometry_epoch': 1, 'target_id': 'e7', 'expected_revision': 3, 'action': 'click', 'dry_run': True, 'text': 'No permitido en click'} should not be valid under {'required': ['text']}"
+    },
+    {
+      "check": "payload:contratos/ejemplos_invalidos/type_sin_texto.json",
+      "passed": true,
+      "detail": "'text' is a required property"
+    },
+    {
+      "check": "payload:contratos/ejemplos_invalidos/scroll_sin_direccion.json",
+      "passed": true,
+      "detail": "'direction' is a required property"
+    },
+    {
+      "check": "payload:contratos/ejemplos_invalidos/accion_shell.json",
+      "passed": true,
+      "detail": "'shell' is not one of ['click', 'type', 'scroll']"
+    },
+    {
+      "check": "payload:contratos/ejemplos_invalidos/revision_cero.json",
+      "passed": true,
+      "detail": "0 is less than the minimum of 1"
+    },
+    {
+      "check": "payload:contratos/ejemplos_invalidos/snapshot_sin_cursor.json",
+      "passed": true,
+      "detail": "'next_cursor' is a required property"
+    },
+    {
+      "check": "payload:contratos/ejemplos_invalidos/simulacion_con_efecto_real.json",
+      "passed": true,
+      "detail": "False was expected"
+    },
+    {
+      "check": "jsonl:mcp_legacy_solicitudes.jsonl:1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_legacy_solicitudes.jsonl:2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_legacy_solicitudes.jsonl:3",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_moderno_respuestas.jsonl:1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "result_type:1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "cache_metadata:1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_moderno_respuestas.jsonl:2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "result_type:2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "cache_metadata:2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_moderno_respuestas.jsonl:3",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "result_type:3",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "contenido_consistente:3",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_moderno_respuestas.jsonl:4",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "result_type:4",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "contenido_consistente:4",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_moderno_respuestas.jsonl:5",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "result_type:5",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "contenido_consistente:5",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_moderno_solicitudes.jsonl:1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "meta:1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "sin_initialize:1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_moderno_solicitudes.jsonl:2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "meta:2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "sin_initialize:2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_moderno_solicitudes.jsonl:3",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "meta:3",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "sin_initialize:3",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_moderno_solicitudes.jsonl:4",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "meta:4",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "sin_initialize:4",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "jsonl:mcp_moderno_solicitudes.jsonl:5",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "meta:5",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "sin_initialize:5",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "dialogo_moderno_ids_emparejados",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "argumentos_ejemplo_mcp:2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "argumentos_ejemplo_mcp:3",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "argumentos_ejemplo_mcp:4",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "csv_columnas_completas",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "requisitos_unicos",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "pruebas_planificadas_unicas",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "capitulos_encontrados",
+      "passed": true,
+      "detail": "13"
+    },
+    {
+      "check": "adrs_encontradas",
+      "passed": true,
+      "detail": "14"
+    },
+    {
+      "check": "referencias:00_AUDITORIA_TECNICA.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:01_TESIS_Y_MARCO_TEORICO.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:02_SDD_ARQUITECTURA_MVP.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:03_ESPECIFICACION_REQUISITOS.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:04_ALGORITMOS_CORE.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:05_TDD_PLAN_Y_MATRIZ.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:07_CONTRATOS_MCP_Y_ERRORES.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:08_SEGURIDAD_Y_PRIVACIDAD.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:09_EVALUACION_EXPERIMENTAL.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:10_RUNBOOK_Y_DEMO.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:11_REFERENCIAS_Y_PROVENIENCIA.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:12_ESTADO_DE_VALIDACION.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0001-rust-runtime-and-independent-oracles.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0002-mcp-stdio-with-explicit-profiles.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0003-conservative-spatial-fusion-with-ioc.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0004-masked-open-set-appearance-cache.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0005-persistent-tracking-instead-of-cell-hash.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0006-transactional-snapshots-and-commits.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0007-fail-closed-actuation-and-honest-simulation.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0008-one-real-platform-first.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0009-models-and-licences-decided-in-the-spike.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0010-performance-budgets-subject-to-measurement.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0011-modular-monolith-and-adaptive-incrementality.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0012-data-minimisation-and-evidence-traceability.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0013-bilingual-documentation.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0014-hexagonal-crate-layout.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "gherkin_cabecera:01_incrementalidad.feature",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-01",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-01",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-02",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-02",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-03",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-03",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-04",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-04",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-05",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-05",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-06",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-06",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_cabecera:02_fusion.feature",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-07",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-07",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-08",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-08",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-09",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-09",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-10",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-10",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-11",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-11",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-12",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-12",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_cabecera:03_identidad.feature",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-13",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-13",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-14",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-14",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-15",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-15",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-16",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-16",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-17",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-17",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_cabecera:04_iconos.feature",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-18",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-18",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-19",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-19",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-20",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-20",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-21",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-21",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_cabecera:05_mcp.feature",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-22",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-22",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-23",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-23",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-24",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-24",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-25",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-25",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-26",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-26",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_cabecera:06_accion_segura.feature",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-27",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-27",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-28",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-28",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-29",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-29",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-30",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-30",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-31",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-31",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-32",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-32",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "escenarios_matriz_completos",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-01",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-02",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-03",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-04",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-05",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-06",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-07",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-08",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-09",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-10",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-11",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-12",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-13",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-14",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-15",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-16",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-17",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-18",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-19",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-20",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-21",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-22",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-23",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-24",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-25",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-26",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-27",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-28",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-29",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-30",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-31",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-32",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "reporte_oraculo_aprobado",
+      "passed": true,
+      "detail": "Se lee el informe previo; para volver a ejecutar use referencia_ejecutable/run_tests.py"
+    }
+  ],
+  "not_run": [
+    "parser oficial Gherkin",
+    "step definitions BDD",
+    "conformidad MCP con un servidor",
+    "compilación Rust",
+    "benchmarks del producto"
+  ]
+}

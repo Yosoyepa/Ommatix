@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ommatix observe_screen.output v1.0",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "geometry_epoch": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "frame_seq": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "mode": {
+      "const": "full"
+    },
+    "age_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "degraded": {
+      "type": "boolean"
+    },
+    "elements": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "role": {
+            "enum": [
+              "button",
+              "input",
+              "checkbox",
+              "dropdown",
+              "icon_button",
+              "text_node",
+              "unknown"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "label_source": {
+            "enum": [
+              "ocr",
+              "curated_icon",
+              "model",
+              "accessibility",
+              "unknown"
+            ]
+          },
+          "actionability": {
+            "enum": [
+              "confirmed",
+              "unknown",
+              "not_actionable"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "visible": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "text_kind": {
+            "enum": [
+              "value",
+              "placeholder",
+              "unknown"
+            ]
+          },
+          "zone": {
+            "enum": [
+              "top_bar",
+              "left_sidebar",
+              "center_main",
+              "bottom_bar",
+              "unknown"
+            ]
+          }
+        },
+        "required": [
+          "target_id",
+          "revision",
+          "role",
+          "label",
+          "label_source",
+          "actionability",
+          "enabled",
+          "visible",
+          "zone"
+        ],
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "text"
+              ]
+            },
+            "then": {
+              "required": [
+                "text_kind"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "text_kind"
+              ]
+            },
+            "then": {
+              "required": [
+                "text"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "total_elements": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "next_cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  },
+  "required": [
+    "schema_version",
+    "session_id",
+    "snapshot_id",
+    "geometry_epoch",
+    "frame_seq",
+    "mode",
+    "age_ms",
+    "degraded",
+    "elements",
+    "total_elements",
+    "truncated"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "truncated": {
+            "const": true
+          }
+        },
+        "required": [
+          "truncated"
+        ]
+      },
+      "then": {
+        "required": [
+          "next_cursor"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "next_cursor"
+          ]
+        }
+      }
+    }
+  ]
+}

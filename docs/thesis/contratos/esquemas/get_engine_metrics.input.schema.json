@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ommatix get_engine_metrics.input v1.0",
+  "type": "object",
+  "properties": {},
+  "required": [],
+  "additionalProperties": false
+}

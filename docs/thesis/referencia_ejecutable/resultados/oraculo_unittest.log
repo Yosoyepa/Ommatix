@@ -1,0 +1,53 @@
+test_or01_ioc_small_text (test_core.CoreTests.test_or01_ioc_small_text) ... ok
+test_or02_reject_nan (test_core.CoreTests.test_or02_reject_nan) ... ok
+test_or03_reject_empty_rect (test_core.CoreTests.test_or03_reject_empty_rect) ... ok
+test_or04_first_frame_is_dirty (test_core.CoreTests.test_or04_first_frame_is_dirty) ... ok
+test_or05_identical_frames (test_core.CoreTests.test_or05_identical_frames) ... ok
+test_or06_single_pixel_odd_row (test_core.CoreTests.test_or06_single_pixel_odd_row) ... ok
+test_or07_odd_width_last_pixel (test_core.CoreTests.test_or07_odd_width_last_pixel) ... ok
+test_or08_alpha_ignored (test_core.CoreTests.test_or08_alpha_ignored) ... ok
+test_or09_stride_padding_ignored (test_core.CoreTests.test_or09_stride_padding_ignored) ... ok
+test_or10_stride_real_pixel (test_core.CoreTests.test_or10_stride_real_pixel) ... ok
+test_or11_invalid_buffer (test_core.CoreTests.test_or11_invalid_buffer) ... ok
+test_or12_epoch_change (test_core.CoreTests.test_or12_epoch_change) ... ok
+test_or13_invalid_tile_size (test_core.CoreTests.test_or13_invalid_tile_size) ... ok
+test_or14_halo_transitive (test_core.CoreTests.test_or14_halo_transitive) ... ok
+test_or15_halo_order_invariant (test_core.CoreTests.test_or15_halo_order_invariant) ... ok
+test_or16_halo_budget_fallback (test_core.CoreTests.test_or16_halo_budget_fallback) ... ok
+test_or17_merge_transitive (test_core.CoreTests.test_or17_merge_transitive) ... ok
+test_or18_stage_does_not_mutate (test_core.CoreTests.test_or18_stage_does_not_mutate) ... ok
+test_or19_failed_inference_keeps_dirty (test_core.CoreTests.test_or19_failed_inference_keeps_dirty) ... ok
+test_or20_stale_commit_rejected (test_core.CoreTests.test_or20_stale_commit_rejected) ... ok
+test_or21_reading_order (test_core.CoreTests.test_or21_reading_order) ... ok
+test_or22_reading_permutation_invariant (test_core.CoreTests.test_or22_reading_permutation_invariant) ... ok
+test_or23_specific_owner (test_core.CoreTests.test_or23_specific_owner) ... ok
+test_or24_owner_tie_abstains (test_core.CoreTests.test_or24_owner_tie_abstains) ... ok
+test_or25_unicode_and_word_boundary (test_core.CoreTests.test_or25_unicode_and_word_boundary) ... ok
+test_or26_corridor_excludes_endpoints (test_core.CoreTests.test_or26_corridor_excludes_endpoints) ... ok
+test_or27_external_label (test_core.CoreTests.test_or27_external_label) ... ok
+test_or28_external_tie_abstains (test_core.CoreTests.test_or28_external_tie_abstains) ... ok
+test_or29_legacy_theme_counterexample (test_core.CoreTests.test_or29_legacy_theme_counterexample) ... ok
+test_or30_masked_inversion (test_core.CoreTests.test_or30_masked_inversion) ... ok
+test_or31_flat_descriptor_rejected (test_core.CoreTests.test_or31_flat_descriptor_rejected) ... ok
+test_or32_bad_icon_shape (test_core.CoreTests.test_or32_bad_icon_shape) ... ok
+test_or33_low_support_rejected (test_core.CoreTests.test_or33_low_support_rejected) ... ok
+test_or34_grid_boundary_changes_id (test_core.CoreTests.test_or34_grid_boundary_changes_id) ... ok
+test_or35_duplicate_seed_collides (test_core.CoreTests.test_or35_duplicate_seed_collides) ... ok
+test_or36_birthday_probability (test_core.CoreTests.test_or36_birthday_probability) ... ok
+test_or37_registry_not_position_hash (test_core.CoreTests.test_or37_registry_not_position_hash) ... ok
+test_or38_registry_no_reuse (test_core.CoreTests.test_or38_registry_no_reuse) ... ok
+test_or39_stale_snapshot_rejected (test_core.CoreTests.test_or39_stale_snapshot_rejected) ... ok
+test_or40_revision_rejected (test_core.CoreTests.test_or40_revision_rejected) ... ok
+test_or41_orphan_not_actionable (test_core.CoreTests.test_or41_orphan_not_actionable) ... ok
+test_or42_wrong_session (test_core.CoreTests.test_or42_wrong_session) ... ok
+test_or43_never_reports_real_execution (test_core.CoreTests.test_or43_never_reports_real_execution) ... ok
+test_or44_real_actuation_not_implemented (test_core.CoreTests.test_or44_real_actuation_not_implemented) ... ok
+test_or45_disabled_rejected (test_core.CoreTests.test_or45_disabled_rejected) ... ok
+test_or46_hidden_rejected (test_core.CoreTests.test_or46_hidden_rejected) ... ok
+test_or47_retired_missing (test_core.CoreTests.test_or47_retired_missing) ... ok
+test_or48_all_small_pixels_detected (test_core.CoreTests.test_or48_all_small_pixels_detected) ... ok
+
+----------------------------------------------------------------------
+Ran 48 tests in 0.010s
+
+OK

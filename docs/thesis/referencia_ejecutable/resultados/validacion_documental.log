@@ -1,0 +1,197 @@
+PASS schema:contratos/esquemas/execute_action.input.schema.json 
+PASS schema:contratos/esquemas/execute_action.output.schema.json 
+PASS schema:contratos/esquemas/get_engine_metrics.input.schema.json 
+PASS schema:contratos/esquemas/get_engine_metrics.output.schema.json 
+PASS schema:contratos/esquemas/observe_screen.input.schema.json 
+PASS schema:contratos/esquemas/observe_screen.output.schema.json 
+PASS schema:contratos/esquemas/tool_error.output.schema.json 
+PASS payload:contratos/ejemplos/observe_input.json válido
+PASS payload:contratos/ejemplos/observe_output.json válido
+PASS payload:contratos/ejemplos/click_input.json válido
+PASS payload:contratos/ejemplos/type_input.json válido
+PASS payload:contratos/ejemplos/scroll_input.json válido
+PASS payload:contratos/ejemplos/simulated_output.json válido
+PASS payload:contratos/ejemplos/stale_output.json válido
+PASS payload:contratos/ejemplos/metrics_input.json válido
+PASS payload:contratos/ejemplos/metrics_output.json válido
+PASS payload:contratos/ejemplos_invalidos/click_con_coordenadas.json Additional properties are not allowed ('x', 'y' were unexpected)
+PASS payload:contratos/ejemplos_invalidos/click_con_texto.json {'request_id': 'demo-click-001', 'session_id': 'demo-session', 'snapshot_id': 's17', 'geometry_epoch': 1, 'target_id': 'e7', 'expected_revision': 3, 'action': 'click', 'dry_run': True, 'text': 'No permitido en click'} should not be valid under {'required': ['text']}
+PASS payload:contratos/ejemplos_invalidos/type_sin_texto.json 'text' is a required property
+PASS payload:contratos/ejemplos_invalidos/scroll_sin_direccion.json 'direction' is a required property
+PASS payload:contratos/ejemplos_invalidos/accion_shell.json 'shell' is not one of ['click', 'type', 'scroll']
+PASS payload:contratos/ejemplos_invalidos/revision_cero.json 0 is less than the minimum of 1
+PASS payload:contratos/ejemplos_invalidos/snapshot_sin_cursor.json 'next_cursor' is a required property
+PASS payload:contratos/ejemplos_invalidos/simulacion_con_efecto_real.json False was expected
+PASS jsonl:mcp_legacy_solicitudes.jsonl:1 
+PASS jsonl:mcp_legacy_solicitudes.jsonl:2 
+PASS jsonl:mcp_legacy_solicitudes.jsonl:3 
+PASS jsonl:mcp_moderno_respuestas.jsonl:1 
+PASS result_type:1 
+PASS cache_metadata:1 
+PASS jsonl:mcp_moderno_respuestas.jsonl:2 
+PASS result_type:2 
+PASS cache_metadata:2 
+PASS jsonl:mcp_moderno_respuestas.jsonl:3 
+PASS result_type:3 
+PASS contenido_consistente:3 
+PASS jsonl:mcp_moderno_respuestas.jsonl:4 
+PASS result_type:4 
+PASS contenido_consistente:4 
+PASS jsonl:mcp_moderno_respuestas.jsonl:5 
+PASS result_type:5 
+PASS contenido_consistente:5 
+PASS jsonl:mcp_moderno_solicitudes.jsonl:1 
+PASS meta:1 
+PASS sin_initialize:1 
+PASS jsonl:mcp_moderno_solicitudes.jsonl:2 
+PASS meta:2 
+PASS sin_initialize:2 
+PASS jsonl:mcp_moderno_solicitudes.jsonl:3 
+PASS meta:3 
+PASS sin_initialize:3 
+PASS jsonl:mcp_moderno_solicitudes.jsonl:4 
+PASS meta:4 
+PASS sin_initialize:4 
+PASS jsonl:mcp_moderno_solicitudes.jsonl:5 
+PASS meta:5 
+PASS sin_initialize:5 
+PASS dialogo_moderno_ids_emparejados 
+PASS argumentos_ejemplo_mcp:2 
+PASS argumentos_ejemplo_mcp:3 
+PASS argumentos_ejemplo_mcp:4 
+PASS csv_columnas_completas 
+PASS requisitos_unicos 
+PASS pruebas_planificadas_unicas 
+PASS capitulos_encontrados 13
+PASS adrs_encontradas 14
+PASS referencias:00_AUDITORIA_TECNICA.md []
+PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
+PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
+PASS referencias:03_ESPECIFICACION_REQUISITOS.md []
+PASS referencias:04_ALGORITMOS_CORE.md []
+PASS referencias:05_TDD_PLAN_Y_MATRIZ.md []
+PASS referencias:06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md []
+PASS referencias:07_CONTRATOS_MCP_Y_ERRORES.md []
+PASS referencias:08_SEGURIDAD_Y_PRIVACIDAD.md []
+PASS referencias:09_EVALUACION_EXPERIMENTAL.md []
+PASS referencias:10_RUNBOOK_Y_DEMO.md []
+PASS referencias:11_REFERENCIAS_Y_PROVENIENCIA.md []
+PASS referencias:12_ESTADO_DE_VALIDACION.md []
+PASS referencias:0001-rust-runtime-and-independent-oracles.md []
+PASS referencias:0002-mcp-stdio-with-explicit-profiles.md []
+PASS referencias:0003-conservative-spatial-fusion-with-ioc.md []
+PASS referencias:0004-masked-open-set-appearance-cache.md []
+PASS referencias:0005-persistent-tracking-instead-of-cell-hash.md []
+PASS referencias:0006-transactional-snapshots-and-commits.md []
+PASS referencias:0007-fail-closed-actuation-and-honest-simulation.md []
+PASS referencias:0008-one-real-platform-first.md []
+PASS referencias:0009-models-and-licences-decided-in-the-spike.md []
+PASS referencias:0010-performance-budgets-subject-to-measurement.md []
+PASS referencias:0011-modular-monolith-and-adaptive-incrementality.md []
+PASS referencias:0012-data-minimisation-and-evidence-traceability.md []
+PASS referencias:0013-bilingual-documentation.md []
+PASS referencias:0014-hexagonal-crate-layout.md []
+PASS gherkin_cabecera:01_incrementalidad.feature 
+PASS gherkin_id_unico:BDD-01 
+PASS gherkin_estructura:BDD-01 
+PASS gherkin_id_unico:BDD-02 
+PASS gherkin_estructura:BDD-02 
+PASS gherkin_id_unico:BDD-03 
+PASS gherkin_estructura:BDD-03 
+PASS gherkin_id_unico:BDD-04 
+PASS gherkin_estructura:BDD-04 
+PASS gherkin_id_unico:BDD-05 
+PASS gherkin_estructura:BDD-05 
+PASS gherkin_id_unico:BDD-06 
+PASS gherkin_estructura:BDD-06 
+PASS gherkin_cabecera:02_fusion.feature 
+PASS gherkin_id_unico:BDD-07 
+PASS gherkin_estructura:BDD-07 
+PASS gherkin_id_unico:BDD-08 
+PASS gherkin_estructura:BDD-08 
+PASS gherkin_id_unico:BDD-09 
+PASS gherkin_estructura:BDD-09 
+PASS gherkin_id_unico:BDD-10 
+PASS gherkin_estructura:BDD-10 
+PASS gherkin_id_unico:BDD-11 
+PASS gherkin_estructura:BDD-11 
+PASS gherkin_id_unico:BDD-12 
+PASS gherkin_estructura:BDD-12 
+PASS gherkin_cabecera:03_identidad.feature 
+PASS gherkin_id_unico:BDD-13 
+PASS gherkin_estructura:BDD-13 
+PASS gherkin_id_unico:BDD-14 
+PASS gherkin_estructura:BDD-14 
+PASS gherkin_id_unico:BDD-15 
+PASS gherkin_estructura:BDD-15 
+PASS gherkin_id_unico:BDD-16 
+PASS gherkin_estructura:BDD-16 
+PASS gherkin_id_unico:BDD-17 
+PASS gherkin_estructura:BDD-17 
+PASS gherkin_cabecera:04_iconos.feature 
+PASS gherkin_id_unico:BDD-18 
+PASS gherkin_estructura:BDD-18 
+PASS gherkin_id_unico:BDD-19 
+PASS gherkin_estructura:BDD-19 
+PASS gherkin_id_unico:BDD-20 
+PASS gherkin_estructura:BDD-20 
+PASS gherkin_id_unico:BDD-21 
+PASS gherkin_estructura:BDD-21 
+PASS gherkin_cabecera:05_mcp.feature 
+PASS gherkin_id_unico:BDD-22 
+PASS gherkin_estructura:BDD-22 
+PASS gherkin_id_unico:BDD-23 
+PASS gherkin_estructura:BDD-23 
+PASS gherkin_id_unico:BDD-24 
+PASS gherkin_estructura:BDD-24 
+PASS gherkin_id_unico:BDD-25 
+PASS gherkin_estructura:BDD-25 
+PASS gherkin_id_unico:BDD-26 
+PASS gherkin_estructura:BDD-26 
+PASS gherkin_cabecera:06_accion_segura.feature 
+PASS gherkin_id_unico:BDD-27 
+PASS gherkin_estructura:BDD-27 
+PASS gherkin_id_unico:BDD-28 
+PASS gherkin_estructura:BDD-28 
+PASS gherkin_id_unico:BDD-29 
+PASS gherkin_estructura:BDD-29 
+PASS gherkin_id_unico:BDD-30 
+PASS gherkin_estructura:BDD-30 
+PASS gherkin_id_unico:BDD-31 
+PASS gherkin_estructura:BDD-31 
+PASS gherkin_id_unico:BDD-32 
+PASS gherkin_estructura:BDD-32 
+PASS escenarios_matriz_completos 
+PASS trazabilidad:BDD-01 
+PASS trazabilidad:BDD-02 
+PASS trazabilidad:BDD-03 
+PASS trazabilidad:BDD-04 
+PASS trazabilidad:BDD-05 
+PASS trazabilidad:BDD-06 
+PASS trazabilidad:BDD-07 
+PASS trazabilidad:BDD-08 
+PASS trazabilidad:BDD-09 
+PASS trazabilidad:BDD-10 
+PASS trazabilidad:BDD-11 
+PASS trazabilidad:BDD-12 
+PASS trazabilidad:BDD-13 
+PASS trazabilidad:BDD-14 
+PASS trazabilidad:BDD-15 
+PASS trazabilidad:BDD-16 
+PASS trazabilidad:BDD-17 
+PASS trazabilidad:BDD-18 
+PASS trazabilidad:BDD-19 
+PASS trazabilidad:BDD-20 
+PASS trazabilidad:BDD-21 
+PASS trazabilidad:BDD-22 
+PASS trazabilidad:BDD-23 
+PASS trazabilidad:BDD-24 
+PASS trazabilidad:BDD-25 
+PASS trazabilidad:BDD-26 
+PASS trazabilidad:BDD-27 
+PASS trazabilidad:BDD-28 
+PASS trazabilidad:BDD-29 
+PASS trazabilidad:BDD-30 
+PASS trazabilidad:BDD-31 
+PASS trazabilidad:BDD-32 
+PASS reporte_oraculo_aprobado Se lee el informe previo; para volver a ejecutar use referencia_ejecutable/run_tests.py

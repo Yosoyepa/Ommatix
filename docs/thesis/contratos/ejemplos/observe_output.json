@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "session_id": "demo-session",
+  "snapshot_id": "s17",
+  "geometry_epoch": 1,
+  "frame_seq": 17,
+  "mode": "full",
+  "age_ms": 0,
+  "degraded": false,
+  "elements": [
+    {
+      "target_id": "e7",
+      "revision": 3,
+      "role": "button",
+      "label": "Guardar ejemplo",
+      "label_source": "ocr",
+      "actionability": "confirmed",
+      "enabled": true,
+      "visible": true,
+      "zone": "center_main"
+    },
+    {
+      "target_id": "e8",
+      "revision": 1,
+      "role": "text_node",
+      "label": "Vista de demostración",
+      "label_source": "ocr",
+      "actionability": "unknown",
+      "enabled": null,
+      "visible": true,
+      "zone": "top_bar"
+    }
+  ],
+  "total_elements": 2,
+  "truncated": false
+}

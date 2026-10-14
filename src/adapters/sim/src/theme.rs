@@ -1,5 +1,5 @@
 /// Colour scheme of the simulated desktop. Themes exist to prove the detector assumes no
-/// background colour (ADR-0010).
+/// background colour (bootstrap ADR B0010).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Theme {
     /// Light window on a light wallpaper of nearly the same colour.

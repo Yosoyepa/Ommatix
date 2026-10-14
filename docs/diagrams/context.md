@@ -1,18 +1,18 @@
 # System context / Contexto del sistema
 
-*Ommatix sits between the agent (reasoning) and the desktop (pixels).*
-*Ommatix se ubica entre el agente (razonamiento) y el escritorio (píxeles).*
+*The agent works with element IDs and revisions; only the engine touches pixels and input,
+and a local policy outside the agent's control decides what is allowed.*
+*El agente trabaja con IDs y revisiones de elementos; sólo el motor toca píxeles y entrada,
+y una política local fuera del control del agente decide qué se permite.*
+
+Source / Fuente: [`01_contexto.mmd`](../thesis/diagramas/01_contexto.mmd).
 
 ```mermaid
 flowchart LR
-    user([Person / Persona]) -->|goal / objetivo| agent
-    subgraph Reasoning
-      agent[LLM agent<br/>MCP client]
-    end
-    subgraph Perception
-      ommatix[Ommatix<br/>Rust, single binary]
-    end
-    agent <-->|MCP over stdio<br/>JSON-RPC 2.0| ommatix
-    ommatix -->|capture frames| os[(Desktop / OS<br/>framebuffer)]
-    agent -. future: click / type via Ommatix tools .-> os
+  U[Local operator] -->|consent and stop| P[Local policy]
+  A[Agent / MCP host] -->|IDs and revisions| M[Ommatix engine]
+  M -->|minimised snapshot| A
+  OS[Desktop and applications] -->|pixels / context| M
+  M -->|authorised events only| OS
+  P --> M
 ```

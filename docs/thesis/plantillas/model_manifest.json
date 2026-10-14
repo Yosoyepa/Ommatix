@@ -1,0 +1,19 @@
+{
+  "status": "CANDIDATOS_NO_SELECCIONADOS",
+  "artifacts": [],
+  "required_fields_per_artifact": [
+    "name",
+    "role",
+    "source_url",
+    "revision",
+    "sha256",
+    "license",
+    "export_command",
+    "opset",
+    "input_shape",
+    "output_layout",
+    "class_mapping",
+    "execution_provider",
+    "test_report"
+  ]
+}

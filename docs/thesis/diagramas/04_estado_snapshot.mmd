@@ -1,0 +1,14 @@
+stateDiagram-v2
+  [*] --> Uninitialized
+  Uninitialized --> Staging: primera captura
+  Confirmed --> Staging: cambios detectados
+  Staging --> Confirmed: commit completo
+  Staging --> Degraded: inferencia falla o se cancela
+  Degraded --> Staging: reintento de observación
+  Confirmed --> Uninitialized: epoch incompatible
+  Degraded --> Uninitialized: acceso perdido
+  note right of Degraded
+    Estado previo sólo informativo
+    Dirty pendiente no se descarta
+    Actuación bloqueada
+  end note

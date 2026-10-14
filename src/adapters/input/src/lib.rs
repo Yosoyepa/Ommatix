@@ -5,7 +5,7 @@
 //! | Adapter | Feature | Live | Use |
 //! |---|---|---|---|
 //! | [`DryRunInput`] | always | no | default for `serve`; records and logs actions |
-//! | `NativeInput` | `native` | yes | real mouse/keyboard via `enigo` (ADR-0008) |
+//! | `NativeInput` | `native` | yes | real mouse/keyboard via `enigo` (bootstrap ADR B0008) |
 
 mod dry_run;
 #[cfg(feature = "native")]

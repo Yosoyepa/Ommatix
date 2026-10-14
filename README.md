@@ -4,106 +4,129 @@
 
 🇪🇸 [Leer en español](README.es.md)
 
-Ommatix is a low-latency, deterministic perception engine that lets LLM agents operate a
-graphical desktop. Instead of sending every screenshot to a slow vision model, Ommatix
-splits the framebuffer into a grid of independent cells, re-analyses **only the cells that
-changed**, keeps every detected element in a spatial index, and answers the agent with
-**exact pixel coordinates** through the [Model Context Protocol](https://modelcontextprotocol.io).
+Ommatix is a local perception engine that lets an LLM agent operate a desktop safely. It turns
+screen frames into GUI elements with stable identifiers, re-analyses only the regions that
+changed, and serves the result through the [Model Context Protocol](https://modelcontextprotocol.io).
+The agent chooses an element by its identifier; Ommatix keeps the geometry, checks that the
+agent's observation is still current, acts through the operating system and reports what it
+could verify. Perception lives here; reasoning lives in the agent.
 
 > **Why "Ommatix"?** Named after *ommatidia*, the independent photoreceptor units that make
 > up the compound eye of fast-flying insects. Just as each ommatidium processes local changes
 > in luminance in parallel without saturating the central nervous system, Ommatix divides the
 > screen framebuffer into a spatial matrix of independent cells, processes only the regions
-> with visual activity and delivers deterministic coordinates to the agent.
+> with visual activity and gives the agent stable element identifiers instead of coordinates.
 
-## Status
+## The thesis
 
-`v0.1.0` — **MVP in progress.** The agent can perceive and act (click, type, press keys)
-end to end on a simulated desktop, recorded frames or, behind feature flags, the live
-screen. The MVP's acceptance criteria are executable Gherkin features. See the
-[roadmap](#roadmap).
+Ommatix implements the thesis *Incremental visual perception and safe temporal grounding for
+desktop agents: spatial fusion, perceptual cache and identifier-based control over MCP*. Its
+engineering and research dossier, in Spanish, is the baseline of this repository:
+[`docs/thesis/`](docs/thesis/README.md).
+
+| Part | Where |
+|---|---|
+| Technical audit, thesis framework, SDD, requirements (RF-01..18, RNF-01..10) | [chapters 00–03](docs/thesis/README.md) |
+| Algorithms: incremental perception, spatial fusion, icon cache, temporal identity | [chapter 04](docs/thesis/04_ALGORITMOS_CORE.md) |
+| TDD plan (76 planned tests), integration plan S0–S4 and definition of done | [chapters 05–06](docs/thesis/05_TDD_PLAN_Y_MATRIZ.md) |
+| MCP contract, errors, JSON schemas and examples | [chapter 07](docs/thesis/07_CONTRATOS_MCP_Y_ERRORES.md), [`contratos/`](docs/thesis/contratos/README.md) |
+| Security, evaluation protocol, runbook, references | chapters 08–12 |
+| 32 Gherkin scenarios (BDD-01..32) and traceability matrices | [`features/`](docs/thesis/features), [`matrices/`](docs/thesis/matrices) |
+| Python reference oracle (48 tests) and package validator | [`referencia_ejecutable/`](docs/thesis/referencia_ejecutable) |
+| Architecture decisions ADR-0001..0014, in English | [`docs/adr/`](docs/adr/README.md) |
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    A[Frame source] --> B[Grid signature<br/>per-cell hash]
-    B -->|diff vs previous| C[Dirty cells]
-    C --> D[Merged regions<br/>+ expanded to touched elements]
-    D --> E[Element detector<br/>only inside regions]
-    E --> F[Scene + spatial index<br/>stable element ids]
-    F -->|MCP tools| G[LLM agent]
+    CAP[Capture<br/>frame + dirty rects] --> PLAN[Algorithm 1<br/>exact tile diff,<br/>halo closure, budget]
+    PLAN --> PER[Detector + OCR<br/>on planned regions]
+    PER --> FUS[Algorithm 2<br/>spatial fusion,<br/>reading order, labels]
+    FUS --> ICO[Algorithm 3A<br/>icon cache<br/>with rejection]
+    ICO --> TRK[Algorithm 3B<br/>session IDs,<br/>revisions]
+    TRK --> SNAP[Atomic commit<br/>immutable snapshot]
+    SNAP -->|observe_screen| AG[LLM agent]
+    AG -->|execute_action:<br/>target_id + revision| GATE[Policy and<br/>action gate]
+    GATE --> ACT[OS actuator] --> VER[Effect verifier]
 ```
 
-A static screen costs one hash pass and nothing else; typing in a text field re-analyses
-3 of 260 cells in the demo session. More in [docs/architecture](docs/architecture/overview.md).
+A failed step publishes nothing: the engine keeps the pending regions, reports itself
+degraded and blocks actions until a consistent observation exists. Actions are dry runs
+unless the agent and a local policy both allow them. More in the
+[architecture overview](docs/architecture/overview.md).
+
+## Status
+
+**The dossier is the specification; the code is catching up with it.**
+
+- `docs/thesis/` holds the consolidated dossier. Its oracle (48/48) and validator run in CI.
+- `src/` holds a prototype written while the repository was bootstrapped, before the dossier
+  was consolidated. It shares the architecture (Rust, hexagonal crates, MCP over stdio,
+  dry-run by default, injected clock) but not the pipeline: it has a flat-colour detector
+  without OCR, hashed cells, a mutable scene and seven MCP tools that return coordinates. The
+  stages below replace it. The [overview](docs/architecture/overview.md#where-the-code-is-today)
+  lists the differences.
+- First platform: **Windows 11 x64**, one monitor, DPI 100/125/150 %
+  ([ADR-0008](docs/adr/0008-one-real-platform-first.md), approved 2026-10-14).
+
+## Roadmap
+
+From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
+
+- [x] Dossier consolidated into the repository; oracle and validator in CI
+- [ ] **S0, spike:** hardware, candidate detectors and OCR, licences and ONNX export,
+  execution provider, DXGI capture with stride, MCP client compatibility
+- [ ] **S1, geometric and incremental core:** exact tile diff, halo closure, line grouping,
+  text ownership, staging and commit (UT-01..26); oracle tests ported to Rust
+- [ ] **S2, identity, cache and contract:** temporal registry with tombstones, icon cache,
+  MCP contract through `rmcp`, honest dry run (UT-27..43, CT)
+- [ ] **S3, real adapters and action loop on Windows 11:** DXGI, ONNX Runtime, `SendInput`,
+  policy, stop and effect verification; the bootstrap's macOS and X11 adapters are retired
+- [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
+  and the acceptance report
 
 ## Quick start
 
-Requires Rust stable (pinned in `rust-toolchain.toml`).
+Requires Rust stable (pinned in `rust-toolchain.toml`) and Python 3.11 or later for the
+thesis checks.
 
 ```bash
+# Thesis checks (from docs/thesis/; the validator needs jsonschema)
+pip install -r docs/thesis/requirements-validacion.txt
+cd docs/thesis && python referencia_ejecutable/run_tests.py && python validar_paquete.py && cd -
+
+# Bootstrap prototype
 cargo run -- demo                       # scripted desktop session, one line per frame
-cargo run -- demo --theme dark          # same session in the dark theme (or contrasting-wallpaper)
 cargo run -- serve --source sim         # MCP server on an interactive simulated desktop
-cargo run -- serve --source images --images ./captures/session-01   # replay PNG frames
-cargo run --features screen -- serve --source screen                 # live screen, dry-run input
-cargo run --features screen,native-input -- serve --source screen --input native  # live input
+cargo run --features screen -- serve --source screen   # live screen, dry-run input
 ```
 
-Input is **dry-run by default**: actions are validated and recorded but never reach the OS
-unless you build with `native-input` and pass `--input native` (ADR-0008). Native input
-requires `--source screen`, so clicks land on the monitor the agent sees, mapped for HiDPI
-and multi-monitor setups (ADR-0012). It works on macOS, Linux X11 and Windows at 100%
-display scale; on Wayland and on scaled Windows displays Ommatix refuses native input at
-start-up rather than guess where clicks land. Live capture on Linux needs the system
-libraries listed in [AGENTS.md](AGENTS.md#toolchain).
-
-### Use it from an MCP client
-
-```json
-{
-  "mcpServers": {
-    "ommatix": { "command": "/path/to/ommatix", "args": ["serve", "--source", "screen"] }
-  }
-}
-```
-
-| Tool | Purpose |
-|---|---|
-| `perceive` | Capture a frame, re-analyse changed regions, return added / updated / removed elements |
-| `list_elements` | Every element on screen in reading order, with a click target |
-| `element_at` | Elements under `(x, y)`, most specific first |
-| `elements_in_rect` | Elements intersecting a rectangle |
-| `click` | Click an element by id (preferred) or a coordinate |
-| `type_text` | Type printable text into the focused control |
-| `press_key` | Press Enter, Tab, Escape, Backspace, arrows… |
-
-Each action waits for the screen to settle (no change for 2 frames, at most 1 s) and
-returns the net change. Once an action is performed it is never reported as failed: if
-watching the screen afterwards fails, the result carries `performed` and an
-`observe_error`, so the agent does not repeat it. Run-dependent timings travel in `_meta`,
-which keeps `structuredContent` reproducible (ADR-0012).
+The prototype's input is dry-run unless it is built with `native-input` and started with
+`--source screen --input native`. Its MCP tools (`perceive`, `list_elements`, `element_at`,
+`elements_in_rect`, `click`, `type_text`, `press_key`) are the bootstrap contract; S2
+replaces them with the thesis contract: `observe_screen`, `execute_action` and
+`get_engine_metrics`.
 
 ## Repository layout
 
 ```text
-src/                       Cargo workspace members (modular monolith)
-├── domain/                ommatix-domain        pure core: frame, grid, regions, scene, spatial index
-├── application/           ommatix-application   ports (traits) + use cases: perceive, observe, act
+src/                       Cargo workspace (modular monolith, ADR-0014)
+├── domain/                ommatix-domain        pure core, no I/O
+├── application/           ommatix-application   use cases and port traits
 ├── adapters/
-│   ├── capture/           ommatix-adapter-capture  FrameSource: scripted, PNG sequence, screen
-│   ├── vision/            ommatix-adapter-vision   ElementDetector: flat-region detector
-│   ├── input/             ommatix-adapter-input    InputController: dry-run, native (enigo)
-│   ├── sim/               ommatix-adapter-sim      simulated desktop with themes (FrameSource + InputController)
-│   └── mcp/               ommatix-adapter-mcp      MCP stdio server (driving adapter)
-├── app/                   ommatix               composition root + CLI binary
-└── acceptance/            ommatix-acceptance    Gherkin features (features/*.feature) + cucumber steps
+│   ├── capture/           ommatix-adapter-capture  frame capture
+│   ├── vision/            ommatix-adapter-vision   detection (and OCR, from S3)
+│   ├── input/             ommatix-adapter-input    OS input
+│   ├── sim/               ommatix-adapter-sim      simulated desktop for deterministic fixtures
+│   └── mcp/               ommatix-adapter-mcp      MCP server over stdio (driving adapter)
+├── app/                   ommatix               composition root and CLI binary
+└── acceptance/            ommatix-acceptance    executable Gherkin scenarios
 docs/
-├── adr/                   architecture decision records
+├── thesis/                the thesis dossier (Spanish): chapters, contracts, matrices, oracle
+├── adr/                   architecture decision records (bootstrap ones in adr/bootstrap/)
 ├── architecture/          overview (EN/ES)
-├── diagrams/              Mermaid diagrams (context, hexagon, pipeline)
-└── reviews/               code reviews: finding → resolution → regression test
+├── diagrams/              Mermaid diagrams
+└── reviews/               code reviews: finding, resolution, regression test
 ```
 
 ## Development
@@ -113,33 +136,15 @@ git config core.hooksPath .githooks     # once: fmt + clippy + tests before comm
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                  # unit, integration and Gherkin acceptance tests
-cargo test -p ommatix-acceptance        # only the Gherkin specification
-cargo test -p ommatix-adapter-vision --release -- --ignored --nocapture   # detector benchmark
 ```
 
-Contribution rules (for humans and AI agents) live in [AGENTS.md](AGENTS.md).
-
-## Roadmap
-
-- [x] Grid diffing, region merging, spatial index, stable element identity
-- [x] Deterministic flat-region detector, same results on light, dark and contrasting themes
-- [x] MCP server (stdio) with perception tools
-- [x] Synthetic, PNG-sequence and live-screen sources
-- [x] Actuation tools (click, type, keys) behind an `InputController` port, dry-run by default
-- [x] Actions wait for the screen to settle; HiDPI and multi-monitor coordinate mapping
-- [x] Executable Gherkin acceptance specification on a simulated desktop
-- [ ] Validation on a real desktop (X11 clicks checked under Xvfb; Windows, macOS pending)
-- [ ] Native input on Wayland and on scaled Windows displays
-- [ ] Benchmarks (criterion) and latency budget per stage
-- [ ] Text detection / OCR adapter, element classification (button, text, icon)
-- [ ] Parallel per-region detection and SIMD hashing
-- [ ] Evaluation harness against recorded GUI sessions
+Contribution rules, for humans and AI agents alike, are in [AGENTS.md](AGENTS.md).
 
 ## Documentation
 
+- [Thesis dossier](docs/thesis/README.md) (Spanish)
 - [Architecture overview](docs/architecture/overview.md) · [Visión general](docs/architecture/overview.es.md)
 - [Architecture decision records](docs/adr/README.md)
-- [Acceptance features (Gherkin)](src/acceptance/features)
 - [Diagrams](docs/diagrams/README.md)
-- [MVP code review](docs/reviews/2026-10-14-mvp-review.md)
 - [Glossary / Glosario](docs/glossary.md)
+- [Bootstrap MVP code review](docs/reviews/2026-10-14-mvp-review.md)

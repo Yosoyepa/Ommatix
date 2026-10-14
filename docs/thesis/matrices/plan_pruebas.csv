@@ -1,0 +1,77 @@
+﻿id,caso,resultado_esperado,referencia_oraculo_parcial,estado_aceptacion_producto
+UT-01,Primer frame,"Toda la pantalla sucia, incluso si es negra.",OR-04,PENDIENTE_EN_RUNTIME_RUST
+UT-02,Sin cambios,Conjunto dirty vacío con pixels idénticos.,OR-05,PENDIENTE_EN_RUNTIME_RUST
+UT-03,Cambio mínimo,Detectar un píxel en fila impar.,OR-06,PENDIENTE_EN_RUNTIME_RUST
+UT-04,Borde parcial,Detectar último píxel con ancho/alto impar.,OR-07,PENDIENTE_EN_RUNTIME_RUST
+UT-05,Formato/stride,"Ignorar padding y alfa, no ignorar RGB real.",OR-08..OR-10,PENDIENTE_EN_RUNTIME_RUST
+UT-06,Entrada inválida,Rechazar dimensiones/stride/buffer inválidos sin panic.,OR-11,PENDIENTE_EN_RUNTIME_RUST
+UT-07,Epoch,Cambio geométrico fuerza full refresh.,OR-12,PENDIENTE_EN_RUNTIME_RUST
+UT-08,Propiedad diferencial,Cada píxel válido alterado activa su tile.,OR-48,PENDIENTE_EN_RUNTIME_RUST
+UT-09,Halo transitivo,Expandir hasta cubrir soportes alcanzados indirectamente.,OR-14,PENDIENTE_EN_RUNTIME_RUST
+UT-10,Halo independiente de orden,Permutar soportes conserva el cierre.,OR-15,PENDIENTE_EN_RUNTIME_RUST
+UT-11,Budget de halo,Fallback completo cuando se agota el trabajo permitido.,OR-16,PENDIENTE_EN_RUNTIME_RUST
+UT-12,Solapamiento,Fusionar regiones hasta punto fijo.,OR-17,PENDIENTE_EN_RUNTIME_RUST
+UT-13,Staging,No mutar base publicada al construir candidato.,OR-18,PENDIENTE_EN_RUNTIME_RUST
+UT-14,Rollback lógico,Fallo conserva base y cambio pendiente.,OR-19,PENDIENTE_EN_RUNTIME_RUST
+UT-15,Commit obsoleto,Rechazar resultado de revisión anterior.,OR-20,PENDIENTE_EN_RUNTIME_RUST
+UT-16,IoC,Texto pequeño contenido devuelve 1.,OR-01,PENDIENTE_EN_RUNTIME_RUST
+UT-17,Geometría inválida,"Rechazar NaN, infinito y área no positiva.",OR-02..OR-03,PENDIENTE_EN_RUNTIME_RUST
+UT-18,Propietario específico,El panel no roba texto al control interno.,OR-23,PENDIENTE_EN_RUNTIME_RUST
+UT-19,Empate de contención,Abstenerse sin depender del orden.,OR-24,PENDIENTE_EN_RUNTIME_RUST
+UT-20,Lectura multilínea,Renglones antes de orden X; resultado determinista.,OR-21..OR-22,PENDIENTE_EN_RUNTIME_RUST
+UT-21,Unicode,NFC y límites de palabras preservados.,OR-25,PENDIENTE_EN_RUNTIME_RUST
+UT-22,Asociación externa,Corredor entre bordes y caso de dos columnas.,OR-26..OR-27,PENDIENTE_EN_RUNTIME_RUST
+UT-23,Asociación ambigua,Empates retornan ausencia de label.,OR-28,PENDIENTE_EN_RUNTIME_RUST
+UT-24,Texto huérfano,No actuar sobre texto sin evidencia positiva.,OR-41,PENDIENTE_EN_RUNTIME_RUST
+UT-25,Value/placeholder,Conservar unknown sin inferir valor confirmado.,PENDIENTE,PENDIENTE_EN_RUNTIME_RUST
+UT-26,Ocultos/deshabilitados,No dar permiso a elementos tapados o disabled.,OR-45..OR-46,PENDIENTE_EN_RUNTIME_RUST
+UT-27,dHash defectuoso,Reproducir contraejemplo con distancia 32.,OR-29,PENDIENTE_EN_RUNTIME_RUST
+UT-28,Inversión ideal,Descriptor enmascarado conserva match.,OR-30,PENDIENTE_EN_RUNTIME_RUST
+UT-29,Soporte vacío,Rechazar crops planos/soporte insuficiente.,OR-31..OR-33,PENDIENTE_EN_RUNTIME_RUST
+UT-30,Formato del descriptor,Validar shape y rango uint8.,OR-32,PENDIENTE_EN_RUNTIME_RUST
+UT-31,Caché contextual,Contexto/versión y margen; no autoconfirmar desconocidos.,PENDIENTE,PENDIENTE_EN_RUNTIME_RUST
+UT-32,Frontera de celda,Mostrar que FNV cuantizado cambia a un píxel.,OR-34,PENDIENTE_EN_RUNTIME_RUST
+UT-33,Colisiones,Mostrar semilla duplicada y probabilidad en espacio reducido.,OR-35..OR-36,PENDIENTE_EN_RUNTIME_RUST
+UT-34,Registro independiente de coordenadas,Actualizar bbox sin crear ID nuevo cuando la asociación se conoce.,OR-37,PENDIENTE_EN_RUNTIME_RUST
+UT-35,Sin reutilización,No reciclar ID tras retirada.,OR-38,PENDIENTE_EN_RUNTIME_RUST
+UT-36,Matching uno-a-uno,No asociar dos candidatos a un track; abstenerse si ambiguo.,PENDIENTE,PENDIENTE_EN_RUNTIME_RUST
+UT-37,Virtualización,Retirar identidad al cambiar contenido discriminante de fila.,PENDIENTE,PENDIENTE_EN_RUNTIME_RUST
+UT-38,Snapshot obsoleto,Rechazar aunque siga existiendo el ID.,OR-39,PENDIENTE_EN_RUNTIME_RUST
+UT-39,Revisión obsoleta,Rechazar elemento modificado.,OR-40,PENDIENTE_EN_RUNTIME_RUST
+UT-40,Sesión distinta,Rechazar referencias de otra sesión.,OR-42,PENDIENTE_EN_RUNTIME_RUST
+UT-41,Target ausente,Rechazar ID retirado/no existente.,OR-47,PENDIENTE_EN_RUNTIME_RUST
+UT-42,Simulación honesta,Nunca reportar input entregado desde un mock.,OR-43,PENDIENTE_EN_RUNTIME_RUST
+UT-43,Sin actuador,Rechazar modo real si no existe adaptador.,OR-44,PENDIENTE_EN_RUNTIME_RUST
+IT-01,Captura DXGI,Frames reales/stride/rotación/pérdida de acceso,NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-02,Modelos,Detector/OCR reales y deshacer letterbox,NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-03,Actuador,Conteo SendInput y permisos/foco,NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-04,Verificación,Postcondición y timeout sin retry,NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-05,Idempotencia,"request_id, conflicto y caída ambigua",NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-06,Telemetría,Redacción y desglose temporal,NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-07,DPI,"100/125/150%, epoch y fuera de perfil",NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-01,Snapshot completo,Schema y orden estable,NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-02,Paginación,Cursor atado a snapshot; truncamiento explícito,NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-03,Estado unknown,No inventar rol o label,NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-04,Límites semánticos,Texto y query con topes,NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-05,MCP moderno,Metadatos por request/resultType,NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-06,Versión no soportada,Error según perfil,NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-07,Notificaciones,No responder a notification,NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-08,Legacy opt-in,Handshake únicamente en perfil legacy,NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-09,Tools/errors,Listado y separación error herramienta/protocolo,NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-10,Tamaño,"64 KiB entrada/salida, inputs inválidos",NO_EJECUTADO,PENDIENTE_PRODUCTO
+SEC-01,Política local,Agente no puede habilitarse,NO_EJECUTADO,PENDIENTE_PRODUCTO
+SEC-02,Parada,Detener nuevas inyecciones,NO_EJECUTADO,PENDIENTE_PRODUCTO
+SEC-03,Prompt injection visual,OCR no cambia permisos,NO_EJECUTADO,PENDIENTE_PRODUCTO
+SEC-04,Exfiltración,Sin screenshots ni secretos por defecto,NO_EJECUTADO,PENDIENTE_PRODUCTO
+SEC-05,Precheck de acción,Foco/ventana/frescura y carreras,NO_EJECUTADO,PENDIENTE_PRODUCTO
+SEC-06,Modelo/caché,"Hashes, licencia, corrupción y cache poisoning",NO_EJECUTADO,PENDIENTE_PRODUCTO
+E2E-01,Formulario local,Valores dummy y confirmación observable,NO_EJECUTADO,PENDIENTE_PRODUCTO
+E2E-02,Editor,Escritura y guardado de archivo temporal,NO_EJECUTADO,PENDIENTE_PRODUCTO
+E2E-03,Explorador,Navegar carpetas de prueba sin destrucción,NO_EJECUTADO,PENDIENTE_PRODUCTO
+PERF-01,Core,"Release, 300 controles/600 spans; p50/p95/p99",NO_EJECUTADO,PENDIENTE_PRODUCTO
+PERF-02,Percepción,Full/incremental/cold/cache y modelos iguales,NO_EJECUTADO,PENDIENTE_PRODUCTO
+PERF-03,Recursos,RSS/VRAM/colas/soak 2h,NO_EJECUTADO,PENDIENTE_PRODUCTO
+EV-01,Grounding,"Precisión más cobertura, por aplicación/DPI",NO_EJECUTADO,PENDIENTE_PRODUCTO
+EV-02,Tareas,450 corridas planificadas con verificador independiente,NO_EJECUTADO,PENDIENTE_PRODUCTO
+REL-01,Reproducibilidad,Lockfile/hashes/licencias/hardware/corpus,NO_EJECUTADO,PENDIENTE_PRODUCTO
+DOC-01,Trazabilidad,Cada requisito ligado a prueba/evidencia y ADR,NO_EJECUTADO,PENDIENTE_PRODUCTO

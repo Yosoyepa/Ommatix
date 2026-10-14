@@ -1,0 +1,15 @@
+{
+  "schema_version": "1.0",
+  "request_id": "demo-stale-002",
+  "status": "rejected",
+  "target_id": "e7",
+  "snapshot_id": "s16",
+  "input_delivered": false,
+  "verified": false,
+  "error": {
+    "code": "STALE_SNAPSHOT",
+    "message": "La observación debe actualizarse antes de actuar.",
+    "retryable": false,
+    "next_step": "observe_again"
+  }
+}
