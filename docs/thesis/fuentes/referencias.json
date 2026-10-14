@@ -1,0 +1,218 @@
+[
+  {
+    "id": "S01",
+    "autor": "Model Context Protocol",
+    "titulo": "Especificación MCP 2026-07-28: cambios",
+    "anio": "2026",
+    "url": "https://modelcontextprotocol.io/specification/2026-07-28/changelog",
+    "alcance": "Protocolo moderno sin initialize; metadatos por petición. No prueba compatibilidad de un cliente concreto.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S02",
+    "autor": "Model Context Protocol",
+    "titulo": "Transporte stdio, revisión 2026-07-28",
+    "anio": "2026",
+    "url": "https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/stdio",
+    "alcance": "Encuadre por líneas y separación stdout/stderr; no aporta una latencia universal.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S03",
+    "autor": "Model Context Protocol",
+    "titulo": "Versioning and Compatibility",
+    "anio": "2026",
+    "url": "https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning",
+    "alcance": "Distinción entre clientes modernos y legacy; error de versión no soportada.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S04",
+    "autor": "Model Context Protocol",
+    "titulo": "Tools y Schema Reference",
+    "anio": "2026",
+    "url": "https://modelcontextprotocol.io/specification/2026-07-28/server/tools",
+    "alcance": "Descubrimiento de herramientas y resultados estructurados. Complemento: https://modelcontextprotocol.io/specification/2026-07-28/schema",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S05",
+    "autor": "Model Context Protocol",
+    "titulo": "Lifecycle, revisión 2025-11-25",
+    "anio": "2025",
+    "url": "https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle",
+    "alcance": "Contrato legacy con initialize/initialized; no mezclar con el moderno.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S06",
+    "autor": "Microsoft",
+    "titulo": "Desktop Duplication API",
+    "anio": "2021",
+    "url": "https://learn.microsoft.com/en-us/windows/win32/direct3ddxgi/desktop-dup-api",
+    "alcance": "Dirty rects, move rects, cursor y rotación. Los movimientos se procesan antes que las regiones sucias.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S07",
+    "autor": "Microsoft",
+    "titulo": "SendInput function",
+    "anio": "2021",
+    "url": "https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput",
+    "alcance": "Entrega de eventos y restricciones UIPI; no confirma efectos de negocio.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S08",
+    "autor": "Microsoft",
+    "titulo": "High DPI Desktop Application Development on Windows",
+    "anio": "2026",
+    "url": "https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows",
+    "alcance": "Espacios de coordenadas y Per-Monitor V2. La conversión debe probarse.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S09",
+    "autor": "ONNX Runtime",
+    "titulo": "DirectML Execution Provider",
+    "anio": "s. f.",
+    "url": "https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html",
+    "alcance": "Restricciones de sesión, shapes y estado de mantenimiento de DirectML; WinML es una vía de evolución.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S10",
+    "autor": "ONNX Runtime",
+    "titulo": "Execution Providers",
+    "anio": "s. f.",
+    "url": "https://onnxruntime.ai/docs/execution-providers/",
+    "alcance": "Abstracción del proveedor de ejecución; no garantiza cero copias ni aceleración de cualquier modelo.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S11",
+    "autor": "Lu, Y.; Yang, J.; Shen, Y.; Awadallah, A.",
+    "titulo": "OmniParser for Pure Vision Based GUI Agent",
+    "anio": "2024",
+    "url": "https://arxiv.org/abs/2408.00203",
+    "alcance": "Detección de regiones interactuables y descripción semántica especializadas. Antecedente, no una prueba del motor propuesto.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S12",
+    "autor": "Microsoft",
+    "titulo": "OmniParser: repositorio oficial y licencias de pesos",
+    "anio": "s. f.",
+    "url": "https://github.com/microsoft/OmniParser",
+    "alcance": "Distingue icon_detect_v3, basado en YOLOv9 MIT, de detectores Ultralytics anteriores con AGPL. Verificar el artefacto exacto.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S13",
+    "autor": "Muryn, V. y colaboradores",
+    "titulo": "Screen2AX: Vision-Based Approach for Automatic macOS Accessibility Generation",
+    "anio": "2025",
+    "url": "https://arxiv.org/abs/2507.16704",
+    "alcance": "Reconstrucción visual de jerarquías de accesibilidad en macOS; no es un detector nano universal de Windows.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S14",
+    "autor": "MacPaw",
+    "titulo": "Screen2AX: implementación y modelos",
+    "anio": "s. f.",
+    "url": "https://github.com/MacPaw/Screen2AX",
+    "alcance": "Publica detectores YOLOv11l de elementos/grupos. Destilarlos a nano sería trabajo adicional.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S15",
+    "autor": "Xie, T. y colaboradores",
+    "titulo": "OSWorld: Benchmarking Multimodal Agents for Open-Ended Tasks in Real Computer Environments",
+    "anio": "2024",
+    "url": "https://arxiv.org/abs/2404.07972",
+    "alcance": "Referencia histórica para evaluación de tareas con verificación ejecutable, no leaderboard actual.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S16",
+    "autor": "Li, K. y colaboradores",
+    "titulo": "ScreenSpot-Pro: GUI Grounding for Professional High-Resolution Computer Use",
+    "anio": "2025",
+    "url": "https://arxiv.org/abs/2504.07981",
+    "alcance": "Evaluación de grounding en interfaces profesionales de alta resolución; no mide estabilidad temporal por sí sola.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S17",
+    "autor": "Guttman, A.",
+    "titulo": "R-trees: A Dynamic Index Structure for Spatial Searching",
+    "anio": "1984",
+    "url": "https://dl.acm.org/doi/10.1145/971697.602266",
+    "alcance": "Fundamento del índice espacial de rectángulos. DOI: 10.1145/971697.602266.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S18",
+    "autor": "Beckmann, N.; Kriegel, H.-P.; Schneider, R.; Seeger, B.",
+    "titulo": "The R*-tree: An Efficient and Robust Access Method for Points and Rectangles",
+    "anio": "1990",
+    "url": "https://sigmodrecord.org/1990/06/06/the-r-tree-an-efficient-and-robust-access-method-for-points-and-rectangles/",
+    "alcance": "Optimización del índice R*-tree. DOI: 10.1145/93597.98741.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S19",
+    "autor": "GeoRust",
+    "titulo": "rstar: documentación de RTree",
+    "anio": "s. f.",
+    "url": "https://docs.rs/rstar/latest/rstar/struct.RTree.html",
+    "alcance": "API, carga masiva e indexación. El coste real depende de solapamiento y cantidad de resultados.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S20",
+    "autor": "Bewley, A. y colaboradores",
+    "titulo": "Simple Online and Realtime Tracking",
+    "anio": "2016",
+    "url": "https://arxiv.org/abs/1602.00763",
+    "alcance": "Antecedente de asociación temporal. No se trasladan sus cifras de rendimiento ni su dominio de objetos al de GUI.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S21",
+    "autor": "Buchner, J. y colaboradores",
+    "titulo": "ImageHash",
+    "anio": "s. f.",
+    "url": "https://github.com/JohannesBuchner/imagehash",
+    "alcance": "Hashing perceptual para similitud visual, no identificación semántica universal.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S22",
+    "autor": "NumPy",
+    "titulo": "Thread Safety, manual 2.3",
+    "anio": "s. f.",
+    "url": "https://numpy.org/doc/2.3/reference/thread_safety.html",
+    "alcance": "Muchas operaciones liberan el GIL; matiza la comparación Python/Rust.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S23",
+    "autor": "Model Context Protocol / mantenedores del SDK",
+    "titulo": "rmcp: SDK oficial de Rust",
+    "anio": "s. f.",
+    "url": "https://docs.rs/rmcp",
+    "alcance": "Candidato al adaptador MCP. Fijar versión y probar interoperabilidad; no se compiló aquí.",
+    "consulta": "2026-10-13"
+  },
+  {
+    "id": "S24",
+    "autor": "Cucumber",
+    "titulo": "Gherkin Reference y Localisation",
+    "anio": "s. f.",
+    "url": "https://cucumber.io/docs/gherkin/reference/",
+    "alcance": "Sintaxis BDD. Un archivo feature sin step definitions no es una ejecución automatizada.",
+    "consulta": "2026-10-13"
+  }
+]

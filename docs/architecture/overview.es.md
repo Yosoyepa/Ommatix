@@ -2,98 +2,164 @@
 
 🇬🇧 [English version](overview.md)
 
+Esta página resume el diseño de la tesis y lo ubica en el repositorio. El texto normativo está
+en [`docs/thesis/`](../thesis/README.md): el SDD (capítulo 02), los algoritmos (capítulo 04) y
+el contrato MCP (capítulo 07). Si esta página y esos capítulos difieren, mandan los capítulos.
+
 ## Problema
 
-Los agentes de uso de computador suelen enviar capturas completas de pantalla a un modelo
-de visión-lenguaje en cada paso. Eso es lento (segundos), costoso y produce coordenadas
-aproximadas. Sin embargo, entre dos pasos la mayor parte de la pantalla no cambia.
+Los agentes de uso de computador suelen enviar una captura de pantalla a un modelo de
+visión-lenguaje en cada paso y actuar sobre las coordenadas que este adivina. Eso es lento y
+costoso, y además inseguro: la pantalla puede cambiar entre la observación y la acción, y
+nada comprueba que el clic siga cayendo sobre lo que el agente eligió.
 
 ## Enfoque
 
-Ommatix separa la **percepción** del **razonamiento**:
+Ommatix separa la percepción del razonamiento.
 
-- **Percepción (Ommatix, Rust):** incremental, determinista, en milisegundos. Mantiene un
-  modelo actualizado e indexado espacialmente de lo que hay en pantalla.
-- **Razonamiento (el agente, vía MCP):** decide qué hacer y le pregunta a Ommatix *dónde*
-  están las cosas.
+- **Percepción (Ommatix, local, Rust):** convierte los frames de pantalla en elementos de
+  interfaz con identificadores de sesión estables, re-analiza sólo lo que cambió y publica
+  snapshots inmutables.
+- **Razonamiento (el agente, cliente MCP):** elige un elemento por su identificador y su
+  revisión. Nunca envía coordenadas.
 
-Como un ojo compuesto, la pantalla se divide en celdas independientes (*omatidios*). En cada
-tick se calcula la huella de cada celda y solo se re-analizan las celdas cuya huella cambió.
+Antes de actuar, Ommatix comprueba que la observación del agente sigue vigente y que una
+política local permite la acción. Después inyecta la entrada e informa por separado la
+entrega y la verificación. El contenido de la pantalla es un dato no confiable: un texto en
+pantalla nunca cambia permisos.
+
+## Límites de confianza
+
+Un operador local autoriza a un agente a usar una instancia del motor, ligada a una sesión de
+usuario y a un monitor permitido. Una política local fuera del control del agente decide qué
+aplicaciones y acciones están habilitadas, y el operador puede detener el motor en cualquier
+momento. El MVP no abre puertos de red; MCP va por stdio. Ver el [contexto](../diagrams/context.md)
+y el [capítulo 08 de la tesis](../thesis/08_SEGURIDAD_Y_PRIVACIDAD.md).
 
 ## Componentes
 
-Ver el [diagrama hexagonal](../diagrams/hexagon.md).
+El SDD define once componentes ([diagrama](../diagrams/components.md)).
+[ADR-0014](../adr/0014-hexagonal-crate-layout.md) los ubica en crates:
 
-| Crate | Responsabilidad | Tipos clave |
-|---|---|---|
-| `ommatix-domain` | Geometría, firmas de cuadrícula, seguimiento de cambios, fusión de regiones, escena con seguimiento de identidad, índice espacial, mapeo de pantalla | `Frame`, `ChangeTracker`, `Scene`, `SpatialIndex`, `Element`, `DisplayMapping` |
-| `ommatix-application` | Casos de uso y puertos hacia el exterior | `PerceptionEngine`, `Observer`, `ActuationService`, `AgentSession`; puertos `FrameSource`, `ElementDetector`, `InputController`, `Clock` |
-| `ommatix-adapter-capture` | Fuentes de frames | `ScriptedSource`, `ImageSequenceSource`, `ScreenSource` |
-| `ommatix-adapter-vision` | Detección de elementos | `FlatRegionDetector` |
-| `ommatix-adapter-input` | Entrada al escritorio | `DryRunInput`, `NativeInput` |
-| `ommatix-adapter-sim` | Escritorio simulado para pruebas y demos (ambos puertos), temas, sesión grabada | `SimulatedDesktop`, `Theme`, `scripted_session` |
-| `ommatix-adapter-mcp` | Protocolo hacia el agente: sobre JSON-RPC, enrutamiento MCP, registro de herramientas, DTOs | `McpServer` |
-| `ommatix` | Raíz de composición, CLI (`serve`, `demo`) | `main.rs` |
+| Componente | Responsabilidad | Contrato | Crate |
+|---|---|---|---|
+| MCP Adapter | Validar y enrutar llamadas; describir herramientas | Entradas y salidas versionadas | `ommatix-adapter-mcp` |
+| Observation Coordinator | Captura, planificación de regiones y commit | SnapshotRequest → Snapshot | `ommatix-application` |
+| Capture Provider | Píxeles, stride, tiempos, rectángulos dirty y move | FrameLease | `ommatix-adapter-capture` |
+| Perception Provider | Detector, OCR y transformaciones de imagen | Region → RawEvidence | `ommatix-adapter-vision` |
+| Spatial Fusion | Contención, renglones, etiquetas y relaciones | RawEvidence → Candidates | `ommatix-domain` |
+| Icon Resolver | Recuperación contextual con rechazo | CropDescriptor → LabelEvidence | `ommatix-domain` |
+| Temporal Registry | IDs, revisiones y bajas | Candidates + Snapshot → Tracks | `ommatix-domain` |
+| Policy & Action Gate | Vigencia, permisos y precondiciones | ActionRequest → Permit o Reject | `ommatix-application` |
+| OS Actuator | Inyección de eventos y conteo de entrega | ValidatedAction → DeliveryReceipt | `ommatix-adapter-input` |
+| Effect Verifier | Comprobar un efecto esperado o informar incertidumbre | Antes y después → Verification | `ommatix-application` |
+| Telemetry | Métricas y auditoría sin texto sensible | Eventos y spans | puerto en `ommatix-application` y un adaptador |
 
-## Un tick
+El núcleo sólo llega al exterior mediante los puertos `FrameCapturer`, `VisionDetector`,
+`TextRecognizer`, `OsActuator`, `Clock` y `PolicyStore`, de modo que cada adaptador puede
+sustituirse por un fixture determinista. En Windows 11
+([ADR-0008](../adr/0008-one-real-platform-first.md)) la captura usa DXGI Desktop Duplication
+y la entrada usa `SendInput`. La inferencia corre en ONNX Runtime, con CPU como baseline y
+DirectML como opción; los modelos se eligen en el spike S0
+([ADR-0009](../adr/0009-models-and-licences-decided-in-the-spike.md)).
 
-Ver la [secuencia del pipeline](../diagrams/perception-pipeline.md), el
-[ADR-0005](../adr/0005-grid-incremental-perception.md) y el
-[ADR-0011](../adr/0011-incremental-perception-invariants.md).
+## Modelo de datos
 
-1. Capturar un frame.
-2. Calcular el hash del color de cada celda, dos píxeles (8 bytes) a la vez, y compararlo
-   con la última firma confirmada. Un tamaño de frame nuevo implica una escena nueva.
-3. Fusionar celdas sucias en regiones y crecerlas hasta cubrir elementos completos, y los
-   elementos a menos del margen de contexto del detector, hasta que nada cambie. Los
-   contenedores que encierran el cambio sin compartir un borde con él (la ventana
-   alrededor de un botón) no se absorben.
-4. Ejecutar el detector solo dentro de las regiones
-   ([ADR-0010](../adr/0010-flat-region-detector.md)) y recortar lo que devuelva a la región.
-5. Actualizar la escena: emparejar elementos viejos y nuevos por mejor IoU, añadir los
-   nuevos y eliminar los que desaparecieron. Solo entonces se confirma el frame, así que una
-   detección fallida se reintenta en lugar de perderse.
-6. Reportar el delta, los píxeles analizados y los tiempos por etapa.
+- **Frame:** tamaño físico, stride de fila en bytes, BGRA8, instante monotónico de captura,
+  monitor, rotación, epoch geométrico y procedencia de sus regiones de cambio. Los tamaños se
+  validan con aritmética comprobada y nunca se asume `row_stride == width * 4`.
+- **RawEvidence:** una caja, el tipo de evidencia, texto opcional, el score del proveedor, la
+  transformación del tensor al recorte, el modelo con su revisión y el frame de origen.
+- **Element:** un `target_id` opaco, una revisión monotónica, un rol o `unknown`, una etiqueta
+  con procedencia, contenido interno con `text_kind`, visibilidad, habilitación y
+  `actionability`. La geometría se queda dentro del motor.
+- **Snapshot:** `session_id`, `snapshot_id`, `geometry_epoch`, instantes de captura y de
+  publicación, elementos, relaciones, degradación y métricas, en orden estable.
 
-## Actuar
+## Una observación
 
-Ver el [ADR-0008](../adr/0008-actuation-port-dry-run-default.md) y el
-[ADR-0012](../adr/0012-settled-actions-and-wire-contract.md). `ActuationService` valida
-cada petición contra el último frame percibido (objetivo dentro de la pantalla, id de
-elemento existente, longitud del texto, sin caracteres de control) y solo entonces llama
-al `InputController` inyectado. Después el `Observer` percibe hasta que la pantalla se
-estabiliza, así que el agente recibe el efecto ya asentado de su acción en la misma
-respuesta; si observar falla, la respuesta igual indica que la acción se realizó e incluye
-lo observado antes del fallo. Los clics se convierten de píxeles del frame a coordenadas
-del sistema (HiDPI, varios monitores) con un mapeo verificado por plataforma: macOS, Linux
-X11 y Windows al 100% de escalado; en el resto la entrada nativa se rechaza. La entrada es
-dry-run salvo que el binario se compile con `native-input` y se inicie con
-`--source screen --input native`.
+1. **Capturar** un frame y los rectángulos dirty y move nativos.
+2. **Planificar regiones (algoritmo 1).** Comparar tiles de 64×64 de forma exacta, píxel a
+   píxel, contra la última base *confirmada*, y sumar los tiles sucios que sigan pendientes.
+   Agrupar los tiles sucios en componentes 8-conexos, añadir a cada uno un halo de 32 px y
+   cerrarlo sobre la evidencia que toca hasta que nada cambie. Un cambio de geometría, un
+   cierre que agota su presupuesto o un plan por encima de los umbrales iniciales (40 % del
+   área o más de cuatro regiones) pasa a un refresco completo.
+3. **Percibir** las regiones planificadas con el detector y el OCR.
+4. **Fusionar (algoritmo 2).** Un texto pertenece al control más específico que lo contiene,
+   medido por IoC = área(texto ∩ control) / área(texto) ≥ 0,75; ante un empate se abstiene.
+   Los textos se agrupan en renglones antes de ordenar la lectura. Las etiquetas externas se
+   asocian por un coste anisotrópico dentro de un corredor entre bordes enfrentados, con
+   abstención si el margen es pequeño. Un texto sin propietario pasa a ser un `text_node` de
+   accionabilidad desconocida.
+5. **Resolver íconos (algoritmo 3A).** Los íconos sin texto se buscan en un caché contextual
+   con un descriptor de gradientes de 128 bits con máscara; una coincidencia exige soporte
+   suficiente y margen sobre el segundo candidato. Lo desconocido sigue siendo desconocido.
+6. **Seguir la identidad (algoritmo 3B).** Un matching uno a uno conserva el ID de sesión de
+   cada elemento, que es monotónico y nunca se reutiliza; la revisión aumenta cuando cambia
+   algo de lo que depende una acción; los IDs retirados dejan tombstones. Ante ambigüedad se
+   crea un track nuevo en lugar de adivinar.
+7. **Confirmar (commit).** Registro, índice y base se publican juntos como un snapshot
+   inmutable. Si algún paso falla no se publica nada, las regiones sucias pendientes se
+   conservan y el motor queda degradado, lo que bloquea las acciones
+   ([ciclo del snapshot](../diagrams/snapshot-state.md)). Un cambio de monitor, DPI o
+   configuración de modelos incrementa el epoch geométrico y fuerza una reconstrucción.
 
-## Especificación de aceptación
+## Una acción
 
-Ver el [ADR-0009](../adr/0009-gherkin-acceptance-through-mcp.md). El MVP está especificado
-en Gherkin (`src/acceptance/features/`) y se ejecuta con `cucumber` a través del adaptador
-MCP sobre un escritorio simulado que reacciona a la entrada.
+[Diagrama de secuencia](../diagrams/action-sequence.md). `execute_action` nombra la sesión,
+el snapshot, el epoch geométrico, el objetivo y su revisión esperada. El motor valida el
+schema, deduplica el `request_id`, aplica la política local, comprueba que snapshot, revisión
+y epoch estén vigentes, confirma ventana, foco y frescura, registra su intención, inyecta la
+entrada, comprueba la entrega y busca el efecto esperado.
+
+La respuesta es `simulated`, `rejected`, `input_delivered`, `effect_observed` o
+`indeterminate`, y ninguna afirma más de lo que muestra: una entrada entregada no prueba que
+la interfaz obedeciera, y un efecto incierto nunca se reintenta automáticamente. `dry_run` es
+verdadero salvo que el agente lo ponga en falso, y aun así se aplican el consentimiento local
+y la allowlist ([ADR-0007](../adr/0007-fail-closed-actuation-and-honest-simulation.md)).
+
+## Contrato con el agente
+
+Lo definen el [capítulo 07 de la tesis](../thesis/07_CONTRATOS_MCP_Y_ERRORES.md) y los
+schemas JSON de [`docs/thesis/contratos/`](../thesis/contratos/README.md):
+
+- **Perfiles:** MCP 2026-07-28 mediante el SDK `rmcp` (`server/discover`, sin `initialize`,
+  versión y capacidades en `_meta`); 2025-11-25 es opcional
+  ([ADR-0002](../adr/0002-mcp-stdio-with-explicit-profiles.md)).
+- **Herramientas:** `observe_screen` (consulta, paginación, sin coordenadas),
+  `execute_action` (`click`, `type`, `scroll`) y `get_engine_metrics`.
+- **Errores:** llevan un código (`STALE_SNAPSHOT`, `STALE_TARGET`, `AMBIGUOUS_TARGET`,
+  `POLICY_DENIED`, `REQUEST_CONFLICT` y otros) y un `next_step` como `observe_again` u
+  `operator_review`. Los mensajes se limitan a 64 KiB.
 
 ## Atributos de calidad
 
 | Atributo | Cómo se aborda |
 |---|---|
-| Latencia | Trabajo proporcional al área cambiada (`analysed_px` en cada reporte); algoritmos casi lineales; tiempos por etapa en `_meta` |
-| Determinismo | Hash determinista, colecciones ordenadas, ordenamiento explícito, reloj inyectado; conversaciones idénticas dan respuestas idénticas byte a byte |
-| Modificabilidad | Puertos y adaptadores; límites impuestos por las dependencias entre crates |
-| Testabilidad | Puertos inyectados (incluido el tiempo); escritorio simulado con temas; pruebas MCP de extremo a extremo sin stdio |
-| Privacidad | Los frames no se guardan por defecto; las capturas están en `.gitignore` |
+| Corrección | Cada algoritmo tiene invariantes y pruebas planificadas (UT-01..43); un oráculo Python (48 pruebas) es la referencia diferencial |
+| Seguridad | Compuerta fail-closed, vigencia estricta, estados de entrega y verificación separados, parada local |
+| Determinismo | Colecciones ordenadas, ordenamiento explícito, reloj inyectado; los valores que dependen de la ejecución quedan fuera del resultado estructurado |
+| Privacidad | Sin capturas ni valores en logs por defecto; los datos de pantalla nunca elevan permisos ([ADR-0012](../adr/0012-data-minimisation-and-evidence-traceability.md)) |
+| Latencia | Presupuestos por etapa, medidos en hardware de referencia antes de convertirse en compromisos ([ADR-0010](../adr/0010-performance-budgets-subject-to-measurement.md)) |
+| Modificabilidad | Puertos y adaptadores, con límites impuestos por las dependencias entre crates |
 
-## Limitaciones actuales (MVP)
+## Dónde está el código hoy
 
-- El detector reporta solo geometría (`kind = blob`), sin texto; los controles de bajo
-  contraste no se ven.
-- La entrada real solo se ha ejercitado con los adaptadores dry-run y simulado.
-- Cambiar la configuración de pantalla durante una sesión requiere reiniciar.
-- Un solo hilo; un análisis completo 1080p toma ~0,1 s, los frames siguientes solo pagan
-  por lo que cambia.
+El código de `src/` se escribió al arrancar el repositorio, antes de consolidar la tesis. Ya
+sigue la organización en crates, el reloj inyectado, stdout reservado a MCP y la entrada en
+dry-run por defecto, pero no el pipeline de la tesis:
 
-La [revisión del MVP](../reviews/2026-10-14-mvp-review.md) lista los defectos encontrados y
-cómo se prueba cada uno.
+| Área | Tesis | Prototipo en `src/` | Se reemplaza en |
+|---|---|---|---|
+| Detección de cambios | Tiles de 64×64 exactos contra la base confirmada, cierre halo con presupuesto | Celdas de 32 px con hash contra el frame anterior, expansión por margen de contexto | S1 |
+| Percepción | Detector y OCR en ONNX Runtime, roles según el spike S0 | Detector de regiones de color plano, sin texto, todo elemento es `blob` | S0, S3 |
+| Estado | Snapshots inmutables, staging, commit atómico, epoch geométrico | Una escena mutable | S1 |
+| Identidad | IDs de sesión, revisiones, tombstones, matching uno a uno con abstención | IDs monotónicos emparejados por IoU | S2 |
+| Contrato con el agente | `observe_screen`, `execute_action`, `get_engine_metrics`; sin coordenadas | Siete herramientas que exponen coordenadas; MCP 2025-06-18 | S2 |
+| Plataforma | Windows 11 x64: DXGI y `SendInput` | `xcap` y `enigo` en macOS, Linux X11 y Windows al 100 % | S3 |
+
+Las features Gherkin del prototipo en `src/acceptance/features/` y sus decisiones archivadas
+en [`docs/adr/bootstrap/`](../adr/bootstrap/README.md) lo describen hasta que se reemplace. Los
+escenarios de la tesis (BDD-01..32, en [`docs/thesis/features/`](../thesis/features)) pasan al
+crate de aceptación a medida que cada etapa los vuelve ejecutables.

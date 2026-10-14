@@ -1,0 +1,9 @@
+{
+  "schema_version": "1.0",
+  "request_id": "demo-click-001",
+  "status": "simulated",
+  "target_id": "e7",
+  "snapshot_id": "s17",
+  "input_delivered": false,
+  "verified": false
+}

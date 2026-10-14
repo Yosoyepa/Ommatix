@@ -1,0 +1,18 @@
+digraph G { graph [rankdir=TB, bgcolor="transparent", pad="0.18", nodesep="0.30", ranksep="0.34", fontname="DejaVu Sans", fontsize=12];
+node [shape=box, style="rounded,filled", fillcolor="#EDF4F6", color="#528593", fontname="DejaVu Sans", fontsize=11, margin="0.15,0.10", penwidth=1.1];
+edge [color="#61788B", fontname="DejaVu Sans", fontsize=9, arrowsize=0.7, penwidth=1.0];
+ u [label="UNINITIALIZED
+Sin base válida"];
+ st [label="STAGING
+Candidato aún no publicado"];
+ conf [label="CONFIRMED
+Snapshot coherente",fillcolor="#D8E8EC"];
+ d [label="DEGRADED
+Estado previo informativo
+Dirty pendiente • acción bloqueada",fillcolor="#F6EBE2",color="#A87B53"];
+ u->st[label="captura"]; st->conf[label="commit completo"];
+ st->d[label="fallo / cancelación"];d->st[label="reobservación"];
+ conf->st[label="cambios",constraint=false];conf->u[label="epoch incompatible",style=dashed,constraint=false];
+ d->u[label="acceso perdido",style=dashed,constraint=false];
+ {rank=same;conf;d;}
+}

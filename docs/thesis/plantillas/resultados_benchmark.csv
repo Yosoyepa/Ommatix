@@ -1,0 +1,1 @@
+run_id,sequence_id,frame_id,baseline,mode,hardware_id,model_hash,config_hash,dirty_ratio_after_halo,roi_count,capture_ms,preprocess_ms,detector_ms,ocr_ms,fusion_ms,tracking_ms,perception_wall_ms,rss_mib,vram_mib,status

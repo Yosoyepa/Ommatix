@@ -1,0 +1,2 @@
+# Solo validación de JSON Schema; el oráculo no requiere dependencias.
+jsonschema==4.26.0

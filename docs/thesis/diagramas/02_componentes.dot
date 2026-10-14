@@ -1,0 +1,25 @@
+digraph G { graph [rankdir=TB, bgcolor="transparent", pad="0.18", nodesep="0.30", ranksep="0.34", fontname="DejaVu Sans", fontsize=12];
+node [shape=box, style="rounded,filled", fillcolor="#EDF4F6", color="#528593", fontname="DejaVu Sans", fontsize=11, margin="0.15,0.10", penwidth=1.1];
+edge [color="#61788B", fontname="DejaVu Sans", fontsize=9, arrowsize=0.7, penwidth=1.0];
+ m [label="Adaptador MCP
+Contratos y perfil explícitos"];
+ c [label="Coordinador de observación
+Captura real → dirty planner / halo"];
+ p [label="Percepción
+Detector + OCR + caché de iconos"];
+ f [label="Fusión espacial
+IoC • renglones • etiquetas"];
+ t [label="Tracking y registro temporal
+IDs no reutilizados • revisiones"];
+ s [label="Commit atómico
+Snapshot + índice coherentes",fillcolor="#D8E8EC"];
+ g [label="Policy & action gate
+Vigencia • foco • permisos"];
+ a [label="Actuador del SO
+Recibo de entrega"];
+ v [label="Verificador de efecto
+Confirmación o incertidumbre"];
+ m->c->p->f->t->s;
+ m->g; s->g; g->a->v; v->c [style=dashed,label="reobservación",constraint=false];
+ {rank=same;s;v;} {rank=same;t;a;} {rank=same;f;g;}
+}

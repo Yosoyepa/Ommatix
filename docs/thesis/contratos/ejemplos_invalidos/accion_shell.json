@@ -1,0 +1,10 @@
+{
+  "request_id": "demo-click-001",
+  "session_id": "demo-session",
+  "snapshot_id": "s17",
+  "geometry_epoch": 1,
+  "target_id": "e7",
+  "expected_revision": 3,
+  "action": "shell",
+  "dry_run": true
+}

@@ -31,6 +31,23 @@ jobs:
       - name: Smoke test (demo pipeline)
         run: cargo run --quiet -- demo
 
+  thesis:
+    name: thesis oracle · package validator
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs/thesis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements-validacion.txt
+      - name: Reference oracle (48 tests)
+        run: python referencia_ejecutable/run_tests.py
+      - name: Schemas, examples, traceability and Gherkin structure
+        run: python validar_paquete.py
+
   screen-feature:
     name: screen capture + native input features build
     runs-on: ubuntu-latest

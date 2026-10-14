@@ -1,0 +1,23 @@
+{
+  "status": "PENDIENTE_S0",
+  "os_build": null,
+  "cpu_model": null,
+  "ram_gib": null,
+  "gpu_model": null,
+  "vram_gib": null,
+  "driver": null,
+  "power_plan": null,
+  "resolution": [
+    1920,
+    1080
+  ],
+  "dpi_percent": [
+    100,
+    125,
+    150
+  ],
+  "runtime_commit": null,
+  "onnx_runtime": null,
+  "execution_provider": null,
+  "mcp_profile": "2026-07-28"
+}

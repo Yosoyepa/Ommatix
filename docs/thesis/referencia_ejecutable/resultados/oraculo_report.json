@@ -1,0 +1,19 @@
+{
+  "timestamp_utc": "2026-10-14T06:18:46.440948+00:00",
+  "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+  "platform": "Linux-6.18.44-fc-v114-x86_64-with-glibc2.39",
+  "tests_run": 48,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "success": true,
+  "scope": "Oráculos escalares y estado simulado. No acredita Rust, MCP, OCR, GPU ni control del escritorio.",
+  "not_run": [
+    "compilacion Rust",
+    "conformidad MCP",
+    "BDD con Cucumber",
+    "inferencia de modelos",
+    "acciones Windows",
+    "benchmark de producto"
+  ]
+}

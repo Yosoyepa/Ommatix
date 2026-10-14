@@ -1,0 +1,87 @@
+[
+  {
+    "example": "contratos/ejemplos/observe_input.json",
+    "schema": "contratos/esquemas/observe_screen.input.schema.json",
+    "valid": true
+  },
+  {
+    "example": "contratos/ejemplos/observe_output.json",
+    "schema": "contratos/esquemas/observe_screen.output.schema.json",
+    "valid": true
+  },
+  {
+    "example": "contratos/ejemplos/click_input.json",
+    "schema": "contratos/esquemas/execute_action.input.schema.json",
+    "valid": true
+  },
+  {
+    "example": "contratos/ejemplos/type_input.json",
+    "schema": "contratos/esquemas/execute_action.input.schema.json",
+    "valid": true
+  },
+  {
+    "example": "contratos/ejemplos/scroll_input.json",
+    "schema": "contratos/esquemas/execute_action.input.schema.json",
+    "valid": true
+  },
+  {
+    "example": "contratos/ejemplos/simulated_output.json",
+    "schema": "contratos/esquemas/execute_action.output.schema.json",
+    "valid": true
+  },
+  {
+    "example": "contratos/ejemplos/stale_output.json",
+    "schema": "contratos/esquemas/execute_action.output.schema.json",
+    "valid": true
+  },
+  {
+    "example": "contratos/ejemplos/metrics_input.json",
+    "schema": "contratos/esquemas/get_engine_metrics.input.schema.json",
+    "valid": true
+  },
+  {
+    "example": "contratos/ejemplos/metrics_output.json",
+    "schema": "contratos/esquemas/get_engine_metrics.output.schema.json",
+    "valid": true
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/click_con_coordenadas.json",
+    "schema": "contratos/esquemas/execute_action.input.schema.json",
+    "valid": false
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/click_con_texto.json",
+    "schema": "contratos/esquemas/execute_action.input.schema.json",
+    "valid": false
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/type_sin_texto.json",
+    "schema": "contratos/esquemas/execute_action.input.schema.json",
+    "valid": false
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/scroll_sin_direccion.json",
+    "schema": "contratos/esquemas/execute_action.input.schema.json",
+    "valid": false
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/accion_shell.json",
+    "schema": "contratos/esquemas/execute_action.input.schema.json",
+    "valid": false
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/revision_cero.json",
+    "schema": "contratos/esquemas/execute_action.input.schema.json",
+    "valid": false
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/snapshot_sin_cursor.json",
+    "schema": "contratos/esquemas/observe_screen.output.schema.json",
+    "valid": false
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/simulacion_con_efecto_real.json",
+    "schema": "contratos/esquemas/execute_action.output.schema.json",
+    "valid": false
+  }
+]

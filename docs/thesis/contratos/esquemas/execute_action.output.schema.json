@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ommatix execute_action.output v1.0",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "status": {
+      "enum": [
+        "simulated",
+        "rejected",
+        "input_delivered",
+        "effect_observed",
+        "indeterminate"
+      ]
+    },
+    "target_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "input_delivered": {
+      "type": "boolean"
+    },
+    "verified": {
+      "type": "boolean"
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "STALE_SNAPSHOT",
+            "STALE_TARGET",
+            "TARGET_NOT_FOUND",
+            "AMBIGUOUS_TARGET",
+            "NOT_ACTIONABLE",
+            "POLICY_DENIED",
+            "PERMISSION_DENIED",
+            "CAPTURE_UNAVAILABLE",
+            "INFERENCE_FAILED",
+            "UNSUPPORTED_GEOMETRY",
+            "INDETERMINATE_EFFECT",
+            "REQUEST_CONFLICT",
+            "CANCELLED",
+            "LIMIT_EXCEEDED",
+            "SESSION_MISMATCH",
+            "EPOCH_MISMATCH"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "next_step": {
+          "enum": [
+            "observe_again",
+            "operator_review",
+            "reduce_request",
+            "reconcile_effect",
+            "stop"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "next_step"
+      ],
+      "additionalProperties": false
+    },
+    "observed_effect": {
+      "enum": [
+        "none",
+        "focus_changed",
+        "value_updated",
+        "scroll_moved",
+        "visual_change",
+        "unknown"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "request_id",
+    "status",
+    "target_id",
+    "snapshot_id",
+    "input_delivered",
+    "verified"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "simulated",
+              "rejected"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input_delivered": {
+            "const": false
+          },
+          "verified": {
+            "const": false
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "rejected"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "effect_observed"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input_delivered": {
+            "const": true
+          },
+          "verified": {
+            "const": true
+          }
+        },
+        "required": [
+          "observed_effect"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "input_delivered"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "input_delivered": {
+            "const": true
+          },
+          "verified": {
+            "const": false
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": "1.0",
+  "mode": "simulation",
+  "observations": 0,
+  "rejected_actions": 0,
+  "delivered_actions": 0,
+  "pending_regions": 0,
+  "models_loaded": false,
+  "timings_source": "not_measured"
+}

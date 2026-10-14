@@ -1,5 +1,6 @@
 //! Wire representations. Domain and application types are never serialised directly, so
-//! the public contract with agents can evolve independently of the model (ADR-0004).
+//! the public contract with agents can evolve independently of the model
+//! (bootstrap ADR B0004).
 
 use std::time::Duration;
 

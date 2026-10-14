@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ommatix tool_error.output v1.0",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "status": {
+      "const": "rejected"
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "STALE_SNAPSHOT",
+            "STALE_TARGET",
+            "TARGET_NOT_FOUND",
+            "AMBIGUOUS_TARGET",
+            "NOT_ACTIONABLE",
+            "POLICY_DENIED",
+            "PERMISSION_DENIED",
+            "CAPTURE_UNAVAILABLE",
+            "INFERENCE_FAILED",
+            "UNSUPPORTED_GEOMETRY",
+            "INDETERMINATE_EFFECT",
+            "REQUEST_CONFLICT",
+            "CANCELLED",
+            "LIMIT_EXCEEDED",
+            "SESSION_MISMATCH",
+            "EPOCH_MISMATCH"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "next_step": {
+          "enum": [
+            "observe_again",
+            "operator_review",
+            "reduce_request",
+            "reconcile_effect",
+            "stop"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "next_step"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "status",
+    "error"
+  ],
+  "additionalProperties": false
+}

@@ -1,22 +1,38 @@
 # Glossary / Glosario
 
+Terms of the thesis dossier ([`docs/thesis/`](thesis/README.md)) as the code and the docs use
+them. / Términos del dossier de la tesis tal como los usan el código y la documentación.
+
 | English | Español | Meaning / Significado |
 |---|---|---|
-| Frame | Frame / cuadro | One RGBA8 capture of the screen. / Una captura RGBA8 de la pantalla. |
-| Cell (ommatidium) | Celda (omatidio) | Fixed-size square of the grid, fingerprinted independently. / Cuadrado de tamaño fijo de la cuadrícula, con huella independiente. |
-| Grid signature | Firma de cuadrícula | Per-cell hashes of one frame. / Hashes por celda de un frame. |
-| Dirty cell | Celda sucia | Cell whose hash changed since the previous frame. / Celda cuyo hash cambió respecto al frame anterior. |
-| Dirty region | Región sucia | Bounding box of 4-connected dirty cells, expanded to whole elements. / Caja envolvente de celdas sucias conectadas, expandida a elementos completos. |
-| Container | Contenedor | Element that encloses a change without sharing an edge with it (a window around a button); not re-analysed for it. / Elemento que encierra un cambio sin compartir un borde con él (una ventana alrededor de un botón); no se re-analiza por él. |
-| Context margin | Margen de contexto | Distance up to which a detector groups elements (the gap between glyphs); a change reaches every element within it. / Distancia hasta la que un detector agrupa elementos (el espacio entre glifos); un cambio alcanza a todo elemento dentro de ella. |
-| Flat region | Región plana | Connected pixels whose neighbours differ by at most the tolerance; the detector's unit. / Píxeles conectados cuyos vecinos difieren como mucho la tolerancia; la unidad del detector. |
-| Surface | Superficie | Flat stretch covering at least half of a screen edge (wallpaper, maximised or snapped window, taskbar); background, never an element. / Tramo plano que cubre al menos la mitad de un borde de la pantalla (fondo, ventana maximizada o acoplada, barra de tareas); es fondo, nunca un elemento. |
-| Detection | Detección | Raw detector output (bounds + kind), no identity yet. / Salida cruda del detector, aún sin identidad. |
-| Element | Elemento | Detection with a stable id living in the scene. / Detección con id estable dentro de la escena. |
-| Scene | Escena | Current set of elements plus their spatial index. / Conjunto actual de elementos y su índice espacial. |
-| Spatial index | Índice espacial | Uniform-grid hash from screen buckets to elements. / Hash de cuadrícula uniforme de cubetas de pantalla a elementos. |
-| Port | Puerto | Trait the application needs the outside world to implement. / Trait que la aplicación exige al mundo exterior. |
-| Adapter (driving / driven) | Adaptador (conductor / conducido) | Code that calls the core (MCP) / that the core calls (capture, vision). / Código que invoca al núcleo / que el núcleo invoca. |
-| Tick | Tick | One capture → diff → detect → update cycle. / Un ciclo captura → diff → detección → actualización. |
-| Settled | Estabilizada | Screen with no changed cell for a few consecutive frames after an action. / Pantalla sin celdas cambiadas durante varios frames seguidos tras una acción. |
-| Display mapping | Mapeo de pantalla | Conversion from frame pixels to OS input coordinates (HiDPI scale, monitor origin). / Conversión de píxeles del frame a coordenadas de entrada del sistema (escala HiDPI, origen del monitor). |
+| Frame | Frame | One BGRA8 capture of the selected monitor, with its row stride, capture time and geometry epoch. / Una captura BGRA8 del monitor seleccionado, con su stride de fila, instante de captura y epoch geométrico. |
+| Tile | Tile | 64×64 square of the frame, compared exactly against the committed base (Algorithm 1); it plays no part in identity. / Cuadrado de 64×64 del frame que se compara de forma exacta con la base confirmada (algoritmo 1); no interviene en la identidad. |
+| Committed base | Base confirmada | The last frame whose evidence was published in a snapshot. Changes are measured against it, not against the previous frame. / El último frame cuya evidencia se publicó en un snapshot. Los cambios se miden contra él, no contra el frame anterior. |
+| Dirty region | Región sucia | 8-connected changed tiles, padded with a halo and closed over the evidence they touch. / Tiles cambiados 8-conexos, ampliados con un halo y cerrados sobre la evidencia que tocan. |
+| Pending dirty | Dirty pendiente | Changed regions not yet processed successfully; a failure keeps them. / Regiones cambiadas que aún no se procesaron con éxito; un fallo las conserva. |
+| Halo closure | Cierre halo | Growing a region by 32 px and by every support and relation it touches, until a fixed point or until the budget runs out. / Ampliar una región 32 px y con todo soporte y relación que toque, hasta un punto fijo o hasta agotar el presupuesto. |
+| Full refresh | Refresco completo | Processing the whole frame, when the geometry changes or the region plan exceeds its budget. / Procesar el frame entero, cuando cambia la geometría o el plan de regiones supera su presupuesto. |
+| Staging, commit | Staging, commit | Building the next state aside, then publishing registry, index and base together, or nothing at all. / Construir el siguiente estado aparte y publicar después registro, índice y base juntos, o nada. |
+| Snapshot | Snapshot | Immutable published state that the agent observes and acts on: session, snapshot ID, geometry epoch, elements. / Estado publicado e inmutable que el agente observa y sobre el que actúa: sesión, ID de snapshot, epoch geométrico, elementos. |
+| Geometry epoch | Epoch geométrico | Counter bumped by a change of monitor, DPI, rotation or model configuration; actions on an old epoch are rejected. / Contador que aumenta con un cambio de monitor, DPI, rotación o configuración de modelos; las acciones sobre un epoch viejo se rechazan. |
+| Degraded | Degradado | State after a failed observation: the previous snapshot is informational only and actions are blocked. / Estado tras una observación fallida: el snapshot anterior es sólo informativo y las acciones se bloquean. |
+| RawEvidence | RawEvidence | A detector or OCR result with its box, score, model and source frame, before fusion. / Un resultado del detector o del OCR con su caja, score, modelo y frame de origen, antes de la fusión. |
+| IoC | IoC | area(T ∩ U) / area(T): how much of text box T lies inside control U. Ownership starts at 0.75. / área(T ∩ U) / área(T): cuánto de la caja de texto T cae dentro del control U. La propiedad empieza en 0,75. |
+| Reading order | Orden de lectura | Texts grouped into lines first, then sorted by (line, x, y, id); the result does not depend on the input order. / Textos agrupados primero en renglones y ordenados después por (renglón, x, y, id); el resultado no depende del orden de entrada. |
+| External label | Label externo | Text outside a control that names it, chosen by an anisotropic cost inside a corridor between facing edges. / Texto fuera de un control que lo nombra, elegido por un coste anisotrópico dentro de un corredor entre bordes enfrentados. |
+| Abstention | Abstención | Answering unknown or ambiguous instead of guessing. / Responder desconocido o ambiguo en lugar de adivinar. |
+| `text_kind` | `text_kind` | Whether text inside a control is a `value`, a `placeholder` or `unknown`. / Si el texto dentro de un control es `value`, `placeholder` o `unknown`. |
+| Actionability | Accionabilidad | Whether an element may be acted on, decided from evidence and policy, separately from its role. / Si se puede actuar sobre un elemento, decidido con evidencia y política, aparte de su rol. |
+| Masked descriptor | Descriptor con máscara | 128-bit icon signature (64 gradient signs and 64 validity bits), compared only where both signatures are valid. / Firma de ícono de 128 bits (64 signos de gradiente y 64 bits de validez), comparada sólo donde ambas firmas son válidas. |
+| Track, `target_id` | Track, `target_id` | An element's identity across snapshots. Its ID is monotonic within a session and never reused. / La identidad de un elemento a lo largo de los snapshots. Su ID es monotónico en la sesión y nunca se reutiliza. |
+| Revision | Revisión | Counter that grows when something an action depends on changes: geometry, content, visibility, enablement or context. / Contador que crece cuando cambia algo de lo que depende una acción: geometría, contenido, visibilidad, habilitación o contexto. |
+| Tombstone | Tombstone | Record of a retired ID that prevents its reuse in the same session. / Registro de un ID retirado que impide reutilizarlo en la misma sesión. |
+| Policy gate | Compuerta de política | Local check, outside the agent's control, of permissions, freshness and focus before any input. / Comprobación local, fuera del control del agente, de permisos, vigencia y foco antes de cualquier entrada. |
+| Dry run | Dry run | Validation without input, reported as `simulated`; the default for every action. / Validación sin entrada, informada como `simulated`; el valor por defecto de toda acción. |
+| Delivery receipt | Recibo de entrega | The actuator's count of the events the OS accepted. It does not prove that the interface obeyed. / El conteo del actuador de los eventos que aceptó el SO. No prueba que la interfaz obedeciera. |
+| Effect verification | Verificación del efecto | Checking the declared postcondition after acting. A failure gives `indeterminate`, never a retry. / Comprobar la postcondición declarada tras actuar. Un fallo da `indeterminate`, nunca un reintento. |
+| `request_id` | `request_id` | Key chosen by the agent that deduplicates actions; the same key with other arguments is a `REQUEST_CONFLICT`. / Clave elegida por el agente que deduplica acciones; la misma clave con otros argumentos es un `REQUEST_CONFLICT`. |
+| MCP profile | Perfil MCP | The protocol revision the server speaks: modern 2026-07-28, or legacy 2025-11-25 when enabled. / La revisión del protocolo que habla el servidor: la moderna 2026-07-28, o la legacy 2025-11-25 si se habilita. |
+| Oracle | Oráculo | The Python reference implementation used for differential tests; never a runtime dependency. / La implementación de referencia en Python usada para pruebas diferenciales; nunca una dependencia del runtime. |
+| Port, adapter | Puerto, adaptador | A trait the core needs, and the code that implements it with one technology (DXGI, ONNX Runtime, `SendInput`, MCP). / Un trait que necesita el núcleo, y el código que lo implementa con una tecnología (DXGI, ONNX Runtime, `SendInput`, MCP). |
+| Spike (S0) | Spike (S0) | First stage of the plan: measures hardware, models, licences and APIs before the core is fixed. / Primera etapa del plan: mide hardware, modelos, licencias y APIs antes de fijar el núcleo. |

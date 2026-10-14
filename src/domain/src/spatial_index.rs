@@ -7,8 +7,9 @@ use crate::{ElementId, Point, Rect};
 ///
 /// A uniform grid is used instead of an R-tree because GUI elements have bounded,
 /// similar sizes and the scene is updated incrementally every tick: inserts and removals
-/// are O(buckets covered), point queries touch one bucket (see ADR-0005). Rectangle
-/// queries never cost more than the number of occupied buckets, whatever the query size.
+/// are O(buckets covered), point queries touch one bucket (see bootstrap ADR B0005).
+/// Rectangle queries never cost more than the number of occupied buckets, whatever the
+/// query size.
 #[derive(Debug, Clone)]
 pub struct SpatialIndex {
     bucket_size: u32,

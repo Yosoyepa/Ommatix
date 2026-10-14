@@ -1,0 +1,21 @@
+sequenceDiagram
+  participant A as Agente
+  participant M as MCP adapter
+  participant S as Snapshot / policy
+  participant O as Actuador SO
+  participant V as Verificador
+  A->>M: observe_screen
+  M->>S: construir y publicar snapshot
+  S-->>A: session + snapshot + IDs + revisions
+  A->>M: execute_action con precondiciones
+  M->>S: validar contexto y política
+  alt referencia inválida
+    S-->>A: rejected / observe_again
+  else dry_run
+    S-->>A: simulated; sin input
+  else autorizado
+    S->>O: entrada validada
+    O-->>S: recibo de entrega
+    S->>V: comprobar postcondición
+    V-->>A: effect_observed o indeterminate
+  end

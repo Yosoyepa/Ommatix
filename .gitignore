@@ -19,9 +19,15 @@ flamegraph*.svg
 
 # --- Logs & local environment ---
 *.log
+# Evidence of the thesis checks is versioned (docs/thesis/README.md)
+!docs/thesis/referencia_ejecutable/resultados/*.log
 .env
 .env.*
 !.env.example
+
+# --- Python (thesis oracle and validator) ---
+__pycache__/
+*.pyc
 
 # --- Editors / OS ---
 .idea/

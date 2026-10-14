@@ -1,0 +1,16 @@
+flowchart TD
+  MCP[Adaptador MCP] --> CO[Coordinador de observación]
+  CO --> CAP[Captura real]
+  CAP --> DP[Dirty planner / halo]
+  DP --> CV[Detector + OCR]
+  CV --> F[Fusión espacial]
+  CV --> IC[Caché de iconos]
+  IC --> F
+  F --> TR[Matching y registro temporal]
+  TR --> ST[Commit de snapshot inmutable]
+  ST --> MCP
+  MCP --> G[Policy + precondiciones]
+  ST --> G
+  G --> ACT[Actuador del SO]
+  ACT --> V[Verificador de efecto]
+  V --> CO

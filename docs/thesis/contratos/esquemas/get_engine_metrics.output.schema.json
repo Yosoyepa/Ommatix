@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ommatix get_engine_metrics.output v1.0",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "mode": {
+      "enum": [
+        "simulation",
+        "native"
+      ]
+    },
+    "observations": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "rejected_actions": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "delivered_actions": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pending_regions": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "models_loaded": {
+      "type": "boolean"
+    },
+    "timings_source": {
+      "enum": [
+        "not_measured",
+        "runtime_monotonic"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "mode",
+    "observations",
+    "rejected_actions",
+    "delivered_actions",
+    "pending_regions",
+    "models_loaded",
+    "timings_source"
+  ],
+  "additionalProperties": false
+}

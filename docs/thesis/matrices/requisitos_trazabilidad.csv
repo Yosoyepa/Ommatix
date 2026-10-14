@@ -1,0 +1,29 @@
+﻿id,nombre,criterio_aceptacion_propuesto,pruebas_planificadas,hito,estado_producto
+RF-01,Captura real,"Capturar pixels físicos, stride, formato y tiempo; detectar cambio de epoch.",IT-01,S0/S3,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-02,Diferenciación exacta,"Detectar todos los cambios RGB en fixtures, incluidos bordes y filas impares.",UT-01..UT-08,S1,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-03,Plan de regiones,"Cierre halo transitivo, fusión de solapes y fallback completo acotado.",UT-09..UT-12,S1,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-04,Transacción regional,Fallo/cancelación no confirma frame base ni borra evidencia publicada.,UT-13..UT-15,S1,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-05,Percepción real,Detector y OCR ejecutados con modelos/versiones/transformaciones registrados.,IT-02,S0/S3,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-06,Fusión,"Propiedad específica de texto, orden estable y asociación conservadora.",UT-16..UT-23,S1,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-07,Texto y affordance,No tratar huérfanos o placeholders como acciones/valores confirmados.,UT-24..UT-26,S1,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-08,Iconos,"Soporte, rechazo y contexto; nunca autoetiquetar desconocidos como certeza.",UT-27..UT-31,S2,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-09,Identidad,IDs de sesión sin colisión/reutilización; tracking uno-a-uno y revisión.,UT-32..UT-37,S2,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-10,Observación,"Snapshot completo versionado; orden estable, paginación, límites y expiración explícitos.",CT-01..CT-04,S2,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-11,Acción segura,"Validar sesión/snapshot/revisión, política, ventana/foco y frescura.",UT-38..UT-43,S2/S3,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-12,Actuación real,Click/type/scroll con permiso; reportar eventos entregados sin falso éxito.,IT-03,S3,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-13,Postcondiciones,"Separar entrega, cambio y efecto; timeout o incertidumbre sin retry ciego.",IT-04,S3,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-14,Deduplicación,request_id repetido no duplica input; conflicto y caída exigen reconciliación.,IT-05,S3,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-15,MCP,Perfil moderno y compatibilidad legacy sólo si se prueba explícitamente.,CT-05..CT-09,S2,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-16,Parada y privacidad,Actuación deshabilitada al inicio; parada local y telemetría redactada.,SEC-01..SEC-06,S3,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-17,Observabilidad,Métricas por etapa y motivos de rechazo; ninguna captura/texto crudo por defecto.,IT-06,S3,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-18,Demo funcional,Ejecutar flujos reales verificables en 3 aplicaciones permitidas.,E2E-01..E2E-03,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RNF-01,Corrección del core,100% de regresiones críticas aprobadas; cero referencia obsoleta ejecutada en suite.,UT/SEC,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RNF-02,Grounding útil,Precisión aceptada >=98% y cobertura >=85% en corpus de aceptación.,EV-01,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RNF-03,Éxito de tareas,Éxito global de al menos 90% y por aplicación de al menos 85% en el protocolo definido.,EV-02,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RNF-04,Latencia core,"p95 <=10 ms para 300 controles y 600 spans; sólo core, hardware fijado S0.",PERF-01,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RNF-05,Latencia percepción,Metas iniciales: incremental p95 <=150 ms; full warm p95 <=700 ms.,PERF-02,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RNF-06,Recursos,"Medir RSS/VRAM totales, cola acotada y sin crecimiento sostenido en soak de 2 h.",PERF-03,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RNF-07,Compatibilidad,"Win11 x64, monitor seleccionado y DPI 100/125/150%; rechazo explícito fuera de perfil.",IT-07,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RNF-08,Reproducibilidad,"Commit, lockfiles, modelos con hash/licencia, hardware y corpus congelados.",REL-01,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RNF-09,Protocolo acotado,Máx. solicitud 64 KiB; resultado 64 KiB; campos de texto con límites.,CT-10,S2,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RNF-10,Trazabilidad,"Cada RF/RNF tiene propietario, prueba, estado y evidencia; cambios mediante ADR.",DOC-01,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION

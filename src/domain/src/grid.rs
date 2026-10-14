@@ -127,8 +127,8 @@ impl GridSignature {
 }
 
 /// Hash of the colour of RGBA pixel rows, two pixels (one 64-bit word) at a time
-/// (ADR-0011 §6). Deterministic across runs and platforms (unlike `RandomState`) and
-/// dependency-free.
+/// (bootstrap ADR B0011 §6). Deterministic across runs and platforms (unlike `RandomState`)
+/// and dependency-free.
 ///
 /// - Each step `h = (h ^ word) * K; h ^= h >> 32` is a bijection of `h` for a fixed word,
 ///   so a change confined to two neighbouring pixels always changes the final hash.

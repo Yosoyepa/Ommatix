@@ -1,13 +1,19 @@
 # MVP code review (2026-10-14)
 
-Independent review of the MVP (PR #2 at `8f0415b`) against the ADRs, the Gherkin
+> **Scope.** This review covers the prototype built while the repository was bootstrapped,
+> before the thesis dossier ([`docs/thesis/`](../thesis/README.md)) was consolidated. The
+> ADRs it cites are archived in [`docs/adr/bootstrap/`](../adr/bootstrap/README.md) with a
+> `B` prefix. / Esta revisión cubre el prototipo del arranque, anterior a la consolidación de
+> la tesis; las ADR que cita están archivadas en `docs/adr/bootstrap/` con prefijo `B`.
+
+Independent review of the MVP (PR #2 at `8f0415b`) against the bootstrap ADRs, the Gherkin
 specification and general engineering practice (single responsibility, dependency
 injection, determinism, robustness on external input). Every finding was reproduced with a
 scratch test or a benchmark before being fixed; each fix ships with a regression test.
 
-Decisions taken as a result: [ADR-0010](../adr/0010-flat-region-detector.md) (detector),
-[ADR-0011](../adr/0011-incremental-perception-invariants.md) (pipeline invariants),
-[ADR-0012](../adr/0012-settled-actions-and-wire-contract.md) (settled actions, wire
+Decisions taken as a result: [B0010](../adr/bootstrap/B0010-flat-region-detector.md) (detector),
+[B0011](../adr/bootstrap/B0011-incremental-perception-invariants.md) (pipeline invariants),
+[B0012](../adr/bootstrap/B0012-settled-actions-and-wire-contract.md) (settled actions, wire
 contract).
 
 ## Findings and resolution
@@ -52,7 +58,7 @@ defects turned up (N1–N12). All are resolved in this PR, each with a regressio
 | 1 | A window flush with three screen edges (snapped to the left half, 960–1620 px wide) took over the screen border: the wallpaper became the element and the window vanished | Screen-edge surfaces are flat stretches covering at least half of an edge, measured on the whole frame; a snapped window and the wallpaper are both surfaces | `a_snapped_window_and_the_wallpaper_are_both_surfaces` (unit and pipeline) |
 | 2 | Screens packed with tiny segments (2×2 dots at a 3 px pitch, 3×3 random tiles) still took ≈ 15 s per 1080p frame: every grouping search scanned a 64 px bucket of some 450 boxes | Each grouping pass builds its own grid (4 px cells, coarser when sparse); output unchanged. 1080p dots 16 s → 0.15 s, text page 109 → 74 ms | `a_dotted_screen_is_one_element`, `random_tiles_are_grouped_deterministically`, `agrees_with_the_definitions_on_random_boxes`, `bench_dense_screens` |
 | 4 | The mapping was wrong on Linux X11 with a display scale | See N3 | See N3 |
-| 15 | With the real clock, frame counters in `structuredContent` (`observation.frames`, `first_seen`) differed between identical live runs | Not a code defect: those runs saw different numbers of frames. ADR-0012 now states the contract exactly: the same frame sequence gives byte-identical payloads | `conversations_are_reproducible_byte_for_byte` |
+| 15 | With the real clock, frame counters in `structuredContent` (`observation.frames`, `first_seen`) differed between identical live runs | Not a code defect: those runs saw different numbers of frames. B0012 now states the contract exactly: the same frame sequence gives byte-identical payloads | `conversations_are_reproducible_byte_for_byte` |
 | 18 | `Frame::from_rgba` and `Frame::solid` overflowed on huge sizes, `Rect::iou` on huge rectangles, and `DisplayMapping::to_os` instead of saturating | Checked buffer length (`FrameTooLarge`); IoU and the mapping computed in 128 bits, the mapping saturating | `rejects_sizes_that_overflow`, `iou_of_huge_rects`, `extreme_coordinates_saturate` |
 | 20 | U+2028, U+2029 and U+202E got through `type_text` | Line and paragraph separators and bidirectional marks, embeddings, overrides and isolates are refused | `invalid_requests_never_reach_the_controller`, `actuation.feature` |
 
@@ -87,7 +93,7 @@ fallar el servidor con argumentos enormes. Todos se corrigieron con una prueba d
 regresión cada uno: nuevo detector por regiones planas, invariantes del pipeline
 incremental, espera de estabilidad tras cada acción con reloj inyectado, mapeo de
 coordenadas HiDPI y un adaptador MCP robusto con DTOs propios. Las decisiones quedan en
-los ADR 0010, 0011 y 0012.
+los ADR del arranque B0010, B0011 y B0012.
 
 Una segunda revisión independiente verificó esas correcciones: 18 estaban completas, 5
 eran parciales y aparecieron 12 problemas nuevos. Los más graves: el borde de la pantalla
