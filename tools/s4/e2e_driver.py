@@ -1,51 +1,53 @@
 #!/usr/bin/env python3
-"""S4 reduced acceptance protocol: click-only end-to-end runs through ``ommatix serve``.
+"""S4 reduced acceptance protocol, second round (ADR-0017): supervised end-to-end runs.
 
 A minimal MCP 2026-07-28 client (the transport of ``tools/s3/mcp_driver.py``) that runs a
-fixed click-only flow N times in one of three authorized applications, each run being:
+fixed flow N times in one of three authorized applications through ``ommatix serve``. Each
+run is:
 
-    observe -> select the target by its exact OCR label -> execute_action (click,
-    dry_run: false, expected_effect: visual_change) -> observe again -> check the visible
-    text by OCR (and, where the OS offers one, by an independent check)
+    observe -> select the target by its exact label (observe_screen) -> execute_action
+    (dry_run: false, expected_effect: visual_change; ``type`` for the typing step) ->
+    observe again -> check the visible text by OCR where the flow asks for it -> check the
+    end state through an OS-side check that does not depend on the engine
 
-Applications and flows (docs/thesis/S4_ACEPTACION_REDUCIDA.md):
+Applications and flows (docs/thesis/S4_ACEPTACION_REDUCIDA.md, section "Segunda ronda con
+accesibilidad (ADR-0017)"):
 
-``testapp``    E2E-01, the controlled test application ``tools/s4/testapp``: ``Sumar`` x3
-               (``Valor: tres``), ``Reiniciar`` (``Valor: cero``), ``Activar`` twice
-               (``Estado: encendido`` / ``apagado``), ``Siguiente`` / ``Anterior``
-               (``Segunda`` / ``Primera página``). Independent check: the window title,
-               which mirrors the state, read through ``GetWindowTextW`` after every step.
-``calculator`` E2E-02, the Windows 11 Calculator. Its digit and operator buttons get no
-               OCR label, so the arithmetic flow cannot select targets by label; the only
-               flow left opens and closes the function flyout (OCR label ``Fundón``), and
-               the pilot showed that its box is grounded on the x² button: not scored.
+``testapp``    E2E-01, the controlled test application ``tools/s4/testapp``: the first-round
+               click flow (``Sumar`` x3, ``Reiniciar``, ``Activar`` x2, ``Siguiente``,
+               ``Anterior``), then a typing step into its text field ``Campo de texto`` (the
+               text ``prueba 123``). The OS-side check is the window title, which mirrors the
+               state and the typed text (``GetWindowTextW``) after every step.
+``calculator`` E2E-02, the Windows 11 Calculator: ``Siete``, ``Más``, ``Ocho``, ``Es igual a``
+               (the display must read 15), then ``Borrar``. The OS-side check is the UI
+               Automation name of the display after every click.
 ``notepad``    E2E-03, Notepad: open the ``Editar`` menu and close it with a second click on
-               ``Editar``. No menu item, tab or caption button is ever clicked.
+               ``Editar``. No menu item, tab or caption button is clicked and nothing is typed.
 
-After every delivered click the control under the cursor (where ``SendInput`` left it) is
-read through UI Automation, independently of the engine: its name, or the bounding
-rectangle of the window's element named like the label, must match the target
-("grounding"). An ``effect_observed`` whose title, display or grounding check fails is
-counted as an engine false success.
+After every delivered action the control under the cursor (where SendInput left it) is read
+through UI Automation: its name, or the bounding rectangle of the window's element with the
+label, must match the target ("grounding"). An ``effect_observed`` whose OS-side or grounding
+check fails is counted as an engine false success; there must be none.
 
 Live input goes only through the engine's gate; this script never injects input itself.
-It never types. It starts the test application and the Calculator itself and closes only
-the processes it started; Notepad is never started or closed: one existing window is
-restored and maximized on the primary monitor (window management, not input) and minimized
-again at the end if it was. A started window that opens on another monitor is moved to the
-primary one the same way. The
-operator's stop is ``[safety] stop_file``: the script creates it and ends the protocol on
-anything unexpected (the foreground is not the target application maximized on the
-primary monitor, an ambiguous label, the live budget exhausted).
+It types only into the test application's field. It starts the test application and the
+Calculator itself and closes only the processes it started. Notepad is never started or
+closed: one existing window is restored and maximized on the primary monitor (window
+management, not input) and minimized again at the end if it was. The operator's stop is
+``[safety] stop_file``: the script creates it and ends the protocol on anything unexpected
+(the foreground is not the target application maximized on the primary monitor, an
+ambiguous label, the live budget exhausted).
 
-Privacy (AGENTS.md rule 7, ADR-0012): nothing is saved but statuses, codes, counts,
-timings and booleans. Labels stay in memory; ``--mode probe`` prints only labels of the
-flow's fixed vocabulary (never for Notepad, whose restored tabs may hold the owner's text).
+Privacy (AGENTS.md rule 7, ADR-0012): nothing is saved but statuses, codes, counts, timings
+and booleans. Screen text stays in memory. ``--mode probe`` prints counts and the attributes
+of the flow's own fixed labels (the test application's and the Calculator's); it prints no
+label of Notepad, whose restored tabs may hold the owner's text.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import ctypes
 import hashlib
 import importlib.util
@@ -56,6 +58,7 @@ import subprocess
 import sys
 import time
 import tomllib
+import unicodedata
 from collections import Counter
 from ctypes import wintypes
 from pathlib import Path
@@ -67,7 +70,10 @@ _spec.loader.exec_module(s3)  # the S3 transport: Server, META, TIMINGS_KEY, Abo
 
 Abort = s3.Abort
 PAGE_LIMIT = 50
-LIVE_CAP = 400  # owner's ceiling for the whole protocol
+# The owner's ceiling for the whole protocol. Round 1 used 124 live requests (S4 report,
+# section 4.5) and its ledger was not kept with the runs, so the ledger starts at 124 and the
+# cap counts both rounds.
+LIVE_CAP = 400
 CREATE_NO_WINDOW = 0x08000000
 
 # ---- read-only Windows queries ------------------------------------------------------------
@@ -277,7 +283,6 @@ def cursor() -> tuple[int, int]:
 def uia_named_contains_cursor(hwnd, name: str) -> tuple[int, int]:
     """How many UI Automation elements of window `hwnd` are named `name`, and how many of
     them contain the cursor (where SendInput left it)."""
-    import base64
     x, y = cursor()
     script = (UIA_NAMED_PS.replace("__HWND__", str(int(hwnd))).replace("__X__", str(x))
               .replace("__Y__", str(y))
@@ -313,7 +318,7 @@ def uia_at_cursor() -> list[tuple[str, str, str]]:
 
 def calculator_display() -> str | None:
     """The Calculator display's UI Automation name (e.g. "La pantalla muestra 15"), read
-    through .NET UI Automation in a separate PowerShell; only its digits are used."""
+    through .NET UI Automation in a separate PowerShell; only its last number is used."""
     out = subprocess.run(["powershell", "-NoProfile", "-Command", CALC_DISPLAY_PS],
                          capture_output=True, text=True, encoding="utf-8", errors="replace",
                          check=False,
@@ -326,24 +331,38 @@ def calculator_display() -> str | None:
 
 # ---- flows --------------------------------------------------------------------------------
 
-TESTAPP_TITLE = "Ommatix S4 prueba [valor={} estado={} pagina={}]"
-
+TESTAPP_TITLE = "Ommatix S4 prueba [valor={} estado={} pagina={} texto={}]"
+TESTAPP_MARK = "texto="  # the title's field that mirrors the typed text
+TEXT_FIELD = "Campo de texto"  # the test application's field, by its accessible name
+TYPED_TEXT = "prueba 123"  # disposable; typed into that field only
+CALC_BUTTONS = ("Siete", "Más", "Ocho", "Es igual a", "Borrar")  # Spanish Windows names
+CARDINALS = ("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve")
+NOTEPAD_MENU = "Editar"
+# Words of the Editar menu's items (Windows 11 Notepad, es-ES); never clicked.
+NOTEPAD_MENU_ITEMS = ("Deshacer", "Cortar", "Copiar", "Pegar", "Eliminar", "Buscar",
+                      "Reemplazar", "Seleccionar", "Fuente")
+# A step whose end state the OCR does not check: only its OS-side check decides.
+NOT_BY_OCR = {"present": (), "absent": ()}
 
 CONTAINERS = {"Pane", "Window", "Group", "Custom", "Document"}
+
+
+def testapp_title(value: int, state: str, page: int, text: str = "") -> str:
+    return TESTAPP_TITLE.format(value, state, page, text)
 
 
 def named_control(label: str, chain: list[tuple[str, str, str]]) -> bool | None:
     """Whether the control under the cursor (or its parent) is named `label`. None when UI
     Automation only reached unnamed containers (XAML islands stop there): the caller then
     falls back to the bounding rectangle of the element named `label`."""
-    if any(name == label for _, name, _ in chain[:2]):
+    def same(name: str) -> bool:
+        return unicodedata.normalize("NFC", name) == unicodedata.normalize("NFC", label)
+
+    if any(same(name) for _, name, _ in chain[:2]):
         return True
     if not chain or all(ctype in CONTAINERS for _, _, ctype in chain[:2]):
         return None
     return False
-
-
-CARDINALS = ("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve")
 
 
 def value_check(v: int) -> dict:
@@ -351,13 +370,18 @@ def value_check(v: int) -> dict:
     return {"present": [CARDINALS[v]], "absent": [w for w in CARDINALS[:5] if w != CARDINALS[v]]}
 
 
-def testapp_flow() -> dict:
-    t = TESTAPP_TITLE.format
+def testapp_flow(focus_click: bool = False) -> dict:
+    t = testapp_title
+    # Focus first (--focus-click, a revision after the round-2 pilot, not yet run): a click
+    # on the field whose end state is the title unchanged. A type that arrives in the frame of
+    # its own focusing click is dropped by the field (egui handles text before it grants
+    # focus; S4 report, second round).
+    focus = [(TEXT_FIELD, NOT_BY_OCR, t(0, "off", 1))] if focus_click else []
     return {
         "exe": "ommatix-testapp.exe",
         "initial": {"present": ["cero", "apagado", "Primera"],
                     "absent": ["uno", "dos", "tres", "encendido", "Segunda"]},
-        # (label, OCR check afterwards, independent check: the window title)
+        # (label, OCR check afterwards, OS-side check: the window title[, text to type]).
         "steps": [
             ("Sumar", value_check(1), t(1, "off", 1)),
             ("Sumar", value_check(2), t(2, "off", 1)),
@@ -367,39 +391,38 @@ def testapp_flow() -> dict:
             ("Activar", {"present": ["apagado"], "absent": ["encendido"]}, t(0, "off", 1)),
             ("Siguiente", {"present": ["Segunda"], "absent": ["Primera"]}, t(0, "off", 2)),
             ("Anterior", {"present": ["Primera"], "absent": ["Segunda"]}, t(0, "off", 1)),
+            *focus,
+            (TEXT_FIELD, NOT_BY_OCR, t(0, "off", 1, TYPED_TEXT), TYPED_TEXT),
         ],
         "grounding": named_control,
         "vocabulary": {"Contador", "Interruptor", "Paginador", "Sumar", "Restar", "Reiniciar",
                        "Activar", "Siguiente", "Anterior", "Valor:", "Estado:", "página",
-                       "apagado", "encendido", "Primera", "Segunda", *CARDINALS},
-        "vocabulary_re": None,
+                       "apagado", "encendido", "Primera", "Segunda", "Texto", TEXT_FIELD,
+                       *CARDINALS},
     }
 
 
-def calculator_flow(label: str) -> dict:
-    """The digit and operator buttons are single glyphs that Windows OCR does not read, so
-    the arithmetic flow cannot select its targets by label (S4 report). The flow opens and
-    closes the Scientific mode's function flyout, whose button is labelled `label` by the
-    OCR, and checks that the display stays at 0 (UI Automation)."""
+def calculator_flow() -> dict:
+    """E2E-02, the Windows 11 Calculator: 7 + 8 = 15, then clear. The buttons are selected
+    by their UI Automation names, which the engine reports as accessibility labels
+    (ADR-0017). The display is checked after every click through its UI Automation name,
+    not by OCR: Windows OCR does not read the single-glyph keys (S4 report, finding 3)."""
     return {
         "exe": "calculatorapp.exe",
-        "initial": {"present": [label]},
-        # (label, OCR check afterwards, independent check: the display's UIA value)
+        "initial": {"exact": list(CALC_BUTTONS)},
+        "initial_display": "0",
+        # (label, OCR check (none), OS-side check: the display's number after the click)
         "steps": [
-            (label, ("ocr_set", "changed"), "0"),
-            (label, ("ocr_set", "restored"), "0"),
+            ("Siete", NOT_BY_OCR, "7"),
+            ("Más", NOT_BY_OCR, "7"),
+            ("Ocho", NOT_BY_OCR, "8"),
+            ("Es igual a", NOT_BY_OCR, "15"),
+            ("Borrar", NOT_BY_OCR, "0"),
         ],
-        "grounding": lambda _label, chain: (None if not chain else
-                                            any(aid == CALCULATOR_FLYOUT_ID for aid, _, _ in chain[:2])),
-        "vocabulary": {label},
+        "grounding": named_control,
+        "vocabulary": set(CALC_BUTTONS),
         "vocabulary_re": None,
     }
-
-
-NOTEPAD_MENU = "Editar"
-# Words of the Editar menu's items (Windows 11 Notepad, es-ES); never clicked.
-NOTEPAD_MENU_ITEMS = ("Deshacer", "Cortar", "Copiar", "Pegar", "Eliminar", "Buscar",
-                      "Reemplazar", "Seleccionar", "Fuente")
 
 
 def notepad_flow() -> dict:
@@ -411,14 +434,12 @@ def notepad_flow() -> dict:
         "steps": [(NOTEPAD_MENU, ("menu", "open"), None),
                   (NOTEPAD_MENU, ("menu", "closed"), None)],
         "grounding": named_control,
-        "vocabulary": {"Archivo", "Editar", "Ver", *NOTEPAD_MENU_ITEMS},
+        "vocabulary": set(),  # Notepad's labels are never printed (its tabs hold owner text)
         "vocabulary_re": None,
     }
 
 
 FLOWS = {"testapp": testapp_flow, "calculator": calculator_flow, "notepad": notepad_flow}
-CALCULATOR_FLYOUT_ID = "FuncButton"  # provisional: the flyout button's AutomationId
-CALCULATOR_LABEL = "Fundón"  # how Windows OCR (es-ES) reads the "Función" flyout button
 E2E_ID = {"testapp": "E2E-01", "calculator": "E2E-02", "notepad": "E2E-03"}
 
 # ---- the protocol ---------------------------------------------------------------------------
@@ -427,6 +448,13 @@ E2E_ID = {"testapp": "E2E-01", "calculator": "E2E-02", "notepad": "E2E-03"}
 def log(event: str, **fields) -> None:
     print(json.dumps({"t": round(time.monotonic(), 3), "event": event, **fields},
                      ensure_ascii=False), flush=True)
+
+
+def stage_ms(meta: dict) -> dict:
+    """The per-stage timings of a response's `_meta` (io.ommatix/timings), in milliseconds.
+    Includes `accessibility` when the stage ran (ADR-0017)."""
+    return {k.removesuffix("_us"): round(v / 1000, 3)
+            for k, v in meta.get(s3.TIMINGS_KEY, {}).items()}
 
 
 class Protocol:
@@ -439,10 +467,11 @@ class Protocol:
         self.live_sent = 0
         self.results: list[dict] = []
         self.started: set[int] = set()
-        self.initial_set: frozenset | None = None
-        self.menu_base: int | None = None
+        self.menu_base: int | None = None  # Notepad: the item count of the closed menu
         self.current: int | None = None  # the application kept between runs (--restart never)
         self.notepad: dict | None = None
+        self.app_hwnd = None
+        self.placements = 0
 
     # -- safety
     def engage_stop(self, reason: str) -> None:
@@ -489,12 +518,9 @@ class Protocol:
             if is_error:
                 raise Abort(f"observe_screen page failed: {page.get('code')}")
             elements.extend(page.get("elements", []))
-        timings = {k.removesuffix("_us"): round(v / 1000, 2)
-                   for k, v in meta.get(s3.TIMINGS_KEY, {}).items()}
         obs = {"frame_seq": first["frame_seq"], "epoch": first["geometry_epoch"],
                "elements": first["total_elements"], "degraded": first["degraded"],
-               "total_ms": timings.get("total"), "detect_ms": timings.get("detect"),
-               "rtt_ms": round(ms, 1)}
+               "rtt_ms": round(ms, 1), "stages_ms": stage_ms(meta)}
         return first, elements, obs
 
     @staticmethod
@@ -509,10 +535,6 @@ class Protocol:
             return found[0]
         return None
 
-    def ocr_set(self, elements: list[dict]) -> frozenset:
-        return frozenset(e.get("label", "").strip() for e in elements
-                         if e.get("label", "").strip())
-
     @staticmethod
     def words(elements: list[dict]) -> Counter:
         """The OCR words of every label: a control's label joins the words inside its box,
@@ -520,46 +542,47 @@ class Protocol:
         return Counter(w for e in elements for w in e.get("label", "").split())
 
     def ocr_ok(self, elements: list[dict], check) -> bool:
-        labels = self.words(elements)
-        if isinstance(check, tuple) and check[0] == "ocr_set":
-            now = self.ocr_set(elements)
-            base = self.initial_set or frozenset()
-            added = len(now - base)
-            if check[1] == "changed":
-                return added >= 3
-            return added <= 1 and len(base - now) <= 1
+        if check is NOT_BY_OCR:
+            return True
         if isinstance(check, tuple) and check[0] == "menu":
             # Item words visible now, against the closed menu of the initial state (the
             # document may contain some of these words too).
-            n = sum(labels.get(item, 0) for item in NOTEPAD_MENU_ITEMS)
+            words = self.words(elements)
+            n = sum(words.get(item, 0) for item in NOTEPAD_MENU_ITEMS)
             if self.menu_base is None:  # the initial check sets the closed-menu baseline
                 self.menu_base = n
                 return check[1] == "closed"
             return n >= self.menu_base + 3 if check[1] == "open" else n <= self.menu_base
-        return (all(labels.get(text) for text in check.get("present", ()))
-                and not any(labels.get(text) for text in check.get("absent", ())))
+        if isinstance(check, dict) and "exact" in check:
+            labels = self.labels(elements)
+            return all(labels.get(text) for text in check["exact"])
+        words = self.words(elements)
+        return (all(words.get(text) for text in check.get("present", ()))
+                and not any(words.get(text) for text in check.get("absent", ())))
 
     def probe_print(self, elements: list[dict]) -> None:
-        vocab, rx = self.flow["vocabulary"], self.flow["vocabulary_re"]
-        shown = Counter()
-        hidden = 0
-        for e in elements:
-            label = e.get("label", "").strip()
-            if label in vocab or (rx is not None and rx.match(label)):
-                shown[(label, e["actionability"], e["role"], e["label_source"])] += 1
-            else:
-                hidden += 1
-        log("probe", vocabulary_labels=[list(k) + [n] for k, n in sorted(shown.items())],
-            other_elements=hidden,
-            label_lengths=dict(sorted(Counter(min(len(e.get("label", "").strip()), 10)
-                                              for e in elements).items())),
+        """Counts, and the attributes (never the text of other labels) of the flow's own
+        fixed labels. Notepad prints counts only."""
+        vocab = self.flow["vocabulary"]
+        fixed = {}
+        if self.args.app != "notepad":
+            for label in sorted(vocab):
+                rows = Counter((e["role"], e["actionability"], e["label_source"])
+                               for e in elements if e.get("label", "").strip() == label)
+                if rows:
+                    fixed[label] = [[*key, n] for key, n in sorted(rows.items())]
+        # How many elements carry each step's target label, without the label itself: a
+        # target must be unique and confirmed before any live action.
+        step_targets = {step[0]: None for step in self.flow["steps"]}
+        step_rows = [[[*key, n] for key, n in sorted(Counter(
+            (e["role"], e["actionability"], e["label_source"]) for e in elements
+            if e.get("label", "").strip() == label).items())] for label in step_targets]
+        log("probe", fixed_labels=fixed, step_targets=step_rows,
+            vocabulary_elements=sum(1 for e in elements if e.get("label", "").strip() in vocab),
+            elements=len(elements),
             label_source=dict(Counter(e["label_source"] for e in elements)),
+            roles=dict(Counter(e["role"] for e in elements)),
             actionability=dict(Counter(e["actionability"] for e in elements)))
-        if self.args.app == "calculator" and self.args.show_calculator_labels:
-            # The Calculator's own text is disposable; shown for protocol design only.
-            log("probe_calculator_labels", labels=sorted(
-                (e.get("label", "").strip(), e["zone"], e["actionability"]) for e in elements
-                if e.get("label", "").strip()))
 
     # -- app lifecycle
     def notepad_window(self) -> int:
@@ -640,10 +663,10 @@ class Protocol:
     # -- one run
     def run_once(self, n: int) -> dict:
         res = {"e2e": E2E_ID[self.args.app], "run": n, "success": False, "steps": 0,
-               "actions_requested": 0, "delivered": 0, "effect_observed": 0, "indeterminate": 0,
-               "rejected": 0, "stale_retries": 0, "ocr_checks_failed": 0,
-               "independent_checks": 0, "independent_failed": 0, "engine_false_success": 0,
-               "observations": [], "actions": [], "failure": None}
+               "actions_requested": 0, "delivered": 0, "typed_delivered": 0,
+               "effect_observed": 0, "indeterminate": 0, "rejected": 0, "stale_retries": 0,
+               "ocr_checks_failed": 0, "independent_checks": 0, "independent_failed": 0,
+               "engine_false_success": 0, "observations": [], "actions": [], "failure": None}
         start = time.perf_counter()
         res["user_idle_s_at_start"] = idle_seconds()
         reuse = self.args.restart == "never" and self.current is not None
@@ -660,7 +683,7 @@ class Protocol:
             res["restarted"] = pid in self.started
             ok, requests = self.wait_foreground(pid)
         res["activation_requests"] = requests
-        res["window_placements"] = getattr(self, "placements", 0)
+        res["window_placements"] = self.placements
         res["foreground_wait_s"] = round(time.perf_counter() - start, 2)
         if not ok:
             res["failure"] = "the application did not reach the foreground maximized"
@@ -675,11 +698,11 @@ class Protocol:
             time.sleep(self.args.settle)  # let a new window finish its first paints
         # Settle: observe until the initial state is visible (the window may still paint).
         elements = []
+        snap = None
         for _ in range(6):
             snap, elements, obs = self.observe()
             res["observations"].append(obs)
             if self.ocr_ok(elements, self.flow["initial"]):
-                self.initial_set = self.ocr_set(elements)
                 break
             time.sleep(0.5)
         else:
@@ -687,17 +710,31 @@ class Protocol:
         if self.args.mode == "probe":
             self.probe_print(elements)
         if res["failure"] is None and self.args.app == "testapp":
+            initial = testapp_title(0, "off", 1)
             for _ in range(10):  # the title may lag the first paint by a few frames
-                if window_title(hwnd) == TESTAPP_TITLE.format(0, "off", 1):
+                if window_title(hwnd) == initial:
                     break
                 time.sleep(0.2)
-            if window_title(hwnd) != TESTAPP_TITLE.format(0, "off", 1):
+            if window_title(hwnd) != initial:
                 fg = foreground()
                 ours = fg["pid"] == pid and fg["hwnd"] == hwnd
-                title = window_title(hwnd) if ours else ""
+                now = window_title(hwnd)
+                # Diagnostics without text: the title's shape and the foreground's identity.
+                log("initial_title_mismatch", title_chars=len(now),
+                    head_matches=now.partition(TESTAPP_MARK)[0] == initial.partition(TESTAPP_MARK)[0],
+                    text_chars=len(now.partition(TESTAPP_MARK)[2].rstrip("]")), ours=ours,
+                    foreground_exe=fg["exe"], launched_pid_is_foreground=fg["pid"] == pid)
                 res["failure"] = ("initial title differs"
-                                  + (f" ({title!r})" if title.startswith("Ommatix S4") else
-                                     " (not the test application's window)"))
+                                  + ("" if ours else " (not the test application's window)"))
+        if res["failure"] is None and self.args.app == "calculator":
+            display = None
+            for _ in range(10):  # the display may lag the first paint
+                display = calculator_display()
+                if display == self.flow["initial_display"]:
+                    break
+                time.sleep(0.5)
+            if display != self.flow["initial_display"]:
+                res["failure"] = "initial display differs"
         if res["failure"] is None and self.args.mode == "run":
             self.steps(res, snap, elements, hwnd, pid)
         res["total_s"] = round(time.perf_counter() - start, 2)
@@ -706,8 +743,31 @@ class Protocol:
             self.current = None
         return res
 
+    def os_check(self, hwnd, expected: str) -> bool:
+        """The end state read by the OS, not by the engine: the test application's window
+        title, or the Calculator display's UI Automation name. Read up to 8 times, since a
+        repaint may lag the action."""
+        now = None
+        for _ in range(8):
+            now = window_title(hwnd) if self.args.app == "testapp" else calculator_display()
+            if now == expected:
+                return True
+            time.sleep(0.25)
+        if self.args.app == "testapp" and now is not None and TESTAPP_MARK in expected:
+            # Diagnostics without text (ADR-0012): how the title's typed part compares.
+            typed_now = now.partition(TESTAPP_MARK)[2].rstrip("]")
+            typed_expected = expected.partition(TESTAPP_MARK)[2].rstrip("]")
+            log("os_check_mismatch", title_chars=len(now), text_chars=len(typed_now),
+                expected_text_chars=len(typed_expected),
+                text_is_prefix=typed_expected.startswith(typed_now),
+                text_is_suffix=typed_expected.endswith(typed_now),
+                head_matches=now.partition(TESTAPP_MARK)[0] == expected.partition(TESTAPP_MARK)[0])
+        return False
+
     def steps(self, res: dict, snap: dict, elements: list[dict], hwnd, pid) -> None:
-        for label, ocr_check, independent in self.flow["steps"]:
+        for step in self.flow["steps"]:
+            label, ocr_check, independent, *rest = step
+            text = rest[0] if rest else None  # a typing step has its text
             res["steps"] += 1
             target = None
             for _ in range(3):
@@ -720,26 +780,41 @@ class Protocol:
             if target is None:
                 res["failure"] = f"step {res['steps']}: target label not found or not confirmed"
                 return
+            if text is not None and target["role"] != "input":
+                res["failure"] = f"step {res['steps']}: the typing target is not a confirmed input"
+                return
             out = None
             for attempt in range(4):  # again only after STALE_SNAPSHOT (nothing delivered)
                 self.require_foreground()
                 self.spend_live()
                 res["actions_requested"] += 1
-                args = {"request_id": f"s4-{self.args.app}-{res['run']}-{res['steps']}-{attempt + 1}",
+                kind = "click" if text is None else "type"
+                # A click's effect is a visual change. Typing asks for value_updated: the engine
+                # verifies only visual changes (chapter 07 §7.5), so it reports indeterminate
+                # for a typing, and the OS-side check decides. visual_change would accept the
+                # focusing click alone (pilot, S4 report §4.6).
+                effect = "visual_change" if text is None else "value_updated"
+                args = {"request_id": f"s4r2-{self.args.app}-{res['run']}-{res['steps']}-{attempt + 1}",
                         "session_id": snap["session_id"], "snapshot_id": snap["snapshot_id"],
                         "geometry_epoch": snap["geometry_epoch"],
                         "target_id": target["target_id"], "expected_revision": target["revision"],
-                        "action": "click", "dry_run": False, "expected_effect": "visual_change"}
+                        "action": kind, "dry_run": False, "expected_effect": effect}
+                if text is not None:
+                    args["text"] = text
                 out, _, meta, ms = self.srv.call("execute_action", args)
                 err = (out.get("error") or {}).get("code")
-                act = {"step": res["steps"], "status": out.get("status"),
+                act = {"step": res["steps"], "action": kind, "expected_effect": effect,
+                       "status": out.get("status"),
                        "input_delivered": out.get("input_delivered"), "verified": out.get("verified"),
                        "observed_effect": out.get("observed_effect"), "error": err,
-                       "rtt_ms": round(ms, 1)}
+                       "rtt_ms": round(ms, 1), "stages_ms": stage_ms(meta),
+                       "target_role": target["role"], "label_source": target["label_source"]}
                 res["actions"].append(act)
                 log("action", run=res["run"], **act)
                 if out.get("input_delivered"):
                     res["delivered"] += 1
+                    if text is not None:
+                        res["typed_delivered"] += 1
                 if out.get("status") == "effect_observed":
                     res["effect_observed"] += 1
                 elif out.get("status") == "indeterminate":
@@ -758,27 +833,25 @@ class Protocol:
                     continue
                 break
             if out.get("status") == "rejected":
-                res["failure"] = f"step {res['steps']}: rejected ({(out.get('error') or {}).get('code')})"
-                if (out.get("error") or {}).get("code") == "POLICY_DENIED":
+                res["failure"] = f"step {res['steps']}: rejected ({err})"
+                if err == "POLICY_DENIED":
                     self.engage_stop("POLICY_DENIED during the protocol")
                 return
             # Independent grounding: which control is under the cursor (UI Automation).
             if out.get("input_delivered") and self.flow.get("grounding"):
                 chain = uia_at_cursor()
                 hit = self.flow["grounding"](label, chain)
-                if hit is None and self.args.app != "calculator":
+                if hit is None:
                     count, inside = uia_named_contains_cursor(self.app_hwnd, label)
                     hit = None if count == 0 else inside > 0
                     res.setdefault("grounding_by_rect", []).append([count, inside])
                 res.setdefault("grounding", []).append(hit)
                 if hit is False:
                     res["grounding_wrong"] = res.get("grounding_wrong", 0) + 1
-                if self.args.app == "calculator" and self.args.show_calculator_labels:
-                    log("probe_calculator_uia", chain=chain)
                 if self.args.debug_grounding:
                     log("grounding_chain", step=res["steps"], hit=hit,
                         chain=[(aid, ctype, name == label) for aid, name, ctype in chain])
-            # Re-observe and check the visible text (no retry of a delivered click).
+            # Re-observe (the next step needs fresh targets) and check the visible text.
             passed = False
             for _ in range(4):
                 snap, elements, obs = self.observe()
@@ -790,30 +863,23 @@ class Protocol:
             indep_ok = True
             if independent is not None:
                 res["independent_checks"] += 1
-                if self.args.app == "testapp":
-                    indep_ok = window_title(hwnd) == independent
-                else:
-                    indep_ok = calculator_display() == independent
+                indep_ok = self.os_check(hwnd, independent)
                 if not indep_ok:
                     res["independent_failed"] += 1
-            if self.args.app == "calculator" and self.args.show_calculator_labels:
-                now = self.ocr_set(elements)
-                log("probe_calculator_delta", added=sorted(now - (self.initial_set or frozenset())),
-                    removed=sorted((self.initial_set or frozenset()) - now))
             grounded = (res.get("grounding") or [None])[-1] if out.get("input_delivered") else None
-            # A false success: the engine reported the effect while the independent evidence
-            # (the title, the display, the control under the cursor) says the intended effect
-            # did not happen.
+            # A false success: the engine reported the effect while the OS-side evidence or
+            # the control under the cursor says the intended effect did not happen.
             if out.get("status") == "effect_observed" and (not indep_ok or grounded is False):
                 res["engine_false_success"] += 1
-            if not passed and indep_ok and grounded is not False:
-                res["ocr_false_negative"] = res.get("ocr_false_negative", 0) + 1
-            if passed and (not indep_ok or grounded is False):
-                res["ocr_false_positive"] = res.get("ocr_false_positive", 0) + 1
+            if ocr_check is not NOT_BY_OCR:  # OCR counters only where OCR decides a step
+                if not passed and indep_ok and grounded is not False:
+                    res["ocr_false_negative"] = res.get("ocr_false_negative", 0) + 1
+                if passed and (not indep_ok or grounded is False):
+                    res["ocr_false_positive"] = res.get("ocr_false_positive", 0) + 1
             if not passed and self.args.app == "testapp":
                 vocab = self.flow["vocabulary"]
                 log("ocr_check_failed", run=res["run"], step=res["steps"],
-                    tokens=sorted(k for k in self.words(elements) if k in vocab))
+                    matched=sum(1 for k in self.words(elements) if k in vocab))
             if not passed or not indep_ok:
                 if not passed:
                     res["ocr_checks_failed"] += 1
@@ -838,10 +904,7 @@ class Protocol:
             failures = 0 if res["success"] else failures + 1
             if failures >= 3:
                 self.engage_stop("three consecutive failed runs")
-            if self.args.app == "notepad":
-                time.sleep(self.args.pause)
-            else:
-                time.sleep(self.args.pause)
+            time.sleep(self.args.pause)
 
 
 def main() -> int:
@@ -858,15 +921,17 @@ def main() -> int:
                    help="file holding the protocol's live request count (cap 400)")
     p.add_argument("--results", type=Path, required=True, help="JSONL file to append runs to")
     p.add_argument("--testapp-exe", default=str(HERE / "testapp" / "target" / "release" / "ommatix-testapp.exe"))
-    p.add_argument("--session-id", default="s4")
+    p.add_argument("--session-id", default="s4r2")
     p.add_argument("--output", type=int, default=0)
     p.add_argument("--foreground-wait", type=float, default=600.0)
     p.add_argument("--pause", type=float, default=1.0)
     p.add_argument("--settle", type=float, default=1.5,
                    help="seconds to wait after a newly started window reaches the foreground")
-    p.add_argument("--show-calculator-labels", action="store_true")
+    p.add_argument("--focus-click", action="store_true",
+                   help="testapp: click the field once before typing (revision after the second "
+                        "round's pilot; not yet executed)")
     p.add_argument("--debug-grounding", action="store_true",
-                   help="log the AutomationId and ControlType under the cursor (never names)")
+                   help="log the AutomationId and ControlType under the cursor and whether each name matches (never names)")
     p.add_argument("--restart", choices=["each", "never"], default="each",
                    help="each: start and close the application around every run; never: one "
                         "start per invocation, every run checks the initial state first")
@@ -890,8 +955,9 @@ def main() -> int:
             "--config", str(args.config), "--session-id", args.session_id]
     if live:
         argv += ["--input", "sendinput"]
-    flow = FLOWS[args.app](CALCULATOR_LABEL) if args.app == "calculator" else FLOWS[args.app]()
+    flow = testapp_flow(args.focus_click) if args.app == "testapp" else FLOWS[args.app]()
     log("start", app=args.app, mode=args.mode, runs=args.runs, live_input=live,
+        focus_click=args.focus_click,
         config_sha256=hashlib.sha256(raw).hexdigest(), max_live=args.max_live)
     srv = s3.Server(argv)
     proto = Protocol(args, srv, stop_file, flow, args.ledger)

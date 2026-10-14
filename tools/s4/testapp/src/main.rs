@@ -7,13 +7,16 @@
 //!   `Valor: cero` .. `Valor: nueve`;
 //! - a toggle: an `Activar` button and the text `Estado: apagado` / `Estado: encendido`;
 //! - a pager: `Anterior` and `Siguiente` buttons and the text `Primera página` ..
-//!   `Novena página`.
+//!   `Novena página`;
+//! - a text field, named `Campo de texto`: a plain egui `TextEdit` whose contents are
+//!   mirrored in the window title, so a `type` step is checked through the OS. Its accessible
+//!   name is set on its AccessKit node and not drawn, so UI Automation reports an editable
+//!   field and OCR reads no second copy of the name.
 //!
 //! Every effect of a click is visible text, so an end-to-end run can verify its end state
 //! by OCR alone. OCR returns one element per word, so each state is spelt with a word that
 //! appears nowhere else in the window (cardinals for the counter, ordinals for the pager):
-//! digits would be ambiguous. The window has no text field, so the protocol needs no `type`. Nothing
-//! moves on its own: the window only repaints after input.
+//! digits would be ambiguous. Nothing moves on its own: the window only repaints after input.
 
 #![windows_subsystem = "windows"]
 
@@ -38,7 +41,11 @@ struct State {
     value: u8,
     on: bool,
     page: u8,
+    text: String,
 }
+
+/// The longest text the field takes: a disposable string, far below the contract's limit.
+const TEXT_LIMIT: usize = 64;
 
 impl Default for State {
     fn default() -> Self {
@@ -46,6 +53,7 @@ impl Default for State {
             value: 0,
             on: false,
             page: 1,
+            text: String::new(),
         }
     }
 }
@@ -89,15 +97,16 @@ impl State {
         format!("{} página", ORDINALS[usize::from(self.page - 1)])
     }
 
-    /// The window title: the whole state in a fixed ASCII form, so that an end-to-end run
-    /// can check its end state through the OS (`GetWindowTextW`), independently of the
-    /// engine's OCR.
+    /// The window title: the whole state in a fixed form, so that an end-to-end run can check
+    /// its end state through the OS (`GetWindowTextW`), independently of the engine's OCR.
+    /// The text field is mirrored last, as the text the user typed.
     fn title(&self) -> String {
         format!(
-            "Ommatix S4 prueba [valor={} estado={} pagina={}]",
+            "Ommatix S4 prueba [valor={} estado={} pagina={} texto={}]",
             self.value,
             if self.on { "on" } else { "off" },
-            self.page
+            self.page,
+            self.text
         )
     }
 }
@@ -142,16 +151,40 @@ fn section(
     pressed
 }
 
+/// The text field: a plain `TextEdit`. Its accessible name is set on its AccessKit node, so
+/// UI Automation reports an editable field named `Campo de texto`, and nothing is drawn for
+/// OCR. Returns whether its contents changed.
+fn text_field(ui: &mut egui::Ui, text: &mut String) -> bool {
+    ui.vertical_centered(|ui| {
+        ui.label(egui::RichText::new("Texto").size(HEADING_TEXT));
+        ui.add_space(30.0);
+        let edit = ui.add(
+            egui::TextEdit::singleline(text)
+                .char_limit(TEXT_LIMIT)
+                .desired_width(BUTTON_SIZE[0])
+                .font(egui::FontId::proportional(BUTTON_TEXT)),
+        );
+        ui.ctx()
+            .accesskit_node_builder(edit.id, |node| node.set_label("Campo de texto"));
+        edit.changed()
+    })
+    .inner
+}
+
 impl eframe::App for TestApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
             ui.add_space(60.0);
+            let value = self.state.value_text();
+            let toggle = self.state.toggle_text();
+            let page = self.state.page_text();
             let mut pressed = None;
-            ui.columns(3, |columns| {
+            let mut text_changed = false;
+            ui.columns(4, |columns| {
                 pressed = pressed.or(section(
                     &mut columns[0],
                     "Contador",
-                    &self.state.value_text(),
+                    &value,
                     &[
                         ("Sumar", Command::Add),
                         ("Restar", Command::Subtract),
@@ -161,21 +194,24 @@ impl eframe::App for TestApp {
                 pressed = pressed.or(section(
                     &mut columns[1],
                     "Interruptor",
-                    self.state.toggle_text(),
+                    toggle,
                     &[("Activar", Command::Toggle)],
                 ));
                 pressed = pressed.or(section(
                     &mut columns[2],
                     "Paginador",
-                    &self.state.page_text(),
+                    &page,
                     &[
                         ("Siguiente", Command::Next),
                         ("Anterior", Command::Previous),
                     ],
                 ));
+                text_changed = text_field(&mut columns[3], &mut self.state.text);
             });
             if let Some(command) = pressed {
                 self.state.apply(command);
+            }
+            if pressed.is_some() || text_changed {
                 ui.ctx()
                     .send_viewport_cmd(egui::ViewportCommand::Title(self.state.title()));
             }
@@ -265,10 +301,28 @@ mod tests {
     #[test]
     fn the_title_carries_the_whole_state() {
         let mut s = State::default();
-        assert_eq!(s.title(), "Ommatix S4 prueba [valor=0 estado=off pagina=1]");
+        assert_eq!(
+            s.title(),
+            "Ommatix S4 prueba [valor=0 estado=off pagina=1 texto=]"
+        );
         s.apply(Command::Add);
         s.apply(Command::Toggle);
         s.apply(Command::Next);
-        assert_eq!(s.title(), "Ommatix S4 prueba [valor=1 estado=on pagina=2]");
+        assert_eq!(
+            s.title(),
+            "Ommatix S4 prueba [valor=1 estado=on pagina=2 texto=]"
+        );
+    }
+
+    #[test]
+    fn the_title_mirrors_the_text_field() {
+        let s = State {
+            text: "prueba 123".to_owned(),
+            ..State::default()
+        };
+        assert_eq!(
+            s.title(),
+            "Ommatix S4 prueba [valor=0 estado=off pagina=1 texto=prueba 123]"
+        );
     }
 }
