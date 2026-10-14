@@ -21,6 +21,7 @@ mod view;
 mod tests;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use ommatix_domain::fusion::FusionParams;
 use ommatix_domain::identity::AssociationPolicy;
@@ -39,6 +40,36 @@ pub use journal::JOURNAL_CAPACITY;
 use journal::Journal;
 use observe::Published;
 
+/// How long the engine looks for an action's visual effect after delivering it (SDD §2.9,
+/// chapter 07 §7.4: the deadline of BDD-29). After delivery it captures, compares with
+/// the frame captured right before delivery and, while no change shows, waits `poll` on
+/// the injected [`Clock`] and captures again, until `timeout` has elapsed since delivery.
+/// A change within the window is `effect_observed`; none is `indeterminate`. Only the
+/// screen is read again: the input is never sent twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VerifyParams {
+    /// The window after delivery. Zero: a single check right after delivery.
+    pub timeout: Duration,
+    /// The wait between two verification captures (at least 1 ms is used).
+    pub poll: Duration,
+}
+
+impl VerifyParams {
+    /// `[engine] verify_timeout_ms` of the dossier template.
+    pub const DEFAULT_TIMEOUT: Duration = Duration::from_millis(500);
+    /// `[engine] verify_poll_ms` of the dossier template.
+    pub const DEFAULT_POLL: Duration = Duration::from_millis(50);
+}
+
+impl Default for VerifyParams {
+    fn default() -> Self {
+        Self {
+            timeout: Self::DEFAULT_TIMEOUT,
+            poll: Self::DEFAULT_POLL,
+        }
+    }
+}
+
 /// Engine parameters; the defaults are the thesis's initial values
 /// (`plantillas/configuracion_mvp.toml`).
 #[derive(Debug, Clone, PartialEq)]
@@ -51,6 +82,8 @@ pub struct EngineConfig {
     /// Algorithm 3A. `None` (the default): no icon is resolved and icon labels stay
     /// unknown.
     pub icons: Option<IconResolverConfig>,
+    /// The settle window of effect verification.
+    pub verify: VerifyParams,
 }
 
 impl EngineConfig {
@@ -61,6 +94,7 @@ impl EngineConfig {
             fusion: FusionParams::default(),
             association: AssociationPolicy::default(),
             icons: None,
+            verify: VerifyParams::default(),
         }
     }
 }

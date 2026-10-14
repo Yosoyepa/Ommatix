@@ -91,13 +91,17 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   `tools/s3/mcp_driver.py`. Cuatro clics reales sobre el menú Archivo llegaron al SO; la
   parada del operador, la comprobación de vigencia y la política rechazaron el resto sin
   enviar nada. SEC-01 queda ejecutada; IT-01, IT-03, IT-05, SEC-02 y SEC-05, en parte. Un
-  resultado `indeterminate` dice ahora si el actuador entregó la entrada.
+  resultado `indeterminate` dice ahora si el actuador entregó la entrada. Desde entonces se
+  corrigieron dos hallazgos que esperan una nueva corrida supervisada: la comprobación del
+  efecto espera ahora el redibujado dentro de un plazo acotado (`[engine]
+  verify_timeout_ms`, 500 ms, con capturas cada `verify_poll_ms`, 50 ms; nunca reenvía la
+  entrada), y el capturador DXGI ya no devuelve un primer frame en blanco.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase, unos 7,5 s por
   inferencia en CPU), así que por defecto el detector es el buscador de regiones de color
   plano del arranque (roles `unknown`) y no hay OCR; no se ha probado un cliente MCP de
-  terceros; la comprobación visual justo después de entregar nunca vio el efecto en vivo
-  (necesita un plazo); IT-02 sólo se ejecutó en parte (S0); e IT-04, IT-06, IT-07, SEC-03,
+  terceros; el plazo de verificación y la corrección del primer frame DXGI aún no se han
+  vuelto a ejecutar en vivo; IT-02 sólo se ejecutó en parte (S0); e IT-04, IT-06, IT-07, SEC-03,
   SEC-04 y SEC-06 no se han ejecutado de forma supervisada. La
   entrada real sigue **apagada** salvo que el operador la habilite (abajo). La
   [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo que
@@ -123,8 +127,8 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   macOS y X11 del arranque. Primera parte hecha: los adaptadores DXGI, `SendInput`, ONNX y
   OCR de Windows tras features de compilación, el archivo de parada del operador y la
   comprobación del foco antes de escribir; primeras corridas supervisadas con entrada real
-  sobre `notepad.exe`; falta: un detector para el producto, un plazo de verificación y
-  comprobar efectos más allá del cambio visual, un cliente MCP de terceros y el resto de
+  sobre `notepad.exe`; falta: un detector para el producto, volver a ejecutar en vivo el
+  plazo de verificación, comprobar efectos más allá del cambio visual, un cliente MCP de terceros y el resto de
   corridas supervisadas
 - [ ] **S4, aceptación:** 450 corridas de extremo a extremo en aplicaciones controladas,
   benchmarks, soak e informe de aceptación
@@ -221,7 +225,7 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
 
 - **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
   rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
-  `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `max_message_bytes`
+  `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `max_message_bytes`
   4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`
   en blanco); y valores que este binario no puede cumplir: un `platform` distinto de
   `windows`, un `snapshot_policy`

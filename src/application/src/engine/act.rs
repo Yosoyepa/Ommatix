@@ -16,6 +16,8 @@
 //! that meets it is `POLICY_DENIED` and sends nothing. It never undoes what was already
 //! delivered: those results stay recorded as they were reported.
 
+use std::time::Duration;
+
 use ommatix_domain::fusion::Role;
 use ommatix_domain::identity::{ActionRef, ActionRejection, ActionStatus, Clearance, Delivery};
 use ommatix_domain::incremental::{BgraFrame, dirty_tiles};
@@ -380,7 +382,8 @@ impl Engine {
                 } else {
                     Outcome::uncertain(
                         true,
-                        "input was delivered but no visual change was observed",
+                        "input was delivered but no visual change was observed within the \
+                         verification window; do not retry",
                     )
                 }
             }
@@ -393,10 +396,36 @@ impl Engine {
         }
     }
 
-    /// Whether a fresh capture differs from `before`, the frame captured right before
-    /// delivery; changes that happened earlier are not this action's effect. Nothing is
-    /// published.
+    /// Whether the screen differs from `before`, the frame captured right before
+    /// delivery, within the settle window ([`VerifyParams`](super::VerifyParams)): a
+    /// check right away, then one every `poll` on the injected clock until `timeout` has
+    /// elapsed. Changes that happened before delivery are not this action's effect. Only
+    /// captures: nothing is published and no input is sent again.
     fn screen_changed_since(&mut self, before: &BgraFrame) -> bool {
+        let verify = self.config.verify;
+        let poll = verify.poll.max(Duration::from_millis(1));
+        // Bounds the captures even under a clock that does not advance.
+        let max_waits = verify.timeout.as_nanos().div_ceil(poll.as_nanos());
+        let start = self.ports.clock.now();
+        let mut waits = 0u128;
+        loop {
+            if self.capture_differs(before) {
+                return true;
+            }
+            let elapsed = self.ports.clock.now().saturating_sub(start);
+            let Some(left) = verify.timeout.checked_sub(elapsed) else {
+                return false;
+            };
+            if left.is_zero() || waits >= max_waits {
+                return false;
+            }
+            self.ports.clock.sleep(poll.min(left));
+            waits += 1;
+        }
+    }
+
+    /// Whether one fresh capture differs from `before`; a failed capture shows nothing.
+    fn capture_differs(&mut self, before: &BgraFrame) -> bool {
         let Ok(captured) = self.ports.capturer.capture() else {
             return false;
         };

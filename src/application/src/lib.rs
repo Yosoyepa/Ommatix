@@ -21,7 +21,7 @@ mod error;
 pub mod ports;
 
 pub use clock::ManualClock;
-pub use engine::{Engine, EngineConfig, IconResolverConfig, JOURNAL_CAPACITY, Ports};
+pub use engine::{Engine, EngineConfig, IconResolverConfig, JOURNAL_CAPACITY, Ports, VerifyParams};
 pub use error::{PortError, error_chain};
 pub use ports::{
     CapturedFrame, Clock, DeliveryReceipt, FrameCapturer, LocalPolicy, OsActuator, PolicyStore,

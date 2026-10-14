@@ -18,15 +18,21 @@
 //! loosens `[safety]`.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use ommatix_adapter_mcp::config::MIN_MAX_MESSAGE_BYTES;
 use ommatix_adapter_mcp::{DEFAULT_MAX_MESSAGE_BYTES, MODERN_PROTOCOL_VERSION, McpConfig};
 use ommatix_adapter_vision::model::integrity::Sha256Digest;
-use ommatix_application::{IconResolverConfig, LocalPolicy};
+use ommatix_application::{IconResolverConfig, LocalPolicy, VerifyParams};
 use ommatix_domain::appearance::CachePolicy;
 use ommatix_domain::incremental::PlanParams;
 use serde::Deserialize;
+
+/// Longest effect-verification window accepted, in milliseconds.
+const MAX_VERIFY_TIMEOUT_MS: u64 = 5_000;
+/// Longest wait between two verification captures accepted, in milliseconds.
+const MAX_VERIFY_POLL_MS: u64 = 1_000;
 
 /// Largest configuration file read, in bytes.
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
@@ -54,6 +60,11 @@ pub struct EngineSection {
     pub max_regions: usize,
     pub full_refresh_area_ratio: f64,
     pub max_snapshot_age_ms: u64,
+    /// How long after delivering an action the engine looks for its visual effect
+    /// (SDD §2.9, the deadline of BDD-29). 0: a single check right after delivery.
+    pub verify_timeout_ms: u64,
+    /// The wait between two verification captures inside that window.
+    pub verify_poll_ms: u64,
 }
 
 impl Default for EngineSection {
@@ -67,6 +78,8 @@ impl Default for EngineSection {
             max_regions: 4,
             full_refresh_area_ratio: 0.40,
             max_snapshot_age_ms: 250,
+            verify_timeout_ms: 500,
+            verify_poll_ms: 50,
         }
     }
 }
@@ -409,6 +422,14 @@ impl Config {
             e.max_snapshot_age_ms >= 1,
             "[engine] max_snapshot_age_ms must be at least 1",
         );
+        check(
+            e.verify_timeout_ms <= MAX_VERIFY_TIMEOUT_MS,
+            "[engine] verify_timeout_ms must be between 0 and 5000",
+        );
+        check(
+            (1..=MAX_VERIFY_POLL_MS).contains(&e.verify_poll_ms),
+            "[engine] verify_poll_ms must be between 1 and 1000",
+        );
 
         let m = &self.mcp;
         check(
@@ -516,6 +537,14 @@ impl Config {
         }
     }
 
+    /// The settle window of effect verification.
+    pub fn verify_params(&self) -> VerifyParams {
+        VerifyParams {
+            timeout: Duration::from_millis(self.engine.verify_timeout_ms),
+            poll: Duration::from_millis(self.engine.verify_poll_ms),
+        }
+    }
+
     /// The MCP adapter's settings. `--legacy` can only add the legacy profile.
     pub fn mcp_config(&self, legacy_flag: bool) -> McpConfig {
         McpConfig {
@@ -560,6 +589,7 @@ mod tests {
     fn the_defaults_map_to_the_engine_defaults_and_deny_everything() {
         let config = Config::default();
         assert_eq!(config.plan_params(), PlanParams::default());
+        assert_eq!(config.verify_params(), VerifyParams::default());
         assert_eq!(config.mcp_config(false), McpConfig::default());
         assert_eq!(config.local_policy(), LocalPolicy::default());
     }
@@ -590,6 +620,10 @@ mod tests {
                 "full_refresh_area_ratio",
             ),
             ("[engine]\nmax_snapshot_age_ms = 0\n", "max_snapshot_age_ms"),
+            ("[engine]\nverify_timeout_ms = 5001\n", "verify_timeout_ms"),
+            ("[engine]\nverify_timeout_ms = -1\n", "verify_timeout_ms"),
+            ("[engine]\nverify_poll_ms = 0\n", "verify_poll_ms"),
+            ("[engine]\nverify_poll_ms = 1001\n", "verify_poll_ms"),
             ("[engine]\nmode = \"live\"\n", "mode"),
             ("[engine]\nplatform = \"linux\"\n", "platform"),
             (
@@ -651,6 +685,22 @@ mod tests {
         let policy = config.local_policy();
         assert!(policy.actuation_enabled && policy.include_values && !policy.stopped);
         assert_eq!(policy.allowed_applications, vec!["notepad.exe".to_owned()]);
+    }
+
+    #[test]
+    fn the_verification_window_is_configurable_within_bounds() {
+        let config =
+            Config::parse("[engine]\nverify_timeout_ms = 0\nverify_poll_ms = 1\n").unwrap();
+        assert_eq!(
+            config.verify_params(),
+            VerifyParams {
+                timeout: Duration::ZERO,
+                poll: Duration::from_millis(1),
+            }
+        );
+        let config =
+            Config::parse("[engine]\nverify_timeout_ms = 5000\nverify_poll_ms = 1000\n").unwrap();
+        assert_eq!(config.verify_params().timeout, Duration::from_secs(5));
     }
 
     #[test]

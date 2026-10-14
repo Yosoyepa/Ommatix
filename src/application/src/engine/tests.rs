@@ -52,6 +52,11 @@ struct World {
     /// Paints a mark after each delivery, as a UI reacting to input would.
     react_to_input: bool,
     reactions: u8,
+    /// Captures after a delivery that still show the old screen before the reaction is
+    /// painted: an application that redraws late.
+    redraw_after_captures: u32,
+    /// The reaction waiting to be painted and the captures left before it shows.
+    pending_redraw: Option<u32>,
     /// What the actuator attests as the foreground application.
     foreground: Option<String>,
     /// Answers to the next foreground queries, before `foreground` takes over: a
@@ -81,6 +86,8 @@ impl Default for World {
             delivered: Vec::new(),
             react_to_input: false,
             reactions: 0,
+            redraw_after_captures: 0,
+            pending_redraw: None,
             foreground: Some(APP.into()),
             foreground_script: VecDeque::new(),
             events: Vec::new(),
@@ -148,6 +155,14 @@ impl FrameCapturer for Capturer {
         }
         w.seq += 1;
         w.events.push("capture");
+        match w.pending_redraw {
+            Some(0) => {
+                w.reactions = w.reactions.wrapping_add(1);
+                w.pending_redraw = None;
+            }
+            Some(n) => w.pending_redraw = Some(n - 1),
+            None => {}
+        }
         Ok(CapturedFrame {
             frame: render(&w),
             frame_seq: w.seq,
@@ -223,7 +238,11 @@ impl OsActuator for Actuator {
         w.events.push("deliver");
         w.delivered.push(action.clone());
         if w.react_to_input {
-            w.reactions = w.reactions.wrapping_add(1);
+            if w.redraw_after_captures == 0 {
+                w.reactions = w.reactions.wrapping_add(1);
+            } else {
+                w.pending_redraw = Some(w.redraw_after_captures);
+            }
         }
         w.receipt
             .map_err(|()| PortError::new("test-actuator", "injection failed"))
@@ -1391,6 +1410,143 @@ fn visual_change_is_measured_against_the_pre_delivery_frame() {
         r.world().events,
         ["foreground", "capture", "foreground", "deliver", "capture"]
     );
+}
+
+/// A live form whose UI paints its reaction to input only after `late` more captures.
+fn late_redraw_rig(late: u32, config: EngineConfig) -> (Rig, ObservePage) {
+    let mut r = rig_with(form(), config);
+    {
+        let mut w = r.world();
+        w.live = true;
+        w.react_to_input = true;
+        w.redraw_after_captures = late;
+    }
+    r.set_policy(live_policy());
+    let page = r.observe();
+    r.world().events.clear();
+    (r, page)
+}
+
+/// Captures recorded after the delivery, and whether anything but captures followed it.
+fn captures_after_delivery(events: &[&str]) -> usize {
+    let at = events
+        .iter()
+        .position(|e| *e == "deliver")
+        .expect("a delivery");
+    let after = &events[at + 1..];
+    assert!(after.iter().all(|e| *e == "capture"), "{events:?}");
+    after.len()
+}
+
+#[test]
+fn visual_change_after_a_redraw_delay_is_observed() {
+    // Found in the S3 supervised runs: Notepad drew its menu after the single
+    // verification capture, so 4 of 4 delivered clicks were `indeterminate`.
+    let (mut r, page) = late_redraw_rig(3, EngineConfig::new(SESSION));
+    let start = r.clock.now();
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::VisualChange));
+    assert_eq!(result.status, ActionStatus::EffectObserved);
+    assert!(result.input_delivered() && result.verified());
+    assert_eq!(result.observed_effect, Some(ObservedEffect::VisualChange));
+    // Checks at 0, 50, 100 and 150 ms on the injected clock; the fourth sees the redraw.
+    assert_eq!(
+        r.clock.now().saturating_sub(start),
+        Duration::from_millis(150)
+    );
+    assert_eq!(captures_after_delivery(&r.world().events), 4);
+    assert_eq!(
+        r.engine.engine_metrics().observations,
+        1,
+        "nothing is published"
+    );
+}
+
+#[test]
+fn no_change_within_the_timeout_is_indeterminate() {
+    let ms = Duration::from_millis;
+    // The redraw would come after the window closes (11 checks at 0..=500 ms).
+    let (mut r, page) = late_redraw_rig(11, EngineConfig::new(SESSION));
+    let start = r.clock.now();
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::VisualChange));
+    assert_eq!(result.status, ActionStatus::Indeterminate);
+    assert!(result.input_delivered() && !result.verified());
+    assert_eq!(result.observed_effect, Some(ObservedEffect::Unknown));
+    let error = result.error.unwrap();
+    assert_eq!(
+        (error.code, error.retryable, error.next_step),
+        (
+            ErrorCode::IndeterminateEffect,
+            false,
+            NextStep::ReconcileEffect
+        )
+    );
+    assert_eq!(
+        r.clock.now().saturating_sub(start),
+        VerifyParams::DEFAULT_TIMEOUT
+    );
+    assert_eq!(captures_after_delivery(&r.world().events), 11);
+
+    // The window and its pace come from the configuration; a poll that does not divide
+    // the window ends exactly at its end.
+    let config = EngineConfig {
+        verify: VerifyParams {
+            timeout: ms(100),
+            poll: ms(40),
+        },
+        ..EngineConfig::new(SESSION)
+    };
+    let (mut r, page) = late_redraw_rig(4, config);
+    let start = r.clock.now();
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::VisualChange));
+    assert_eq!(result.status, ActionStatus::Indeterminate);
+    assert_eq!(
+        r.clock.now().saturating_sub(start),
+        ms(100),
+        "checks at 0, 40, 80 and 100 ms"
+    );
+    assert_eq!(captures_after_delivery(&r.world().events), 4);
+
+    // A zero window is the single check right after delivery.
+    let config = EngineConfig {
+        verify: VerifyParams {
+            timeout: Duration::ZERO,
+            poll: ms(50),
+        },
+        ..EngineConfig::new(SESSION)
+    };
+    let (mut r, page) = late_redraw_rig(1, config);
+    let start = r.clock.now();
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::VisualChange));
+    assert_eq!(result.status, ActionStatus::Indeterminate);
+    assert_eq!(r.clock.now(), start, "no wait");
+    assert_eq!(captures_after_delivery(&r.world().events), 1);
+}
+
+#[test]
+fn verification_never_resends_input() {
+    for late in [0, 3, 50] {
+        let (mut r, page) = late_redraw_rig(late, EngineConfig::new(SESSION));
+        r.engine
+            .execute_action(&live_click(&page, "r1", ExpectedEffect::VisualChange));
+        let w = r.world();
+        assert_eq!(w.delivered.len(), 1, "late {late}: one delivery");
+        assert_eq!(
+            w.events.iter().filter(|e| **e == "deliver").count(),
+            1,
+            "late {late}: {:?}",
+            w.events
+        );
+        // Only captures follow the delivery: no attestation, no second delivery.
+        captures_after_delivery(&w.events);
+    }
 }
 
 #[test]

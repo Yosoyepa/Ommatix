@@ -17,9 +17,10 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | #6 | S2b: puertos del SDD y `Engine` en `ommatix-application` (`observe_screen`, `execute_action`, `get_engine_metrics`); adaptador MCP con tipos de `rmcp` 3.5.1 y bucle acotado (ADR-0015); CT-01..10 y los 17 ejemplos del dossier; BDD-11..27 ejecutados; `serve`/`demo` con el motor nuevo y `--config`; algoritmo 3A dentro de la observación; se retira el prototipo; revisión en [`reviews/2026-10-14-s2b-engine-and-mcp.md`](reviews/2026-10-14-s2b-engine-and-mcp.md) | Fusionado |
 | #7 | S3, primera parte (rama `feat/s3-windows-adapters`, sobre S2b): captura DXGI (`--source dxgi`, `--output N`) y entrada `SendInput` (`--input sendinput`) con `unsafe` acotado (ADR-0016); detector ONNX que falla de forma segura con manifiesto y SHA-256 y OCR de Windows (`[models]`); job `windows` en la CI; parada del operador (`[safety] stop_file`) y comprobación del foco antes de escribir; BDD-28..32 ejecutados sobre un doble del actuador real | Fusionado |
 | — | Spike S0 (rama `feat/s0-omniparser-v3`): detector OmniParser `icon_detect_v3` (MIT) exportado a ONNX con `tools/s0/export_omniparser_v3.py`, manifiesto `SELECCIONADO` (`docs/thesis/plantillas/model_manifest.s0.json`), ONNX Runtime 1.28.0 en CPU, OCR de Windows es-ES; corridas supervisadas sobre `notepad.exe` sin entrada; letterbox sin ampliación; `demo --timings`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) | Abierto (#8) |
-| — | S3, corridas supervisadas (rama `feat/s3-supervised-runs`, apilada sobre #8): captura y entrada reales sobre `notepad.exe` con `tools/s3/mcp_driver.py`; SEC-01 ejecutada, IT-01/03/05 y SEC-02/05 en parte; `indeterminate` informa la entrega del actuador; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) y revisión en [`reviews/2026-10-14-s3-supervised-runs.md`](reviews/2026-10-14-s3-supervised-runs.md) | Abierto |
+| — | S3, corridas supervisadas (rama `feat/s3-supervised-runs`, apilada sobre #8): captura y entrada reales sobre `notepad.exe` con `tools/s3/mcp_driver.py`; SEC-01 ejecutada, IT-01/03/05 y SEC-02/05 en parte; `indeterminate` informa la entrega del actuador; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) y revisión en [`reviews/2026-10-14-s3-supervised-runs.md`](reviews/2026-10-14-s3-supervised-runs.md) | Abierto (#9) |
+| — | S3, plazo de verificación y primer frame DXGI (rama `fix/s3-verify-settle`, apilada sobre #9): la verificación del cambio visual vuelve a capturar dentro de `[engine] verify_timeout_ms`/`verify_poll_ms` sin reenviar la entrada; el capturador DXGI ya no entrega un primer frame en blanco; `CHANGELOG.md` 1.0.10 y revisión en [`reviews/2026-10-14-s3-verify-settle-and-first-frame.md`](reviews/2026-10-14-s3-verify-settle-and-first-frame.md) | Abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.9)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.10)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9) ejecutan SEC-01 y,
@@ -63,8 +64,10 @@ en parte, IT-01, IT-03, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ej
     pantalla cambió); recibo de entrega → `input_delivered` o `indeterminate` (un
     `indeterminate` con el recibo completo informa `input_delivered: true` y cuenta en
     `delivered_actions`);
-    `visual_change` se verifica con una captura posterior comparada con la previa a la
-    entrega y los demás efectos quedan `indeterminate`; un error del actuador también es
+    `visual_change` se verifica comparando con la captura previa a la entrega dentro de un
+    plazo acotado (`EngineConfig::verify`: capturas cada `verify_poll_ms` con el `Clock`
+    hasta `verify_timeout_ms`; si vence, `indeterminate`, sin reenviar la entrada) y los
+    demás efectos quedan `indeterminate`; un error del actuador también es
     `indeterminate`, nunca se reintenta; cualquier entrega agota el snapshot hasta la
     siguiente observación.
   - `get_engine_metrics`. Pruebas del motor: `ut_14`, `ut_38`..`ut_43` y las del módulo
@@ -82,7 +85,10 @@ en parte, IT-01, IT-03, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ej
     provisional) y `DxgiCapturer` (feature `dxgi`, Windows): DXGI Desktop Duplication de una
     salida en píxeles físicos, copia a staging con stride, salida rotada rechazada, epoch
     nuevo ante cambios de tamaño, DPI u origen, duplicación perdida recreada una vez,
-    correspondencia de pantalla compartida con la entrada (`mapping_source`). El `unsafe`
+    correspondencia de pantalla compartida con la entrada (`mapping_source`); la primera
+    captura tras abrir o recrear la duplicación espera hasta 500 ms una actualización con
+    imagen presentada (`LastPresentTime != 0`) y falla antes que entregar un frame en
+    blanco. El `unsafe`
     vive sólo en `dxgi/win.rs`.
   - `ommatix-adapter-input`: dry run, `enigo` (feature `native`, provisional) y
     `SendInputActuator` (feature `sendinput`, Windows): atestigua la aplicación en primer
@@ -134,18 +140,21 @@ en parte, IT-01, IT-03, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ej
   sobre un menú de `notepad.exe` (`thesis/S3_CORRIDAS_SUPERVISADAS.md`); la parada por
   archivo se ejecutó en vivo, pero la comprobación del foco antes de escribir y el cambio de
   primer plano sólo se han probado sobre dobles; sólo se verifica el efecto
-  `visual_change`, con una única captura justo después de entregar que en vivo nunca vio el
-  cambio (4 de 4 `indeterminate`); el recibo de `SendInput` no es visible; el único detector seleccionado (spike S0, `icon_detect_v3`) tiene una sola clase, así que los roles
+  `visual_change`; en vivo una única captura justo después de entregar nunca vio el cambio
+  (4 de 4 `indeterminate`), y el plazo de verificación que lo corrige (1.0.10) aún no se ha
+  ejecutado en vivo; el recibo de `SendInput` no es visible; el único detector seleccionado (spike S0, `icon_detect_v3`) tiene una sola clase, así que los roles
   siguen `unknown`, una inferencia cuesta unos 7,5 s en CPU y su precisión no está medida; el
-  primer frame DXGI de una sesión llega en blanco (`thesis/S0_RESULTADOS.md` §7); no hay OCR por defecto; OR-44 espera "actuación no implementada" y el
+  primer frame DXGI en blanco (`thesis/S0_RESULTADOS.md` §7) está corregido (1.0.10) y sólo
+  se ha comprobado con la prueba manual de un frame; no hay OCR por defecto; OR-44 espera "actuación no implementada" y el
   motor responde `POLICY_DENIED` sin entregar nada; el contexto del caché de íconos lo fija
   el operador y sus umbrales no están calibrados; no se ha probado un cliente MCP real
   (capítulo 07 §7.1).
 
 ## Qué sigue
 
-1. **Revisar y fusionar** el PR del spike S0 (`feat/s0-omniparser-v3`, #8) y después el de
-   las corridas supervisadas de S3 (`feat/s3-supervised-runs`, apilado sobre #8).
+1. **Revisar y fusionar** el PR del spike S0 (`feat/s0-omniparser-v3`, #8), después el de
+   las corridas supervisadas de S3 (`feat/s3-supervised-runs`, #9, apilado sobre #8) y el
+   de sus correcciones (`fix/s3-verify-settle`, apilado sobre #9).
 2. **Decisiones que esperan al responsable** (ningún agente puede tomarlas):
    - Detector del producto (ADR-0009). El spike S0 (`thesis/S0_RESULTADOS.md`) seleccionó
      `icon_detect_v3` de OmniParser (MIT, revisión `f55d0750`) para integrar y medir:
@@ -165,9 +174,10 @@ en parte, IT-01, IT-03, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ej
    aplicación de prueba en `allowed_applications`. S0 ejecutó en parte IT-01 e IT-02 sin
    entrada; S3 (`thesis/S3_CORRIDAS_SUPERVISADAS.md`, cliente `tools/s3/mcp_driver.py`)
    ejecutó SEC-01 y en parte IT-01, IT-03, IT-05, SEC-02 y SEC-05; ninguna prueba automática
-   sustituye a las que faltan. Antes de la próxima corrida: corregir el primer frame DXGI en
-   blanco, añadir un plazo a la verificación visual, abrir el Bloc de notas en una sesión
-   limpia (restaura pestañas) y traer al primer plano a mano la ventana de prueba (Windows no
+   sustituye a las que faltan. El primer frame DXGI en blanco y el plazo de la verificación
+   visual ya están corregidos (1.0.10): la próxima corrida debe comprobarlos (IT-03 con
+   `effect_observed`, IT-04 agotando el plazo). Antes de ella: abrir el Bloc de notas en una
+   sesión limpia (restaura pestañas) y traer al primer plano a mano la ventana de prueba (Windows no
    se lo da a un proceso lanzado en segundo plano; por eso SEC-05 no pudo cambiar el primer
    plano):
    - IT-01 (captura DXGI: frames reales, stride, rotación, pérdida de acceso;

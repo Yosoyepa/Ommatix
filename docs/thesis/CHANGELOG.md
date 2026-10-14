@@ -1,5 +1,14 @@
 # Historial documental
 
+## 1.0.10 — 2026-10-14: plazo de verificación y primer frame DXGI
+
+Corrige los hallazgos 3 y 4 de las corridas supervisadas de S3 ([`S3_CORRIDAS_SUPERVISADAS.md`](S3_CORRIDAS_SUPERVISADAS.md) §6). Precisa SDD §2.9 y capítulo 07 §7.4 sin cambiar los schemas ni los estados; no cambia el estado de ningún requisito, prueba ni escenario: las dos correcciones esperan una nueva corrida supervisada.
+
+- **Plantilla (`plantillas/configuracion_mvp.toml`):** añade `[engine] verify_timeout_ms = 500` y `verify_poll_ms = 50`. El binario rechaza `verify_timeout_ms` mayor que 5000 y `verify_poll_ms` fuera de 1..1000.
+- **Plazo de verificación (SDD §2.9, §7.4, hallazgo 3):** tras entregar una acción que espera `visual_change`, el motor captura enseguida y, mientras no vea cambio respecto al frame previo a la entrega, espera `verify_poll_ms` con el puerto `Clock` y vuelve a capturar hasta que pasa `verify_timeout_ms`. Un cambio en el plazo es `effect_observed`; si vence, `indeterminate` (`INDETERMINATE_EFFECT`, `reconcile_effect`). Sólo se vuelve a leer la pantalla: la entrada nunca se reenvía y no se publica nada. Plazo 0 = una sola comprobación inmediata, como antes. El "plazo" de BDD-29 es ahora esta ventana configurable (ya no "esa única captura posterior a la entrega" de 1.0.5); su paso comprueba con el reloj manual que el motor esperó la ventana entera. Pruebas: `visual_change_after_a_redraw_delay_is_observed`, `no_change_within_the_timeout_is_indeterminate`, `verification_never_resends_input` y `the_verification_window_is_configurable_within_bounds`.
+- **Primer frame DXGI (hallazgo 4, S0 §7):** tras crear o recrear la duplicación, el capturador ya no entrega una actualización sin imagen presentada (`LastPresentTime == 0`), cuya textura llegaba en blanco: espera otra dentro de los 500 ms de la primera captura y, si no llega ninguna, devuelve un error (`CAPTURE_UNAVAILABLE`) en lugar de un frame en blanco. Prueba de la decisión: `a_first_update_without_a_desktop_image_is_never_a_frame`. La prueba manual `dxgi_captures_one_frame_of_output_0` exige ahora que el primer frame no sea uniforme (sólo en memoria); falló con el código anterior y pasa con la corrección en la máquina de referencia.
+- Revisión en `docs/reviews/2026-10-14-s3-verify-settle-and-first-frame.md`.
+
 ## 1.0.9 — 2026-10-14: S3, corridas supervisadas con entrada real
 
 Aclara un punto del contrato (capítulo 07 §7.5, sin cambiar los schemas) y cambia el estado de las matrices. El informe está en [`S3_CORRIDAS_SUPERVISADAS.md`](S3_CORRIDAS_SUPERVISADAS.md).

@@ -168,7 +168,10 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   physical pixels (the process is per-monitor-v2 DPI aware). The desktop texture is copied
   to a staging texture and read row by row with its own stride; frames stay in memory. A
   rotated output is refused; a change of size, DPI or origin bumps the geometry epoch; when
-  no desktop update arrives the last frame is returned again; a lost duplication
+  no desktop update arrives the last frame is returned again; the first capture after
+  opening (or recreating) the duplication waits up to 500 ms for an update that carries a
+  presented desktop image (`LastPresentTime != 0`) and fails rather than return a blank
+  frame; a lost duplication
   (`DXGI_ERROR_ACCESS_LOST`, device removed or reset: a mode change, the secure desktop) is
   recreated once within the capture, a second loss is a capture error, and the next frame
   starts a new geometry epoch. Dirty and move rectangles are only counted; the engine's own
@@ -245,8 +248,10 @@ reaches either, and results already delivered stay recorded as reported. While l
 possible, `serve` prints an active-control indicator on stderr, and a line whenever the stop
 is engaged or cleared. A delivery receipt whose inserted events match the submitted ones is
 `input_delivered`; anything else is `indeterminate`. An expected `visual_change` is verified
-by a capture after delivery compared with the pre-delivery frame (`effect_observed` or
-`indeterminate`); the other effects (focus, value, scroll) are reported `indeterminate`
+against the pre-delivery frame within a bounded settle window: the engine captures right
+after delivery and, while nothing changed, again every `[engine] verify_poll_ms` (50 ms) on
+its injected clock until `verify_timeout_ms` (500 ms; 0 is a single check) has elapsed. A
+change is `effect_observed`; none is `indeterminate`, and the input is never sent again; the other effects (focus, value, scroll) are reported `indeterminate`
 until they can be checked.
 Any delivery, whatever its outcome, spends the snapshot: the next action needs a new
 observation (`STALE_SNAPSHOT`), while journal replays still return the stored result.
@@ -258,7 +263,7 @@ observation (`STALE_SNAPSHOT`), while journal replays still return the stored re
 | Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | By default, flat-colour region detector (roles `unknown`) and no OCR (`NullTextRecognizer`); the simulated desktops report ground truth. Opt-in adapters exist for `images`, `screen` and `dxgi`, but no model is selected: a fail-closed ONNX detector driven by a SHA-256-pinned manifest (feature `onnx`) and Windows OCR for one language (feature `winrt-ocr`) | S0 (models), S3 |
 | Agent contract | Ommatix 1.0 over MCP 2026-07-28; 2025-11-25 opt-in | Implemented (CT-01..10); driven live by the minimal S3 client `tools/s3/mcp_driver.py`, not yet by a third-party client | S0/S3 for the client |
 | Action gate | Freshness, policy, allowlist, focus, stop | Snapshot freshness (also re-checked by a capture before delivery), policy and the allowlist against the foreground application `SendInput` attests, all checked again right before delivery; the operator's stop file (`[safety] stop_file`); the actuator also checks the process under the target point, integrity level and held modifiers, and for `type` keyboard focus after the focusing click. Run under supervision on `notepad.exe` ([S3 runs](../thesis/S3_CORRIDAS_SUPERVISADAS.md)): the stop file, the freshness check and the policy refused live clicks without sending anything; a change of foreground application could not be provoked (SEC-02, SEC-05 in part) | S3 (supervised runs) |
-| Effect verification | Focus, value, scroll and visual postconditions | Visual change by one re-capture right after delivery; live, it never saw the effect (4 of 4 `indeterminate`, which still report the delivered input), so a verification deadline is needed | S3 |
+| Effect verification | Focus, value, scroll and visual postconditions | Visual change only, re-captured within a bounded settle window (`verify_timeout_ms`, `verify_poll_ms`); added after the S3 runs, where a single capture right after delivery never saw the effect (4 of 4 `indeterminate`); not yet re-run live | S3 |
 | Telemetry | Metrics and audit without sensitive text | `get_engine_metrics`; stage timings in `_meta` | S3 |
 | Platform | Windows 11 x64: DXGI and `SendInput` | DXGI capture and `SendInput` input behind the `dxgi` and `sendinput` features (ADR-0016), built and tested in CI on Windows run in part under supervision ([S3 runs](../thesis/S3_CORRIDAS_SUPERVISADAS.md): IT-01 and IT-03, four real clicks on `notepad.exe`; IT-07 not run); simulated and fixture desktops for tests; interim `xcap` and `enigo` behind `screen` and `native-input` | S3 (supervised runs) |
 

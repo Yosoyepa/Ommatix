@@ -177,7 +177,10 @@ sin OCR, entrada en dry run y política que lo niega todo.
   escritorio se copia a una textura de staging y se lee fila a fila con su propio stride; los
   frames sólo viven en memoria. Se rechaza una salida rotada; un cambio de tamaño, DPI u
   origen incrementa el epoch geométrico; si no llega ninguna actualización del escritorio se
-  devuelve de nuevo el último frame; una duplicación perdida (`DXGI_ERROR_ACCESS_LOST`,
+  devuelve de nuevo el último frame; la primera captura tras abrir (o recrear) la
+  duplicación espera hasta 500 ms una actualización con una imagen del escritorio presentada
+  (`LastPresentTime != 0`) y falla antes que devolver un frame en blanco; una duplicación
+  perdida (`DXGI_ERROR_ACCESS_LOST`,
   dispositivo retirado o reiniciado: un cambio de modo, el escritorio seguro) se recrea una
   vez dentro de la captura, una segunda pérdida es un error de captura y el frame siguiente
   abre un epoch geométrico nuevo. Los rectángulos dirty y move sólo se cuentan; el
@@ -264,8 +267,11 @@ entregados quedan registrados tal como se informaron. Mientras la entrada real e
 `serve` escribe en stderr un indicador de control activo, y una línea cada vez que la parada
 se activa o se retira. Un recibo de entrega cuyos
 eventos insertados coinciden con los enviados es `input_delivered`; cualquier otra cosa es
-`indeterminate`. Un `visual_change` esperado se verifica con una captura posterior a la
-entrega comparada con el frame previo a ella (`effect_observed` o `indeterminate`); los demás
+`indeterminate`. Un `visual_change` esperado se verifica contra el frame previo a la
+entrega dentro de un plazo acotado: el motor captura justo después de entregar y, mientras
+nada cambie, otra vez cada `[engine] verify_poll_ms` (50 ms) con su reloj inyectado hasta que
+pase `verify_timeout_ms` (500 ms; 0 es una sola comprobación). Un cambio es
+`effect_observed`; ninguno es `indeterminate`, y la entrada nunca se reenvía; los demás
 efectos (foco, valor, desplazamiento) se informan `indeterminate` hasta que puedan
 comprobarse. Cualquier entrega, sea
 cual sea su resultado, agota el snapshot: la acción siguiente necesita una observación nueva
@@ -278,7 +284,7 @@ cual sea su resultado, agota el snapshot: la acción siguiente necesita una obse
 | Percepción | Detector y OCR en ONNX Runtime, roles según el spike S0 | Por defecto, detector de regiones de color plano (roles `unknown`) y sin OCR (`NullTextRecognizer`); los escritorios simulados informan la verdad de terreno. Hay adaptadores opcionales para `images`, `screen` y `dxgi`, pero ningún modelo seleccionado: un detector ONNX que falla de forma segura, guiado por un manifiesto fijado por SHA-256 (feature `onnx`), y el OCR de Windows para un único idioma (feature `winrt-ocr`) | S0 (modelos), S3 |
 | Contrato con el agente | Ommatix 1.0 por MCP 2026-07-28; 2025-11-25 opcional | Implementado (CT-01..10); guiado en vivo por el cliente mínimo de S3 `tools/s3/mcp_driver.py`, todavía no por un cliente de terceros | S0/S3 para el cliente |
 | Compuerta de acciones | Vigencia, política, allowlist, foco, parada | Vigencia del snapshot (comprobada también con una captura antes de entregar), política y la lista permitida contra la aplicación en primer plano que atestigua `SendInput`, todo comprobado de nuevo justo antes de entregar; el archivo de parada del operador (`[safety] stop_file`); el actuador comprueba además el proceso bajo el punto objetivo, el nivel de integridad y los modificadores pulsados, y en `type` el foco de teclado tras el clic que enfoca el campo. Ejecutadas de forma supervisada sobre `notepad.exe` ([corridas de S3](../thesis/S3_CORRIDAS_SUPERVISADAS.md)): el archivo de parada, la comprobación de vigencia y la política rechazaron clics reales sin enviar nada; no se pudo provocar un cambio de aplicación en primer plano (SEC-02 y SEC-05 en parte) | S3 (corridas supervisadas) |
-| Verificación del efecto | Postcondiciones de foco, valor, desplazamiento y cambio visual | Sólo cambio visual, con una única captura justo después de entregar; en vivo nunca vio el efecto (4 de 4 `indeterminate`, que igualmente informan la entrada entregada), así que hace falta un plazo de verificación | S3 |
+| Verificación del efecto | Postcondiciones de foco, valor, desplazamiento y cambio visual | Sólo cambio visual, con nuevas capturas dentro de un plazo acotado (`verify_timeout_ms`, `verify_poll_ms`); se añadió tras las corridas de S3, donde una única captura justo después de entregar nunca vio el efecto (4 de 4 `indeterminate`); falta volver a ejecutarlo en vivo | S3 |
 | Telemetría | Métricas y auditoría sin texto sensible | `get_engine_metrics`; tiempos por etapa en `_meta` | S3 |
 | Plataforma | Windows 11 x64: DXGI y `SendInput` | Captura DXGI y entrada `SendInput` tras las features `dxgi` y `sendinput` (ADR-0016), compiladas y probadas en la integración continua en Windows ejecutadas en parte de forma supervisada ([corridas de S3](../thesis/S3_CORRIDAS_SUPERVISADAS.md): IT-01 e IT-03, cuatro clics reales sobre `notepad.exe`; IT-07 sin ejecutar); escritorios simulado y de fixtures para las pruebas; `xcap` y `enigo` provisionales tras `screen` y `native-input` | S3 (corridas supervisadas) |
 

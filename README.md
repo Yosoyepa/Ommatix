@@ -83,12 +83,16 @@ unless the agent and a local policy both allow them. More in the
   MCP by `tools/s3/mcp_driver.py`. Four live clicks on the File menu reached the OS; the
   operator's stop, the freshness check and the policy refused the rest without sending
   anything. SEC-01 is executed; IT-01, IT-03, IT-05, SEC-02 and SEC-05 in part. An
-  `indeterminate` result now says whether the actuator delivered the input.
+  `indeterminate` result now says whether the actuator delivered the input. Two findings
+  are fixed since and await a new supervised run: the effect check now waits a bounded
+  settle window for the redraw (`[engine] verify_timeout_ms`, 500 ms, polling every
+  `verify_poll_ms`, 50 ms; never resending input), and the DXGI capturer no longer returns
+  a blank first frame.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class, about 7.5 s per inference
   on CPU), so by default the detector is the bootstrap's flat-colour region finder (roles
-  `unknown`) and there is no OCR; no third-party MCP client has been tested; the visual
-  check right after delivery never saw the effect live (it needs a deadline); IT-02 ran only
+  `unknown`) and there is no OCR; no third-party MCP client has been tested; the
+  verification window and the DXGI first-frame fix have not been re-run live yet; IT-02 ran only
   in part (S0); and IT-04, IT-06, IT-07, SEC-03, SEC-04 and SEC-06 have not been run under
   supervision. Live input stays **off** unless the
   operator enables it (below). The [overview](docs/architecture/overview.md#where-the-code-is-today) lists what
@@ -113,8 +117,8 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
   policy, stop and effect verification; the bootstrap's macOS and X11 adapters are retired.
   First part done: the DXGI, `SendInput`, ONNX and Windows OCR adapters behind build
   features, the operator's stop file and the focus check before typing; first supervised
-  runs with real input on `notepad.exe`; pending: a product detector, a verification
-  deadline and effect checks beyond the visual change, a third-party MCP client and the
+  runs with real input on `notepad.exe`; pending: a product detector, a live re-run of
+  the verification window, effect checks beyond the visual change, a third-party MCP client and the
   remaining supervised runs
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
   and the acceptance report
@@ -207,7 +211,7 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
 
 - **Refused** (the server does not start): unknown sections or keys; out-of-range values
   (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024, `full_refresh_area_ratio`
-  in (0, 1], `max_snapshot_age_ms` ≥ 1, `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
+  in (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
   blank `allowed_applications` entries, a blank `stop_file`); and values this build cannot
   honour: a `platform` other than `windows`, a `snapshot_policy` other than `strict`, a `profile` other than
   `2026-07-28` (the legacy profile is enabled with `legacy_enabled`), a `transport` other than

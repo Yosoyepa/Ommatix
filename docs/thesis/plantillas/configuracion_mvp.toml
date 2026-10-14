@@ -8,6 +8,11 @@ halo_px = 32
 max_regions = 4
 full_refresh_area_ratio = 0.40
 max_snapshot_age_ms = 250
+# Plazo de verificación del efecto (SDD §2.9, BDD-29): tras entregar, el motor vuelve a
+# capturar cada verify_poll_ms hasta ver un cambio visual o hasta que venza el plazo
+# (entonces indeterminate, sin reintentar). 0: una sola comprobación inmediata.
+verify_timeout_ms = 500
+verify_poll_ms = 50
 
 [mcp]
 profile = "2026-07-28"
