@@ -88,6 +88,30 @@ jobs:
       - run: cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings
       - run: cargo test -p ommatix --features screen,native-input
       - run: cargo test -p ommatix-adapter-capture -p ommatix-adapter-input --features ommatix-adapter-capture/screen,ommatix-adapter-input/native
+      - name: Pure helpers of the Windows adapters (DXGI, SendInput) on Linux
+        run: cargo test -p ommatix-adapter-capture -p ommatix-adapter-input --features ommatix-adapter-capture/dxgi,ommatix-adapter-input/sendinput
+
+  windows:
+    name: DXGI capture + SendInput (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p ommatix --features dxgi,sendinput
+      - run: cargo clippy -p ommatix --features dxgi,sendinput --all-targets -- -D warnings
+      - run: >-
+          cargo clippy --all-targets -p ommatix-adapter-capture -p ommatix-adapter-input
+          --features ommatix-adapter-capture/dxgi,ommatix-adapter-input/sendinput
+          -- -D warnings
+      # Unit tests only: the DXGI test that reads a real screen is #[ignore]d (a hosted
+      # runner has no interactive desktop) and no test ever injects input.
+      - run: cargo test -p ommatix --features dxgi,sendinput
+      - run: >-
+          cargo test -p ommatix-adapter-capture -p ommatix-adapter-input
+          --features ommatix-adapter-capture/dxgi,ommatix-adapter-input/sendinput
 
   cross-check:
     name: capture + native input compile for ${{ matrix.target }}
@@ -108,5 +132,6 @@ jobs:
       - run: >-
           cargo clippy --target ${{ matrix.target }} --all-targets
           -p ommatix-adapter-capture -p ommatix-adapter-input
-          --features ommatix-adapter-capture/screen,ommatix-adapter-input/native
+          --features ommatix-adapter-capture/screen,ommatix-adapter-capture/dxgi
+          --features ommatix-adapter-input/native,ommatix-adapter-input/sendinput
           -- -D warnings
