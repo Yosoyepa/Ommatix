@@ -114,8 +114,11 @@ Nothing MVP-related goes in the repository root except workspace configuration.
    never re-process the full frame when only regions changed. The full refresh is Algorithm
    1's explicit fallback (geometry change, budget exceeded), never a shortcut. Any new
    pipeline stage takes the region plan as input.
-3. **No `unsafe`** (`unsafe_code = "forbid"` at workspace level). Lift it only with an ADR;
-   the Windows adapters of S3 will need one.
+3. **No `unsafe`** (`unsafe_code = "forbid"` at workspace level). Lift it only with an ADR.
+   ADR-0016 (proposed) allows it only in the `#[cfg(windows)] mod win` of the capture
+   (`dxgi`) and input (`sendinput`) adapters: those crates deny `unsafe_code` and
+   `clippy::undocumented_unsafe_blocks`, every block wraps one Win32/COM call with a
+   `// SAFETY:` comment, and raw pointers never leave the module.
 4. **No panics on external input.** `unwrap`/`expect` only in tests or on documented
    invariants. Adapters return `PortError`. Geometry saturates; check arithmetic on values
    that come from the wire.
@@ -125,11 +128,14 @@ Nothing MVP-related goes in the repository root except workspace configuration.
    otherwise and the local policy allows it. Never make a live actuator the default and
    never bypass the action gate. Report what happened and no more: `simulated` never claims
    delivery, `input_delivered` never claims an effect, and an uncertain effect is
-   `indeterminate`, never an automatic retry. Live input needs the `native-input` build
-   feature, the native input and the screen source, `actuation_enabled = true` in the
-   operator's configuration and `dry_run: false` from the agent; it is off by default.
-   `allowed_applications` is not enforced before S3 (there is no foreground-window evidence
-   yet), so do not describe it as a safeguard.
+   `indeterminate`, never an automatic retry. Live input needs `--input sendinput` with
+   `--source dxgi` on a Windows build with the `sendinput` feature, `actuation_enabled =
+   true` and a non-empty `allowed_applications` in the operator's configuration, and
+   `dry_run: false` from the agent; it is off by default. The engine checks the foreground
+   application the actuator attests against `allowed_applications`; the `SendInput`
+   actuator also refuses an elevated foreground, a point outside its windows and held
+   modifiers. The interim `enigo` input (`native-input`) cannot attest the foreground
+   application, so the engine never lets it act live.
 7. **Privacy** (ADR-0012). No screenshots or screen values in logs by default; text on screen
    never changes permissions. Never commit screen captures, recorded sessions, datasets
    (`captures/`, `datasets/` are git-ignored) or model weights. Use synthetic frames in
@@ -155,7 +161,12 @@ cargo clippy --workspace --all-targets -- -D warnings  # lint (CI-blocking)
 cargo test --workspace                                 # unit + integration + Gherkin (CI-blocking)
 cargo run -- demo                                      # smoke test: the engine on the simulated desktop
 cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings  # when touching capture/input
+cargo clippy -p ommatix --features dxgi,sendinput --all-targets -- -D warnings       # on Windows (CI job `windows`)
+cargo test -p ommatix-adapter-capture --features dxgi -- --ignored                   # manual: one DXGI frame, never saved
 ```
+
+Never write a test that injects real input; the `SendInput` actuator is tested through its
+pure helpers only.
 
 The thesis checks run from `docs/thesis/` (CI job `thesis`, CI-blocking):
 
@@ -165,7 +176,9 @@ python referencia_ejecutable/run_tests.py              # oracle: 48 reference te
 python validar_paquete.py                              # schemas, examples, traceability, Gherkin structure
 ```
 
-CI also compiles capture and native input for Windows and macOS (job `cross-check`). To run
+CI builds, lints and tests the `dxgi,sendinput` features on `windows-latest` (job
+`windows`), and also compiles capture and native input for Windows and macOS (job
+`cross-check`). To run
 it locally: `rustup target add x86_64-pc-windows-gnu aarch64-apple-darwin`, then
 `cargo clippy --target <target> -p ommatix-adapter-capture -p ommatix-adapter-input
 --features ommatix-adapter-capture/screen,ommatix-adapter-input/native -- -D warnings`.
@@ -206,13 +219,14 @@ Do not bypass them with `--no-verify` unless the PR says why.
 ## 9. Decisions already made (do not re-litigate without a new ADR)
 
 See `docs/adr/README.md`. ADR-0001..0012 come from the thesis; the project owner accepted
-them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015 is proposed and awaits the
-owner's approval.
+them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015 and ADR-0016 are proposed
+and await the owner's approval.
 Highlights: Rust runtime with independent oracles (0001), MCP over stdio with explicit
 profiles (0002), conservative spatial fusion with IoC (0003), masked open-set icon cache
 (0004), persistent tracking instead of cell hashes (0005), transactional snapshots (0006),
 fail-closed actuation and honest simulation (0007), Windows 11 first (0008), models and
 licences chosen in the S0 spike (0009), performance budgets subject to measurement (0010),
 modular monolith with adaptive incrementality (0011), data minimisation (0012), bilingual
-documentation (0013), the hexagonal crate layout (0014) and the MCP transport on `rmcp` wire
-types with a bounded message loop (0015).
+documentation (0013), the hexagonal crate layout (0014), the MCP transport on `rmcp` wire
+types with a bounded message loop (0015, proposed) and bounded `unsafe` for the Windows
+capture and input adapters (0016, proposed).
