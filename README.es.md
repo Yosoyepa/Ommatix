@@ -85,7 +85,9 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (aprobada el 14 de octubre de 2026). La integración continua los compila, revisa y
   prueba en Windows. El operador puede detener localmente la entrada real con un archivo de
   parada (`[safety] stop_file`), y `type` sólo envía sus teclas tras verificar que el foco
-  de teclado está en el campo objetivo.
+  de teclado está en el campo objetivo: con evidencia de UI Automation el motor confirma el
+  foco en el elemento objetivo entre el clic de enfoque y las teclas
+  ([ADR-0018](docs/adr/0018-two-phase-type-with-element-level-focus-confirmation.md)).
 - **S3, corridas supervisadas** ([informe](docs/thesis/S3_CORRIDAS_SUPERVISADAS.md)): captura
   DXGI y `SendInput` reales sobre `notepad.exe` con datos desechables, guiadas por MCP con
   `tools/s3/mcp_driver.py`. Cuatro clics reales sobre el menú Archivo llegaron al SO; la
@@ -114,10 +116,11 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   [CHANGELOG 1.0.15](docs/thesis/CHANGELOG.md)) confirmó por nombre de accesibilidad las
   teclas de la aplicación de prueba y de la Calculadora en sondeos sin entrada, con 36
   entregas reales, todas sobre el control pedido. Sus corridas puntuadas de escritura
-  fallaron: `type` pierde las teclas que llegan en el fotograma de su clic de enfoque, porque
-  la comprobación de foco es a nivel de ventana (hallazgo abierto). La serie se detuvo por la
-  regla de tres fallos seguidos, así que los flujos de la Calculadora y del Bloc de notas no
-  se ejecutaron en vivo.
+  fallaron: `type` perdía las teclas que llegaban en el fotograma de su clic de enfoque,
+  porque la comprobación de foco era a nivel de ventana. La ADR-0018 lo corrige en código
+  (`type` en dos fases, probado con dobles; una corrida viva supervisada sigue siendo del
+  responsable). La serie se detuvo por la regla de tres fallos seguidos, así que los flujos
+  de la Calculadora y del Bloc de notas no se ejecutaron en vivo.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
@@ -225,9 +228,13 @@ rechaza además un proceso en primer plano con un nivel de integridad mayor (UIP
 descartaría la entrada en silencio), un punto fuera de las ventanas de ese proceso y teclas
 modificadoras o botones del ratón pulsados; en `type`, tras el clic que enfoca el campo,
 comprueba que el foco de teclado está en la ventana bajo el punto objetivo (o en una que la
-contiene) del mismo proceso en primer plano y, si no, no envía ninguna tecla. Ese rechazo se
-informa como `indeterminate` y nunca se reintenta: en `type` el clic puede haberse
-entregado ya. `--input native` (o `[engine] mode = "native"`) se
+contiene) del mismo proceso en primer plano y, si no, no envía ninguna tecla. Con
+`[models] accessibility = "uia"` el motor entrega `type` en dos fases
+([ADR-0018](docs/adr/0018-two-phase-type-with-element-level-focus-confirmation.md)): envía
+el clic, consulta con su reloj hasta que UI Automation informa el foco de teclado en el
+elemento objetivo y sólo entonces envía las teclas; sin confirmación dentro del plazo de
+verificación no hay teclas. Ese rechazo se informa como `indeterminate` y nunca se
+reintenta: en `type` el clic puede haberse entregado ya. `--input native` (o `[engine] mode = "native"`) se
 sigue aceptando con `--source screen` y `actuation_enabled = true`, pero `enigo` no puede
 atestiguar la aplicación en primer plano, así que sus acciones reales son siempre
 `POLICY_DENIED`.

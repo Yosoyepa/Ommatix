@@ -77,7 +77,9 @@ unless the agent and a local policy both allow them. More in the
   and input adapters need is bounded by
   [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (accepted on 2026-10-14). CI builds, lints and tests them on Windows. The operator
   can stop live input locally with a stop file (`[safety] stop_file`), and `type` sends
-  its keys only once keyboard focus is verified on the target field.
+  its keys only once keyboard focus is verified on the target field: with UI Automation
+  evidence the engine confirms focus on the target element between the focusing click and
+  the keys ([ADR-0018](docs/adr/0018-two-phase-type-with-element-level-focus-confirmation.md)).
 - **S3, supervised runs** ([report, in Spanish](docs/thesis/S3_CORRIDAS_SUPERVISADAS.md)):
   real DXGI capture and real `SendInput` on `notepad.exe` with disposable data, driven over
   MCP by `tools/s3/mcp_driver.py`. Four live clicks on the File menu reached the OS; the
@@ -104,9 +106,11 @@ unless the agent and a local policy both allow them. More in the
   evidence ([ADR-0017](docs/adr/0017-ui-automation-evidence-fused-with-vision.md), [CHANGELOG
   1.0.15](docs/thesis/CHANGELOG.md)) confirmed the test application's and the Calculator's keys
   by accessibility name in dry-run probes, with 36 real deliveries, all on the requested
-  control. Its scored typing runs failed: `type` drops the keys that arrive in the frame of
-  its focusing click, because its focus check is window-level (an open finding). The series
-  stopped at its three-failure rule, so the Calculator and Notepad flows did not run live.
+  control. Its scored typing runs failed: `type` dropped the keys that arrived in the frame
+  of its focusing click, because its focus check was window-level. ADR-0018 fixes that in
+  code (two-phase `type`, tested on doubles; a supervised live run is still owner-only). The
+  series stopped at its three-failure rule, so the Calculator and Notepad flows did not run
+  live.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML,
@@ -210,7 +214,11 @@ foreground process with a higher integrity level (UIPI would drop the input sile
 target point outside that process's windows and held modifier keys or mouse buttons; for
 `type`, after the click that focuses the field it checks that keyboard focus is on the
 window at the target point (or a window containing it) of the same foreground process, and
-otherwise sends no key. Such a refusal is reported `indeterminate`, never retried: for
+otherwise sends no key. With `[models] accessibility = "uia"` the engine itself delivers
+`type` in two phases ([ADR-0018](docs/adr/0018-two-phase-type-with-element-level-focus-confirmation.md)):
+it sends the click, polls on its clock until UI Automation reports keyboard focus on the
+target element, and only then sends the keys; no confirmation in the verification window
+means no key. Such a refusal is reported `indeterminate`, never retried: for
 `type` the click may already have been delivered. `--input native`
 (or `[engine] mode = "native"`) is still accepted with `--source screen` and
 `actuation_enabled = true`, but `enigo` cannot attest

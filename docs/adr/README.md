@@ -5,8 +5,9 @@ translated into English; each keeps its original Spanish text in `## Resumen (ES
 project owner accepted all twelve on 2026-10-14. ADR-0013 and ADR-0014 record decisions the
 owner made when the repository was bootstrapped. ADR-0015 records how S2b serves the MCP
 contract, ADR-0016 bounds the `unsafe` that the Windows capture and input adapters of S3
-need, and ADR-0017 adds UI Automation evidence fused with the visual path; the owner
-accepted all three on 2026-10-14.
+need, ADR-0017 adds UI Automation evidence fused with the visual path, and ADR-0018 makes
+`type` a two-phase action whose keys wait for element-level keyboard focus; the owner
+accepted all four on 2026-10-14.
 
 | # | Title | Status |
 |---|---|---|
@@ -27,6 +28,7 @@ accepted all three on 2026-10-14.
 | [0015](0015-mcp-transport-on-rmcp-wire-types.md) | MCP transport on rmcp wire types with a bounded message loop | Accepted (2026-10-14) |
 | [0016](0016-bounded-unsafe-for-windows-capture-and-input.md) | Bounded unsafe for the Windows capture and input adapters | Accepted (2026-10-14) |
 | [0017](0017-ui-automation-evidence-fused-with-vision.md) | UI Automation evidence, fused with the visual path | Accepted (2026-10-14) |
+| [0018](0018-two-phase-type-with-element-level-focus-confirmation.md) | Two-phase type with element-level focus confirmation | Accepted (2026-10-14) |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They
@@ -52,4 +54,5 @@ español. El responsable del proyecto aprobó las doce el 14 de octubre de 2026.
 decisiones del arranque: documentación bilingüe y crates hexagonales. ADR-0015, de S2b y aprobada el 14 de octubre de 2026, sirve MCP con los tipos de wire de `rmcp` y un bucle de mensajes
 propio y acotado. ADR-0016, de S3 y aprobada el mismo día, limita el `unsafe` a
 los módulos Windows de captura DXGI y entrada `SendInput`. ADR-0017, aprobada el mismo día, añade la
-evidencia de UI Automation como un puerto más, fusionada con la visual y sin `unsafe` propio. Las ADR del arranque se archivan en `bootstrap/` como B0001–B0012.
+evidencia de UI Automation como un puerto más, fusionada con la visual y sin `unsafe` propio. ADR-0018,
+aprobada el mismo día, entrega `type` en dos fases: las teclas esperan a que el foco del teclado esté en el campo destino, confirmado por UI Automation. Las ADR del arranque se archivan en `bootstrap/` como B0001–B0012.

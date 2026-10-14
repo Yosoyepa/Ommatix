@@ -38,7 +38,9 @@ ocr_path = ""
 ocr_sha256 = ""
 # Evidencia de accesibilidad (ADR-0017): "none" (por defecto) o "uia" (árbol de UI Automation
 # de la aplicación en primer plano, sólo Windows, sólo con --source dxgi o screen). Se fusiona
-# con la visión y nunca la sustituye; nunca se lee el valor de un campo.
+# con la visión y nunca la sustituye; nunca se lee el valor de un campo. Con "uia", `type`
+# envía sus teclas sólo cuando el foco de teclado está en el elemento objetivo (ADR-0018);
+# con "none" conserva la comprobación de foco a nivel de ventana del actuador.
 accessibility = "none"
 
 [cache]

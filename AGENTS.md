@@ -141,7 +141,13 @@ Nothing MVP-related goes in the repository root except workspace configuration.
    application the actuator attests against `allowed_applications`; the `SendInput`
    actuator also refuses an elevated foreground, a point outside its windows and held
    modifiers, and `type` sends its keys only after verifying keyboard focus on the target
-   field (otherwise `indeterminate`: its click may have been delivered). The interim `enigo`
+   field (otherwise `indeterminate`: its click may have been delivered). With accessibility
+   evidence (`[models] accessibility = "uia"`) the engine delivers `type` in two phases
+   (ADR-0018): the focusing click, then a poll on the injected `Clock` until UI Automation
+   reports keyboard focus on the target element itself, then the keys. No confirmation in
+   time means no key, `indeterminate` and the delivered click reported, never a retry; its
+   `visual_change` is measured against a frame captured after the click and before the keys,
+   and the field's value is never read. The interim `enigo`
    input (`native-input`) cannot attest the foreground application, so the engine never lets
    it act live. Before delivering, the engine re-captures the screen and refuses
    (`STALE_SNAPSHOT`) if it differs from the committed base, then reads the policy and
@@ -233,8 +239,8 @@ Do not bypass them with `--no-verify` unless the PR says why.
 ## 9. Decisions already made (do not re-litigate without a new ADR)
 
 See `docs/adr/README.md`. ADR-0001..0012 come from the thesis; the project owner accepted
-them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015, ADR-0016 and ADR-0017 were
-accepted on 2026-10-14 too.
+them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015, ADR-0016, ADR-0017 and
+ADR-0018 were accepted on 2026-10-14 too.
 Highlights: Rust runtime with independent oracles (0001), MCP over stdio with explicit
 profiles (0002), conservative spatial fusion with IoC (0003), masked open-set icon cache
 (0004), persistent tracking instead of cell hashes (0005), transactional snapshots (0006),
@@ -243,5 +249,6 @@ licences chosen in the S0 spike (0009), performance budgets subject to measureme
 modular monolith with adaptive incrementality (0011), data minimisation (0012), bilingual
 documentation (0013), the hexagonal crate layout (0014), the MCP transport on `rmcp` wire
 types with a bounded message loop (0015), bounded `unsafe` for the Windows
-capture and input adapters (0016) and UI Automation evidence fused with the visual path,
-with no `unsafe` of our own (0017).
+capture and input adapters (0016), UI Automation evidence fused with the visual path,
+with no `unsafe` of our own (0017) and `type` in two phases whose keys wait for
+element-level keyboard focus (0018).

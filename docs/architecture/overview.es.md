@@ -198,7 +198,11 @@ sin OCR, entrada en dry run y política que lo niega todo.
   envía primero el clic que enfoca el campo y sus teclas sólo cuando `GetGUIThreadInfo`
   muestra el foco de teclado, en el mismo proceso en primer plano, en la ventana bajo el
   punto objetivo o en una que la contiene (lo consulta hasta 200 ms mientras se procesa el
-  clic); si no, no envía ninguna tecla. Un rechazo es un error del actuador, que el motor
+  clic); si no, no envía ninguna tecla. Con evidencia de accesibilidad es el motor quien
+  controla esa pausa (ADR-0018): `deliver_focus_click` envía el clic, el motor consulta
+  `keyboard_focus` del proveedor con su `Clock` hasta que el elemento objetivo tiene el foco
+  y sólo entonces llama a `deliver_keys`, que sigue comprobando la aplicación en primer plano
+  y los modificadores pulsados. Un rechazo es un error del actuador, que el motor
   informa como `indeterminate` y nunca reintenta: tras un `type` rechazado el clic puede
   haberse entregado. Ninguna prueba envía entrada real.
 - *Detector* (`onnx`, `[models] detector_manifest`): un detector genérico de tipo YOLO sobre
@@ -314,4 +318,6 @@ permisos, el archivo de parada del operador durante una secuencia) del mismo mod
 doble de prueba del actuador real que registra lo que recibe y no envía nada. Muestran la
 parte del motor de SEC-05, IT-04, IT-05, SEC-03 y SEC-02, que siguen necesitando corridas
 supervisadas con el actuador real; la comprobación del foco de teclado dentro de la
-aplicación permitida es del actuador `SendInput`, y ninguna prueba lo ejecuta.
+aplicación permitida es del actuador `SendInput`, y ninguna prueba lo ejecuta. El `type`
+en dos fases de la ADR-0018 (foco confirmado por el motor en el elemento objetivo, BDD-34 y
+BDD-35) corre sobre dobles del actuador y del proveedor de accesibilidad.

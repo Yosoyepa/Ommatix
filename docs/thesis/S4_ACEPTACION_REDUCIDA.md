@@ -226,6 +226,8 @@ Mediana, p95 y máximo, en milisegundos, de las 41 observaciones de las corridas
 
 Esta ronda no cambia ningún código de las crates de Rust, así que no hay regresión nueva que añadir. Los hallazgos 1 y 2 necesitan una decisión de diseño, por eso no se corrigen aquí. Constan en [`reviews/2026-10-14-s4-uia-acceptance.md`](../reviews/2026-10-14-s4-uia-acceptance.md).
 
+**Nota posterior (CHANGELOG 1.0.16).** El responsable decidió el 14 de octubre de 2026 la corrección de los hallazgos 1 y 2 con la [ADR-0018](../adr/0018-two-phase-type-with-element-level-focus-confirmation.md): `type` en dos fases, con el foco confirmado sobre el elemento objetivo por UI Automation antes de enviar las teclas, y `visual_change` medido tras el clic de enfoque. Está en el código y probado con dobles (BDD-34 y BDD-35, y `src/application/src/engine/tests/typing.rs`); **no se ha repetido la corrida viva**. Los resultados de esta ronda describen el comportamiento anterior a esa corrección.
+
 ### 6. Estado en la matriz
 
 - **E2E-01:** `EJECUTADO_SUPERVISADO_PARCIAL`, sin cambio. Esta ronda confirma los clics y los controles por accesibilidad, pero la escritura no se verificó en la serie puntuada (0 de 3).
@@ -236,11 +238,11 @@ Esta ronda no cambia ningún código de las crates de Rust, así que no hay regr
 
 ### 7. Cómo repetirlo y reanudar
 
-El cuaderno de solicitudes (`ledger.txt`) está en 160 y el tope es 400. El archivo de parada, `stop.flag`, existe y **lo retira sólo el responsable**. Antes de reanudar conviene un sondeo y el piloto de `--focus-click`, que no se ha ejecutado.
+El cuaderno de solicitudes (`ledger.txt`) está en 160 y el tope es 400. El archivo de parada, `stop.flag`, existe y **lo retira sólo el responsable**. Antes de reanudar conviene un sondeo y un piloto de escritura con el código posterior a la ADR-0018. El modo `--focus-click` del cliente (un clic extra sobre el campo antes de escribir) **queda sustituido por esa corrección**: se conserva apagado por defecto, nunca se ejecutó y no debe usarse, porque ya no es necesario y su clic adicional falsearía la medición de `visual_change`.
 
 ```text
 python tools\s4\e2e_driver.py --exe target\release\ommatix.exe --config <local>.toml --app testapp --mode probe --runs 1 --ledger <dir>\ledger.txt --results <dir>\probe.jsonl
-python tools\s4\e2e_driver.py --exe target\release\ommatix.exe --config <local>.toml --app testapp --mode run --runs 10 --focus-click --max-live 100 --ledger <dir>\ledger.txt --results <dir>\s4r2.results.jsonl --session-id s4r2-e2e01
+python tools\s4\e2e_driver.py --exe target\release\ommatix.exe --config <local>.toml --app testapp --mode run --runs 10 --max-live 100 --ledger <dir>\ledger.txt --results <dir>\s4r2.results.jsonl --session-id s4r2-e2e01
 python tools\s4\e2e_driver.py --exe target\release\ommatix.exe --config <local>.toml --app calculator --mode run --runs 10 --max-live 60 --ledger <dir>\ledger.txt --results <dir>\s4r2.results.jsonl --session-id s4r2-e2e02
 python tools\s4\e2e_driver.py --exe target\release\ommatix.exe --config <local>.toml --app notepad --mode run --runs 10 --max-live 30 --ledger <dir>\ledger.txt --results <dir>\s4r2.results.jsonl --session-id s4r2-e2e03
 ```
