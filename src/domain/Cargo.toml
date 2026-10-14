@@ -1,6 +1,6 @@
 [package]
 name = "ommatix-domain"
-description = "Ommatix domain core: frames, perception grid, regions, elements and spatial index. Zero I/O."
+description = "Ommatix domain core: frames, change tracking, regions, elements and spatial index. Zero I/O."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,6 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-serde = { workspace = true }
 thiserror = { workspace = true }
 
 [lints]

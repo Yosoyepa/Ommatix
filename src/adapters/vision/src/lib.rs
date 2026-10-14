@@ -1,10 +1,14 @@
 //! # ommatix-adapter-vision
 //!
 //! Driven adapter for the [`ElementDetector`](ommatix_application::ElementDetector) port.
-//! The MVP ships one detector, [`ContrastBlobDetector`]: classic, deterministic,
-//! CPU-only connected-component analysis. Learned detectors (OCR, widget classifiers)
-//! are future adapters behind the same port.
+//! The MVP ships one detector, [`FlatRegionDetector`]: classic, deterministic, CPU-only
+//! region growing over the flat colours GUIs are drawn with (ADR-0010). Learned
+//! detectors (OCR, widget classifiers) are future adapters behind the same port.
 
-mod contrast_blob;
+mod border;
+mod flat_region;
+mod forest;
+mod grouping;
+mod segment;
 
-pub use contrast_blob::{ContrastBlobConfig, ContrastBlobDetector};
+pub use flat_region::{FlatRegionConfig, FlatRegionDetector};

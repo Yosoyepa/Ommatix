@@ -1,6 +1,6 @@
 # 0006. Deterministic classical detector for the MVP
 
-- **Status:** Accepted
+- **Status:** Superseded by [0010](0010-flat-region-detector.md)
 - **Date:** 2026-10-14
 
 ## Context

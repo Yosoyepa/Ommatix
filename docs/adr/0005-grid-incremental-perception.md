@@ -1,6 +1,6 @@
 # 0005. Grid-based incremental perception and uniform-grid spatial index
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by [0011](0011-incremental-perception-invariants.md)
 - **Date:** 2026-10-14
 
 ## Context

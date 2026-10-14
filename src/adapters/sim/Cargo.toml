@@ -1,0 +1,16 @@
+[package]
+name = "ommatix-adapter-sim"
+description = "Ommatix simulated desktop: a tiny deterministic GUI implementing both FrameSource and InputController, for acceptance tests and demos."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+ommatix-application = { workspace = true }
+ommatix-domain = { workspace = true }
+
+[lints]
+workspace = true

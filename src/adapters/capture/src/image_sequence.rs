@@ -63,7 +63,9 @@ impl FrameSource for ImageSequenceSource {
         let (w, h) = img.dimensions();
         Frame::from_rgba(w, h, img.into_raw())
             .map(Some)
-            .map_err(|e| PortError::new(ADAPTER, e.to_string()))
+            .map_err(|e| {
+                PortError::new(ADAPTER, format!("{} is unusable", path.display())).with_source(e)
+            })
     }
 }
 

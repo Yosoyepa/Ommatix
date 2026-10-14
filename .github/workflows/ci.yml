@@ -26,11 +26,13 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - name: Acceptance specification (Gherkin)
+        run: cargo test -p ommatix-acceptance
       - name: Smoke test (demo pipeline)
         run: cargo run --quiet -- demo
 
   screen-feature:
-    name: screen capture feature builds
+    name: screen capture + native input features build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,4 +45,27 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy -p ommatix --features screen --all-targets -- -D warnings
+      - run: cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings
+      - run: cargo test -p ommatix-adapter-capture -p ommatix-adapter-input --features ommatix-adapter-capture/screen,ommatix-adapter-input/native
+
+  cross-check:
+    name: capture + native input compile for ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-pc-windows-gnu, aarch64-apple-darwin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: >-
+          cargo clippy --target ${{ matrix.target }} --all-targets
+          -p ommatix-adapter-capture -p ommatix-adapter-input
+          --features ommatix-adapter-capture/screen,ommatix-adapter-input/native
+          -- -D warnings

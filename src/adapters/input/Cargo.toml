@@ -1,0 +1,22 @@
+[package]
+name = "ommatix-adapter-input"
+description = "Ommatix driven adapters for the InputController port: dry-run recorder and native mouse/keyboard via enigo."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+## Send real mouse/keyboard events to the OS through `enigo`.
+native = ["dep:enigo"]
+
+[dependencies]
+ommatix-application = { workspace = true }
+ommatix-domain = { workspace = true }
+enigo = { workspace = true, optional = true }
+
+[lints]
+workspace = true
