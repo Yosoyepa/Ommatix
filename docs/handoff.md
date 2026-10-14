@@ -23,14 +23,18 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | S0, proveedor e hilos del detector (rama `perf/s0-detector-ep`, apilada sobre `feat/s3-supervised-runs`): `[models] detector_execution_provider = "cpu" \| "directml"` (feature `directml`, `DirectML.dll` fijada, sin vuelta a la CPU) y `detector_threads`; manifiesto S0 con `"cpu,directml"`; DirectML equivalente a la CPU; agrupar regiones se midió y se descartó porque cambia las detecciones; `tools/s0/synthetic_frames.py` y el ejemplo `s0_probe`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §9 (CHANGELOG 1.0.11) | Fusionado (con #9) |
 | — | S4, protocolo de aceptación reducido (rama `feat/s4-reduced-e2e`): 20 corridas E2E puntuadas sólo con clics, con `tools/s4/e2e_driver.py` y la aplicación de prueba `tools/s4/testapp` (`eframe`/`egui`, crate independiente). Aplicación de prueba, 9 de 10; Bloc de notas (menú `Editar`), 10 de 10; Calculadora no puntuada. 0 falsos éxitos según el título y el anclaje por UI Automation. El actuador `SendInput` atestigua la aplicación hospedada en vez de `ApplicationFrameHost.exe`. E2E-01 y PERF-02 en parte. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) (CHANGELOG 1.0.13) y revisión en [`reviews/2026-10-14-s4-reduced-acceptance.md`](reviews/2026-10-14-s4-reduced-acceptance.md) | Abierto |
 | — | Evidencia de UI Automation (rama `feat/uia-evidence`, ADR-0017): puerto `AccessibilityProvider`, adaptador `ommatix-adapter-accessibility` (feature `uia`, crate seguro `uiautomation`, sin `unsafe` propio), `[models] accessibility = "none" \| "uia"`. Se fusiona con la visión sin sustituirla: rol, nombre (`label_source: accessibility`) y caja del elemento ganan; las cajas visuales que son el mismo control se absorben; una caja centrada sobre otro control accesible pierde la confirmación (hallazgo 2 de S4); `type` permitido sobre una entrada confirmada por accesibilidad. Etapa `accessibility` en `_meta`. UT-44 y BDD-33 (CHANGELOG 1.0.14) | Abierto |
+| — | S4, segunda ronda con accesibilidad (rama `feat/uia-evidence`, #11): sondeos sin entrada que confirman por nombre de UI Automation los controles de la aplicación de prueba (`Campo de texto` como `input`), las teclas de la Calculadora y `Editar`; 36 entregas reales, 36 de 36 sobre el control pedido; la escritura de E2E-01 pierde el texto en 3 de 4 intentos (`type` verifica el foco a nivel de ventana: hallazgo abierto); serie puntuada 0 de 3; E2E-02 y E2E-03 no ejecutadas; el archivo de parada queda creado para decisión del responsable. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Segunda ronda con accesibilidad» (CHANGELOG 1.0.15) y revisión en [`reviews/2026-10-14-s4-uia-acceptance.md`](reviews/2026-10-14-s4-uia-acceptance.md) | Abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.14)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.15)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
 en parte, IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ejecutado.
 El protocolo S4 reducido (1.0.13) ejecuta en parte E2E-01 y PERF-02, con 20 corridas sólo
 con clics. No son las 450 del protocolo (EV-02), y RF-18, RNF-03 y RNF-05 siguen pendientes.
+La segunda ronda (1.0.15) confirma por nombre de accesibilidad los controles de E2E-01 y E2E-02
+en sondeos sin entrada, pero la escritura de E2E-01 falló en sus corridas puntuadas (0 de 3), la
+serie se detuvo con el archivo de parada creado y E2E-02 y E2E-03 no se han ejecutado en vivo.
 
 ## Cómo está el código
 
@@ -193,9 +197,10 @@ con clics. No son las 450 del protocolo (EV-02), y RF-18, RNF-03 y RNF-05 siguen
    - Evidencia de UI Automation (ADR-0017, aprobada el 2026-10-14): implementada y probada con
      dobles. Falta medir su coste en la máquina de referencia (etapa `accessibility` de
      `_meta`; el recorrido está acotado a 2 000 elementos, profundidad 32 y 250 ms, valores
-     `[P]` por calibrar), repetir la Calculadora y una corrida supervisada con `type` sobre una
-     entrada confirmada por accesibilidad (E2E-02), y decidir si se mantiene el IoU 0,5 de la
-     fusión. La lectura manual del árbol de la aplicación de prueba es la prueba `#[ignore]`
+     `[P]` por calibrar), y decidir si se mantiene el IoU 0,5 de la fusión. La segunda ronda
+     (1.0.15) deja abiertos dos puntos: que `type` verifique el foco del campo (ADR nueva; hoy
+     pierde teclas en 3 de 4 intentos) y reanudar la serie de E2E-01, la Calculadora y el Bloc de
+     notas, sólo cuando el responsable retire `stop.flag`. La lectura manual del árbol de la aplicación de prueba es la prueba `#[ignore]`
      `reads_the_tree_of_the_s4_test_application` del adaptador (arranca
      `tools/s4/testapp`, lee sólo ese proceso, imprime recuentos por rol y cierra el proceso
      que lanzó; no envía entrada).

@@ -1,5 +1,19 @@
 # Historial documental
 
+## 1.0.15 — 2026-10-14: S4, segunda ronda con accesibilidad (ADR-0017)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código de las crates de Rust. Documenta la segunda ronda del protocolo reducido, con la evidencia de UI Automation activada. El informe está en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), sección «Segunda ronda con accesibilidad (ADR-0017)», y la revisión en [`../reviews/2026-10-14-s4-uia-acceptance.md`](../reviews/2026-10-14-s4-uia-acceptance.md).
+
+- **Autorización:** la del responsable del proyecto del 14 de octubre de 2026, la misma de la primera ronda, con `[models] accessibility = "uia"`.
+- **Sondeos sin entrada:** los controles por nombre se confirman por accesibilidad. En la aplicación de prueba, los seis botones y el campo `Campo de texto` (`input`); en la Calculadora, `Siete`, `Más`, `Ocho`, `Es igual a` y `Borrar`, con la pantalla inicial en `0`; en el Bloc de notas, `Editar`. Cada etiqueta aparece una sola vez. Es lo que la primera ronda no podía hacer con las teclas de la Calculadora.
+- **Corridas con entrada:** 36 solicitudes `dry_run: false`, todas entregadas, con el control pedido bajo el cursor en 36 de 36. Efectos: 34 `effect_observed` y 2 `indeterminate`. El cuaderno de solicitudes pasa de 124 a 160 de 400.
+- **E2E-01 (aplicación de prueba):** la serie puntuada de tres corridas no tuvo éxitos. Los ocho clics pasaron en las tres. La escritura en el campo dejó el texto fuera del título en tres de cuatro intentos, y el motor informó `indeterminate` o `effect_observed` según el modo. El piloto con `visual_change` tuvo un falso éxito según el protocolo, excluido de las puntuadas. La serie se detuvo por la regla de tres corridas seguidas fallidas, y el archivo de parada sigue creado.
+- **E2E-02 (Calculadora) y E2E-03 (Bloc de notas):** no se ejecutaron en vivo.
+- **Hallazgos abiertos:** (1) `type` pierde las teclas que llegan en el fotograma de su clic de enfoque, porque el actuador verifica el foco a nivel de ventana; (2) `visual_change` en `type` puede dar `effect_observed` sólo por el clic de enfoque; (3) el título inicial no coincidió en una corrida, sin causa identificada. Ninguno se corrige aquí: exigen una decisión de diseño (ADR y dossier).
+- **Latencias [V]:** en las 41 observaciones con entrada, la mediana de `total` es 318,8 ms (p95 495,6 ms). La etapa `accessibility` tiene una mediana de 71,1 ms (p95 111,4 ms). RNF-05 sigue sin cumplirse.
+- **Aplicación de prueba y cliente:** `tools/s4/testapp` gana el campo de texto y refleja su contenido en el título. `tools/s4/e2e_driver.py` gana los flujos por nombre de UI Automation, la escritura con `type`, las etapas de `_meta` y un modo `--focus-click` que no se ha ejecutado.
+- **Matrices (`matrices/plan_pruebas.csv`):** sin cambio de estado. E2E-01 sigue `EJECUTADO_SUPERVISADO_PARCIAL`, y E2E-02 y E2E-03 de la matriz no se ejecutaron. RF-18, RNF-03, RNF-05 y las casillas DoD no cambian.
+
 ## 1.0.14 — 2026-10-14: evidencia de UI Automation (ADR-0017)
 
 No cambia ningún requisito, algoritmo base ni schema del contrato. Añade un puerto, un adaptador y una extensión de la fusión del algoritmo 2, y un escenario. Responde a los hallazgos de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md): el detector de S0 tiene una sola clase (todos los roles `unknown`, así que `type` es imposible), el OCR no etiqueta las teclas de un carácter de la Calculadora y una caja etiquetada «Función» quedó centrada sobre x² (hallazgo abierto 2).

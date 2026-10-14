@@ -109,7 +109,15 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   puntuó: el OCR de Windows no lee sus botones de un glifo, y su única etiqueta utilizable
   pertenecía a una caja centrada en otro botón. Ningún flujo escribe: `type` necesita un
   rol de entrada confirmado, que el detector de una clase nunca da. E2E-01 y PERF-02 se
-  ejecutaron en parte; queda el protocolo de 450 corridas.
+  ejecutaron en parte; queda el protocolo de 450 corridas. Una segunda ronda con evidencia
+  de UI Automation ([ADR-0017](docs/adr/0017-ui-automation-evidence-fused-with-vision.md),
+  [CHANGELOG 1.0.15](docs/thesis/CHANGELOG.md)) confirmó por nombre de accesibilidad las
+  teclas de la aplicación de prueba y de la Calculadora en sondeos sin entrada, con 36
+  entregas reales, todas sobre el control pedido. Sus corridas puntuadas de escritura
+  fallaron: `type` pierde las teclas que llegan en el fotograma de su clic de enfoque, porque
+  la comprobación de foco es a nivel de ventana (hallazgo abierto). La serie se detuvo por la
+  regla de tres fallos seguidos, así que los flujos de la Calculadora y del Bloc de notas no
+  se ejecutaron en vivo.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
@@ -146,7 +154,8 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   corridas supervisadas
 - [ ] **S4, aceptación:** 450 corridas de extremo a extremo en aplicaciones controladas,
   benchmarks, soak e informe de aceptación. Se ejecutó un protocolo reducido sólo con clics
-  (20 corridas puntuadas en dos aplicaciones; E2E-01 y PERF-02 en parte)
+  (20 corridas puntuadas en dos aplicaciones; E2E-01 y PERF-02 en parte; la segunda ronda con
+  accesibilidad se detuvo en sus corridas de escritura)
 
 ## Inicio rápido
 

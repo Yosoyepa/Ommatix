@@ -100,7 +100,13 @@ unless the agent and a local policy both allow them. More in the
   Calculator was not scored: Windows OCR does not read its single-glyph buttons, and its
   one usable label belonged to a box centred on another button. No flow types: `type`
   needs a confirmed input role, which the one-class detector never gives. E2E-01 and
-  PERF-02 ran in part; the 450-run protocol remains.
+  PERF-02 ran in part; the 450-run protocol remains. A second round with UI Automation
+  evidence ([ADR-0017](docs/adr/0017-ui-automation-evidence-fused-with-vision.md), [CHANGELOG
+  1.0.15](docs/thesis/CHANGELOG.md)) confirmed the test application's and the Calculator's keys
+  by accessibility name in dry-run probes, with 36 real deliveries, all on the requested
+  control. Its scored typing runs failed: `type` drops the keys that arrive in the frame of
+  its focusing click, because its focus check is window-level (an open finding). The series
+  stopped at its three-failure rule, so the Calculator and Notepad flows did not run live.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML,
@@ -135,7 +141,8 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
   remaining supervised runs
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
   and the acceptance report. A reduced, click-only protocol ran (20 scored runs in two
-  applications; E2E-01 and PERF-02 in part)
+  applications; E2E-01 and PERF-02 in part; the second round with UI Automation stopped at
+  its typing runs)
 
 ## Quick start
 
