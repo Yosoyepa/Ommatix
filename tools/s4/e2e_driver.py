@@ -376,6 +376,56 @@ foreach ($e in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
 [Console]::Out.Write(($states -join ","))
 """
 
+# Read-only diagnostic of Notepad's menu step (S4 fifth round, finding 1): the element under a
+# point and up to 4 ancestors, as ``RuntimeId, AutomationId, ControlType, ClassName,
+# ExpandCollapseState`` rows. Never a name or a value: identifiers, types and states only.
+UIA_DIAG_HEAD_PS = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
+"""
+UIA_DIAG_WALK_PS = r"""
+$rows = @()
+for ($i = 0; $e -and $i -lt 5; $i++) {
+  $rid = ''
+  try { $rid = ($e.GetRuntimeId() -join '.') } catch {}
+  $type = $e.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  $state = ''
+  try {
+    $pattern = $null
+    if ($e.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$pattern)) {
+      $state = $pattern.Current.ExpandCollapseState.ToString()
+    }
+  } catch {}
+  $rows += ($rid + "`t" + $e.Current.AutomationId + "`t" + $type + "`t" + $e.Current.ClassName + "`t" + $state)
+  $e = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($e)
+}
+[Console]::Out.Write(($rows -join "`n"))
+"""
+# The point is the centre of the one on-screen element of the window with the exact name and
+# one of the control types (the element the click is about to reach); no row otherwise.
+UIA_DIAG_AT_ELEMENT_PS = UIA_DIAG_HEAD_PS + r"""
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND__)
+$name = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__NAME__'))
+$types = '__TYPES__'.Split(',')
+$cond = New-Object System.Windows.Automation.PropertyCondition(
+  [System.Windows.Automation.AutomationElement]::NameProperty, $name)
+$found = @()
+foreach ($c in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) {
+  $type = $c.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  if (($types -contains $type) -and -not $c.Current.IsOffscreen) { $found += $c }
+}
+$e = $null
+if ($found.Count -eq 1) {
+  $r = $found[0].Current.BoundingRectangle
+  $p = New-Object System.Windows.Point(($r.X + $r.Width / 2), ($r.Y + $r.Height / 2))
+  $e = [System.Windows.Automation.AutomationElement]::FromPoint($p)
+}
+""" + UIA_DIAG_WALK_PS
+UIA_DIAG_AT_POINT_PS = UIA_DIAG_HEAD_PS + r"""
+$p = New-Object System.Windows.Point([double]__X__, [double]__Y__)
+$e = [System.Windows.Automation.AutomationElement]::FromPoint($p)
+""" + UIA_DIAG_WALK_PS
+
 user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
 
 
@@ -446,6 +496,57 @@ def notepad_menu_state(hwnd) -> str | None:
     return parse_menu_state(out)
 
 
+def parse_diag_rows(output: str) -> list[dict]:
+    """Rows of ``RuntimeId<TAB>AutomationId<TAB>ControlType<TAB>ClassName<TAB>State`` as printed
+    by the diagnostic scripts; a row of another shape is dropped."""
+    rows = []
+    for line in output.splitlines():
+        parts = line.rstrip("\r").split("\t")
+        if len(parts) != 5:
+            continue
+        rows.append({"runtime_id": parts[0].strip(), "automation_id": parts[1].strip(),
+                     "control_type": parts[2].strip().removeprefix("ControlType."),
+                     "class_name": parts[3].strip(), "expand_state": parts[4].strip()})
+    return rows
+
+
+def run_diag(script: str) -> list[dict] | None:
+    """One read-only diagnostic script; None when it timed out. No input is sent."""
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             check=False, creationflags=CREATE_NO_WINDOW, timeout=60).stdout
+    except subprocess.TimeoutExpired:
+        return None
+    return parse_diag_rows(out)
+
+
+def uia_diag_at_element(hwnd, label: str, control_types: tuple[str, ...]) -> list[dict] | None:
+    """The diagnostic chain under the centre of the one on-screen element of `hwnd` named
+    `label` (before the click). The name is never printed."""
+    return run_diag(UIA_DIAG_AT_ELEMENT_PS.replace("__HWND__", str(int(hwnd)))
+                    .replace("__NAME__", base64.b64encode(label.encode("utf-8")).decode("ascii"))
+                    .replace("__TYPES__", ",".join(control_types)))
+
+
+def uia_diag_at_cursor() -> list[dict] | None:
+    """The diagnostic chain under the mouse cursor (after the click, where SendInput left it)."""
+    x, y = cursor()
+    return run_diag(UIA_DIAG_AT_POINT_PS.replace("__X__", str(x)).replace("__Y__", str(y)))
+
+
+def diag_record(rows: list[dict], expected_runtime_id: str) -> list[dict]:
+    """The recorded form of a diagnostic chain: per element its depth (0 is the element under
+    the point), control type, automation id, class name, ExpandCollapse state and whether its
+    RuntimeId is the one seen before the click. The RuntimeIds themselves are not recorded."""
+    return [{"depth": depth, "control_type": row["control_type"],
+             "automation_id": row["automation_id"], "class_name": row["class_name"],
+             "expand_state": row["expand_state"],
+             "same_runtime_id": bool(expected_runtime_id and row["runtime_id"]
+                                     and expected_runtime_id == row["runtime_id"])}
+            for depth, row in enumerate(rows[:5])]
+
+
 def calculator_display() -> str | None:
     """The Calculator display's UI Automation name (e.g. "La pantalla muestra 15"), read
     through .NET UI Automation in a separate PowerShell; only its last number is used."""
@@ -501,6 +602,17 @@ ROLE_CONTROL_TYPES = {
     "unknown": ("Edit", "Document", "RadioButton", "MenuItem", "TabItem", "ListItem",
                 "TreeItem", "DataItem", "Hyperlink", "HeaderItem"),
 }
+
+
+# Every UI Automation control type, for the read-only diagnosis of a step that found no
+# usable target (counts and types of the elements of the window with the step's name).
+ANY_CONTROL_TYPE = (
+    "AppBar", "Button", "Calendar", "CheckBox", "ComboBox", "Custom", "DataGrid", "DataItem",
+    "Document", "Edit", "Group", "Header", "HeaderItem", "Hyperlink", "Image", "List",
+    "ListItem", "Menu", "MenuBar", "MenuItem", "Pane", "ProgressBar", "RadioButton",
+    "ScrollBar", "SemanticZoom", "Separator", "Slider", "Spinner", "SplitButton", "StatusBar",
+    "Tab", "TabItem", "Table", "Text", "Thumb", "TitleBar", "ToolBar", "ToolTip", "Tree",
+    "TreeItem", "Window")
 
 
 def parse_identity_rows(output: str) -> list[dict]:
@@ -1067,27 +1179,95 @@ class Protocol:
     def current_hwnd(self):
         return foreground()["hwnd"]
 
-    def identify_before(self, res: dict, fg: dict, label: str, target: dict) -> dict | None:
+    def identity_lookup(self, hwnd, label: str, target: dict) -> tuple[dict, dict | None]:
         """The identity of the element a click is about to reach (see identity_decision), found
-        through UI Automation in the foreground window of the target application. Records its
-        RuntimeId, AutomationId and control type. Returns None, with the run failed, when the
-        click must not be sent."""
+        through UI Automation in the window `hwnd`: its record (status, candidate counts and,
+        when exactly one, its RuntimeId, AutomationId and control type) and the element, or
+        None when the click must not be sent. Shared by every click of the client."""
         control_types = ROLE_CONTROL_TYPES.get(target.get("role", ""))
-        rows = self.identify(fg["hwnd"], label, control_types) if control_types else None
+        rows = self.identify(hwnd, label, control_types) if control_types else None
         status, found = identity_decision(rows)
         if not control_types:
             status = "no_control_type"  # a role with no UI Automation control is never clicked
-        record = {"step": res["steps"], "status": status,
+        record = {"status": status,
                   "candidates": sum(1 for r in rows or [] if not r["offscreen"]),
                   "offscreen_ignored": sum(1 for r in rows or [] if r["offscreen"])}
         if found is not None:
             record.update(runtime_id=found["runtime_id"], automation_id=found["automation_id"],
                           control_type=found["control_type"])
+        return record, found
+
+    def identify_before(self, res: dict, fg: dict, label: str, target: dict) -> dict | None:
+        """The identity lookup of a step's click, recorded in the run. Returns None, with the
+        run failed, when the click must not be sent."""
+        record, found = self.identity_lookup(fg["hwnd"], label, target)
+        status = record["status"]
+        record = {"step": res["steps"], **record}
         res.setdefault("identity", []).append(record)
         if found is None:
             res["failure"] = f"step {res['steps']}: no click, the element's identity is {status}"
             return None
         return found
+
+    def diag_at_element(self, hwnd, label: str, control_types: tuple[str, ...]):
+        return uia_diag_at_element(hwnd, label, control_types)
+
+    def diag_at_cursor(self):
+        return uia_diag_at_cursor()
+
+    @staticmethod
+    def read_diag(read, expected_runtime_id: str) -> list[dict] | None:
+        """One diagnostic chain in its recorded form, or None when it could not be read. A
+        diagnostic never decides anything and never stops a run, so any failure of the
+        read is only recorded as unreadable."""
+        try:
+            rows = read()
+        except Exception:  # read-only diagnostics must not fail a run
+            return None
+        return None if rows is None else diag_record(rows, expected_runtime_id)
+
+    def uia_candidates(self, hwnd, names: tuple[str, ...]) -> dict | None:
+        """How many elements of the window UI Automation sees under the step's names, of any
+        control type, and which types (never the names). None when it could not be read."""
+        on_screen, off_screen, types = 0, 0, set()
+        for name in names:
+            try:
+                rows = self.identify(hwnd, name, ANY_CONTROL_TYPE)
+            except Exception:  # a diagnosis must not mask the stop it explains
+                return None
+            if rows is None:
+                return None
+            for row in rows:
+                if row["offscreen"]:
+                    off_screen += 1
+                else:
+                    on_screen += 1
+                    types.add(row["control_type"])
+        return {"candidates": on_screen, "offscreen": off_screen, "control_types": sorted(types)}
+
+    def record_target(self, res: dict, elements: list[dict], spec, hwnd,
+                      stopped: bool = False) -> None:
+        """What the observation holds under a step's label(s), without any name (S4 fifth round,
+        finding 3): how many candidates, how many are confirmed, their roles, actionability and
+        label sources, and, when the step stopped here, the condition that stopped it:
+        ``zero_candidates``, ``several_candidates`` or ``not_confirmed`` (one candidate that is
+        not confirmed). A stop also records what UI Automation sees under the same names."""
+        names = candidates(spec)
+        found = [e for e in elements if e.get("label", "").strip() in names]
+
+        def counts(key: str) -> dict:
+            return dict(sorted(Counter(e.get(key, "") for e in found).items()))
+
+        record = {"step": res["steps"], "candidates": len(found),
+                  "confirmed": sum(1 for e in found if e.get("actionability") == "confirmed"),
+                  "roles": counts("role"), "actionability": counts("actionability"),
+                  "label_source": counts("label_source"), "stopped_by": None}
+        if stopped:
+            record["stopped_by"] = ("zero_candidates" if not found else
+                                    "several_candidates" if len(found) > 1 else "not_confirmed")
+            record["uia"] = self.uia_candidates(hwnd, names)
+            log("target_stop", run=res.get("run"), **record)
+        res.setdefault("targets", []).append(record)
 
     def soft_foreground_ok(self) -> bool:
         """Whether the target application is in front and maximized on the primary monitor.
@@ -1158,6 +1338,7 @@ class Protocol:
                 time.sleep(self.args.settle)  # let the Calculator save its mode before it closes
             self.close(pid)  # only a process this step started
             summary["identity"] = res.get("identity", [])
+            summary["targets"] = res.get("targets", [])
             summary["live_requests"] = res["actions_requested"]
             summary["ledger_end"] = self.ledger_total()
             log("calc_standard", **summary)
@@ -1200,10 +1381,31 @@ class Protocol:
         if target is None:
             log("menu_restore_skipped", run=res["run"], reason="no confirmed Editar target")
             return False
+        # The same identity grounding as the clicks of steps(), before the click: not exactly
+        # one `Editar` in the foreground window means no click at all.
+        record, ident = self.identity_lookup(self.current_hwnd(), NOTEPAD_MENU, target)
+        restore["identity"] = record
+        if ident is None:
+            log("menu_restore_skipped", run=res["run"],
+                reason=f"the Editar identity is {record['status']}")
+            return False
         out = self.restore_click(res, target, snap)
         restore["clicked"] = bool(out.get("input_delivered"))
+        restore["status"] = out.get("status")
+        if out.get("input_delivered"):
+            # ... and after it: the control under the cursor must be that element. A mismatch is
+            # recorded and counted as in steps(); nothing more is sent and nothing is retried.
+            grounded = identity_hit(ident, self.cursor_chain())
+            restore["grounded"] = grounded
+            if not grounded:
+                res["grounding_wrong"] = res.get("grounding_wrong", 0) + 1
+                if out.get("status") == "effect_observed":
+                    res["engine_false_success"] = res.get("engine_false_success", 0) + 1
+                log("menu_restore_ungrounded", run=res["run"])
+        restore["state_polls"] = 0
         for _ in range(8):
             restore["state_after"] = self.menu_state(hwnd)
+            restore["state_polls"] += 1
             if restore["state_after"] == MENU_CLOSED:
                 break
             time.sleep(0.25)
@@ -1247,12 +1449,17 @@ class Protocol:
             spec = label  # a name, or ordered alternatives (the clear control)
             target = None
             for _ in range(3):
-                label, target = self.find_target(elements, spec)
+                try:
+                    label, target = self.find_target(elements, spec)
+                except Abort:  # several elements share the label: say what was there, then stop
+                    self.record_target(res, elements, spec, hwnd, stopped=True)
+                    raise
                 if target is not None:
                     break
                 time.sleep(0.3)
                 snap, elements, obs = self.observe()
                 res["observations"].append(obs)
+            self.record_target(res, elements, spec, hwnd, stopped=target is None)
             if target is None:
                 res["failure"] = f"step {res['steps']}: target label not found or not confirmed"
                 if isinstance(spec, tuple):  # which of the fixed alternatives exist at all
@@ -1273,6 +1480,13 @@ class Protocol:
                 ident = self.identify_before(res, fg, label, target)
                 if ident is None:
                     return
+                diagnostic = None
+                if self.args.app == "notepad":
+                    # Read-only (finding 1): what is under the target point before the click.
+                    types = ROLE_CONTROL_TYPES[target["role"]]
+                    diagnostic = {"step": res["steps"], "before": self.read_diag(
+                        lambda: self.diag_at_element(fg["hwnd"], label, types),
+                        ident["runtime_id"])}
                 self.spend_live()
                 res["actions_requested"] += 1
                 kind = "click" if text is None else "type"
@@ -1290,6 +1504,7 @@ class Protocol:
                 if text is not None:
                     args["text"] = text
                 out, _, meta, ms = self.srv.call("execute_action", args)
+                clicked_at = time.monotonic()
                 err = (out.get("error") or {}).get("code")
                 act = {"step": res["steps"], "action": kind, "expected_effect": effect,
                        "status": out.get("status"),
@@ -1338,6 +1553,13 @@ class Protocol:
                 if self.args.debug_grounding:
                     log("grounding_chain", step=res["steps"], hit=hit,
                         chain=[(row["automation_id"], row["control_type"]) for row in chain])
+                if diagnostic is not None:  # read-only: it decides nothing and is not scored
+                    diagnostic["after"] = self.read_diag(self.diag_at_cursor, ident["runtime_id"])
+                    # How long after the engine's reply the chain was read: a menu may still be
+                    # animating, so the reader of the record needs the delay.
+                    diagnostic["after_ms"] = round((time.monotonic() - clicked_at) * 1000)
+                    res.setdefault("menu_diagnostic", []).append(diagnostic)
+                    log("menu_diagnostic", run=res["run"], **diagnostic)
             # Re-observe (the next step needs fresh targets) and check the visible text.
             passed = False
             for _ in range(4):
