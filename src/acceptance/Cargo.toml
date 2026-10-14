@@ -24,5 +24,9 @@ serde_json = { workspace = true }
 name = "acceptance"
 harness = false
 
+[[test]]
+name = "thesis"
+harness = false
+
 [lints]
 workspace = true
