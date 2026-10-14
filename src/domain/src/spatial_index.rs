@@ -118,7 +118,7 @@ mod tests {
             vec![ElementId(2), ElementId(1)]
         );
         assert_eq!(idx.query_point(Point::new(150, 150)), vec![ElementId(1)]);
-        assert!(idx.query_point(Point::new(500, 500)).is_empty());
+        assert_eq!(idx.query_point(Point::new(500, 500)).len(), 0);
     }
 
     #[test]
@@ -126,7 +126,7 @@ mod tests {
         let mut idx = SpatialIndex::new(10);
         idx.upsert(ElementId(7), Rect::new(0, 0, 5, 5));
         idx.upsert(ElementId(7), Rect::new(50, 50, 5, 5));
-        assert!(idx.query_point(Point::new(1, 1)).is_empty());
+        assert_eq!(idx.query_point(Point::new(1, 1)).len(), 0);
         assert_eq!(idx.query_point(Point::new(51, 51)), vec![ElementId(7)]);
         assert_eq!(idx.remove(ElementId(7)), Some(Rect::new(50, 50, 5, 5)));
         assert!(idx.is_empty());

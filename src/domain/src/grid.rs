@@ -172,7 +172,7 @@ mod tests {
     fn identical_frames_have_no_dirty_cells() {
         let g = GridSpec::new(8).unwrap();
         let f = Frame::solid(32, 32, WHITE).unwrap();
-        assert!(g.signature(&f).diff(Some(&g.signature(&f))).is_empty());
+        assert_eq!(g.signature(&f).diff(Some(&g.signature(&f))).len(), 0);
     }
 
     #[test]

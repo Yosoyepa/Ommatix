@@ -255,7 +255,7 @@ mod tests {
 
         let second = e.tick().unwrap().unwrap();
         assert_eq!(second.dirty_cells, 0);
-        assert!(second.dirty_regions.is_empty());
+        assert_eq!(second.dirty_regions.len(), 0);
         assert!(second.delta.is_empty());
         assert_eq!(second.element_count, 1);
         assert!(e.tick().unwrap().is_none(), "source exhausted");

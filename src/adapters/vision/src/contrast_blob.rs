@@ -227,6 +227,6 @@ mod tests {
     fn low_contrast_is_background() {
         let mut f = Frame::solid(20, 20, WHITE).unwrap();
         f.fill_rect(Rect::new(5, 5, 5, 5), [245, 245, 245, 255]);
-        assert!(detect(&f, f.bounds()).is_empty());
+        assert_eq!(detect(&f, f.bounds()).len(), 0);
     }
 }
