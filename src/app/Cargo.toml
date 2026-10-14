@@ -27,6 +27,9 @@ sendinput = ["dxgi", "ommatix-adapter-input/sendinput"]
 ## Enable the ONNX detector (`[models] detector_manifest`). ONNX Runtime is loaded at run
 ## time from the library `[models] onnxruntime_path` pins; nothing is downloaded at build.
 onnx = ["ommatix-adapter-vision/onnx"]
+## Enable the DirectML execution provider for the ONNX detector
+## (`[models] detector_execution_provider = "directml"`). Windows only; implies `onnx`.
+directml = ["onnx", "ommatix-adapter-vision/directml"]
 ## Enable Windows OCR (`[models] ocr = "winrt"`). Windows only.
 winrt-ocr = ["ommatix-adapter-vision/winrt-ocr"]
 

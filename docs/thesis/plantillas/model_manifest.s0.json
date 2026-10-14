@@ -21,7 +21,7 @@
           "affordance_evidence": "Ficha del modelo microsoft/OmniParser-v2.0@f55d0750 (README.md): icon_detect_v3 es 'an MIT licensed interactable region detector' entrenado con un conjunto 'automatically annotated to highlight clickable and actionable regions'. Afirmación del proveedor del modelo; su precisión en escritorio Windows no se midió en S0 (docs/thesis/S0_RESULTADOS.md, límites)"
         }
       ],
-      "execution_provider": "cpu",
+      "execution_provider": "cpu,directml",
       "test_report": "docs/thesis/S0_RESULTADOS.md",
       "score_threshold": 0.05,
       "nms_iou": 0.45

@@ -190,7 +190,11 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   Runtime loaded at run time (`load-dynamic`) from a library pinned by SHA-256. The model
   manifest is pinned by SHA-256 and names the weights, their SHA-256 and each class's role
   and affordance; class names never become roles. Each planned region is letterboxed into
-  the input, decoded, suppressed and mapped back to the frame.
+  the input, decoded, suppressed and mapped back to the frame, one inference per region.
+  It runs on the CPU (`detector_threads` intra-op threads) or,
+  with the `directml` feature, on DirectML with a pinned `DirectML.dll`, sequential
+  execution, no memory pattern and no CPU fallback; the manifest lists the providers the
+  model was validated on.
 - *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` for exactly
   `ocr_language`, never another language, without invented confidences; recognised text is
   never logged.

@@ -119,6 +119,22 @@ pub enum OcrKind {
     Winrt,
 }
 
+/// The ONNX Runtime execution provider of the detector (`[models]
+/// detector_execution_provider`). The model manifest must list it as validated.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    /// The CPU, the baseline.
+    #[default]
+    Cpu,
+    /// DirectML (DirectX 12, Windows), with a pinned `DirectML.dll`; never falls back to
+    /// the CPU.
+    Directml,
+}
+
+/// Most intra-op threads `[models] detector_threads` accepts.
+pub const MAX_DETECTOR_THREADS: u32 = 64;
+
 /// `[models]`: the perception models, chosen in the S0 spike. Empty (no model, no OCR)
 /// until the operator pins them; every file is pinned by SHA-256 and refused on mismatch.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -132,6 +148,15 @@ pub struct ModelsSection {
     /// The ONNX Runtime library the detector runs on (`onnxruntime.dll`).
     pub onnxruntime_path: String,
     pub onnxruntime_sha256: String,
+    /// The detector's execution provider (`cpu` unless the operator chooses `directml`).
+    pub detector_execution_provider: ProviderKind,
+    /// With `directml`: the `DirectML.dll` ONNX Runtime binds to, pinned like the runtime.
+    /// Empty with `cpu`.
+    pub directml_path: String,
+    pub directml_sha256: String,
+    /// Intra-op threads of the detector, `1..=MAX_DETECTOR_THREADS`; `0` (the default)
+    /// lets ONNX Runtime choose, which is the number of physical cores.
+    pub detector_threads: u32,
     pub ocr: OcrKind,
     /// BCP-47 tag of the OCR language; never replaced by another language.
     pub ocr_language: String,
@@ -149,6 +174,10 @@ impl Default for ModelsSection {
             detector_manifest_sha256: String::new(),
             onnxruntime_path: String::new(),
             onnxruntime_sha256: String::new(),
+            detector_execution_provider: ProviderKind::Cpu,
+            directml_path: String::new(),
+            directml_sha256: String::new(),
+            detector_threads: 0,
             ocr: OcrKind::None,
             ocr_language: "es-ES".to_owned(),
             detector_path: String::new(),
@@ -196,11 +225,35 @@ impl ModelsSection {
              model)",
         );
         check(
-            [&self.detector_manifest_sha256, &self.onnxruntime_sha256]
-                .iter()
-                .all(|v| v.is_empty() || is_sha256(v)),
-            "[models] detector_manifest_sha256 and onnxruntime_sha256 must be SHA-256 \
-             digests (64 hexadecimal characters)",
+            [
+                &self.detector_manifest_sha256,
+                &self.onnxruntime_sha256,
+                &self.directml_sha256,
+            ]
+            .iter()
+            .all(|v| v.is_empty() || is_sha256(v)),
+            "[models] detector_manifest_sha256, onnxruntime_sha256 and directml_sha256 must \
+             be SHA-256 digests (64 hexadecimal characters)",
+        );
+        let directml_pinned = !self.directml_path.is_empty() && !self.directml_sha256.is_empty();
+        let directml_empty = self.directml_path.is_empty() && self.directml_sha256.is_empty();
+        match self.detector_execution_provider {
+            ProviderKind::Cpu => check(
+                directml_empty,
+                "[models] directml_path and directml_sha256 are only used with \
+                 detector_execution_provider = \"directml\"",
+            ),
+            ProviderKind::Directml => check(
+                directml_pinned && self.has_detector(),
+                "[models] detector_execution_provider = \"directml\" needs a detector and \
+                 directml_path with directml_sha256 (the DirectML.dll ONNX Runtime binds to); \
+                 it never falls back to the CPU",
+            ),
+        }
+        check(
+            self.detector_threads <= MAX_DETECTOR_THREADS,
+            "[models] detector_threads must be between 0 (ONNX Runtime's default: the \
+             physical cores) and 64",
         );
         check(
             is_language_tag(&self.ocr_language),
@@ -687,6 +740,29 @@ mod tests {
         assert_eq!(config.models.ocr_language, "es-MX");
     }
 
+    const DETECTOR: &str = "[models]\ndetector_manifest = \"m.json\"\n\
+                            detector_manifest_sha256 = \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n\
+                            onnxruntime_path = \"o.dll\"\n\
+                            onnxruntime_sha256 = \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n";
+
+    #[test]
+    fn the_detector_runs_on_the_cpu_with_onnx_runtime_threads_unless_configured() {
+        let models = Config::parse(DETECTOR).unwrap().models;
+        assert_eq!(models.detector_execution_provider, ProviderKind::Cpu);
+        assert_eq!(models.detector_threads, 0);
+
+        let models = Config::parse(&format!(
+            "{DETECTOR}detector_execution_provider = \"directml\"\n\
+             directml_path = \"runtime/DirectML.dll\"\ndirectml_sha256 = \"{DIGEST}\"\n\
+             detector_threads = 8\n"
+        ))
+        .unwrap()
+        .models;
+        assert_eq!(models.detector_execution_provider, ProviderKind::Directml);
+        assert_eq!(models.directml_path, "runtime/DirectML.dll");
+        assert_eq!(models.detector_threads, 8);
+    }
+
     #[test]
     fn half_configured_or_unpinned_models_are_rejected() {
         for (text, expected) in [
@@ -712,6 +788,33 @@ mod tests {
             (
                 "[models]\nocr_language = \"-es\"\n".to_owned(),
                 "ocr_language",
+            ),
+            (
+                "[models]\ndetector_execution_provider = \"cuda\"\n".to_owned(),
+                "detector_execution_provider",
+            ),
+            (
+                format!("{DETECTOR}detector_execution_provider = \"directml\"\n"),
+                "never falls back to the CPU",
+            ),
+            (
+                format!(
+                    "{DETECTOR}detector_execution_provider = \"directml\"\n\
+                     directml_path = \"DirectML.dll\"\ndirectml_sha256 = \"abc\"\n"
+                ),
+                "directml_sha256",
+            ),
+            (
+                format!("{DETECTOR}directml_path = \"DirectML.dll\"\n"),
+                "only used with",
+            ),
+            (
+                "[models]\ndetector_threads = 65\n".to_owned(),
+                "detector_threads",
+            ),
+            (
+                "[models]\ndetector_threads = -1\n".to_owned(),
+                "detector_threads",
             ),
         ] {
             let message = error(&text);
