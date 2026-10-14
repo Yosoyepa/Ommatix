@@ -1,5 +1,14 @@
 # Historial documental
 
+## 1.0.2 — 2026-10-14: S1, núcleo geométrico e incremental
+
+No cambia ningún requisito, algoritmo, contrato ni escenario. Cambia el estado de las matrices:
+
+- UT-01 a UT-26 pasan a `IMPLEMENTADO_EN_RUST_S1` en `matrices/plan_pruebas.csv`. Son pruebas del crate `ommatix-domain` (módulos `incremental`, `snapshot`, `fusion` y `bbox`) que llevan su ID en el nombre y reproducen los casos del oráculo indicados en la matriz.
+- BDD-01 a BDD-10 pasan a `EJECUTADO_SOBRE_NUCLEO_S1` en `matrices/gherkin_trazabilidad.csv`. Se ejecutan desde esta carpeta con `src/acceptance/tests/thesis.rs` y ejercitan el núcleo directamente; el recorrido por MCP llega con el contrato en S2. BDD-11 y BDD-12 esperan a S2 porque hablan del ID del elemento y de su publicación.
+- Los requisitos RF-02 a RF-07 siguen pendientes: su aceptación exige capturas, detector y OCR reales.
+- Diferencia conocida con el oráculo: la normalización de texto en Rust usa NFC y `to_lowercase`; el oráculo usa `casefold`, que además convierte caracteres como `ß` en `ss`. Ninguna prueba del plan depende de esa diferencia.
+
 ## 1.0.1 — 2026-10-14: consolidación en el repositorio
 
 El dossier entra al repositorio con el nombre final del proyecto, Ommatix, y pasa a ser su línea base. No cambia ningún requisito, algoritmo, contrato ni escenario; los cambios son de ubicación y de estado:

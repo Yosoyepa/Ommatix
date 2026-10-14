@@ -58,7 +58,7 @@ compiler-enforced boundary.
 
 | Crate | May depend on |
 |---|---|
-| `ommatix-domain` | `thiserror`, plus pure-computation crates listed here (none yet). No I/O, no threads, no clocks, no serialisation, no other Ommatix crate |
+| `ommatix-domain` | `thiserror`, plus pure-computation crates listed here: `unicode-normalization` (NFC for labels). No I/O, no threads, no clocks, no serialisation, no other Ommatix crate |
 | `ommatix-application` | `ommatix-domain` + `thiserror`. No adapter crate; time only through the `Clock` port |
 | `ommatix-adapter-*` | `ommatix-application`, `ommatix-domain`, their own external libs. **Never another adapter** (dev-dependencies for integration tests are fine) |
 | `ommatix` (app) | everything; it is the only place where concrete adapters are chosen |
@@ -94,7 +94,7 @@ compiler-enforced boundary.
 | An architectural decision | `docs/adr/NNNN-title.md` (copy `0000-template.md`) |
 | A diagram | `docs/diagrams/*.md` as Mermaid |
 | A code review | `docs/reviews/YYYY-MM-DD-topic.md`: finding → resolution → regression test |
-| Executable acceptance scenarios | `src/acceptance/features/*.feature` + steps in `src/acceptance/tests/acceptance.rs`. A thesis scenario moves there from `docs/thesis/features/`, with its ID and tags, in the PR that adds its steps |
+| Executable acceptance scenarios | Thesis scenarios stay in `docs/thesis/features/` (the validator traces them there); their steps go in `src/acceptance/tests/thesis.rs`, and the PR that adds them adds the scenario to its `IMPLEMENTED` list. The prototype's own scenarios are in `src/acceptance/features/` with steps in `tests/acceptance.rs` |
 | Unit tests | next to the code (`#[cfg(test)] mod tests`); a test that implements a planned test carries its ID (`ut_13_failed_commit_keeps_pending_dirty`) |
 | Cross-crate / end-to-end tests | `src/<crate>/tests/` |
 
