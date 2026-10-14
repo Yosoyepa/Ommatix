@@ -781,9 +781,46 @@ Sin cambio. Esta corrida no es puntuada: `docs/thesis/matrices/plan_pruebas.csv`
 
 ### 9. Qué queda y cómo reanudar
 
-1. **Responsable (hallazgo 1), decisión previa a cualquier otra corrida de E2E-03.** Con la regla actual, «Editar» no puede confirmarse por posición en este Bloc de notas, así que la serie puntuada no puede empezar. Hay dos caminos: (i) mantener la regla, y E2E-03 queda sin ejecutar; (ii) que el propio elemento dé fe del clic, leyendo su RuntimeId tras el clic desde su árbol de UI Automation y exigiendo que su estado ExpandCollapse sea el esperado. (ii) cambia la regla de anclaje para este control: necesita una especificación escrita, una prueba que falle sin ella y una ronda nueva con cambio de hash del cliente. **Recomendación:** (ii) sólo con esa especificación; mientras tanto, (i).
+1. **Responsable (hallazgo 1), decisión previa a cualquier otra corrida de E2E-03.** Con la regla actual, «Editar» no puede confirmarse por posición en este Bloc de notas, así que la serie puntuada no puede empezar. Hay dos caminos: (i) mantener la regla, y E2E-03 queda sin ejecutar; (ii) que el propio elemento dé fe del clic, leyendo su RuntimeId tras el clic desde su árbol de UI Automation y exigiendo que su estado ExpandCollapse sea el esperado. (ii) cambia la regla de anclaje para este control: necesita una especificación escrita, una prueba que falle sin ella y una ronda nueva con cambio de hash del cliente. **Recomendación:** (ii) sólo con esa especificación; mientras tanto, (i). **Decidido el 14 de octubre de 2026:** el responsable eligió descender dentro de la isla (ni (i) ni (ii)); ver «Preparación de la séptima ronda».
 2. **Cliente:** sin cambios en esta ronda. La regla de anclaje y el cliente se quedan como están.
 3. **Cuaderno:** 401. La siguiente ronda usa `--round-start 401`.
 4. **Ninguna solicitud en vivo más** sin una nueva autorización del responsable.
 
 **Ejecución.** Las únicas entradas de la corrida fueron las dos del cliente. Guardar y restaurar la colocación de las ventanas es gestión de ventanas, sin entradas, y las lecturas de UI Automation posteriores son de sólo lectura.
+
+## Preparación de la séptima ronda: el cliente ancla los clics dentro de una isla XAML
+
+**Fecha:** 14 de octubre de 2026. Rama `fix/s4-island-grounding`, sobre `main` tras la fusión de #14 (`9fb4748`). Sólo cambian el cliente (`tools/s4/e2e_driver.py`, SHA-256 **`60486d87ea06313fd687ea1bd64ef913795cadf6b6007cc4df7764ce3b5c214a`**, antes `6dad0dc3…8e2a77`) y sus pruebas; no cambia ninguna crate de Rust, ni se ejecutó entrada en vivo: las pruebas usan un motor falso y una cadena de accesibilidad falsa. La regla, escrita antes del código, y la revisión del hallazgo 1 están en la [revisión](../reviews/2026-10-14-s4-fifth-round.md), sección «Seventh round: grounding inside a XAML island».
+
+### Decisión del responsable (14 de octubre de 2026)
+
+Entre las dos opciones del §9.1 de la sexta ronda, el responsable eligió **«descender dentro de la isla»**: no se relaja el anclaje por identidad ni se ancla por cambio de estado; se especifica cómo se obtiene el elemento bajo el punto cuando la consulta por posición devuelve el anfitrión de una isla XAML. La opción (i), mantener la regla, queda descartada.
+
+### La regla
+
+1. **Cuándo.** El primer elemento de la cadena de la consulta por posición (`FromPoint`) tiene una clase de la lista cerrada y explícita `ISLAND_HOST_CLASSES`, que hoy contiene sólo `Microsoft.UI.Content.DesktopChildSiteBridge`. Con cualquier otra clase, o con una cadena vacía, el comportamiento no cambia: la cadena de la consulta es la cadena de anclaje y no se recorre nada.
+2. **El descenso.** El cliente recorre el subárbol de la vista de control (ControlView) de ese anfitrión, en profundidad, y lee de cada elemento su RuntimeId, `AutomationId`, tipo de control, clase, `IsOffscreen` y `BoundingRectangle`; nunca un nombre, un valor ni un patrón. El recorrido está acotado a **500 elementos por debajo del anfitrión y 16 niveles** (`DESCENT_MAX_ELEMENTS` y `DESCENT_MAX_DEPTH`; los dos son [P] y se registran en cada descenso). El anfitrión se vuelve a leer por el punto al empezar y debe conservar el RuntimeId de la consulta, o el recorrido no lee nada.
+3. **El resultado.** De los elementos en pantalla por debajo del anfitrión cuyo `BoundingRectangle` contiene el punto, **el del nivel más profundo**. La cadena es ese elemento seguido de sus ancestros hasta el anfitrión, y `identity_hit` se aplica a ella **sin cambios**: el elemento o su padre deben tener el RuntimeId esperado, o el `AutomationId` esperado sólo cuando falta el RuntimeId en alguno de los dos lados.
+4. **No se confirma nada** (la cadena queda vacía y el clic no está anclado) cuando: dos o más elementos contienen el punto en el nivel más profundo (los de un mismo nivel nunca están anidados entre sí, así que son ambiguos); el recorrido llegó a una cota (también si las filas superan la cota, diga lo que diga el lector); el recorrido no se pudo leer o está mal formado; el anfitrión cambió; o ningún elemento por debajo del anfitrión contiene el punto.
+5. **Lo que no cambia.** No hay anclaje por cambio de estado (el estado ExpandCollapse del menú sigue siendo sólo la comprobación del lado del sistema operativo), ni comparación de nombres, ni reintento. Un descenso fallido es un fallo de anclaje igual que una discrepancia: `grounding_wrong` (y `engine_false_success` si el motor informó `effect_observed`), la corrida termina y no se envía más entrada.
+6. **Dónde se aplica.** En todos los lugares donde el cliente ancla un clic por posición: `steps()`, `restore_menu` (el clic que cierra el menú) y el diagnóstico del menú.
+
+### Registro (sin nombres)
+
+Cada descenso deja `descended`, `status` (`ok`, `not_found`, `ambiguous`, `truncated`, `host_changed`, `unreadable`), `depth`, `visited`, `truncated`, `ambiguous`, `max_elements` y `max_depth`, y, si halló un elemento, su `control_type` y `automation_id`. Una consulta que no es una isla deja `{descended: false}`. Está en `descent` de la corrida (uno por clic anclado, con su `step`), en `menu_restore.descent` y en `menu_diagnostic` como `before_descent` y `after_descent`; las filas `before` y `after` del diagnóstico siguen siendo la cadena cruda de la consulta, así que el anfitrión de la isla sigue viéndose en ellas.
+
+### Pruebas
+
+`python -m unittest discover -s tools/s4 -p "test_*.py"`: **113 pruebas correctas** (81 anteriores, sin cambios, y 32 nuevas). Con el cliente de la sexta ronda las 32 nuevas fallan (17 fallos y 15 errores). Cubren: (a) la consulta devuelve la isla y el descenso halla «Editar» (`MenuItem`, `AutomationId` `Edit`, RuntimeId esperado) → anclado, en una corrida de dos clics y en el clic de cierre; (b) el descenso halla otro control → no anclado y sin reintento; (c) dos elementos no anidados que contienen el punto → ambiguo, aunque uno sea el elemento; (d) se llega a la cota → no anclado aunque se haya visto el elemento; (e) una cadena que no es de una isla se comporta como antes y no se recorre; (f) los registros no contienen nombres.
+
+### Comprobación de sólo lectura sobre el Bloc de notas del responsable (sin entrada)
+
+Se hizo una vez, sin clics, sin enfocar, sin restaurar y sin escribir. Las dos ventanas del Bloc de notas estaban minimizadas, así que no se pudo usar la consulta por posición (el elemento está en torno a `-31915,-31960`): se llegó al anfitrión de la isla desde los dos elementos «Editar» hallados por nombre, y se aplicaron el mismo script de recorrido y la misma regla (`descend`) con el centro del elemento como punto. Resultado, en cada ventana: la clase del anfitrión está en la lista; 20 elementos por debajo, nivel más profundo 3, sin truncar (lejos de 500 y 16); tipos bajo el anfitrión: `Button` 12, `MenuItem` 3, `Pane` 3, `MenuBar` 1, `Window` 1; 17 en pantalla y 3 que contienen el centro (el elemento, la barra de menús y un panel); el descenso termina `ok` en el nivel 3 con un `MenuItem`, `AutomationId` `Edit` y **el mismo RuntimeId que el elemento hallado por nombre**; la cadena es `MenuItem Edit → MenuBar → Pane → Pane (anfitrión)`. Lo que esto **no** demuestra: que la consulta por posición devuelva el anfitrión en vivo (las ventanas están minimizadas y no se podía traer ninguna al frente) ni el tiempo del recorrido con la ventana al frente.
+
+### Qué debe mostrar la próxima ronda en vivo
+
+Un piloto de Notepad con `--max-live 2` y el responsable presente debe registrar, para el clic de apertura y para el de cierre, `descent.status` `ok`, profundidad 3 y `automation_id` `Edit`, `grounding_wrong` 0 y el menú `Collapsed → Expanded → Collapsed`. Cualquier otra cosa es un hallazgo. Un recorrido de hasta 500 elementos por UI Automation tarda un tiempo que esta rama no ha medido en vivo; `after_ms` del diagnóstico lo registrará la primera vez. El hash del cliente cambia, así que la próxima ronda empieza con `--round-start 401` y la comprobación del SHA-256 de arriba.
+
+### Estado
+
+Hallazgo 1: regla especificada e implementada en el cliente, **sin confirmar en vivo**. Hallazgos 2 a 4 y el conflicto de `stop.flag`: sin cambio. E2E-02 y E2E-03 siguen `NO_EJECUTADO`; las matrices no cambian.
