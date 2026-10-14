@@ -1,0 +1,38 @@
+# --- Rust / Cargo ---
+/target/
+**/target/
+**/*.rs.bk
+*.pdb
+
+# --- Profiling & benchmarks ---
+*.profraw
+*.profdata
+perf.data*
+flamegraph*.svg
+/criterion/
+
+# --- Captured frames & local datasets (never commit screen captures) ---
+/captures/
+/datasets/
+*.raw
+*.rgba
+
+# --- Logs & local environment ---
+*.log
+.env
+.env.*
+!.env.example
+
+# --- Editors / OS ---
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Agent tooling (local-only settings) ---
+.claude/settings.local.json
+.claude/worktrees/
