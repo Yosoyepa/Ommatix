@@ -14,6 +14,14 @@ pub const SAVE_BUTTON: Rect = Rect::new(500, 300, 80, 32);
 pub const DIALOG: Rect = Rect::new(200, 170, 240, 110);
 pub const OK_BUTTON: Rect = Rect::new(360, 240, 64, 28);
 
+/// Where the (unpainted) words of the form are: the field's label, the captions and the
+/// dialog's prompt. Only the recogniser's ground truth uses them.
+pub const FIELD_LABEL: Rect = Rect::new(44, 128, 32, 14);
+pub const CANCEL_CAPTION: Rect = Rect::new(420, 309, 50, 14);
+pub const SAVE_CAPTION: Rect = Rect::new(520, 309, 40, 14);
+pub const OK_CAPTION: Rect = Rect::new(382, 247, 20, 14);
+pub const DIALOG_PROMPT: Rect = Rect::new(220, 190, 60, 14);
+
 /// Typed characters are drawn as solid glyph blocks.
 pub const GLYPH_W: u32 = 6;
 pub const GLYPH_H: u32 = 12;
@@ -32,6 +40,16 @@ pub const fn text_bounds(chars: u32) -> Rect {
         TEXT_ORIGIN_X,
         TEXT_ORIGIN_Y,
         (chars - 1) * GLYPH_ADVANCE + GLYPH_W,
+        GLYPH_H,
+    )
+}
+
+/// Bounds of the glyphs of characters `[from, to)` of the typed text (`to > from`).
+pub const fn glyph_run(from: u32, to: u32) -> Rect {
+    Rect::new(
+        TEXT_ORIGIN_X + from * GLYPH_ADVANCE,
+        TEXT_ORIGIN_Y,
+        (to - from - 1) * GLYPH_ADVANCE + GLYPH_W,
         GLYPH_H,
     )
 }
