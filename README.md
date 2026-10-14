@@ -124,7 +124,7 @@ unless the agent and a local policy both allow them. More in the
   so the series was aborted. The Notepad series did not run, pending the owner's decision.
   A fifth round ([CHANGELOG 1.0.21](docs/thesis/CHANGELOG.md)) scored no runs. Its switch of the Calculator to Standard mode stopped before the second click, so E2E-02 did not run, and the Notepad pilot's click on Edit did not pass its identity check after the click, so the scored E2E-03 series was not run.
   The client was then corrected without a live run ([CHANGELOG 1.0.23](docs/thesis/CHANGELOG.md)): the menu-closing click is grounded by identity, a step records why it found no target, and the Notepad menu step records a read-only diagnostic. The owner decided that S4 runs now use the float16 detector manifest and that ADR-0017's window enumeration is not changed to reach the two-region RNF-05 target, so RNF-05 stays not met by about 3 ms.
-A seventh round ([CHANGELOG 1.0.26](docs/thesis/CHANGELOG.md)) passed the Notepad pilot, in which the island descent grounded both clicks on Edit, and scored nine of ten Notepad runs, all successful and with no false success. The tenth run was not sent: the series' budget of 20 requests did not reserve room for the retries after a stale snapshot, which two runs used. The client then created the operator's stop file, which the owner has not removed, so the Calculator steps did not run.
+A seventh round ([CHANGELOG 1.0.26](docs/thesis/CHANGELOG.md)) passed the Notepad pilot, in which the island descent grounded both clicks on Edit, and scored nine of ten Notepad runs, all successful and with no false success. The tenth run was not sent: the series' budget of 20 requests did not reserve room for the retries after a stale snapshot, which two runs used. The client then created the operator's stop file; the owner later authorised removing it for this round, so the Calculator steps did not run in the first part. The continuation ([CHANGELOG 1.0.27](docs/thesis/CHANGELOG.md)) ran with the stop file absent: it ran the tenth Notepad run, which passed, so the Notepad series has ten of ten scored runs, all successful and with no false success. The Calculator's `--calc-standard` step did not reach Standard mode (its navigation click was grounded, but "Standard" did not appear in UI Automation), so E2E-02 did not run.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML;
@@ -164,7 +164,7 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
   and the acceptance report. A reduced, click-only protocol ran (20 scored runs in two
   applications; E2E-01 and PERF-02 in part; with UI Automation and two-phase `type`, the test
   application passed 10 of 10 typing runs in two rounds, and the Calculator and Notepad flows did not
-  complete; in the seventh round, nine of ten scored Notepad runs passed, and the tenth was not sent for lack of budget)
+  complete; in the seventh round and its continuation, the ten scored Notepad runs passed, and E2E-02 did not run because the Calculator did not reach Standard mode)
 
 ## Quick start
 
