@@ -126,38 +126,46 @@ impl GridSignature {
     }
 }
 
-/// FNV-1a style multiply-xor hash over 64-bit little-endian words (ADR-0010).
+/// Hash of the colour of RGBA pixel rows, two pixels (one 64-bit word) at a time
+/// (ADR-0011 §6). Deterministic across runs and platforms (unlike `RandomState`) and
+/// dependency-free.
 ///
-/// Deterministic across runs and platforms (unlike `RandomState`) and dependency-free.
-/// Each step `h = (h ^ word) * PRIME` is a bijection of `h` for a fixed word, so a change
-/// confined to a single word always changes the final hash; only changes spread over
-/// several words can (with probability ≈ 2⁻⁶⁴) collide. Working a word at a time is ~7×
-/// faster than byte-wise FNV-1a on desktop-sized frames.
+/// - Each step `h = (h ^ word) * K; h ^= h >> 32` is a bijection of `h` for a fixed word,
+///   so a change confined to two neighbouring pixels always changes the final hash.
+/// - The multiply carries low bits up and the shift carries high bits down, so changes
+///   spread over several words collide only by chance (none in 2²⁰ random two-word
+///   changes; a plain multiply-xor missed one in 2¹⁶).
+/// - Alpha is not hashed: a screen is opaque and the detector never reads it.
 struct WordHasher(u64);
 
 impl WordHasher {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    /// Odd (so multiplying is a bijection), with bits set throughout: 2⁶⁴ / φ.
+    const K: u64 = 0x9e37_79b9_7f4a_7c15;
+    /// The colour bytes of the two pixels in a little-endian word.
+    const COLOUR: u64 = 0x00ff_ffff_00ff_ffff;
 
     const fn new() -> Self {
         Self(Self::OFFSET)
     }
 
+    /// `bytes` must start at a pixel.
     fn write(&mut self, bytes: &[u8]) {
         let (words, tail) = bytes.as_chunks::<8>();
         for w in words {
-            self.mix(u64::from_le_bytes(*w));
+            self.mix(u64::from_le_bytes(*w) & Self::COLOUR);
         }
         if !tail.is_empty() {
             let mut last = [0u8; 8];
             last[..tail.len()].copy_from_slice(tail);
-            // Tag the tail with its length so "ab" and "ab\0" differ.
-            self.mix(u64::from_le_bytes(last) ^ ((tail.len() as u64) << 59));
+            // Tag the tail with its length so a short row differs from a zero-padded one.
+            self.mix((u64::from_le_bytes(last) & Self::COLOUR) ^ ((tail.len() as u64) << 59));
         }
     }
 
     fn mix(&mut self, word: u64) {
-        self.0 = (self.0 ^ word).wrapping_mul(Self::PRIME);
+        let h = (self.0 ^ word).wrapping_mul(Self::K);
+        self.0 = h ^ (h >> 32);
     }
 
     const fn finish(&self) -> u64 {
@@ -217,6 +225,77 @@ mod tests {
         let mut b = a.clone();
         b.fill_rect(Rect::new(2, 1, 1, 1), [0, 0, 0, 255]);
         assert_eq!(g.signature(&b).diff(Some(&g.signature(&a))).len(), 1);
+    }
+
+    fn hash(words: &[u64]) -> u64 {
+        let mut h = WordHasher::new();
+        for w in words {
+            h.write(&w.to_le_bytes());
+        }
+        h.finish()
+    }
+
+    /// Verification N10: flipping the top (alpha) bit of two words used to cancel out.
+    /// Alpha is now left out on purpose; every colour bit counts.
+    #[test]
+    fn alpha_is_not_part_of_the_picture() {
+        let g = GridSpec::new(4).unwrap();
+        let a = Frame::solid(8, 4, WHITE).unwrap();
+        let mut translucent = a.clone();
+        translucent.fill_rect(Rect::new(0, 0, 8, 4), [255, 255, 255, 0]);
+        assert_eq!(g.signature(&translucent).diff(Some(&g.signature(&a))), []);
+
+        let colour_bits = (0..64).filter(|b| (WordHasher::COLOUR >> b) & 1 == 1);
+        for bit in colour_bits {
+            let flip = 1u64 << bit;
+            assert_ne!(hash(&[7, 9]), hash(&[7 ^ flip, 9]), "bit {bit}");
+            assert_ne!(hash(&[7, 9]), hash(&[7 ^ flip, 9 ^ flip]), "bit {bit}");
+        }
+    }
+
+    /// Verification N10: changes to the high bytes of two words (the blue of every second
+    /// pixel) used to collide about once in 2¹⁶.
+    #[test]
+    fn changes_spread_over_two_words_do_not_collide() {
+        let mut rng = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng
+        };
+        let mut missed = 0;
+        for _ in 0..1 << 20 {
+            let (a, b, r) = (next(), next(), next());
+            let blue = |shift: u32| ((r >> shift) % 255 + 1) << 48;
+            if hash(&[a, b]) == hash(&[a ^ blue(0), b ^ blue(8)]) {
+                missed += 1;
+            }
+        }
+        assert_eq!(missed, 0);
+    }
+
+    /// Hashing cost per frame: `cargo test -p ommatix-domain --release -- --ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore = "benchmark"]
+    fn bench_signature() {
+        let g = GridSpec::new(32).unwrap();
+        for (w, h) in [(1920, 1080), (3840, 2160)] {
+            let mut f = Frame::solid(w, h, WHITE).unwrap();
+            for i in 0..w / 8 {
+                f.fill_rect(
+                    Rect::new(i * 8, (i * 7) % h, 3, 5),
+                    [0, 0, (i % 256) as u8, 255],
+                );
+            }
+            let start = std::time::Instant::now();
+            let runs = 20;
+            for _ in 0..runs {
+                std::hint::black_box(g.signature(std::hint::black_box(&f)));
+            }
+            eprintln!("{w}x{h}: signature in {:?}", start.elapsed() / runs);
+        }
     }
 
     #[test]

@@ -101,11 +101,12 @@ impl Rect {
     /// Intersection over union in `[0, 1]`.
     pub fn iou(&self, other: &Rect) -> f32 {
         let inter = self.intersection(other).map_or(0, |r| r.area());
-        let union = self.area() + other.area() - inter;
+        // Two areas can exceed u64; their sum cannot exceed u128.
+        let union = u128::from(self.area()) + u128::from(other.area()) - u128::from(inter);
         if union == 0 {
             0.0
         } else {
-            inter as f32 / union as f32
+            (inter as f64 / union as f64) as f32
         }
     }
 
@@ -169,6 +170,15 @@ mod tests {
         assert!((a.iou(&b) - 50.0 / 150.0).abs() < 1e-6);
         assert!((a.iou(&b) - b.iou(&a)).abs() < f32::EPSILON);
         assert!((a.iou(&a) - 1.0).abs() < f32::EPSILON);
+    }
+
+    /// Verification #18b: the largest rectangles do not overflow.
+    #[test]
+    fn iou_of_huge_rects() {
+        let a = Rect::new(0, 0, u32::MAX, u32::MAX);
+        let b = Rect::new(1, 1, u32::MAX, u32::MAX);
+        assert!((a.iou(&b) - 1.0).abs() < 1e-6);
+        assert!((a.iou(&Rect::new(0, 0, 0, 0))).abs() < f32::EPSILON);
     }
 
     #[test]

@@ -12,6 +12,8 @@ pub enum DomainError {
         expected: usize,
         actual: usize,
     },
+    #[error("an RGBA8 frame of {width}x{height} pixels does not fit in memory")]
+    FrameTooLarge { width: u32, height: u32 },
     #[error("grid cell size must be non-zero")]
     ZeroCellSize,
     #[error("spatial index bucket size must be non-zero")]

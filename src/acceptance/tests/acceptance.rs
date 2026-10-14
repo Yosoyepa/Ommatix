@@ -6,7 +6,7 @@
 // cucumber passes captured step parameters by value.
 #![allow(clippy::needless_pass_by_value)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use cucumber::gherkin::Step;
 use cucumber::{World, given, then, when};
@@ -17,9 +17,9 @@ use ommatix_adapter_sim::{SimState, SimulatedDesktop, Theme, layout, scripted_se
 use ommatix_adapter_vision::FlatRegionDetector;
 use ommatix_application::{
     ActuationPolicy, ActuationService, AgentSession, FrameSource, InputController, ManualClock,
-    Observer, PerceptionConfig, PerceptionEngine, SettlePolicy,
+    Observer, PerceptionConfig, PerceptionEngine, PortError, SettlePolicy,
 };
-use ommatix_domain::{Point, Rect};
+use ommatix_domain::{Frame, Point, Rect};
 use serde_json::{Value, json};
 
 #[derive(Debug, Default, World)]
@@ -35,6 +35,32 @@ struct Agent {
     /// Elements returned by the last spatial query.
     last_answer: Vec<Value>,
     remembered_id: Option<Value>,
+    /// Frames the simulator's capture still delivers before it breaks (`None`: never).
+    capture_budget: Arc<Mutex<Option<usize>>>,
+}
+
+/// The simulator's screen, with a capture that can be made to break.
+struct Breakable {
+    inner: Box<dyn FrameSource>,
+    frames_left: Arc<Mutex<Option<usize>>>,
+}
+
+impl FrameSource for Breakable {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn next_frame(&mut self) -> Result<Option<Frame>, PortError> {
+        let mut left = self.frames_left.lock().expect("budget lock");
+        match left.as_mut() {
+            Some(0) => Err(PortError::new(self.inner.name(), "capture lost")),
+            Some(n) => {
+                *n -= 1;
+                self.inner.next_frame()
+            }
+            None => self.inner.next_frame(),
+        }
+    }
 }
 
 impl Agent {
@@ -59,7 +85,11 @@ impl Agent {
 
     fn start_simulator(&mut self, theme: Theme) {
         let sim = SimulatedDesktop::with_theme(theme);
-        self.connect(Box::new(sim.screen()), Box::new(sim.input()));
+        let screen = Breakable {
+            inner: Box::new(sim.screen()),
+            frames_left: self.capture_budget.clone(),
+        };
+        self.connect(Box::new(screen), Box::new(sim.input()));
         self.sim = Some(sim);
     }
 
@@ -189,6 +219,11 @@ fn demo_session(w: &mut Agent) {
     w.dry_run_log = Some(log);
 }
 
+#[given(regex = r"^the screen capture will fail after (\d+) more frames?$")]
+fn capture_breaks(w: &mut Agent, frames: usize) {
+    *w.capture_budget.lock().expect("budget lock") = Some(frames);
+}
+
 #[given("the recorded session has been played to the end")]
 fn play_to_the_end(w: &mut Agent) {
     while w.call("perceive", &json!({})).is_some() {}
@@ -245,9 +280,13 @@ fn type_text(w: &mut Agent, text: String) {
     w.must_call("type_text", &json!({ "text": text }));
 }
 
-#[when("the agent types a line break")]
-fn type_line_break(w: &mut Agent) {
-    w.call("type_text", &json!({ "text": "a\nb" }));
+#[when(regex = r"^the agent types text containing U\+([0-9A-F]{4})$")]
+fn type_special(w: &mut Agent, code: String) {
+    let c = u32::from_str_radix(&code, 16)
+        .ok()
+        .and_then(char::from_u32)
+        .expect("a Unicode scalar value");
+    w.call("type_text", &json!({ "text": format!("a{c}b") }));
 }
 
 #[when(expr = "the agent presses {word}")]
@@ -440,6 +479,11 @@ fn performed_but_unobserved(w: &mut Agent) {
     let structured = &result["structuredContent"];
     assert!(structured["performed"].is_object(), "{structured}");
     assert!(structured["observe_error"].is_string(), "{structured}");
+}
+
+#[then("there is no response")]
+fn no_response(w: &mut Agent) {
+    assert!(w.last_response.is_null(), "{}", w.last_response);
 }
 
 #[then(expr = "the response is a batch of {int} response(s)")]

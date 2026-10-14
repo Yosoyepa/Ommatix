@@ -209,10 +209,12 @@ pub fn format_element_id(id: ElementId) -> String {
     format!("e{}", id.0)
 }
 
-/// Parses the wire form of an element id (`"e12"`).
+/// Parses the wire form of an element id (`"e12"`). Only the form ids are written in is
+/// accepted, so one element has one id (`"e012"` is not `"e12"`).
 pub fn parse_element_id(s: &str) -> Result<ElementId, String> {
     s.strip_prefix('e')
         .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        .filter(|n| *n == "0" || !n.starts_with('0'))
         .and_then(|n| n.parse::<u64>().ok())
         .map(ElementId)
         .ok_or_else(|| format!("invalid element id {s:?}, expected e.g. \"e4\""))
@@ -286,6 +288,7 @@ mod tests {
     fn element_ids_round_trip_and_reject_junk() {
         assert_eq!(parse_element_id("e42"), Ok(ElementId(42)));
         assert_eq!(format_element_id(ElementId(42)), "e42");
+        assert_eq!(parse_element_id("e0"), Ok(ElementId(0)));
         for junk in [
             "42",
             "e",
@@ -294,6 +297,10 @@ mod tests {
             "E1",
             "e1x",
             "e99999999999999999999",
+            // Verification N12: one element, one id.
+            "e00001",
+            "e042",
+            "e00",
         ] {
             assert!(parse_element_id(junk).is_err(), "{junk}");
         }

@@ -224,6 +224,23 @@ fn a_performed_action_is_reported_even_if_watching_it_fails() {
     assert_eq!(log.snapshot().len(), 1, "the agent must not type it again");
 }
 
+/// Verification N8: a notification is never answered, so a tool call sent as one must
+/// not act: the agent would never learn that it clicked.
+#[test]
+fn a_tool_call_without_an_id_does_nothing() {
+    let (mut s, log) = replay(4);
+    call(&mut s, "perceive", &json!({}));
+    let click = json!({
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": { "name": "click", "arguments": { "x": 10, "y": 10 } }
+    });
+    assert!(send(&mut s, &click.to_string()).is_none());
+    let batch = json!([click, { "jsonrpc": "2.0", "method": "notifications/initialized" }]);
+    assert!(send(&mut s, &batch.to_string()).is_none());
+    assert_eq!(log.snapshot().len(), 0);
+}
+
 /// A screen whose capture breaks after a number of frames.
 struct BreaksAfter {
     inner: Box<dyn FrameSource>,

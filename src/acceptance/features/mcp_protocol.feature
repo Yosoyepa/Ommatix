@@ -41,6 +41,18 @@ Feature: Model Context Protocol interface
     When the client sends [{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"tools/list"}]
     Then the response is a batch of 2 responses
 
-  Scenario: Invalid tool arguments are reported as a tool error the agent can fix
-    When the agent calls "element_at" with {"x": 1}
-    Then the call fails with "invalid arguments"
+  Scenario: A tool call without an id is ignored, so nothing acts unseen
+    Given the agent perceives the screen
+    When the client sends {"jsonrpc":"2.0","method":"tools/call","params":{"name":"click","arguments":{"x":540,"y":316}}}
+    Then there is no response
+    And the desktop received no input
+
+  Scenario Outline: Invalid tool arguments are reported as a tool error the agent can fix
+    When the agent calls "<tool>" with <arguments>
+    Then the call fails with "<error>"
+
+    Examples:
+      | tool       | arguments             | error              |
+      | element_at | {"x": 1}              | invalid arguments  |
+      | element_at | [540, 316]            | expected an object |
+      | click      | {"element_id": "e01"} | invalid element id |

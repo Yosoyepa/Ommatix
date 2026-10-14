@@ -57,12 +57,13 @@ pub(crate) fn definitions() -> Value {
         .collect()
 }
 
-/// Deserialises tool arguments; absent arguments mean `{}`.
+/// Deserialises tool arguments, which must be an object (serde would otherwise take an
+/// array positionally); absent arguments mean `{}`.
 fn parse<T: DeserializeOwned>(args: &Value) -> Result<T, String> {
-    let args = if args.is_null() {
-        Value::Object(Map::new())
-    } else {
-        args.clone()
+    let args = match args {
+        Value::Null => Value::Object(Map::new()),
+        Value::Object(_) => args.clone(),
+        _ => return Err("invalid arguments: expected an object".into()),
     };
     serde_json::from_value(args).map_err(|e| format!("invalid arguments: {e}"))
 }
@@ -76,6 +77,22 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    /// Verification N12: arguments are named, never positional.
+    #[test]
+    fn arguments_must_be_an_object() {
+        #[derive(Debug, serde::Deserialize)]
+        struct Point {
+            x: u32,
+            y: u32,
+        }
+        let point: Point = parse(&serde_json::json!({ "x": 540, "y": 316 })).unwrap();
+        assert_eq!((point.x, point.y), (540, 316));
+        for args in [serde_json::json!([540, 316]), serde_json::json!("e1")] {
+            let err = parse::<Point>(&args).unwrap_err();
+            assert!(err.contains("expected an object"), "{args}: {err}");
+        }
+    }
 
     #[test]
     fn names_are_unique_and_definitions_complete() {

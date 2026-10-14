@@ -48,8 +48,9 @@ pub enum ActuationError {
     #[error("text has {len} characters, the limit is {max}")]
     TextTooLong { len: usize, max: usize },
     #[error(
-        "text contains a control character at position {position}; \
-         use press_key for Enter, Tab, Backspace and other keys"
+        "text contains a control character at position {position} (line breaks, tabs, \
+         escapes and invisible direction marks are not typed); use press_key for Enter, \
+         Tab, Backspace and other keys"
     )]
     ControlCharacter { position: usize },
     #[error("input controller failed")]
@@ -111,8 +112,7 @@ impl ActuationService {
         self.perform(Action::Click { at, button }, element)
     }
 
-    /// Types printable text. Control characters (newline, tab, escape...) are rejected:
-    /// their effect depends on the focused control, so agents send them as keys.
+    /// Types printable text. Control characters are rejected (see [`is_typeable`]).
     pub fn type_text(&mut self, text: &str) -> Result<ActionReceipt, ActuationError> {
         let len = text.chars().count();
         if len == 0 {
@@ -124,7 +124,7 @@ impl ActuationService {
                 max: self.policy.max_text_chars,
             });
         }
-        if let Some(position) = text.chars().position(char::is_control) {
+        if let Some(position) = text.chars().position(|c| !is_typeable(c)) {
             return Err(ActuationError::ControlCharacter { position });
         }
         self.perform(
@@ -151,6 +151,18 @@ impl ActuationService {
             live: self.input.is_live(),
         })
     }
+}
+
+/// Whether `type_text` may type `c`. Refused: control characters (newline, tab,
+/// escape...), whose effect depends on the focused control, so agents send them as keys;
+/// and invisible characters that change how the text is laid out: line and paragraph
+/// separators and bidirectional marks, embeddings, overrides and isolates.
+fn is_typeable(c: char) -> bool {
+    !(c.is_control()
+        || matches!(
+            c,
+            '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        ))
 }
 
 #[cfg(test)]
@@ -263,6 +275,25 @@ mod tests {
             svc.type_text("ok\nrm -rf"),
             Err(ActuationError::ControlCharacter { position: 2 })
         ));
+        // Verification #20: invisible layout characters are refused too.
+        for text in [
+            "a\u{2028}b",
+            "a\u{2029}b",
+            "a\u{202e}b",
+            "a\u{2066}b",
+            "a\u{200f}b",
+        ] {
+            assert!(
+                matches!(
+                    svc.type_text(text),
+                    Err(ActuationError::ControlCharacter { position: 1 })
+                ),
+                "{text:?}"
+            );
+        }
         assert_eq!(rec.0.lock().unwrap().len(), 0);
+        for text in ["señal ✓", "日本語", "שלום", "\u{200d}👍"] {
+            svc.type_text(text).unwrap();
+        }
     }
 }

@@ -85,10 +85,11 @@ impl McpServer {
                 Some(jsonrpc::failure(&id, INVALID_REQUEST, reason))
             }
             Incoming::Call(Call { id, method, params }) => {
-                let result = self.dispatch(method, params);
-                // Notifications are executed but never answered, even on error.
+                // A notification (no id) is never answered, so it must not act either: a
+                // `tools/call` without an id would click with no one told. The
+                // `notifications/*` clients send need no handling.
                 let id = id?;
-                Some(match result {
+                Some(match self.dispatch(method, params) {
                     Ok(result) => jsonrpc::success(id, result),
                     Err((code, message)) => jsonrpc::failure(id, code, &message),
                 })
@@ -102,7 +103,6 @@ impl McpServer {
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": tools::definitions() })),
             "tools/call" => self.call_tool(params),
-            m if m.starts_with("notifications/") => Ok(Value::Null),
             other => Err((METHOD_NOT_FOUND, format!("method not found: {other}"))),
         }
     }

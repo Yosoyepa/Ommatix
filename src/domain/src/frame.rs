@@ -21,10 +21,7 @@ impl Frame {
     pub const BYTES_PER_PIXEL: usize = 4;
 
     pub fn from_rgba(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, DomainError> {
-        if width == 0 || height == 0 {
-            return Err(DomainError::EmptyFrame { width, height });
-        }
-        let expected = width as usize * height as usize * Self::BYTES_PER_PIXEL;
+        let expected = Self::buffer_len(width, height)?;
         if pixels.len() != expected {
             return Err(DomainError::BufferSize {
                 width,
@@ -42,8 +39,19 @@ impl Frame {
 
     /// A frame filled with a single colour.
     pub fn solid(width: u32, height: u32, rgba: [u8; 4]) -> Result<Self, DomainError> {
-        let n = width as usize * height as usize;
-        Self::from_rgba(width, height, rgba.repeat(n))
+        let len = Self::buffer_len(width, height)?;
+        Self::from_rgba(width, height, rgba.repeat(len / Self::BYTES_PER_PIXEL))
+    }
+
+    /// Bytes of a `width x height` RGBA8 buffer.
+    fn buffer_len(width: u32, height: u32) -> Result<usize, DomainError> {
+        if width == 0 || height == 0 {
+            return Err(DomainError::EmptyFrame { width, height });
+        }
+        (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|n| n.checked_mul(Self::BYTES_PER_PIXEL))
+            .ok_or(DomainError::FrameTooLarge { width, height })
     }
 
     pub const fn width(&self) -> u32 {
@@ -123,6 +131,18 @@ mod tests {
             Frame::from_rgba(2, 2, vec![0; 15]),
             Err(DomainError::BufferSize { expected: 16, .. })
         ));
+    }
+
+    /// Verification #18a: sizes whose buffer length overflows are errors, not panics.
+    #[test]
+    fn rejects_sizes_that_overflow() {
+        let huge = 1 << 31;
+        let too_large = Err(DomainError::FrameTooLarge {
+            width: huge,
+            height: huge,
+        });
+        assert_eq!(Frame::from_rgba(huge, huge, vec![]), too_large);
+        assert_eq!(Frame::solid(huge, huge, [0; 4]), too_large);
     }
 
     #[test]

@@ -53,11 +53,25 @@ Feature: Acting on the desktop
     Then the action is reported as performed with an observation error
     And the dry-run log contains 1 action
 
-  Scenario: Control characters are rejected, keys are pressed instead
+  Scenario: Watching an action that breaks off still reports what was already seen
+    Given the screen capture will fail after 1 more frame
+    When the agent clicks the "Save" button
+    Then the action is reported as performed with an observation error
+    And 2 elements are added
+    And the dialog is open on the desktop
+
+  Scenario Outline: Characters that are not plain text are rejected, keys are pressed instead
     When the agent clicks the text field
-    And the agent types a line break
+    And the agent types text containing <character>
     Then the call fails with "control character"
     And the text field contains ""
+
+    Examples:
+      | character | which                    |
+      | U+000A    | a line break             |
+      | U+0009    | a tab                    |
+      | U+2028    | a Unicode line separator |
+      | U+202E    | a right-to-left override |
 
   Scenario: Dry-run input never reaches the operating system
     Given the recorded demo session with dry-run input
