@@ -30,20 +30,31 @@ pub enum SourceKind {
     /// The simulated desktop, with its own detector, recogniser and (never live)
     /// actuator.
     Sim,
-    /// A directory of PNG frames (`--images DIR`), with the flat-region detector.
+    /// A directory of PNG frames (`--images DIR`), with the `[models]` detector and OCR
+    /// (by default, the flat-region detector and no OCR).
     Images,
-    /// Live capture of the primary monitor, with the flat-region detector (build with
-    /// `--features screen`).
+    /// Live capture of the primary monitor through `xcap`, with the `[models]` detector and
+    /// OCR (build with `--features screen`). Interim; superseded by `dxgi` on Windows.
     Screen,
+    /// Live capture of one monitor (`--output`, default 0) through DXGI Desktop
+    /// Duplication, in physical pixels, with the `[models]` detector and OCR (Windows; build
+    /// with `--features dxgi`). Frames stay in memory.
+    Dxgi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum InputKind {
     /// Simulate and record actions; never touch the OS.
     DryRun,
-    /// Real mouse and keyboard. Needs `--source screen`, `[safety] actuation_enabled =
-    /// true` and a build with `--features native-input`.
+    /// Real mouse and keyboard through `enigo`. Needs `--source screen`, `[safety]
+    /// actuation_enabled = true` and a build with `--features native-input`. It cannot
+    /// attest the foreground application, so the engine refuses its live actions.
     Native,
+    /// Real mouse and keyboard through Win32 `SendInput`. Needs `--source dxgi`, `[safety]
+    /// actuation_enabled = true`, a non-empty `[safety] allowed_applications` of lowercase
+    /// executable names (e.g. "notepad.exe") and a Windows build with `--features
+    /// sendinput`.
+    Sendinput,
 }
 
 /// Colour scheme of the simulated desktop.
@@ -65,6 +76,10 @@ pub struct RunArgs {
     /// Directory with PNG frames, for `--source images`.
     #[arg(long, value_name = "DIR")]
     pub images: Option<PathBuf>,
+    /// Output to duplicate, for `--source dxgi`: the n-th display output attached to the
+    /// desktop, in DXGI order (0 is normally the primary monitor).
+    #[arg(long, value_name = "N", default_value_t = 0)]
+    pub output: u32,
     /// Input adapter; defaults to `[engine] mode` (`dry-run` in the template).
     #[arg(long, value_enum)]
     pub input: Option<InputKind>,

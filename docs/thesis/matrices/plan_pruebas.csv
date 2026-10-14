@@ -42,9 +42,9 @@ UT-40,Sesión distinta,Rechazar referencias de otra sesión.,OR-42,IMPLEMENTADO_
 UT-41,Target ausente,Rechazar ID retirado/no existente.,OR-47,IMPLEMENTADO_EN_RUST_S2
 UT-42,Simulación honesta,Nunca reportar input entregado desde un mock.,OR-43,IMPLEMENTADO_EN_RUST_S2
 UT-43,Sin actuador,Rechazar modo real si no existe adaptador.,OR-44,IMPLEMENTADO_EN_RUST_S2
-IT-01,Captura DXGI,Frames reales/stride/rotación/pérdida de acceso,NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-01,Captura DXGI,Frames reales/stride/rotación/pérdida de acceso,NO_EJECUTADO,IMPLEMENTADO_PENDIENTE_EJECUCION_SUPERVISADA
 IT-02,Modelos,Detector/OCR reales y deshacer letterbox,NO_EJECUTADO,PENDIENTE_PRODUCTO
-IT-03,Actuador,Conteo SendInput y permisos/foco,NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-03,Actuador,Conteo SendInput y permisos/foco,NO_EJECUTADO,IMPLEMENTADO_PENDIENTE_EJECUCION_SUPERVISADA
 IT-04,Verificación,Postcondición y timeout sin retry,NO_EJECUTADO,PENDIENTE_PRODUCTO
 IT-05,Idempotencia,"request_id, conflicto y caída ambigua",NO_EJECUTADO,PENDIENTE_PRODUCTO
 IT-06,Telemetría,Redacción y desglose temporal,NO_EJECUTADO,PENDIENTE_PRODUCTO
@@ -60,10 +60,10 @@ CT-08,Legacy opt-in,Handshake únicamente en perfil legacy,NO_EJECUTADO,IMPLEMEN
 CT-09,Tools/errors,Listado y separación error herramienta/protocolo,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
 CT-10,Tamaño,"64 KiB entrada/salida, inputs inválidos",NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
 SEC-01,Política local,Agente no puede habilitarse,NO_EJECUTADO,PENDIENTE_PRODUCTO
-SEC-02,Parada,Detener nuevas inyecciones,NO_EJECUTADO,PENDIENTE_PRODUCTO
+SEC-02,Parada,Detener nuevas inyecciones,NO_EJECUTADO,IMPLEMENTADO_PENDIENTE_EJECUCION_SUPERVISADA
 SEC-03,Prompt injection visual,OCR no cambia permisos,NO_EJECUTADO,PENDIENTE_PRODUCTO
 SEC-04,Exfiltración,Sin screenshots ni secretos por defecto,NO_EJECUTADO,PENDIENTE_PRODUCTO
-SEC-05,Precheck de acción,Foco/ventana/frescura y carreras,NO_EJECUTADO,PENDIENTE_PRODUCTO
+SEC-05,Precheck de acción,Foco/ventana/frescura y carreras,NO_EJECUTADO,IMPLEMENTADO_PENDIENTE_EJECUCION_SUPERVISADA
 SEC-06,Modelo/caché,"Hashes, licencia, corrupción y cache poisoning",NO_EJECUTADO,PENDIENTE_PRODUCTO
 E2E-01,Formulario local,Valores dummy y confirmación observable,NO_EJECUTADO,PENDIENTE_PRODUCTO
 E2E-02,Editor,Escritura y guardado de archivo temporal,NO_EJECUTADO,PENDIENTE_PRODUCTO

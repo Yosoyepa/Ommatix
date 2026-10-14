@@ -21,6 +21,9 @@ allowed_applications = []
 allow_destructive = false
 allow_screenshots_to_client = false
 include_values = false
+# Parada local del operador (§8.2): mientras exista este archivo no se envía entrada nueva.
+# Vacío: sin archivo de parada; la parada local es terminar el proceso.
+stop_file = ""
 
 [models]
 # El runtime futuro debe fallar de forma segura mientras no se configure S0.

@@ -1,6 +1,7 @@
 //! Engine flows over deterministic test doubles and a [`ManualClock`]. Tests that implement
 //! a planned test carry its ID; their expected outcome follows the oracle case in brackets.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -53,6 +54,9 @@ struct World {
     reactions: u8,
     /// What the actuator attests as the foreground application.
     foreground: Option<String>,
+    /// Answers to the next foreground queries, before `foreground` takes over: a
+    /// foreground that changes while the engine works.
+    foreground_script: VecDeque<Option<String>>,
     /// Captures and deliveries, in order.
     events: Vec<&'static str>,
     /// 9x8 greyscale grids painted over a box at 2x2 pixels per cell (icons).
@@ -78,6 +82,7 @@ impl Default for World {
             react_to_input: false,
             reactions: 0,
             foreground: Some(APP.into()),
+            foreground_script: VecDeque::new(),
             events: Vec::new(),
             textures: Vec::new(),
         }
@@ -205,7 +210,12 @@ impl OsActuator for Actuator {
     }
 
     fn foreground_application(&self) -> Option<String> {
-        lock(&self.0).foreground.clone()
+        let mut w = lock(&self.0);
+        w.events.push("foreground");
+        match w.foreground_script.pop_front() {
+            Some(answer) => answer,
+            None => w.foreground.clone(),
+        }
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
@@ -220,15 +230,24 @@ impl OsActuator for Actuator {
     }
 }
 
+/// The operator's policy; the queue answers the next reads before the base policy takes
+/// over (an operator acting while the engine works).
 #[derive(Debug, Default)]
-struct Policy(Mutex<LocalPolicy>);
+struct Policy(Mutex<LocalPolicy>, Mutex<VecDeque<LocalPolicy>>);
 
 impl PolicyStore for Policy {
     fn current(&self) -> LocalPolicy {
-        self.0
+        let next = self
+            .1
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .pop_front();
+        next.unwrap_or_else(|| {
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        })
     }
 }
 
@@ -246,6 +265,15 @@ impl Rig {
 
     fn set_policy(&self, policy: LocalPolicy) {
         *self.policy.0.lock().unwrap_or_else(PoisonError::into_inner) = policy;
+    }
+
+    /// The policy the next reads return, in order, before the base policy takes over.
+    fn script_policy(&self, reads: impl IntoIterator<Item = LocalPolicy>) {
+        self.policy
+            .1
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(reads);
     }
 
     fn observe(&mut self) -> ObservePage {
@@ -1160,6 +1188,134 @@ fn live_input_is_denied_when_the_foreground_application_is_unknown() {
     assert_eq!(result.status, ActionStatus::InputDelivered);
 }
 
+fn stopped() -> LocalPolicy {
+    LocalPolicy {
+        stopped: true,
+        ..live_policy()
+    }
+}
+
+const STOPPED: &str = "the operator stopped live input; nothing was delivered";
+
+/// SEC-02 at engine level: the stop is read again right before delivery, after the
+/// freshness capture, so a stop that arrives while the engine works sends nothing.
+#[test]
+fn an_operator_stop_right_before_delivery_sends_nothing() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    r.world().events.clear();
+    // The gate reads the live policy; the operator stops before the last look.
+    r.script_policy([live_policy(), stopped()]);
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::None));
+    assert_policy_denied(&result, STOPPED);
+    assert_eq!(r.world().events, ["foreground", "capture"], "no delivery");
+    // Nothing was delivered, so the snapshot is not spent: once the operator clears the
+    // stop, a new request on the same observation goes through.
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r2", ExpectedEffect::None));
+    assert_eq!(result.status, ActionStatus::InputDelivered);
+    assert_eq!(r.world().delivered.len(), 1);
+}
+
+/// SEC-02 / BDD-32 at engine level: after the stop, new actions are refused without
+/// events, and what was delivered before keeps the status it was reported with.
+#[test]
+fn an_operator_stop_refuses_new_input_and_keeps_what_was_delivered() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let first_page = r.observe();
+    let first = r
+        .engine
+        .execute_action(&live_click(&first_page, "r1", ExpectedEffect::None));
+    assert_eq!(first.status, ActionStatus::InputDelivered);
+
+    r.set_policy(stopped());
+    let page = r.observe();
+    r.world().events.clear();
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r2", ExpectedEffect::None));
+    assert_policy_denied(&result, STOPPED);
+    assert!(r.world().events.is_empty(), "refused before any capture");
+    // No rollback and no rewrite: the delivered action is still reported as delivered.
+    assert_eq!(
+        r.engine
+            .execute_action(&live_click(&first_page, "r1", ExpectedEffect::None)),
+        first
+    );
+    // A dry run sends no events, so the stop does not change it.
+    let dry = r
+        .engine
+        .execute_action(&Rig::action(&page, "Save", "r3", ActionKind::Click));
+    assert_eq!(dry.status, ActionStatus::Simulated);
+    assert_eq!(r.world().delivered.len(), 1);
+    let m = r.engine.engine_metrics();
+    assert_eq!((m.delivered_actions, m.rejected_actions), (1, 1));
+}
+
+/// SEC-05 / BDD-28 at engine level: the foreground application is attested at the gate
+/// and again right before delivery; a change in between sends nothing.
+#[test]
+fn a_foreground_change_right_before_delivery_sends_nothing() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    let typing = |id: &str| ActionRequest {
+        dry_run: false,
+        ..Rig::action(
+            &page,
+            "Name",
+            id,
+            ActionKind::Type {
+                text: "secret".into(),
+            },
+        )
+    };
+    for (i, thief) in [Some("other-app".to_owned()), None].into_iter().enumerate() {
+        r.world().foreground_script = VecDeque::from([Some(APP.to_owned()), thief]);
+        let result = r.engine.execute_action(&typing(&format!("t{i}")));
+        assert_policy_denied(
+            &result,
+            "the foreground application changed after it was checked; nothing was delivered",
+        );
+    }
+    assert!(r.world().delivered.is_empty(), "no keystroke");
+    // The operator narrowing the allowlist meanwhile is honoured too.
+    r.script_policy([
+        live_policy(),
+        LocalPolicy {
+            allowed_applications: vec!["another-app".into()],
+            ..live_policy()
+        },
+    ]);
+    let result = r.engine.execute_action(&typing("t2"));
+    assert_policy_denied(
+        &result,
+        "foreground application is not on the local allowlist",
+    );
+    // And withdrawn consent.
+    r.script_policy([
+        live_policy(),
+        LocalPolicy {
+            actuation_enabled: false,
+            ..live_policy()
+        },
+    ]);
+    let result = r.engine.execute_action(&typing("t3"));
+    assert_eq!(error_code(&result), Some(ErrorCode::PolicyDenied));
+    assert_eq!(r.world().delivered.len(), 0);
+    // Nothing changed: delivered.
+    let result = r.engine.execute_action(&typing("t4"));
+    assert_eq!(result.status, ActionStatus::InputDelivered);
+}
+
 #[test]
 fn a_change_before_delivery_is_not_an_observed_effect() {
     let mut r = rig(form());
@@ -1196,8 +1352,12 @@ fn visual_change_is_measured_against_the_pre_delivery_frame() {
         .engine
         .execute_action(&live_click(&page, "r1", ExpectedEffect::VisualChange));
     assert_eq!(result.status, ActionStatus::EffectObserved);
-    // A frame right before delivery and one after it: the effect is their difference.
-    assert_eq!(r.world().events, ["capture", "deliver", "capture"]);
+    // The gate's attestation, a frame and a last attestation right before delivery, and
+    // a frame after it: the effect is the difference between the two frames.
+    assert_eq!(
+        r.world().events,
+        ["foreground", "capture", "foreground", "deliver", "capture"]
+    );
 }
 
 #[test]

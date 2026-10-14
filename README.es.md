@@ -36,7 +36,7 @@ mediante MCP*. Su dossier de ingeniería e investigación es la línea base de e
 | Seguridad, protocolo de evaluación, runbook, referencias | capítulos 08–12 |
 | 32 escenarios Gherkin (BDD-01..32) y matrices de trazabilidad | [`features/`](docs/thesis/features), [`matrices/`](docs/thesis/matrices) |
 | Oráculo de referencia en Python (48 pruebas) y validador del paquete | [`referencia_ejecutable/`](docs/thesis/referencia_ejecutable) |
-| Decisiones de arquitectura ADR-0001..0015, en inglés con resumen en español | [`docs/adr/`](docs/adr/README.md) |
+| Decisiones de arquitectura ADR-0001..0016, en inglés con resumen en español | [`docs/adr/`](docs/adr/README.md) |
 
 ## Cómo funciona
 
@@ -72,18 +72,28 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   `ommatix-adapter-mcp` sirve el contrato de la tesis (`observe_screen`, `execute_action`,
   `get_engine_metrics`) por MCP 2026-07-28
   ([ADR-0015](docs/adr/0015-mcp-transport-on-rmcp-wire-types.md)). Las pruebas de contrato
-  CT-01..10 y los escenarios BDD-01..27 corren en la integración continua. `serve` y `demo`
-  usan este motor. Cada observación resuelve además los íconos sin texto con prototipos
-  curados (algoritmo 3A) cuando el operador los configura; si no, sus etiquetas quedan
-  `unknown`.
-- Lo que **todavía no** es real: la pantalla es un escritorio simulado o un fixture, el
-  detector es el buscador de regiones de color plano del arranque (roles `unknown`, sin OCR),
-  y no se ha probado un cliente MCP real. La entrada real se **deniega**: la compuerta exige
-  una aplicación en primer plano de la lista permitida, atestiguada por el adaptador de
-  entrada, y ningún adaptador puede atestiguarla antes de S3. S3 trae DXGI, ONNX Runtime y
-  `SendInput`; S4, las corridas de aceptación.
-  La [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo
-  que falta.
+  CT-01..10 y los escenarios BDD-01..32 corren en la integración continua
+  (BDD-28..32 sobre un doble de prueba del actuador real). `serve` y `demo` usan este motor.
+  Cada observación resuelve además los íconos sin texto con prototipos curados (algoritmo 3A)
+  cuando el operador los configura; si no, sus etiquetas quedan `unknown`.
+- **S3, primera parte (adaptadores de Windows):** captura con DXGI Desktop Duplication
+  (`--source dxgi`, `--output N`), entrada con `SendInput` de Win32 que atestigua la
+  aplicación en primer plano (`--input sendinput`), un detector ONNX que falla de forma
+  segura guiado por un manifiesto de modelo fijado por SHA-256 y el OCR de Windows, todos
+  tras features de compilación opcionales. El `unsafe` que necesitan los adaptadores de
+  captura y entrada lo acota la
+  [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (aprobada el 14 de octubre de 2026). La integración continua los compila, revisa y
+  prueba en Windows. El operador puede detener localmente la entrada real con un archivo de
+  parada (`[safety] stop_file`), y `type` sólo envía sus teclas tras verificar que el foco
+  de teclado está en el campo objetivo.
+- Lo que **todavía no** está: no se ha seleccionado ningún modelo (S0, ADR-0009), así que por
+  defecto el detector es el buscador de regiones de color plano del arranque (roles
+  `unknown`) y no hay OCR; no se ha probado un cliente MCP real; y no se ha ejecutado
+  ninguna prueba de integración ni de seguridad (IT-01..07, SEC-01..06): necesitan corridas
+  supervisadas en el hardware de referencia (también la parada y la comprobación del foco). La
+  entrada real sigue **apagada** salvo que el operador la habilite (abajo). La
+  [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo que
+  falta.
 - Primera plataforma: **Windows 11 x64**, un monitor, DPI de 100/125/150 %
   ([ADR-0008](docs/adr/0008-one-real-platform-first.md), aprobada el 14-oct-2026).
 
@@ -102,7 +112,10 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   honesto (CT-01..10, BDD-11..27, S2b)
 - [ ] **S3, adaptadores reales y bucle de acción en Windows 11:** DXGI, ONNX Runtime,
   `SendInput`, política, parada y verificación del efecto; se retiran los adaptadores de
-  macOS y X11 del arranque
+  macOS y X11 del arranque. Primera parte hecha: los adaptadores DXGI, `SendInput`, ONNX y
+  OCR de Windows tras features de compilación, el archivo de parada del operador y la
+  comprobación del foco antes de escribir; falta: modelos (S0), comprobar efectos más allá
+  del cambio visual, un cliente MCP real y las corridas supervisadas
 - [ ] **S4, aceptación:** 450 corridas de extremo a extremo en aplicaciones controladas,
   benchmarks, soak e informe de aceptación
 
@@ -122,29 +135,73 @@ cargo run -- demo --observations 5 --theme dark     # más observaciones, otro t
 cargo run -- serve                                  # servidor MCP por stdio sobre el escritorio simulado
 cargo run -- serve --config ommatix.toml            # lo mismo, con un archivo de configuración
 cargo run -- serve --source images --images frames/ # un directorio de frames PNG
-cargo run --features screen -- serve --source screen   # el monitor principal
+cargo run --features screen -- serve --source screen   # el monitor principal (provisional, xcap)
+cargo run --features dxgi -- serve --source dxgi        # Windows: captura DXGI de la salida 0, entrada en dry run
 ```
+
+Features de compilación, todas apagadas por defecto:
+
+| Feature | Añade | Plataforma |
+|---|---|---|
+| `screen` | `--source screen`: el monitor principal con `xcap` (provisional) | Windows, macOS, Linux |
+| `native-input` | `--input native`: entrada con `enigo` (provisional; implica `screen`; nunca actúa de verdad, ver abajo) | Windows, macOS, Linux |
+| `dxgi` | `--source dxgi`: DXGI Desktop Duplication de una salida | Windows |
+| `sendinput` | `--input sendinput`: `SendInput` de Win32 (implica `dxgi`) | Windows |
+| `onnx` | el detector ONNX de `[models]`; ONNX Runtime se carga al ejecutar desde la biblioteca que fija el operador, nada se descarga al compilar | cualquiera |
+| `winrt-ocr` | `[models] ocr = "winrt"`: el OCR incluido en Windows | Windows |
 
 `serve` y `demo` aceptan las mismas opciones:
 
 | Opción | Valores | Por defecto |
 |---|---|---|
 | `--config RUTA` | un archivo de configuración (abajo) | los valores de la plantilla del dossier |
-| `--source` | `sim` (escritorio simulado), `images` (frames PNG, detector de regiones planas), `screen` (monitor principal, detector de regiones planas; feature `screen`) | `sim` |
+| `--source` | `sim` (escritorio simulado, con su propio detector y reconocedor), `images` (frames PNG), `screen` (monitor principal; feature `screen`) o `dxgi` (un monitor con DXGI Desktop Duplication, en píxeles físicos, frames sólo en memoria; feature `dxgi`, Windows). Las fuentes reales usan el detector y el OCR de `[models]` | `sim` |
 | `--images DIR` | el directorio de PNG para `--source images` | ninguno (`images` lo exige) |
-| `--input` | `dry-run` (registra, nunca toca el SO) o `native` (feature `native-input`, que implica `screen`) | `[engine] mode` (`dry_run`) |
+| `--output N` | la salida que duplica `--source dxgi`, en el orden de DXGI (la 0 suele ser el monitor principal); se rechaza una salida rotada | `0` |
+| `--input` | `dry-run` (registra, nunca toca el SO), `native` (`enigo`; feature `native-input`, fuente `screen`) o `sendinput` (`SendInput` de Win32; feature `sendinput`, fuente `dxgi`) | `[engine] mode` (`dry_run`) |
 | `--theme` | `light`, `dark`, `contrasting-wallpaper` (sólo el escritorio simulado) | `light` |
 | `--session-id ID` | de 1 a 64 caracteres ASCII visibles, para una salida reproducible | derivado de la hora de inicio y del ID del proceso |
 | `--legacy` | sirve además el perfil MCP legacy 2025-11-25 (como `[mcp] legacy_enabled = true`) | apagado |
 | `--observations N` (sólo `demo`) | 1–20 | 3 |
 
-`--input native` (o `[engine] mode = "native"`) se rechaza antes de abrir ningún adaptador
-salvo que la fuente sea `screen`, `[safety] actuation_enabled = true` y el binario tenga
-`native-input`. Aun así, cada acción es un dry run salvo que el agente envíe
-`dry_run: false`, y la compuerta del motor exige además que la aplicación en primer plano,
-tal como la atestigua el adaptador de entrada, esté en `[safety] allowed_applications`. El
-adaptador de entrada provisional no puede atestiguarla, así que la entrada real es
-`POLICY_DENIED` hasta S3.
+Todo falla de forma segura por defecto: sin archivo de configuración, la plantilla niega la
+actuación, oculta los valores y no carga ningún modelo; cada acción es un dry run salvo que
+el agente envíe `dry_run: false`; y ninguna opción de la línea de órdenes relaja `[safety]`.
+La entrada real exige **todo** lo siguiente:
+
+1. `--input sendinput` con `--source dxgi`, en un binario de Windows con `sendinput`;
+2. `[safety] actuation_enabled = true` y una lista `[safety] allowed_applications` no vacía
+   de nombres de ejecutable en minúsculas (`"notepad.exe"`), ambas en la configuración del
+   operador;
+3. `dry_run: false` del agente, sobre un objetivo del snapshot vigente.
+
+La línea de órdenes rechaza un adaptador de entrada real antes de abrir ningún adaptador si
+no se cumplen 1 o 2. En cada acción, el motor comprueba después la aplicación en primer plano
+que atestigua el actuador contra `allowed_applications`, vuelve a capturar la pantalla y
+rechaza (`STALE_SNAPSHOT`) si ya no coincide con el snapshot, lee la parada del operador y
+vuelve a atestiguar la aplicación en primer plano (rechaza con `POLICY_DENIED` si la parada
+está activa o la aplicación cambió), y sólo entonces entrega. El actuador `SendInput`
+rechaza además un proceso en primer plano con un nivel de integridad mayor (UIPI
+descartaría la entrada en silencio), un punto fuera de las ventanas de ese proceso y teclas
+modificadoras o botones del ratón pulsados; en `type`, tras el clic que enfoca el campo,
+comprueba que el foco de teclado está en la ventana bajo el punto objetivo (o en una que la
+contiene) del mismo proceso en primer plano y, si no, no envía ninguna tecla. Ese rechazo se
+informa como `indeterminate` y nunca se reintenta: en `type` el clic puede haberse
+entregado ya. `--input native` (o `[engine] mode = "native"`) se
+sigue aceptando con `--source screen` y `actuation_enabled = true`, pero `enigo` no puede
+atestiguar la aplicación en primer plano, así que sus acciones reales son siempre
+`POLICY_DENIED`.
+
+**Parada del operador.** Mientras la entrada real es posible, `serve` escribe en stderr una
+línea `ACTIVE CONTROL` con las aplicaciones permitidas y cómo detenerla. Con `[safety]
+stop_file = "STOP"` (relativo al archivo de configuración), crear ese archivo detiene la
+entrada real: el motor lo lee antes de cada acción y otra vez justo antes de entregar,
+rechaza las acciones nuevas con `POLICY_DENIED` (`next_step: operator_review`) sin enviar
+ningún evento y escribe una línea en stderr al activarse o retirarse la parada; borrar el
+archivo la retira. Las acciones ya entregadas conservan el estado informado (repetir su
+`request_id` sigue diciendo `input_delivered`); no se deshace nada. Ninguna herramienta MCP
+puede activar ni retirar la parada. Terminar el proceso (Ctrl+C) también detiene; sin
+`stop_file`, es la única parada local.
 
 El archivo de configuración tiene la forma de
 [`docs/thesis/plantillas/configuracion_mvp.toml`](docs/thesis/plantillas/configuracion_mvp.toml)
@@ -155,12 +212,14 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
 - **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
   rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
   `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `max_message_bytes`
-  4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`); y valores que
-  este binario no puede cumplir: un `platform` distinto de `windows`, un `snapshot_policy`
+  4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`
+  en blanco); y valores que este binario no puede cumplir: un `platform` distinto de
+  `windows`, un `snapshot_policy`
   distinto de `strict`, un `profile` distinto de `2026-07-28` (el perfil legacy se habilita
   con `legacy_enabled`), un `transport` distinto de `stdio`, `allow_destructive = true`,
-  `allow_screenshots_to_client = true`, cualquier ruta o hash en `[models]` y
-  `[cache] persist = true`.
+  `allow_screenshots_to_client = true`, `[models] detector_path`, `detector_sha256`,
+  `ocr_path` u `ocr_sha256` (los pesos se declaran en el manifiesto del modelo), un detector
+  configurado a medias o con hashes mal formados (abajo) y `[cache] persist = true`.
 - **Se acepta pero no se aplica** (una nota en stderr al arrancar): `max_snapshot_age_ms`
   (cada página informa su `age_ms`) y `actuation_enabled = true` con un adaptador de entrada
   que no es real.
@@ -174,6 +233,25 @@ identifique la aplicación en primer plano, la nombra el operador), `gradient_ta
 calibra en su corpus (H4); cualquiera de ellas sin las demás se rechaza, y también el archivo
 entero ante una línea inválida o más de `max_entries` prototipos. Sin ellas, la nota de
 arranque dice que las etiquetas de los íconos quedan desconocidas.
+
+`[models]` está vacío por defecto: no se carga ningún modelo (`models_loaded: false`), el
+detector es el de regiones de color plano y no hay OCR. Con la fuente `images`, `screen` o
+`dxgi` puede elegir:
+
+| Clave | Significado |
+|---|---|
+| `detector_manifest`, `detector_manifest_sha256` | un manifiesto con la forma de [`model_manifest.json`](docs/thesis/plantillas/model_manifest.json), con estado `SELECCIONADO`, cuya entrada de detector nombra los pesos, su SHA-256 y los roles y affordances de cada clase; y el SHA-256 del propio manifiesto (64 caracteres hexadecimales) |
+| `onnxruntime_path`, `onnxruntime_sha256` | la biblioteca de ONNX Runtime (`onnxruntime.dll`) y su SHA-256; debe estar en un directorio que sólo el operador pueda escribir |
+| `ocr` | `"none"` (por defecto) o `"winrt"`, el OCR incluido en Windows |
+| `ocr_language` | la etiqueta BCP-47 del idioma del OCR, por defecto `es-ES`; nunca se sustituye por otro |
+
+Las cuatro claves del detector van juntas (feature de compilación `onnx`); las rutas
+relativas lo son al archivo de configuración. El manifiesto, la biblioteca y los pesos se
+comprueban cada uno contra su SHA-256 antes de cargar nada, y una discrepancia, una feature
+ausente o un idioma de OCR no instalado detienen el motor antes de abrir ninguna captura: no
+se recurre a otro modelo ni a otro idioma. Con `--source sim` las claves se ignoran, con una
+nota en stderr. Todavía no se ha seleccionado ningún modelo (S0,
+[ADR-0009](docs/adr/0009-models-and-licences-decided-in-the-spike.md)).
 
 El servidor MCP expone tres herramientas, con los schemas JSON del dossier:
 
@@ -195,9 +273,9 @@ src/                       workspace de Cargo (monolito modular, ADR-0014)
 │                                                fusion, appearance, identity, snapshot
 ├── application/           ommatix-application   puertos del SDD, caso de uso Engine, tipos del contrato
 ├── adapters/
-│   ├── capture/           ommatix-adapter-capture  FrameCapturer: guion, frames PNG, pantalla
-│   ├── vision/            ommatix-adapter-vision   VisionDetector, TextRecognizer (modelos en S3)
-│   ├── input/             ommatix-adapter-input    OsActuator: dry run, entrada nativa
+│   ├── capture/           ommatix-adapter-capture  FrameCapturer: guion, frames PNG, pantalla, DXGI
+│   ├── vision/            ommatix-adapter-vision   VisionDetector, TextRecognizer (color plano, ONNX, OCR de Windows)
+│   ├── input/             ommatix-adapter-input    OsActuator: dry run, entrada nativa, SendInput
 │   ├── sim/               ommatix-adapter-sim      escritorios simulado y de fixtures (los cuatro
 │   │                                               puertos de píxeles y entrada) para pruebas deterministas
 │   └── mcp/               ommatix-adapter-mcp      servidor MCP por stdio (adaptador conductor),
@@ -225,7 +303,7 @@ Cómo se reparten los componentes del SDD del dossier
 | Capture Provider | `ommatix-adapter-capture` (`FrameCapturer`) |
 | Perception Provider | `ommatix-adapter-vision` (`VisionDetector`, `TextRecognizer`) |
 | OS Actuator | `ommatix-adapter-input` (`OsActuator`) |
-| Effect Verifier | la nueva captura del `Engine` tras la entrega; parcial, se completa en S3 |
+| Effect Verifier | la nueva captura del `Engine` tras la entrega (sólo el cambio visual); parcial, se completa en S3 |
 | Telemetry | tiempos por etapa en el `_meta` de MCP; parcial, se completa en S3 |
 
 Y cómo se reparte el paquete del dossier en el repositorio: capítulos, contratos, matrices,
@@ -241,7 +319,12 @@ git config core.hooksPath .githooks     # una vez: fmt + clippy + tests antes de
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                  # tests unitarios, de integración y Gherkin
+cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr --all-targets -- -D warnings   # en Windows
+cargo test -p ommatix --features dxgi,sendinput,onnx,winrt-ocr                                  # en Windows
 ```
+
+Ninguna prueba envía entrada real: el actuador `SendInput` sólo se prueba con sus funciones
+puras.
 
 Las reglas de contribución, para personas y agentes de IA, están en [AGENTS.md](AGENTS.md).
 

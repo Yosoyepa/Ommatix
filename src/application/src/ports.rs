@@ -76,7 +76,9 @@ pub trait OsActuator: Send {
     fn is_live(&self) -> bool;
 
     /// The application in the foreground, as the actuator can attest it. `None` when it
-    /// cannot (the default): live input then never passes the application allowlist.
+    /// cannot (the default): live input then never passes the application allowlist. The
+    /// engine asks at the gate and again right before delivery, and sends nothing unless
+    /// both answers agree.
     fn foreground_application(&self) -> Option<String> {
         None
     }
@@ -92,11 +94,14 @@ pub struct LocalPolicy {
     /// Whether `observe_screen` may return field contents when the agent asks for them.
     pub include_values: bool,
     pub allowed_applications: Vec<String>,
-    /// Operator stop: no new input events while set.
+    /// Operator stop: no new input events while set. The engine reads it at the gate and
+    /// again right before each delivery. Only the operator sets it (the composition root
+    /// derives it from a local stop file or switch); nothing the agent sends reaches it.
     pub stopped: bool,
 }
 
-/// Reads the local policy. The agent has no port to write it.
+/// Reads the local policy. The agent has no port to write it. Read on every action, so
+/// an implementation may reflect the operator's changes (the stop) as they happen.
 pub trait PolicyStore: Send + Sync {
     fn current(&self) -> LocalPolicy;
 }

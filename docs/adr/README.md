@@ -4,7 +4,8 @@ ADR-0001 to ADR-0012 come from the thesis dossier ([`docs/thesis/`](../thesis/RE
 translated into English; each keeps its original Spanish text in `## Resumen (ES)`. The
 project owner accepted all twelve on 2026-10-14. ADR-0013 and ADR-0014 record decisions the
 owner made when the repository was bootstrapped. ADR-0015 records how S2b serves the MCP
-contract and awaits the owner's approval.
+contract, and ADR-0016 bounds the `unsafe` that the Windows capture and input adapters of S3
+need; the owner accepted both on 2026-10-14.
 
 | # | Title | Status |
 |---|---|---|
@@ -22,7 +23,8 @@ contract and awaits the owner's approval.
 | [0012](0012-data-minimisation-and-evidence-traceability.md) | Data minimisation and evidence traceability | Accepted (2026-10-14) |
 | [0013](0013-bilingual-documentation.md) | Bilingual documentation (EN/ES) | Accepted |
 | [0014](0014-hexagonal-crate-layout.md) | Hexagonal crate layout for the modular monolith | Accepted |
-| [0015](0015-mcp-transport-on-rmcp-wire-types.md) | MCP transport on rmcp wire types with a bounded message loop | Proposed |
+| [0015](0015-mcp-transport-on-rmcp-wire-types.md) | MCP transport on rmcp wire types with a bounded message loop | Accepted (2026-10-14) |
+| [0016](0016-bounded-unsafe-for-windows-capture-and-input.md) | Bounded unsafe for the Windows capture and input adapters | Accepted (2026-10-14) |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They
@@ -45,6 +47,6 @@ an ADR exists in that catalogue.
 
 ADR-0001 a ADR-0012 son las de la tesis, traducidas al inglés y con su texto original en
 español. El responsable del proyecto aprobó las doce el 14 de octubre de 2026. ADR-0013 y ADR-0014 recogen las
-decisiones del arranque: documentación bilingüe y crates hexagonales. ADR-0015, propuesta en
-S2b y pendiente de aprobación, sirve MCP con los tipos de wire de `rmcp` y un bucle de mensajes
-propio y acotado. Las ADR del arranque se archivan en `bootstrap/` como B0001–B0012.
+decisiones del arranque: documentación bilingüe y crates hexagonales. ADR-0015, de S2b y aprobada el 14 de octubre de 2026, sirve MCP con los tipos de wire de `rmcp` y un bucle de mensajes
+propio y acotado. ADR-0016, de S3 y aprobada el mismo día, limita el `unsafe` a
+los módulos Windows de captura DXGI y entrada `SendInput`. Las ADR del arranque se archivan en `bootstrap/` como B0001–B0012.

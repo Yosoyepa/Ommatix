@@ -168,6 +168,58 @@ usuario simulado y `DisplayMapping`). Sus decisiones archivadas siguen en
 [revisión de S2b](../reviews/2026-10-14-s2b-engine-and-mcp.md) registra los hallazgos
 corregidos antes de cerrar la etapa, cada uno con su prueba de regresión.
 
+**Adaptadores de Windows (S3, primera parte).** Cada uno está tras una feature de compilación
+apagada por defecto, y los valores por defecto siguen fallando de forma segura: sin modelo,
+sin OCR, entrada en dry run y política que lo niega todo.
+
+- *Captura* (`dxgi`, `--source dxgi --output N`): DXGI Desktop Duplication de una salida en
+  píxeles físicos (el proceso declara conciencia de DPI por monitor v2). La textura del
+  escritorio se copia a una textura de staging y se lee fila a fila con su propio stride; los
+  frames sólo viven en memoria. Se rechaza una salida rotada; un cambio de tamaño, DPI u
+  origen incrementa el epoch geométrico; si no llega ninguna actualización del escritorio se
+  devuelve de nuevo el último frame; una duplicación perdida (`DXGI_ERROR_ACCESS_LOST`,
+  dispositivo retirado o reiniciado: un cambio de modo, el escritorio seguro) se recrea una
+  vez dentro de la captura, una segunda pérdida es un error de captura y el frame siguiente
+  abre un epoch geométrico nuevo. Los rectángulos dirty y move sólo se cuentan; el
+  comparador del motor decide qué cambió. El capturador comparte su correspondencia de
+  pantalla vigente con el adaptador de entrada, que se niega a apuntar mientras está perdida
+  o fuera de perfil.
+- *Entrada* (`sendinput`, `--input sendinput`, sólo con `--source dxgi`): `SendInput` de Win32
+  apuntado con la correspondencia del capturador, una llamada por acción, con un recibo de
+  eventos enviados e insertados. Atestigua la aplicación en primer plano (el nombre del
+  ejecutable, en minúsculas, del proceso de la ventana en primer plano) para la comprobación
+  de la lista permitida del motor y, antes de enviar, rechaza otro proceso en primer plano,
+  un punto fuera de las ventanas de ese proceso, un nivel de integridad mayor (UIPI
+  descartaría la entrada en silencio) y modificadores o botones del ratón pulsados. `type`
+  envía primero el clic que enfoca el campo y sus teclas sólo cuando `GetGUIThreadInfo`
+  muestra el foco de teclado, en el mismo proceso en primer plano, en la ventana bajo el
+  punto objetivo o en una que la contiene (lo consulta hasta 200 ms mientras se procesa el
+  clic); si no, no envía ninguna tecla. Un rechazo es un error del actuador, que el motor
+  informa como `indeterminate` y nunca reintenta: tras un `type` rechazado el clic puede
+  haberse entregado. Ninguna prueba envía entrada real.
+- *Detector* (`onnx`, `[models] detector_manifest`): un detector genérico de tipo YOLO sobre
+  ONNX Runtime cargado al ejecutar (`load-dynamic`) desde una biblioteca fijada por SHA-256.
+  El manifiesto del modelo está fijado por SHA-256 y nombra los pesos, su SHA-256 y el rol y
+  la affordance de cada clase; los nombres de clase nunca se convierten en roles. Cada región
+  planificada se encaja con letterbox en la entrada, se decodifica, se suprime y se lleva de
+  vuelta al frame.
+- *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` para exactamente
+  `ocr_language`, nunca otro idioma, sin inventar confianzas; el texto reconocido nunca se
+  registra.
+- *Configuración*: un detector u OCR configurado que el binario no tiene, cuyos archivos no
+  coinciden con su SHA-256 o cuyo idioma no está instalado detiene el motor antes de abrir
+  ninguna captura. `images`, `screen` y `dxgi` usan todos el detector y el OCR de
+  `[models]`.
+- *`unsafe` acotado*: DXGI y `SendInput` son llamadas COM y Win32. La
+  [ADR-0016](../adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (aprobada el 14 de octubre de
+  2026) sólo permite `unsafe` en el `#[cfg(windows)] mod
+  win` de los adaptadores de captura y entrada: esos crates deniegan `unsafe_code` y
+  `clippy::undocumented_unsafe_blocks`, cada bloque envuelve una llamada con un comentario
+  `// SAFETY:` y los punteros crudos nunca salen del módulo. El OCR usa la proyección segura
+  de WinRT y el crate de visión mantiene `unsafe_code = "forbid"`. Todos usan un único crate
+  `windows` fijado (`=0.62.2`), y la integración continua compila, revisa y prueba las
+  features en `windows-latest`.
+
 **`observe_screen`** captura un frame, planifica regiones contra la última base confirmada
 (algoritmo 1), entrega al detector y al reconocedor sólo las regiones planificadas, conserva
 la evidencia fuera de ellas, fusiona (algoritmo 2), resuelve íconos (algoritmo 3A), sigue las
@@ -197,14 +249,25 @@ forma estricta sesión, epoch geométrico, snapshot, target, revisión y acciona
 snapshot publicado. Un dry run (por defecto) es `simulated`. La entrada real exige la política
 del operador (`actuation_enabled`, sin parada), un actuador real **y** una aplicación en
 primer plano incluida en la lista no vacía `allowed_applications`, tal como la atestigua el
-actuador; si no, `POLICY_DENIED` sin entregar nada. Ningún actuador puede atestiguar la
-aplicación en primer plano antes de S3, así que hoy la entrada real siempre se deniega. Antes
-de entregar, una comprobación de vigencia vuelve a capturar la pantalla: si difiere de la base
-confirmada, la acción es `STALE_SNAPSHOT` y no se entrega nada. Un recibo de entrega cuyos
+actuador; si no, `POLICY_DENIED` sin entregar nada. Sólo el actuador `SendInput` atestigua
+la aplicación en primer plano; la entrada provisional con `enigo` no puede, así que sus
+acciones reales siempre se deniegan. Antes de entregar, una comprobación de vigencia vuelve a
+capturar la pantalla: si difiere de la base confirmada, la acción es `STALE_SNAPSHOT` y no se
+entrega nada. Después el motor echa un último vistazo: vuelve a leer la política (la parada
+del operador, el consentimiento, la lista permitida) y vuelve a pedir al actuador la
+aplicación en primer plano; una parada, o una aplicación distinta de la atestiguada en la
+compuerta, es `POLICY_DENIED` sin entregar nada. La parada del operador viene de `[safety]
+stop_file` (un archivo cuya existencia detiene la entrada nueva, leído en cada acción; una
+ruta ilegible cuenta como presente) o de un `StopSwitch` en proceso de la raíz de
+composición; ninguna herramienta MCP llega a ninguno de los dos, y los resultados ya
+entregados quedan registrados tal como se informaron. Mientras la entrada real es posible,
+`serve` escribe en stderr un indicador de control activo, y una línea cada vez que la parada
+se activa o se retira. Un recibo de entrega cuyos
 eventos insertados coinciden con los enviados es `input_delivered`; cualquier otra cosa es
 `indeterminate`. Un `visual_change` esperado se verifica con una captura posterior a la
 entrega comparada con el frame previo a ella (`effect_observed` o `indeterminate`); los demás
-efectos se informan `indeterminate` hasta que S3 pueda comprobarlos. Cualquier entrega, sea
+efectos (foco, valor, desplazamiento) se informan `indeterminate` hasta que puedan
+comprobarse. Cualquier entrega, sea
 cual sea su resultado, agota el snapshot: la acción siguiente necesita una observación nueva
 (`STALE_SNAPSHOT`), mientras que las repeticiones del diario devuelven el resultado guardado.
 
@@ -212,15 +275,21 @@ cual sea su resultado, agota el snapshot: la acción siguiente necesita una obse
 |---|---|---|---|
 | Detección de cambios, fusión, identidad, snapshots | Algoritmos 1, 2 y 3B; commit transaccional | Implementados en `ommatix-domain` y ejecutados por el `Engine` | S1–S2 (hecho) |
 | Caché de íconos | Algoritmo 3A dentro de la observación | El `Engine` lo ejecuta sobre los candidatos a ícono de las regiones planificadas con los prototipos curados del operador; apagado sin ellos; contexto configurado, umbrales sin calibrar | S3 (contexto), S4 (calibración) |
-| Percepción | Detector y OCR en ONNX Runtime, roles según el spike S0 | Detector de regiones de color plano (roles `unknown`), sin OCR (`NullTextRecognizer`); los escritorios simulados informan la verdad de terreno | S0, S3 |
+| Percepción | Detector y OCR en ONNX Runtime, roles según el spike S0 | Por defecto, detector de regiones de color plano (roles `unknown`) y sin OCR (`NullTextRecognizer`); los escritorios simulados informan la verdad de terreno. Hay adaptadores opcionales para `images`, `screen` y `dxgi`, pero ningún modelo seleccionado: un detector ONNX que falla de forma segura, guiado por un manifiesto fijado por SHA-256 (feature `onnx`), y el OCR de Windows para un único idioma (feature `winrt-ocr`) | S0 (modelos), S3 |
 | Contrato con el agente | Ommatix 1.0 por MCP 2026-07-28; 2025-11-25 opcional | Implementado (CT-01..10); sin probar todavía con un cliente real | S0/S3 para el cliente |
-| Compuerta de acciones | Vigencia, política, allowlist, foco, parada | Vigencia del snapshot (comprobada también con una captura antes de entregar), política, parada y la lista permitida, que deniega la entrada real hasta que un actuador atestigüe la aplicación en primer plano; sin comprobación de foco | S3 |
+| Compuerta de acciones | Vigencia, política, allowlist, foco, parada | Vigencia del snapshot (comprobada también con una captura antes de entregar), política y la lista permitida contra la aplicación en primer plano que atestigua `SendInput`, todo comprobado de nuevo justo antes de entregar; el archivo de parada del operador (`[safety] stop_file`); el actuador comprueba además el proceso bajo el punto objetivo, el nivel de integridad y los modificadores pulsados, y en `type` el foco de teclado tras el clic que enfoca el campo. Sin ejecución supervisada todavía (SEC-02, SEC-05) | S3 (corridas supervisadas) |
 | Verificación del efecto | Postcondiciones de foco, valor, desplazamiento y cambio visual | Sólo cambio visual, con una nueva captura | S3 |
 | Telemetría | Métricas y auditoría sin texto sensible | `get_engine_metrics`; tiempos por etapa en `_meta` | S3 |
-| Plataforma | Windows 11 x64: DXGI y `SendInput` | Escritorios simulado y de fixtures; captura con `xcap` y entrada con `enigo` detrás de features de compilación | S3 |
+| Plataforma | Windows 11 x64: DXGI y `SendInput` | Captura DXGI y entrada `SendInput` tras las features `dxgi` y `sendinput` (ADR-0016), compiladas y probadas en la integración continua en Windows pero sin ejecución supervisada todavía (IT-01, IT-03, IT-07); escritorios simulado y de fixtures para las pruebas; `xcap` y `enigo` provisionales tras `screen` y `native-input` | S3 (corridas supervisadas) |
 
 Los escenarios de la tesis (BDD-01..32) se quedan en [`docs/thesis/features/`](../thesis/features),
 donde los espera la matriz de trazabilidad del dossier; `src/acceptance/tests/thesis.rs`
-ejecuta BDD-01..27: BDD-01..10 y BDD-13..21 sobre el núcleo del dominio, y BDD-11, 12 y 22..27
-a través del motor y del adaptador MCP sobre los escritorios simulado y de fixtures.
-BDD-28..32 esperan a S3.
+los ejecuta todos: BDD-01..10 y BDD-13..21 sobre el núcleo del dominio, BDD-11, 12 y 22..27
+a través del motor y del adaptador MCP sobre los escritorios simulado y de fixtures, y
+BDD-28..32 (otra aplicación que pasa a primer plano antes de escribir, verificación
+indeterminada sin reintento, un `request_id` repetido, texto en pantalla que pide más
+permisos, el archivo de parada del operador durante una secuencia) del mismo modo sobre un
+doble de prueba del actuador real que registra lo que recibe y no envía nada. Muestran la
+parte del motor de SEC-05, IT-04, IT-05, SEC-03 y SEC-02, que siguen necesitando corridas
+supervisadas con el actuador real; la comprobación del foco de teclado dentro de la
+aplicación permitida es del actuador `SendInput`, y ninguna prueba lo ejecuta.

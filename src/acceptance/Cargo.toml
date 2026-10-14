@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
+ommatix = { workspace = true }
 ommatix-adapter-mcp = { workspace = true }
 ommatix-adapter-sim = { workspace = true }
 ommatix-application = { workspace = true }
