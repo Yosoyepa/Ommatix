@@ -31,9 +31,9 @@ use ommatix_adapter_mcp::{
 use ommatix_adapter_sim::{FixtureDesktop, FixtureScene, confirmed};
 use ommatix_application::contract::{ActionKind, ValidatedAction};
 use ommatix_application::{
-    AccessibilityProvider, AccessibleElement, AccessiblePatterns, Clock, DeliveryReceipt,
-    Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock, NoAccessibility, OsActuator,
-    PolicyStore, PortError, Ports, VerifyParams,
+    AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, Clock,
+    DeliveryReceipt, Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock,
+    NoAccessibility, OsActuator, PolicyStore, PortError, Ports, VerifyParams,
 };
 use ommatix_domain::appearance::{
     CachePolicy, DESCRIPTOR_VERSION, GRID_LEN, GradientDescriptor, IconCache, IconMatch, Prototype,
@@ -1005,13 +1005,14 @@ impl AccessibilityProvider for TreeDouble {
         "tree-double"
     }
 
-    fn snapshot(&mut self, regions: &[BBox]) -> Result<Vec<AccessibleElement>, PortError> {
-        Ok(self
-            .0
-            .iter()
-            .filter(|e| regions.iter().any(|r| r.overlaps(&e.bbox)))
-            .cloned()
-            .collect())
+    fn snapshot(&mut self, regions: &[BBox]) -> Result<AccessibleRead, PortError> {
+        Ok(AccessibleRead::complete(
+            self.0
+                .iter()
+                .filter(|e| regions.iter().any(|r| r.overlaps(&e.bbox)))
+                .cloned()
+                .collect(),
+        ))
     }
 
     fn reads_keyboard_focus(&self) -> bool {

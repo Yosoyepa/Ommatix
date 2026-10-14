@@ -16,7 +16,8 @@ use crate::contract::{
     ValidatedAction, Zone,
 };
 use crate::ports::{
-    AccessibleElement, AccessiblePatterns, CapturedFrame, DeliveryReceipt, LocalPolicy,
+    AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame, DeliveryReceipt,
+    LocalPolicy,
 };
 use crate::{ManualClock, PortError};
 
@@ -72,6 +73,9 @@ struct World {
     accessible: Vec<AccessibleElement>,
     access_calls: Vec<Vec<BBox>>,
     fail_access: bool,
+    /// A bounded walk: the provider returns at most this many of the elements it would
+    /// find and reports the read as truncated (`None`: the whole tree).
+    access_limit: Option<usize>,
     /// The accessibility provider reads keyboard focus (UI Automation on, ADR-0018).
     reads_focus: bool,
     /// The element with keyboard focus once `focus_script` is used up.
@@ -115,6 +119,7 @@ impl Default for World {
             accessible: Vec::new(),
             access_calls: Vec::new(),
             fail_access: false,
+            access_limit: None,
             reads_focus: false,
             focused: None,
             focus_script: VecDeque::new(),
@@ -267,17 +272,26 @@ impl AccessibilityProvider for Access {
         "test-accessibility"
     }
 
-    fn snapshot(&mut self, regions: &[BBox]) -> Result<Vec<AccessibleElement>, PortError> {
+    fn snapshot(&mut self, regions: &[BBox]) -> Result<AccessibleRead, PortError> {
         let mut w = lock(&self.0);
         w.access_calls.push(regions.to_vec());
         if w.fail_access {
             return Err(PortError::new("test-accessibility", "tree unavailable"));
         }
-        Ok(w.accessible
+        let mut elements: Vec<AccessibleElement> = w
+            .accessible
             .iter()
             .filter(|e| regions.iter().any(|r| r.overlaps(&e.bbox)))
             .cloned()
-            .collect())
+            .collect();
+        let truncated = w.access_limit.is_some_and(|n| elements.len() > n);
+        if let Some(n) = w.access_limit {
+            elements.truncate(n);
+        }
+        Ok(AccessibleRead {
+            elements,
+            truncated,
+        })
     }
 
     fn reads_keyboard_focus(&self) -> bool {

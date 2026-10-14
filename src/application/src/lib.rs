@@ -25,7 +25,7 @@ pub use clock::ManualClock;
 pub use engine::{Engine, EngineConfig, IconResolverConfig, JOURNAL_CAPACITY, Ports, VerifyParams};
 pub use error::{PortError, error_chain};
 pub use ports::{
-    AccessibilityProvider, AccessibleElement, AccessiblePatterns, CapturedFrame, Clock,
-    DeliveryReceipt, FrameCapturer, LocalPolicy, NoAccessibility, OsActuator, PolicyStore,
+    AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame,
+    Clock, DeliveryReceipt, FrameCapturer, LocalPolicy, NoAccessibility, OsActuator, PolicyStore,
     TextRecognizer, VisionDetector,
 };

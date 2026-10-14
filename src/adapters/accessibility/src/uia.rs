@@ -21,6 +21,10 @@
 //!    the availability of the `Invoke`, `Toggle`, `ExpandCollapse`, `SelectionItem`,
 //!    `Value` (and whether it is read-only) and `Scroll` patterns. `Value.Value` is never
 //!    requested.
+//! 4. **Say when it was cut short.** A walk that ends on its budget (elements, time or
+//!    depth), or that cannot read a window, reports `truncated`: what is missing is
+//!    unknown, not absent, and the engine reads those regions again on its next
+//!    observation.
 //!
 //! `keyboard_focus` (ADR-0018) reads the same cached properties of the one element that has
 //! keyboard focus, when it belongs to the attested foreground application and lies on the
@@ -32,7 +36,7 @@ use std::thread;
 use std::time::Instant;
 
 use ommatix_application::{
-    AccessibilityProvider, AccessibleElement, AccessiblePatterns, PortError,
+    AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, PortError,
 };
 use ommatix_domain::DisplayMapping;
 use ommatix_domain::bbox::BBox;
@@ -57,7 +61,7 @@ enum Request {
 }
 
 enum Answer {
-    Elements(Vec<AccessibleElement>),
+    Elements(AccessibleRead),
     Focus(Option<AccessibleElement>),
 }
 
@@ -135,16 +139,16 @@ impl AccessibilityProvider for UiaProvider {
         ADAPTER
     }
 
-    fn snapshot(&mut self, regions: &[BBox]) -> Result<Vec<AccessibleElement>, PortError> {
+    fn snapshot(&mut self, regions: &[BBox]) -> Result<AccessibleRead, PortError> {
         if regions.is_empty() {
-            return Ok(Vec::new());
+            return Ok(AccessibleRead::complete(Vec::new()));
         }
         let mapping = (self.mapping)()?;
         match self.ask(Request::Snapshot {
             mapping,
             regions: regions.to_vec(),
         })? {
-            Answer::Elements(elements) => Ok(elements),
+            Answer::Elements(read) => Ok(read),
             Answer::Focus(_) => Err(PortError::new(ADAPTER, "unexpected reply")),
         }
     }
@@ -337,7 +341,7 @@ impl Reader {
         windows
     }
 
-    fn snapshot(&self, mapping: &DisplayMapping, regions: &[BBox]) -> Vec<AccessibleElement> {
+    fn snapshot(&self, mapping: &DisplayMapping, regions: &[BBox]) -> AccessibleRead {
         self.foreground_process()
             .map(|pid| self.snapshot_of(pid, mapping, regions))
             .unwrap_or_default()
@@ -364,24 +368,25 @@ impl Reader {
     }
 
     /// The elements of process `pid`'s visible windows inside `regions`, within the budget.
-    fn snapshot_of(
-        &self,
-        pid: i32,
-        mapping: &DisplayMapping,
-        regions: &[BBox],
-    ) -> Vec<AccessibleElement> {
+    /// The read is `truncated` when a bound ended the walk or a window could not be read.
+    fn snapshot_of(&self, pid: i32, mapping: &DisplayMapping, regions: &[BBox]) -> AccessibleRead {
         let start = Instant::now();
         let mut found = Vec::new();
         let mut spent = Spent::default();
+        let mut truncated = false;
         for window in self.windows_of(pid) {
             let Ok(window) = window.build_updated_cache(&self.full) else {
+                truncated = true;
                 continue;
             };
             let mut stack = vec![(window, 0usize)];
             while let Some((element, depth)) = stack.pop() {
                 spent.elapsed = start.elapsed();
                 if !spent.allows_more(&self.budget) {
-                    return found;
+                    return AccessibleRead {
+                        elements: found,
+                        truncated: true,
+                    };
                 }
                 spent.visited += 1;
                 if element.get_cached_process_id().ok() != Some(pid)
@@ -399,14 +404,20 @@ impl Reader {
                 {
                     found.push(e);
                 }
+                let mut children = self.children(&element, &self.full);
                 if depth < self.budget.max_depth {
-                    let mut children = self.children(&element, &self.full);
                     children.reverse();
                     stack.extend(children.into_iter().map(|c| (c, depth + 1)));
+                } else {
+                    // The depth bound cuts the walk only where something lies below it.
+                    truncated |= !children.is_empty();
                 }
             }
         }
-        found
+        AccessibleRead {
+            elements: found,
+            truncated,
+        }
     }
 
     /// The element as evidence, when its control type is one the contract can use.
@@ -486,12 +497,13 @@ mod tests {
         let source = move || Ok(mapping);
         let mut provider = UiaProvider::new(source, Budget::default()).unwrap();
         let t = Instant::now();
-        let elements = provider.snapshot(&[all]).unwrap();
+        let read = provider.snapshot(&[all]).unwrap();
         eprintln!(
-            "{} elements in {:?}: {:?}",
-            elements.len(),
+            "{} elements in {:?} (truncated: {}): {:?}",
+            read.elements.len(),
             t.elapsed(),
-            counts(&elements)
+            read.truncated,
+            counts(&read.elements)
         );
     }
 
@@ -557,7 +569,7 @@ mod tests {
         let mut elements = Vec::new();
         for _ in 0..40 {
             thread::sleep(Duration::from_millis(250));
-            elements = reader.snapshot_of(pid, &mapping, &[all]);
+            elements = reader.snapshot_of(pid, &mapping, &[all]).elements;
             if elements.len() > 3 {
                 break;
             }

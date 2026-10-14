@@ -436,3 +436,75 @@ fn a_zero_verification_window_reads_focus_once() {
     assert_clicked_but_not_typed(&r, &result);
     assert_eq!(phases(&r, &["focus"]), ["focus"]);
 }
+
+// ---- the time of each stage of an action (S4 third round, finding 6) ----
+
+/// Every action the gate ran reports where its time went; the stages it did not reach are
+/// zero.
+#[test]
+fn an_action_reports_the_time_of_each_of_its_stages() {
+    let mut r = typing_rig();
+    let page = r.observe();
+    assert_eq!(r.engine.last_action_timings(), None, "no action yet");
+    let ms = Duration::from_millis;
+
+    // Two-phase type: focus arrives on the third read (two polls of 50 ms).
+    let save = AccessibleElement {
+        bbox: bx(400.0, 250.0, 480.0, 280.0),
+        role: Role::Button,
+        name: "Save".into(),
+        ..name_field()
+    };
+    r.world().focus_script = VecDeque::from([Some(save), None, Some(name_field())]);
+    r.engine
+        .execute_action(&typing(&page, "t1", ExpectedEffect::None));
+    let t = r.engine.last_action_timings().expect("timings");
+    assert_eq!(
+        (
+            t.gate,
+            t.freshness,
+            t.delivery,
+            t.focus,
+            t.verification,
+            t.total
+        ),
+        (ms(0), ms(0), ms(0), ms(100), ms(0), ms(100))
+    );
+
+    // A live click that shows no effect waits out the verification window.
+    let page = r.observe();
+    r.world().phased = false;
+    let click = ActionRequest {
+        dry_run: false,
+        expected_effect: ExpectedEffect::VisualChange,
+        ..Rig::action(&page, "Save", "c1", ActionKind::Click)
+    };
+    let result = r.engine.execute_action(&click);
+    assert_eq!(result.status, ActionStatus::Indeterminate);
+    let t = r.engine.last_action_timings().expect("timings");
+    assert_eq!(t.verification, VerifyParams::DEFAULT_TIMEOUT);
+    assert_eq!((t.gate, t.focus), (ms(0), ms(0)));
+    assert_eq!(t.total, VerifyParams::DEFAULT_TIMEOUT);
+
+    // A dry run has a gate and nothing else; a replay and a refusal before the gate have
+    // no timings of their own.
+    let page = r.observe();
+    let dry = Rig::action(&page, "Save", "d1", ActionKind::Click);
+    r.engine.execute_action(&dry);
+    assert_eq!(
+        r.engine.last_action_timings(),
+        Some(ActionTimings::default())
+    );
+    r.engine.execute_action(&dry);
+    assert_eq!(r.engine.last_action_timings(), None, "a replay");
+    let too_many = ActionRequest {
+        request_id: String::new(),
+        ..dry
+    };
+    r.engine.execute_action(&too_many);
+    assert_eq!(
+        r.engine.last_action_timings(),
+        None,
+        "refused before the gate"
+    );
+}

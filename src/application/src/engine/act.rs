@@ -32,8 +32,8 @@ use super::Engine;
 use super::accessibility::focus_is_on;
 use super::journal::{Lookup, arguments_hash};
 use crate::contract::{
-    ActionKind, ActionRequest, ActionResult, ErrorCode, ExpectedEffect, ObservedEffect, ToolError,
-    ValidatedAction, limits,
+    ActionKind, ActionRequest, ActionResult, ActionTimings, ErrorCode, ExpectedEffect,
+    ObservedEffect, ToolError, ValidatedAction, limits,
 };
 
 /// Parses `s<n>` (`n >= 1`, no leading zeros) as the registry's snapshot number.
@@ -129,6 +129,15 @@ fn check_arguments(request: &ActionRequest) -> Result<(), ToolError> {
     }
 }
 
+/// The stages of an action that [`ActionTimings`] tells apart.
+#[derive(Debug, Clone, Copy)]
+enum Stage {
+    Freshness,
+    Delivery,
+    Focus,
+    Verification,
+}
+
 /// What the gate and the actuator established about one action.
 struct Outcome {
     status: ActionStatus,
@@ -180,6 +189,8 @@ impl Outcome {
 
 impl Engine {
     pub(super) fn act(&mut self, request: &ActionRequest) -> ActionResult {
+        // A replay or a refusal before the gate has no timings of its own.
+        self.action_timings = None;
         let reply = |outcome: Outcome| ActionResult {
             request_id: request.request_id.clone(),
             status: outcome.status,
@@ -207,10 +218,19 @@ impl Engine {
             Lookup::New => {}
         }
 
+        let started = self.ports.clock.now();
+        self.action_timings = Some(ActionTimings::default());
         let result = reply(
             self.gate_and_perform(request)
                 .unwrap_or_else(Outcome::rejected),
         );
+        // The gate is what no other stage accounts for.
+        let total = self.ports.clock.now().saturating_sub(started);
+        if let Some(t) = self.action_timings.as_mut() {
+            let staged = t.freshness + t.delivery + t.focus + t.verification;
+            t.gate = total.saturating_sub(staged);
+            t.total = total;
+        }
         // Every action whose input the actuator reported delivered counts, including an
         // indeterminate one whose effect could not be verified.
         if result.status == ActionStatus::Rejected {
@@ -221,6 +241,20 @@ impl Engine {
         self.journal
             .record(&request.request_id, hash, result.clone());
         result
+    }
+
+    /// Adds the time since `since` to `stage` of the running action.
+    fn spend(&mut self, since: Duration, stage: Stage) {
+        let elapsed = self.ports.clock.now().saturating_sub(since);
+        if let Some(t) = self.action_timings.as_mut() {
+            let slot = match stage {
+                Stage::Freshness => &mut t.freshness,
+                Stage::Delivery => &mut t.delivery,
+                Stage::Focus => &mut t.focus,
+                Stage::Verification => &mut t.verification,
+            };
+            *slot += elapsed;
+        }
     }
 
     /// Runs the checks and, if they pass, simulates or delivers the action.
@@ -292,8 +326,12 @@ impl Engine {
         else {
             return Err(policy_denied());
         };
-        let before = self.fresh_frame()?;
-        self.last_look(foreground.as_deref())?;
+        let since = self.ports.clock.now();
+        let checked = self
+            .fresh_frame()
+            .and_then(|before| self.last_look(foreground.as_deref()).map(|()| before));
+        self.spend(since, Stage::Freshness);
+        let before = checked?;
         let validated = ValidatedAction {
             target_id,
             kind: request.action.clone(),
@@ -372,7 +410,10 @@ impl Engine {
     ) -> Outcome {
         // Whatever happens next, input may have reached the OS: the snapshot is spent.
         self.snapshot_spent = true;
-        let Ok(receipt) = self.ports.actuator.deliver(action) else {
+        let since = self.ports.clock.now();
+        let delivered = self.ports.actuator.deliver(action);
+        self.spend(since, Stage::Delivery);
+        let Ok(receipt) = delivered else {
             return Outcome::uncertain(
                 false,
                 "the actuator failed; input may or may not have reached the OS; do not retry",
@@ -391,6 +432,17 @@ impl Engine {
     /// effect keeps `input_delivered` true (chapter 07 §7.5). `before` is the frame the
     /// visual change is measured against, `None` when it could not be captured.
     fn report_effect(&mut self, before: Option<&BgraFrame>, expected: ExpectedEffect) -> Outcome {
+        let since = self.ports.clock.now();
+        let outcome = self.report_effect_untimed(before, expected);
+        self.spend(since, Stage::Verification);
+        outcome
+    }
+
+    fn report_effect_untimed(
+        &mut self,
+        before: Option<&BgraFrame>,
+        expected: ExpectedEffect,
+    ) -> Outcome {
         match expected {
             ExpectedEffect::None => Outcome::delivered(ActionStatus::InputDelivered, None),
             ExpectedEffect::VisualChange => match before {
@@ -442,7 +494,10 @@ impl Engine {
     ) -> Outcome {
         // Whatever happens next, input may have reached the OS: the snapshot is spent.
         self.snapshot_spent = true;
-        let Ok(click) = self.ports.actuator.deliver_focus_click(action) else {
+        let since = self.ports.clock.now();
+        let clicked = self.ports.actuator.deliver_focus_click(action);
+        self.spend(since, Stage::Delivery);
+        let Ok(click) = clicked else {
             return Outcome::uncertain(
                 false,
                 "the actuator failed; input may or may not have reached the OS; do not retry",
@@ -456,26 +511,35 @@ impl Engine {
         }
         // From here the click is delivered: nothing below reports the action as not
         // delivered and nothing sends it again.
-        if !self.keyboard_focus_on(target) {
+        let since = self.ports.clock.now();
+        let focused = self.keyboard_focus_on(target);
+        self.spend(since, Stage::Focus);
+        if !focused {
             return Outcome::uncertain(
                 true,
                 "the click was delivered but keyboard focus on the target field was not \
                  confirmed in time; no key was sent; do not retry",
             );
         }
+        let since = self.ports.clock.now();
         let reference = if expected == ExpectedEffect::VisualChange {
             self.ports.capturer.capture().ok().map(|c| c.frame)
         } else {
             None
         };
-        if self.last_look(foreground).is_err() {
+        let unchanged = self.last_look(foreground).is_ok();
+        self.spend(since, Stage::Freshness);
+        if !unchanged {
             return Outcome::uncertain(
                 true,
                 "the click was delivered, then the operator's stop or consent or the \
                  foreground application changed; no key was sent; do not retry",
             );
         }
-        let Ok(keys) = self.ports.actuator.deliver_keys(action) else {
+        let since = self.ports.clock.now();
+        let sent = self.ports.actuator.deliver_keys(action);
+        self.spend(since, Stage::Delivery);
+        let Ok(keys) = sent else {
             return Outcome::uncertain(
                 true,
                 "the click was delivered but the actuator failed on the keys; some may have \

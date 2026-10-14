@@ -17,9 +17,9 @@
 use std::fmt;
 
 use ommatix_application::contract::{
-    ActionKind, ActionRequest, ActionResult, EngineMetrics, EngineMode, ErrorCode, ExpectedEffect,
-    LabelSource, NextStep, ObservePage, ObserveRequest, ObservedEffect, ScrollDirection,
-    StageTimings, TimingsSource, ToolError, Zone, limits,
+    ActionKind, ActionRequest, ActionResult, ActionTimings, EngineMetrics, EngineMode, ErrorCode,
+    ExpectedEffect, LabelSource, NextStep, ObservePage, ObserveRequest, ObservedEffect,
+    ScrollDirection, StageTimings, TimingsSource, ToolError, Zone, limits,
 };
 use ommatix_application::contract::{ElementView, SCHEMA_VERSION};
 use ommatix_domain::fusion::{Actionability, Role, TextKind};
@@ -831,6 +831,25 @@ pub fn timings_meta(t: &StageTimings) -> Value {
         "track_us": us(t.track),
         "total_us": us(t.total),
     })
+}
+
+/// Run-dependent stage timings of one action, in whole microseconds, for result `_meta`.
+pub fn action_timings_meta(t: &ActionTimings) -> Value {
+    let us = |d: std::time::Duration| u64::try_from(d.as_micros()).unwrap_or(u64::MAX);
+    serde_json::json!({
+        "gate_us": us(t.gate),
+        "freshness_us": us(t.freshness),
+        "delivery_us": us(t.delivery),
+        "focus_us": us(t.focus),
+        "verification_us": us(t.verification),
+        "total_us": us(t.total),
+    })
+}
+
+/// Whether the accessibility evidence behind an observation is complete, for result
+/// `_meta` (a bounded read that was cut short is read again on the next observation).
+pub fn accessibility_meta(complete: bool) -> Value {
+    serde_json::json!({ "complete": complete })
 }
 
 #[cfg(test)]

@@ -240,6 +240,25 @@ pub struct StageTimings {
     pub total: Duration,
 }
 
+/// Per-stage durations of one `execute_action`. Run-dependent: MCP `_meta` only.
+/// Stages an action did not reach are zero (a dry run has no delivery).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ActionTimings {
+    /// The checks before anything is captured or delivered: arguments, snapshot, registry,
+    /// policy, allowlist.
+    pub gate: Duration,
+    /// The capture that confirms the screen is still the committed base, and the last look
+    /// at the operator's stop and the foreground application.
+    pub freshness: Duration,
+    /// The actuator's calls (for two-phase `type`: the click and the keys).
+    pub delivery: Duration,
+    /// Waiting for UI Automation to report keyboard focus on the target (two-phase `type`).
+    pub focus: Duration,
+    /// Looking for the action's visual effect after delivery.
+    pub verification: Duration,
+    pub total: Duration,
+}
+
 /// One page of a full snapshot (`mode: "full"`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObservePage {

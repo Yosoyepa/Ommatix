@@ -106,6 +106,26 @@ pub struct AccessibleElement {
     pub patterns: AccessiblePatterns,
 }
 
+/// What one accessibility read found, and whether it covered what it was asked about.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AccessibleRead {
+    /// The elements found. Each one is accurate; a truncated read can lack others.
+    pub elements: Vec<AccessibleElement>,
+    /// The walk stopped on its budget (elements, depth or time) before it covered the
+    /// regions: elements may be missing, so the absence of an element proves nothing.
+    pub truncated: bool,
+}
+
+impl AccessibleRead {
+    /// A read that covered everything it was asked about.
+    pub const fn complete(elements: Vec<AccessibleElement>) -> Self {
+        Self {
+            elements,
+            truncated: false,
+        }
+    }
+}
+
 /// Reads the accessibility tree of the foreground window (UI Automation on Windows;
 /// ADR-0017): evidence fused with the visual path, never a replacement for it. It reads
 /// only the window of the application the actuator would attest (on Windows, the same
@@ -115,8 +135,10 @@ pub trait AccessibilityProvider: Send {
     fn name(&self) -> &'static str;
 
     /// The elements whose boxes overlap `regions`. An empty result is valid (no
-    /// foreground application, or nothing accessible there).
-    fn snapshot(&mut self, regions: &[BBox]) -> Result<Vec<AccessibleElement>, PortError>;
+    /// foreground application, or nothing accessible there). A provider whose walk is
+    /// bounded must say when a bound ended it ([`AccessibleRead::truncated`]): the engine
+    /// then reads those regions again instead of trusting what is missing.
+    fn snapshot(&mut self, regions: &[BBox]) -> Result<AccessibleRead, PortError>;
 
     /// Whether [`keyboard_focus`](Self::keyboard_focus) answers. A provider that is off
     /// ([`NoAccessibility`]) says no, and `type` then relies on the actuator's own
@@ -139,8 +161,8 @@ impl AccessibilityProvider for NoAccessibility {
         "none"
     }
 
-    fn snapshot(&mut self, _: &[BBox]) -> Result<Vec<AccessibleElement>, PortError> {
-        Ok(Vec::new())
+    fn snapshot(&mut self, _: &[BBox]) -> Result<AccessibleRead, PortError> {
+        Ok(AccessibleRead::complete(Vec::new()))
     }
 
     fn reads_keyboard_focus(&self) -> bool {

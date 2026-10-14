@@ -10,14 +10,21 @@
 //! text is fused: an element absorbs the detector boxes that are the same control, its
 //! role and name win (`label_source: accessibility`), and OCR words still go to the most
 //! specific control by IoC.
+//!
+//! A bounded accessibility walk can end early (`AccessibleRead::truncated`). The regions it
+//! was asked about then keep a *gap*: they are read again on the next observation even when
+//! no pixel changed there, evidence already held for them that the partial read did not
+//! contradict is kept (so a truncated read never takes away a confirmation or a password's
+//! `sensitive` mark), and a visual box there is not confirmed on the strength of a tree
+//! that may lack the control its click point falls on.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{
-    AccessibleControl, Affordance, Control, FusedControl, LabelChoice, Role, TextKind, Word, fuse,
-    reconcile_accessibility,
+    AccessibleControl, Actionability, Affordance, Control, FusedControl, LabelChoice, Role,
+    TextKind, Word, fuse, reconcile_accessibility,
 };
 use ommatix_domain::identity::{Observation, Registry, TargetId};
 use ommatix_domain::incremental::{BgraFrame, Evidence, RegionPlan, Work, plan_regions};
@@ -49,26 +56,41 @@ impl EvidenceSet {
             .collect()
     }
 
-    /// Keeps the evidence outside `regions` and adds the fresh evidence found inside them.
-    fn replace_in(&self, regions: &[BBox], fresh: Self) -> Self {
-        let outside = |b: &BBox| !regions.iter().any(|r| r.overlaps(b));
+    /// Keeps the evidence outside the regions that were looked at again and adds the fresh
+    /// evidence found inside them. `detected` are the regions the detector and the
+    /// recogniser re-analysed (the plan); `read` are those the accessibility provider read,
+    /// the plan plus the regions of an earlier truncated read.
+    ///
+    /// When the accessibility read was `truncated`, a held element inside `read` is kept
+    /// unless the plan re-analysed its area (its pixels changed, so it may be gone) or the
+    /// read found an element at the same box (the fresh one replaces it): a partial read
+    /// proves nothing about what it did not reach.
+    fn merged(&self, detected: &[BBox], read: &[BBox], fresh: Self, truncated: bool) -> Self {
+        let outside = |regions: &[BBox], b: &BBox| !regions.iter().any(|r| r.overlaps(b));
+        let keeps = |a: &AccessibleControl| {
+            let b = &a.control.bbox;
+            outside(read, b)
+                || (truncated
+                    && outside(detected, b)
+                    && !fresh.accessible.iter().any(|f| f.control.bbox == *b))
+        };
         let mut next = Self {
             controls: self
                 .controls
                 .iter()
-                .filter(|c| outside(&c.bbox))
+                .filter(|c| outside(detected, &c.bbox))
                 .cloned()
                 .collect(),
             words: self
                 .words
                 .iter()
-                .filter(|w| outside(&w.bbox))
+                .filter(|w| outside(detected, &w.bbox))
                 .cloned()
                 .collect(),
             accessible: self
                 .accessible
                 .iter()
-                .filter(|a| outside(&a.control.bbox))
+                .filter(|a| keeps(a))
                 .cloned()
                 .collect(),
         };
@@ -174,6 +196,10 @@ pub(super) struct Published {
     /// Sorted by target ID.
     pub elements: Vec<StoredElement>,
     pub timings: StageTimings,
+    /// Regions whose accessibility read was cut short by its budget and not completed
+    /// since: the next observation reads them again, pixels changed or not. Empty when
+    /// the evidence is complete.
+    pub accessibility_gaps: Vec<BBox>,
 }
 
 impl Published {
@@ -293,9 +319,12 @@ struct Tracked {
 }
 
 /// Fuses `evidence`, labels the curated icons of the controls the `planned` work re-analyses (from
-/// `frame`) and associates everything with the tracks of `previous`.
+/// `frame`) and associates everything with the tracks of `previous`. A visual box in an
+/// accessibility `gaps` region is not confirmed: the tree there may lack the control its
+/// click point falls on, which a complete read would have shown.
 fn fuse_and_track(
     evidence: &EvidenceSet,
+    gaps: &[BBox],
     frame: &BgraFrame,
     planned: &Work,
     previous: Option<&Published>,
@@ -316,8 +345,20 @@ fn fuse_and_track(
         (Work::Regions(rs), Some(_)) => Scope::Regions(rs),
         _ => Scope::All,
     };
-    let reconciled =
-        reconcile_accessibility(&evidence.controls, &evidence.accessible, config.fusion).ok()?;
+    let visual: Vec<Control> = evidence
+        .controls
+        .iter()
+        .map(|c| {
+            let mut c = c.clone();
+            if c.affordance.actionability == Actionability::Confirmed
+                && gaps.iter().any(|g| g.overlaps(&c.bbox))
+            {
+                c.affordance.actionability = Actionability::Unknown;
+            }
+            c
+        })
+        .collect();
+    let reconciled = reconcile_accessibility(&visual, &evidence.accessible, config.fusion).ok()?;
     let fusion = fuse(&reconciled.controls, &evidence.words, config.fusion).ok()?;
     let access_of = |i: usize| reconciled.origins[i].and_then(|k| evidence.accessible.get(k));
     let relations = fusion
@@ -368,6 +409,16 @@ struct Inferred {
     evidence: EvidenceSet,
     t_detect: Duration,
     t_recognize: Duration,
+    /// The accessibility read ended on its budget.
+    truncated: bool,
+}
+
+/// `regions` and `extra` as one sorted list without duplicates.
+fn union(regions: &[BBox], extra: &[BBox]) -> Vec<BBox> {
+    let mut all: Vec<BBox> = regions.iter().chain(extra).copied().collect();
+    all.sort_by(BBox::cmp_corners);
+    all.dedup();
+    all
 }
 
 fn inference_failed() -> ToolError {
@@ -416,11 +467,14 @@ impl Engine {
             Work::Regions(rs) => rs.clone(),
             Work::FullRefresh(_) => vec![frame.bounds()],
         };
+        let bounds = frame.bounds();
+        let read_regions = self.accessibility_regions(&plan.work, &regions, &bounds);
         let Ok(Inferred {
             evidence: fresh,
             t_detect,
             t_recognize,
-        }) = self.infer(&frame, &regions)
+            truncated,
+        }) = self.infer(&frame, &regions, &read_regions)
         else {
             self.store.record_failure(&plan.dirty);
             return Err(inference_failed());
@@ -429,13 +483,14 @@ impl Engine {
 
         let previous = self.store.published();
         let evidence = match (&plan.work, previous) {
-            (Work::Nothing, Some(p)) => p.evidence.clone(),
-            (Work::Regions(rs), Some(p)) => p.evidence.replace_in(rs, fresh),
-            _ => fresh,
+            (Work::FullRefresh(_), _) | (_, None) => fresh,
+            (_, Some(p)) => p.evidence.merged(&regions, &read_regions, fresh, truncated),
         }
-        .normalised(&frame.bounds());
+        .normalised(&bounds);
+        let accessibility_gaps = if truncated { read_regions } else { Vec::new() };
         let tracked = fuse_and_track(
             &evidence,
+            &accessibility_gaps,
             &frame,
             &plan.work,
             previous,
@@ -470,6 +525,7 @@ impl Engine {
                 captured_at: captured.captured_at,
                 elements: tracked.elements,
                 timings,
+                accessibility_gaps,
             },
         );
         if self.store.commit(staged).is_err() {
@@ -479,6 +535,26 @@ impl Engine {
         }
         self.snapshot_spent = false;
         Ok(())
+    }
+
+    /// The regions the accessibility provider reads: the plan, and also where an earlier
+    /// read was cut short, whether or not pixels changed there. The detector and the
+    /// recogniser see the plan only. A full refresh reads everything anyway.
+    fn accessibility_regions(&self, work: &Work, planned: &[BBox], bounds: &BBox) -> Vec<BBox> {
+        if matches!(work, Work::FullRefresh(_)) {
+            return planned.to_vec();
+        }
+        let gaps: Vec<BBox> = self
+            .store
+            .published()
+            .map(|p| {
+                p.accessibility_gaps
+                    .iter()
+                    .filter_map(|g| g.clip(bounds))
+                    .collect()
+            })
+            .unwrap_or_default();
+        union(planned, &gaps)
     }
 
     /// Algorithm 1 against the committed base, the pending tiles and the last evidence.
@@ -504,30 +580,38 @@ impl Engine {
         })
     }
 
-    /// Detects, recognises and reads the accessibility tree inside `regions` only; no
-    /// region, no inference. Accessibility elements outside the regions or off screen are
-    /// dropped, whatever the provider returned.
-    fn infer(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Inferred, PortError> {
-        if regions.is_empty() {
-            let now = self.ports.clock.now();
-            return Ok(Inferred {
-                evidence: EvidenceSet::default(),
-                t_detect: now,
-                t_recognize: now,
-            });
+    /// Detects and recognises inside `regions` (the plan) and reads the accessibility tree
+    /// inside `read_regions` (the plan and the gaps of an earlier truncated read); no
+    /// region, no inference. Accessibility elements outside `read_regions` or off screen
+    /// are dropped, whatever the provider returned.
+    fn infer(
+        &mut self,
+        frame: &BgraFrame,
+        regions: &[BBox],
+        read_regions: &[BBox],
+    ) -> Result<Inferred, PortError> {
+        let mut controls = Vec::new();
+        let mut words = Vec::new();
+        let mut t_detect = self.ports.clock.now();
+        let mut t_recognize = t_detect;
+        if !regions.is_empty() {
+            controls = self.ports.detector.detect(frame, regions)?;
+            t_detect = self.ports.clock.now();
+            words = self.ports.recognizer.recognize(frame, regions)?;
+            t_recognize = self.ports.clock.now();
         }
-        let controls = self.ports.detector.detect(frame, regions)?;
-        let t_detect = self.ports.clock.now();
-        let words = self.ports.recognizer.recognize(frame, regions)?;
-        let t_recognize = self.ports.clock.now();
-        let accessible = self
-            .ports
-            .accessibility
-            .snapshot(regions)?
-            .iter()
-            .filter(|e| regions.iter().any(|r| r.overlaps(&e.bbox)))
-            .filter_map(accessible_control)
-            .collect();
+        let mut accessible = Vec::new();
+        let mut truncated = false;
+        if !read_regions.is_empty() {
+            let read = self.ports.accessibility.snapshot(read_regions)?;
+            truncated = read.truncated;
+            accessible = read
+                .elements
+                .iter()
+                .filter(|e| read_regions.iter().any(|r| r.overlaps(&e.bbox)))
+                .filter_map(accessible_control)
+                .collect();
+        }
         Ok(Inferred {
             evidence: EvidenceSet {
                 controls,
@@ -536,6 +620,7 @@ impl Engine {
             },
             t_detect,
             t_recognize,
+            truncated,
         })
     }
 }

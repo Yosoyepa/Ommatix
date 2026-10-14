@@ -31,8 +31,8 @@ use ommatix_domain::incremental::{PlanParams, connected_components};
 use ommatix_domain::snapshot::SnapshotStore;
 
 use crate::contract::{
-    ActionRequest, ActionResult, EngineMetrics, EngineMode, ObservePage, ObserveRequest,
-    StageTimings, TimingsSource, ToolError,
+    ActionRequest, ActionResult, ActionTimings, EngineMetrics, EngineMode, ObservePage,
+    ObserveRequest, StageTimings, TimingsSource, ToolError,
 };
 use crate::ports::{
     AccessibilityProvider, Clock, FrameCapturer, OsActuator, PolicyStore, TextRecognizer,
@@ -136,6 +136,9 @@ pub struct Engine {
     /// Input was handed to the actuator since the last commit (whatever its outcome): the
     /// published snapshot may no longer show the screen and cannot be acted on again.
     snapshot_spent: bool,
+    /// Stage durations of the last action the gate ran (`None` for a replay or a request
+    /// refused before the gate).
+    action_timings: Option<ActionTimings>,
 }
 
 impl Engine {
@@ -147,6 +150,7 @@ impl Engine {
             journal: Journal::new(JOURNAL_CAPACITY),
             counters: Counters::default(),
             snapshot_spent: false,
+            action_timings: None,
         }
     }
 
@@ -195,5 +199,21 @@ impl Engine {
     /// Timings of the last committed observation, for MCP `_meta`.
     pub fn last_timings(&self) -> Option<StageTimings> {
         self.store.published().map(|p| p.timings)
+    }
+
+    /// Whether the accessibility evidence of the published snapshot is complete: `false`
+    /// while a bounded read left regions the next observation will read again. `None`
+    /// before the first observation. For MCP `_meta`.
+    pub fn accessibility_complete(&self) -> Option<bool> {
+        self.store
+            .published()
+            .map(|p| p.accessibility_gaps.is_empty())
+    }
+
+    /// Stage durations of the last `execute_action` the gate ran, for MCP `_meta`. `None`
+    /// when that call was a replay of an earlier `request_id` or was refused before the
+    /// gate (arguments, `request_id` conflict).
+    pub const fn last_action_timings(&self) -> Option<ActionTimings> {
+        self.action_timings
     }
 }

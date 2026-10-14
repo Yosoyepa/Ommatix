@@ -1,5 +1,7 @@
 //! Accessibility evidence in the engine (ADR-0017), over the [`Access`] double.
 
+use ommatix_domain::identity::TargetId;
+
 use super::*;
 
 const INVOKE: AccessiblePatterns = AccessiblePatterns {
@@ -239,9 +241,9 @@ fn the_accessibility_stage_is_timed() {
         fn name(&self) -> &'static str {
             "slow"
         }
-        fn snapshot(&mut self, _: &[BBox]) -> Result<Vec<AccessibleElement>, PortError> {
+        fn snapshot(&mut self, _: &[BBox]) -> Result<AccessibleRead, PortError> {
             self.0.advance(Duration::from_millis(12));
-            Ok(Vec::new())
+            Ok(AccessibleRead::complete(Vec::new()))
         }
         fn reads_keyboard_focus(&self) -> bool {
             false
@@ -306,4 +308,125 @@ fn accessibility_evidence_is_deterministic_in_any_provider_order() {
     reversed.accessible.reverse();
     let mut b = rig(reversed);
     assert_eq!(a.observe(), b.observe());
+}
+
+// ---- a bounded walk that ends early (S4 third round, finding 2) ----
+
+/// The elements as the agent can act on them: ID, revision, label and actionability.
+fn acting_view(page: &ObservePage) -> Vec<(TargetId, u64, String, Actionability)> {
+    page.elements
+        .iter()
+        .map(|e| (e.target_id, e.revision, e.label.clone(), e.actionability))
+        .collect()
+}
+
+fn leaks(page: &ObservePage, secret: &str) -> bool {
+    page.elements.iter().any(|e| {
+        e.label.contains(secret) || e.text.as_ref().is_some_and(|(t, _)| t.contains(secret))
+    })
+}
+
+/// S4 finding 2: after a walk cut short by its budget, an incremental observation kept the
+/// partial tree and read nothing, so a control stayed unconfirmed for as long as no pixel
+/// changed.
+#[test]
+fn a_truncated_accessibility_read_is_read_again_on_the_next_observation() {
+    let mut r = rig(accessible_form());
+    let full = bx(0.0, 0.0, f64::from(W), f64::from(H));
+
+    // The walk reaches two of the four elements and says so.
+    r.world().access_limit = Some(2);
+    let first = r.observe();
+    assert_eq!(r.engine.accessibility_complete(), Some(false));
+    assert_eq!(r.world().access_calls, vec![vec![full]]);
+    assert!(
+        !first.elements.iter().any(|e| e.label == "Guardar"),
+        "the button was not reached"
+    );
+
+    // No pixel changed, yet the tree is read again (and again while it stays partial);
+    // the detector and the recogniser are not: only the accessibility stage honours the
+    // gap.
+    r.observe();
+    assert_eq!(r.world().access_calls, vec![vec![full], vec![full]]);
+    assert_eq!(r.engine.accessibility_complete(), Some(false));
+
+    // Once the walk completes, what it missed is there and the gap is closed.
+    r.world().access_limit = None;
+    let page = r.observe();
+    assert_eq!(r.world().access_calls.len(), 3);
+    assert_eq!(r.world().detect_calls.len(), 1, "no pixel changed");
+    assert_eq!(r.engine.accessibility_complete(), Some(true));
+    let button = page.elements.iter().find(|e| e.label == "Guardar").unwrap();
+    assert_eq!(button.actionability, Actionability::Confirmed);
+    assert_eq!(button.label_source, LabelSource::Accessibility);
+
+    // A complete read is not read again.
+    r.observe();
+    assert_eq!(r.world().access_calls.len(), 3);
+}
+
+/// What a partial tree cannot show must not become a confirmation, and what it fails to
+/// repeat must not take one away.
+#[test]
+fn a_truncated_read_never_confirms_from_partial_evidence() {
+    // A detector-confirmed button, plus a control the walk reaches first.
+    let world = || World {
+        controls: vec![Control {
+            bbox: bx(400.0, 250.0, 480.0, 280.0),
+            role: Role::Button,
+            affordance: confirmed(),
+        }],
+        words: vec![Word::new("Save", bx(420.0, 258.0, 460.0, 272.0))],
+        accessible: vec![element(
+            bx(20.0, 280.0, 60.0, 300.0),
+            Role::Unknown,
+            "Help",
+            INVOKE,
+        )],
+        ..World::default()
+    };
+    let save_button = |page: &ObservePage| {
+        page.elements
+            .iter()
+            .find(|e| e.role == Role::Button)
+            .unwrap()
+            .actionability
+    };
+
+    // With a complete tree the visual confirmation stands.
+    let mut complete = rig(world());
+    assert_eq!(save_button(&complete.observe()), Actionability::Confirmed);
+
+    // With a cut-short one it does not: the walk may not have reached the control that
+    // sits under the box's click point. Nothing else in the page is confirmed from it.
+    let mut partial = rig(world());
+    partial.world().access_limit = Some(0);
+    let page = partial.observe();
+    assert_eq!(save_button(&page), Actionability::Unknown);
+    let click = Rig::action(&page, "Save", "r1", ActionKind::Click);
+    assert_eq!(
+        error_code(&partial.engine.execute_action(&click)),
+        Some(ErrorCode::NotActionable)
+    );
+    // The next observation completes the read and gives the confirmation back.
+    partial.world().access_limit = None;
+    assert_eq!(save_button(&partial.observe()), Actionability::Confirmed);
+
+    // What a complete read confirmed is kept by a partial one that does not repeat it, and
+    // a password field keeps its mark, so its text still never leaks.
+    let mut r = rig(accessible_form());
+    r.world().access_limit = Some(2);
+    let held = r.observe();
+    assert!(
+        held.elements
+            .iter()
+            .any(|e| e.label == "Name" && e.actionability == Actionability::Confirmed)
+    );
+    assert!(!leaks(&held, "secret"));
+    r.world().access_limit = Some(0);
+    let again = r.observe();
+    assert_eq!(r.engine.accessibility_complete(), Some(false));
+    assert_eq!(acting_view(&again), acting_view(&held), "ids and revisions");
+    assert!(!leaks(&again, "secret"));
 }
