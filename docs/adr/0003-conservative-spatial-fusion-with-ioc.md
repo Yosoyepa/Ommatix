@@ -1,8 +1,8 @@
 # 0003. Conservative spatial fusion with IoC
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -57,3 +57,5 @@ Texto original del dossier (13 de octubre de 2026).
   simple para determinar beneficio.
 - **Reversibilidad:** Cambiar matcher o fuente de evidencia manteniendo el contrato Candidate.
 - **Procedencia:** S17–S19; reemplaza garantías de exactitud de ADR-003 original.
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.

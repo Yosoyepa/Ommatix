@@ -51,7 +51,7 @@ Estas verificaciones no prueban un servidor MCP, una integración OCR/ONNX, un a
 
 ## Decisiones pendientes
 
-La plataforma inicial quedó aprobada por el responsable del proyecto el 14 de octubre de 2026: Windows 11 x64, un monitor seleccionado y DPI de 100, 125 y 150 % ([ADR-0008](../adr/0008-one-real-platform-first.md)). Las aplicaciones de prueba siguen siendo una propuesta de reducción de alcance pendiente de aprobación. Los modelos, pesos, licencias, Execution Provider y hardware se fijan en S0. No se incluye ni distribuye ningún peso de modelo.
+El responsable del proyecto aprobó las doce ADR el 14 de octubre de 2026 ([docs/adr/](../adr/README.md)). La plataforma inicial es Windows 11 x64, un monitor seleccionado y DPI de 100, 125 y 150 % ([ADR-0008](../adr/0008-one-real-platform-first.md)). Las aplicaciones de prueba siguen siendo una propuesta de reducción de alcance pendiente de aprobación. Los modelos, pesos, licencias, Execution Provider y hardware se fijan en S0. No se incluye ni distribuye ningún peso de modelo.
 
 Los IDs espaciales de cinco dígitos y la invariancia binaria del dHash original se sustituyen explícitamente en el diseño revisado. La geometría y el OCR no bastan para afirmar accionabilidad; se incorpora abstención. Se mantienen las metas de latencia como hipótesis y objetivos sujetos a benchmark.
 

@@ -1,8 +1,8 @@
 # 0010. Performance budgets subject to measurement
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -53,3 +53,5 @@ Texto original del dossier (13 de octubre de 2026).
   denominadores.
 - **Reversibilidad:** Actualizar budgets por ADR antes de usar test final; mantener históricos.
 - **Procedencia:** Propuesta nueva [P], apoyada en metodología del dossier.
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.

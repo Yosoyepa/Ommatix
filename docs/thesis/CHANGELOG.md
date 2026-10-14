@@ -6,7 +6,7 @@ El dossier entra al repositorio con el nombre final del proyecto, Ommatix, y pas
 
 - Los capítulos, contratos, matrices, plantillas, features, diagramas y la referencia ejecutable viven en `docs/thesis/`. El índice `LEEME.md` pasa a ser `README.md`.
 - Las doce ADR pasan a `docs/adr/` como ADR-0001 a ADR-0012, en inglés y con su texto original en español. Se añaden ADR-0013 (documentación bilingüe) y ADR-0014 (crates hexagonales), que recogen decisiones del arranque del repositorio. Las ADR escritas durante ese arranque se archivan en `docs/adr/bootstrap/`.
-- ADR-0008 queda aprobada el 14 de octubre de 2026: Windows 11 x64, un monitor y DPI de 100, 125 y 150 %. Las aplicaciones de prueba siguen pendientes.
+- El responsable del proyecto aprueba las doce ADR el 14 de octubre de 2026, entre ellas ADR-0008: Windows 11 x64, un monitor y DPI de 100, 125 y 150 %. Siguen pendientes las aplicaciones de prueba, el cliente MCP, los pesos, las licencias, el hardware de evaluación, el corpus y las políticas de uso.
 - `validar_paquete.py` lee los capítulos de esta carpeta y las ADR de `docs/adr/`. La integración continua ejecuta el oráculo y el validador en cada cambio.
 - Las vistas de `diagramas/` tienen una versión con etiquetas en inglés en `docs/diagrams/`. Los `.svg` no se versionan; se generan desde los `.dot`.
 - La conversación original [F0], la edición de lectura en PDF y Word, el manifiesto, las sumas SHA-256 y el informe de maquetación se conservan fuera del repositorio. La integridad la da git.

@@ -65,4 +65,4 @@ Estas casillas permanecen pendientes en el dossier porque el producto no fue eje
 
 ## 6.9 Gestión de cambios y decisiones abiertas
 
-Cada cambio importante registra contexto, alternativas, consecuencia y criterio de reversión en un ADR. La plataforma Windows inicial quedó aprobada el 14 de octubre de 2026 ([ADR-0008](../adr/0008-one-real-platform-first.md)). Quedan pendientes de aprobación: cliente MCP específico, aplicaciones de prueba, pesos, licencias, hardware de evaluación, corpus y políticas de uso. Los documentos contienen una propuesta coherente para poder empezar S0, no una atribución de aprobación al usuario.
+Cada cambio importante registra contexto, alternativas, consecuencia y criterio de reversión en un ADR. Las doce ADR, entre ellas la plataforma Windows inicial ([ADR-0008](../adr/0008-one-real-platform-first.md)), quedaron aprobadas el 14 de octubre de 2026. Quedan pendientes de aprobación: cliente MCP específico, aplicaciones de prueba, pesos, licencias, hardware de evaluación, corpus y políticas de uso. Los documentos contienen una propuesta coherente para poder empezar S0, no una atribución de aprobación al usuario.

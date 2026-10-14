@@ -1,8 +1,8 @@
 # 0005. Persistent tracking instead of a cell hash
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -56,3 +56,5 @@ Texto original del dossier (13 de octubre de 2026).
 - **Reversibilidad:** Incorporar ID de accesibilidad o matcher más robusto sin cambiar API
   externa.
 - **Procedencia:** S20; sustituye ADR-005 original, no lo conserva como válido.
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.

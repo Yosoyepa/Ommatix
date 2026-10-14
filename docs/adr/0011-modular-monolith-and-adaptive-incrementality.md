@@ -1,8 +1,8 @@
 # 0011. Modular monolith and adaptive incrementality
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -55,3 +55,5 @@ Texto original del dossier (13 de octubre de 2026).
 - **Validación exigida:** Perfil de copias/colas, fallos, regiones y coste real de shapes.
 - **Reversibilidad:** Separar adaptadores si evidencia de estabilidad o aislamiento lo requiere.
 - **Procedencia:** S06, S09–S10; matiza prohibición absoluta de sockets.
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.

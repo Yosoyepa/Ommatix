@@ -1,8 +1,8 @@
 # 0009. Models and licences decided in the spike
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -52,3 +52,5 @@ Texto original del dossier (13 de octubre de 2026).
 - **Validación exigida:** IT-02 y manifiesto con hash, revisión, opset, layout y clases.
 - **Reversibilidad:** Sustituir proveedor o modelo manteniendo RawEvidence y tests de calidad.
 - **Procedencia:** S09–S14; elimina dependencias ficticias.
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.

@@ -1,8 +1,8 @@
 # 0006. Transactional snapshots and commits
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -53,3 +53,5 @@ Texto original del dossier (13 de octubre de 2026).
 - **Reversibilidad:** Optimizar granularidad sólo tras preservar invariantes de publicación y
   vigencia.
 - **Procedencia:** Propuesta nueva [P] derivada de A-09/A-12.
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.

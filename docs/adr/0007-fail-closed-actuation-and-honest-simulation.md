@@ -1,8 +1,8 @@
 # 0007. Fail-closed actuation and honest simulation
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -52,3 +52,5 @@ Texto original del dossier (13 de octubre de 2026).
 - **Validación exigida:** UT-38..UT-43, IT-03..IT-05, SEC-01..SEC-05 y parada real.
 - **Reversibilidad:** Ampliar acciones sólo con políticas y verificadores específicos.
 - **Procedencia:** S07; propuesta nueva [P].
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.

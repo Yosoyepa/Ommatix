@@ -199,8 +199,8 @@ Do not bypass them with `--no-verify` unless the PR says why.
 
 ## 9. Decisions already made (do not re-litigate without a new ADR)
 
-See `docs/adr/README.md`. ADR-0001..0012 come from the thesis and are proposals used as the
-baseline until the project owner accepts them; ADR-0008, 0013 and 0014 are accepted.
+See `docs/adr/README.md`. ADR-0001..0012 come from the thesis; the project owner accepted
+them on 2026-10-14. ADR-0013 and 0014 are accepted too.
 Highlights: Rust runtime with independent oracles (0001), MCP over stdio with explicit
 profiles (0002), conservative spatial fusion with IoC (0003), masked open-set icon cache
 (0004), persistent tracking instead of cell hashes (0005), transactional snapshots (0006),

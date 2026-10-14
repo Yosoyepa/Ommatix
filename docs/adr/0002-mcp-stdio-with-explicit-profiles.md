@@ -1,8 +1,8 @@
 # 0002. MCP over stdio with explicit profiles
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -57,3 +57,5 @@ Texto original del dossier (13 de octubre de 2026).
 - **Reversibilidad:** Agregar otro perfil mediante adaptador sin modificar algoritmos ni
   snapshots.
 - **Procedencia:** S01–S05, S23; revisa ADR-002 original.
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.

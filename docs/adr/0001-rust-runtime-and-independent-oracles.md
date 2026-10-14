@@ -1,8 +1,8 @@
 # 0001. Rust for the runtime; independent oracles
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -56,3 +56,5 @@ Texto original del dossier (13 de octubre de 2026).
 - **Reversibilidad:** Reabrir si integración/modelos bloquean entrega y un runtime alternativo
   satisface los mismos contratos.
 - **Procedencia:** S22; sustituye la justificación absoluta de ADR-001 original.
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.

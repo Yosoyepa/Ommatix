@@ -1,8 +1,8 @@
 # 0004. Masked, open-set appearance cache
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -56,3 +56,5 @@ Texto original del dossier (13 de octubre de 2026).
 - **Reversibilidad:** Elegir otro descriptor según precisión-cobertura/latencia con mismos
   contratos de procedencia.
 - **Procedencia:** S21; sustituye invariancia absoluta de ADR-004 original.
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.

@@ -1,8 +1,8 @@
 # 0012. Data minimisation and evidence traceability
 
-- **Status:** Proposed (thesis baseline)
-- **Date:** 2026-10-13
-- **Approval:** Pending
+- **Status:** Accepted
+- **Date:** 2026-10-13 (proposed), 2026-10-14 (accepted)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 
@@ -55,3 +55,5 @@ Texto original del dossier (13 de octubre de 2026).
 - **Reversibilidad:** Permitir diagnósticos temporales con política local, TTL y borrado
   verificable.
 - **Procedencia:** Propuesta nueva [P].
+
+**Aprobación (14 de octubre de 2026):** aprobada por el responsable del proyecto.
