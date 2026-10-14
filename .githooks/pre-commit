@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# Ommatix pre-commit: formatting and lints. Enable with: git config core.hooksPath .githooks
+set -eu
+echo "ommatix pre-commit: cargo fmt --check"
+cargo fmt --all -- --check
+echo "ommatix pre-commit: cargo clippy"
+cargo clippy --workspace --all-targets --quiet -- -D warnings
