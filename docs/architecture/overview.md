@@ -161,6 +161,47 @@ Its archived decisions stay in [`docs/adr/bootstrap/`](../adr/bootstrap/README.m
 [S2b review](../reviews/2026-10-14-s2b-engine-and-mcp.md) records the findings fixed before
 this stage closed, each with its regression test.
 
+**Windows adapters (S3, first part).** Every one is behind a build feature that is off by
+default, and the defaults stay fail-closed: no model, no OCR, dry-run input, deny-all policy.
+
+- *Capture* (`dxgi`, `--source dxgi --output N`): DXGI Desktop Duplication of one output in
+  physical pixels (the process is per-monitor-v2 DPI aware). The desktop texture is copied
+  to a staging texture and read row by row with its own stride; frames stay in memory. A
+  rotated output is refused; a change of size, DPI or origin bumps the geometry epoch; when
+  no desktop update arrives the last frame is returned again; a lost duplication
+  (`DXGI_ERROR_ACCESS_LOST`, device removed or reset: a mode change, the secure desktop) is
+  recreated once within the capture, a second loss is a capture error, and the next frame
+  starts a new geometry epoch. Dirty and move rectangles are only counted; the engine's own
+  differ decides what changed. The capturer shares its live display mapping with the input
+  adapter, which refuses to aim while it is lost or out of profile.
+- *Input* (`sendinput`, `--input sendinput`, only with `--source dxgi`): Win32 `SendInput`
+  aimed through the capturer's mapping, one call per action, with a receipt of submitted and
+  inserted events. It attests the foreground application (the lowercase executable name of
+  the foreground window's process) to the engine's allowlist check, and before sending it
+  refuses a different foreground process, a target point outside that process's windows, a
+  higher integrity level (UIPI would drop the input silently) and held modifiers or mouse
+  buttons. A refusal is an actuator error, which the engine reports `indeterminate` and never
+  retries. No test sends real input.
+- *Detector* (`onnx`, `[models] detector_manifest`): a generic YOLO-style detector on ONNX
+  Runtime loaded at run time (`load-dynamic`) from a library pinned by SHA-256. The model
+  manifest is pinned by SHA-256 and names the weights, their SHA-256 and each class's role
+  and affordance; class names never become roles. Each planned region is letterboxed into
+  the input, decoded, suppressed and mapped back to the frame.
+- *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` for exactly
+  `ocr_language`, never another language, without invented confidences; recognised text is
+  never logged.
+- *Configuration*: a configured detector or OCR that the build lacks, whose files do not
+  match their SHA-256 or whose language is not installed stops the engine before any capture
+  opens. `images`, `screen` and `dxgi` all take the `[models]` detector and OCR.
+- *Bounded `unsafe`*: DXGI and `SendInput` are COM and Win32 calls.
+  [ADR-0016](../adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (**Proposed**,
+  awaiting the owner's approval) allows `unsafe` only in the `#[cfg(windows)] mod win` of
+  the capture and input adapters: those crates deny `unsafe_code` and
+  `clippy::undocumented_unsafe_blocks`, every block wraps one call with a `// SAFETY:`
+  comment, and raw pointers never leave the module. The OCR uses the safe WinRT projection
+  and the vision crate keeps `unsafe_code = "forbid"`. All of it uses one pinned `windows`
+  crate (`=0.62.2`), and CI builds, lints and tests the features on `windows-latest`.
+
 **`observe_screen`** captures a frame, plans regions against the last committed base
 (Algorithm 1), hands only the planned regions to the detector and the recogniser, keeps the
 evidence outside them, fuses (Algorithm 2), resolves icons (Algorithm 3A), tracks identities
@@ -188,13 +229,14 @@ snapshot, target, revision and actionability strictly against the published snap
 run (the default) is `simulated`. Live input needs the operator's policy
 (`actuation_enabled`, not stopped), a live actuator **and** a foreground application on the
 non-empty `allowed_applications` list, as the actuator attests it; otherwise `POLICY_DENIED`
-with nothing delivered. No actuator can attest the foreground application before S3, so
-today live input is always denied. Before delivering, a freshness check captures the screen
+with nothing delivered. Only the `SendInput` actuator attests the foreground application;
+the interim `enigo` input cannot, so its live actions are always denied. Before delivering, a freshness check captures the screen
 again: if it differs from the committed base, the action is `STALE_SNAPSHOT` and nothing is
 delivered. A delivery receipt whose inserted events match the submitted ones is
 `input_delivered`; anything else is `indeterminate`. An expected `visual_change` is verified
 by a capture after delivery compared with the pre-delivery frame (`effect_observed` or
-`indeterminate`); the other effects are reported `indeterminate` until S3 can check them.
+`indeterminate`); the other effects (focus, value, scroll) are reported `indeterminate`
+until they can be checked.
 Any delivery, whatever its outcome, spends the snapshot: the next action needs a new
 observation (`STALE_SNAPSHOT`), while journal replays still return the stored result.
 
@@ -202,14 +244,20 @@ observation (`STALE_SNAPSHOT`), while journal replays still return the stored re
 |---|---|---|---|
 | Change detection, fusion, identity, snapshots | Algorithms 1, 2, 3B; transactional commit | Implemented in `ommatix-domain` and run by the `Engine` | S1–S2 (done) |
 | Icon cache | Algorithm 3A in the observation | Run by the `Engine` on icon candidates of the planned regions with the operator's curated prototypes; off without them; context configured, thresholds not calibrated | S3 (context), S4 (calibration) |
-| Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | By default, flat-colour region detector (roles `unknown`) and no OCR (`NullTextRecognizer`); the simulated desktops report ground truth. Opt-in adapters exist but no model is selected: a fail-closed ONNX detector driven by a SHA-256-pinned manifest (feature `onnx`) and Windows OCR for one language (feature `winrt-ocr`) | S0, S3 |
+| Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | By default, flat-colour region detector (roles `unknown`) and no OCR (`NullTextRecognizer`); the simulated desktops report ground truth. Opt-in adapters exist for `images`, `screen` and `dxgi`, but no model is selected: a fail-closed ONNX detector driven by a SHA-256-pinned manifest (feature `onnx`) and Windows OCR for one language (feature `winrt-ocr`) | S0 (models), S3 |
 | Agent contract | Ommatix 1.0 over MCP 2026-07-28; 2025-11-25 opt-in | Implemented (CT-01..10); not yet tested against a real client | S0/S3 for the client |
-| Action gate | Freshness, policy, allowlist, focus, stop | Snapshot freshness (also re-checked by a capture before delivery), policy, stop and the allowlist, which denies live input until an actuator attests the foreground application; no focus check | S3 |
+| Action gate | Freshness, policy, allowlist, focus, stop | Snapshot freshness (also re-checked by a capture before delivery), policy and the allowlist against the foreground application `SendInput` attests; the actuator also checks the process under the target point, integrity level and held modifiers. No check of the focused window; the gate honours `LocalPolicy::stopped`, but nothing lets the operator set it yet | S3 |
 | Effect verification | Focus, value, scroll and visual postconditions | Visual change by re-capture only | S3 |
 | Telemetry | Metrics and audit without sensitive text | `get_engine_metrics`; stage timings in `_meta` | S3 |
-| Platform | Windows 11 x64: DXGI and `SendInput` | Simulated and fixture desktops; `xcap` screen capture and `enigo` input behind build features | S3 |
+| Platform | Windows 11 x64: DXGI and `SendInput` | DXGI capture and `SendInput` input behind the `dxgi` and `sendinput` features (ADR-0016, proposed), built and tested in CI on Windows but not yet run under supervision (IT-01, IT-03, IT-07); simulated and fixture desktops for tests; interim `xcap` and `enigo` behind `screen` and `native-input` | S3 (supervised runs) |
 
 The thesis scenarios (BDD-01..32) stay in [`docs/thesis/features/`](../thesis/features),
 where the dossier's traceability matrix expects them; `src/acceptance/tests/thesis.rs` runs
-BDD-01..27: BDD-01..10 and BDD-13..21 on the domain core, BDD-11, 12 and 22..27 through the
-engine and the MCP adapter over the simulated and fixture desktops. BDD-28..32 wait for S3.
+BDD-01..27 and BDD-29..31: BDD-01..10 and BDD-13..21 on the domain core, BDD-11, 12 and
+22..27 through the engine and the MCP adapter over the simulated and fixture desktops, and
+BDD-29..31 (indeterminate verification without retry, a repeated `request_id`, on-screen text
+asking for more permission) the same way over a test double of the live actuator that
+records what it is handed and sends nothing. They show the engine's side of IT-04, IT-05 and
+SEC-03, which still need supervised runs with the real actuator. BDD-28 (focus change) and
+BDD-32 (operator stop) wait: the engine checks the foreground application but not the
+focused window, and nothing lets the operator trigger the stop.
