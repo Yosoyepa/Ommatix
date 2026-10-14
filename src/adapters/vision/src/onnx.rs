@@ -28,6 +28,16 @@
 //! and clipped to the region ([`controls_from_candidates`]). Each planned region costs one
 //! inference: packing several crops into one input was measured in S0 and changed the
 //! detections, so it is not done (docs/thesis/S0_RESULTADOS.md).
+//!
+//! An inference costs about as much as its input has pixels, and a crop is never magnified
+//! (S0 §6), so a small region padded to the model's full 1280×1280 input spends most of the
+//! inference on padding. A model exported with free height and width
+//! (`tools/s0/export_omniparser_v3.py --dynamic`, manifest `input_shapes`) therefore gets one
+//! session per declared input shape, each pinned to its shape with ONNX Runtime's
+//! free-dimension overrides, and every crop goes to the smallest shape that holds it at its
+//! own resolution ([`best_fit`]). The sessions are built, and warmed up with one inference
+//! each, at load, in parallel: the first observation does not pay for the shapes it did not
+//! use. A model with a fixed input has one session and works as before.
 
 use std::path::{Path, PathBuf};
 
@@ -42,7 +52,7 @@ use ort::value::Tensor;
 use crate::crop::{PixelRect, crop_bgra};
 use crate::model::decode::{Candidate, decode, nms};
 use crate::model::integrity::{Sha256Digest, read_verified};
-use crate::model::letterbox::Letterbox;
+use crate::model::letterbox::{Letterbox, PAD_VALUE, best_fit};
 use crate::model::manifest::{DetectorSpec, ExecutionProvider, MAX_MANIFEST_BYTES};
 use crate::model::{ModelError, controls_from_candidates};
 
@@ -77,7 +87,8 @@ pub struct OnnxDetectorSource {
 /// verified load, so [`VisionDetector::models_loaded`] is always `true`.
 pub struct OnnxVisionDetector {
     spec: DetectorSpec,
-    session: Session,
+    /// One session per `spec.input_sizes`, in the same order (smallest input first).
+    sessions: Vec<Session>,
     input_name: String,
     provider: ExecutionProvider,
 }
@@ -202,22 +213,93 @@ impl OnnxVisionDetector {
             MAX_MODEL_BYTES,
         )
         .map_err(model_error)?;
-        let session = Self::session(provider, source.intra_threads, &weights)?;
-        let [input] = session.inputs() else {
+        let sessions = Self::sessions(provider, source.intra_threads, &spec, &weights)?;
+        let first = &sessions[0];
+        let [input] = first.inputs() else {
             return Err(port(format!(
                 "the detector must have exactly one input, it has {}",
-                session.inputs().len()
+                first.inputs().len()
             )));
         };
         let input_name = input.name().to_owned();
-        if session.outputs().is_empty() {
+        if first.outputs().is_empty() {
             return Err(port("the detector has no output"));
         }
-        Ok(Self {
+        let mut detector = Self {
             spec,
-            session,
+            sessions,
             input_name,
             provider,
+        };
+        if provider == ExecutionProvider::DirectMl {
+            detector.warm_up()?;
+        }
+        Ok(detector)
+    }
+
+    /// One session per declared input size, built in parallel (a DirectML session takes
+    /// about a second to build).
+    fn sessions(
+        provider: ExecutionProvider,
+        intra_threads: usize,
+        spec: &DetectorSpec,
+        weights: &[u8],
+    ) -> Result<Vec<Session>, PortError> {
+        let dimensions = spec.input_dimensions.as_ref();
+        std::thread::scope(|scope| {
+            let builds: Vec<_> = spec
+                .input_sizes
+                .iter()
+                .map(|&size| {
+                    scope.spawn(move || {
+                        Self::session(provider, intra_threads, weights, dimensions, size)
+                    })
+                })
+                .collect();
+            builds
+                .into_iter()
+                .map(|build| {
+                    build
+                        .join()
+                        .unwrap_or_else(|_| Err(port("a session build panicked")))
+                })
+                .collect()
+        })
+    }
+
+    /// One inference per session on an empty input: the first inference of a DirectML
+    /// session costs two to three times a warm one (S0 §9.3), and that should be paid at
+    /// load, not by the first observation that happens to use the shape. The output is
+    /// discarded. The CPU provider has no such first-use cost.
+    fn warm_up(&mut self) -> Result<(), PortError> {
+        let (name, sizes) = (self.input_name.as_str(), &self.spec.input_sizes);
+        std::thread::scope(|scope| {
+            let runs: Vec<_> = self
+                .sessions
+                .iter_mut()
+                .zip(sizes)
+                .map(|(session, &(width, height))| {
+                    scope.spawn(move || {
+                        let shape = [1, 3, height as usize, width as usize];
+                        let blank = vec![PAD_VALUE; 3 * width as usize * height as usize];
+                        let tensor = Tensor::from_array((shape, blank))
+                            .map_err(|e| port(format!("cannot build the warm-up tensor: {e}")))?;
+                        session
+                            .run(ort::inputs![name => tensor])
+                            .map(drop)
+                            .map_err(|e| port(format!("the warm-up inference failed: {e}")))
+                    })
+                })
+                .collect();
+            // Every run is waited for, then the first failure (in shape order) is reported.
+            let results: Vec<_> = runs
+                .into_iter()
+                .map(|run| {
+                    run.join()
+                        .unwrap_or_else(|_| Err(port("a warm-up inference panicked")))
+                })
+                .collect();
+            results.into_iter().collect::<Result<(), _>>()
         })
     }
 
@@ -225,6 +307,8 @@ impl OnnxVisionDetector {
         provider: ExecutionProvider,
         intra_threads: usize,
         weights: &[u8],
+        dimensions: Option<&(String, String)>,
+        (width, height): (u32, u32),
     ) -> Result<Session, PortError> {
         let configure = |what: &'static str| {
             move |e: ort::Error<ort::session::builder::SessionBuilder>| {
@@ -239,6 +323,15 @@ impl OnnxVisionDetector {
             .map_err(configure("intra-op threads"))?
             .with_deterministic_compute(true)
             .map_err(configure("deterministic compute"))?;
+        if let Some((height_axis, width_axis)) = dimensions {
+            // Pin the model's free axes: the session then has the static shapes DirectML
+            // needs to place every node on the GPU.
+            builder = builder
+                .with_dimension_override(height_axis, i64::from(height))
+                .map_err(configure("input height"))?
+                .with_dimension_override(width_axis, i64::from(width))
+                .map_err(configure("input width"))?;
+        }
         if provider == ExecutionProvider::DirectMl {
             // DirectML does not support parallel execution or memory patterns. With the CPU
             // fallback disabled, ONNX Runtime refuses the session if any node would run
@@ -272,20 +365,27 @@ impl OnnxVisionDetector {
         self.provider
     }
 
-    /// One inference on a full input tensor: the decoded candidates, before NMS.
-    fn infer(&mut self, input: Vec<f32>) -> Result<Vec<Candidate>, PortError> {
-        let spec = &self.spec;
-        let shape = [1, 3, spec.input_height as usize, spec.input_width as usize];
+    /// Every input size the detector can feed, `(width, height)`, smallest first. The
+    /// last one is the reference (`input_shape`).
+    pub fn input_sizes(&self) -> &[(u32, u32)] {
+        &self.spec.input_sizes
+    }
+
+    /// One inference of session `size` on a full input tensor: the decoded candidates,
+    /// before NMS.
+    fn infer(&mut self, size: usize, input: Vec<f32>) -> Result<Vec<Candidate>, PortError> {
+        let (width, height) = self.spec.input_sizes[size];
+        let shape = [1, 3, height as usize, width as usize];
         let tensor = Tensor::from_array((shape, input))
             .map_err(|e| port(format!("cannot build the input tensor: {e}")))?;
-        let outputs = self
-            .session
+        let outputs = self.sessions[size]
             .run(ort::inputs![self.input_name.as_str() => tensor])
             .map_err(|e| port(format!("inference failed: {e}")))?;
         let (shape, data) = outputs[0]
             .try_extract_tensor::<f32>()
             .map_err(|e| port(format!("the detector output is not an f32 tensor: {e}")))?;
         let dims: Vec<i64> = shape.iter().copied().collect();
+        let spec = &self.spec;
         decode(
             &dims,
             data,
@@ -296,17 +396,76 @@ impl OnnxVisionDetector {
         .map_err(model_error)
     }
 
-    /// The candidates of the whole frame letterboxed into one input, after NMS, in input
-    /// coordinates with their scores: what [`VisionDetector::detect`] maps back for a
-    /// full refresh. For measurement tools (the S0 provider equivalence check).
+    /// The candidates of the whole frame letterboxed into one reference-size input, after
+    /// NMS, in input coordinates with their scores: what [`VisionDetector::detect`] maps
+    /// back for a full refresh at the reference size. For measurement tools (the S0
+    /// provider equivalence check).
     pub fn frame_candidates(&mut self, frame: &BgraFrame) -> Result<Vec<Candidate>, PortError> {
         let rect = PixelRect::cover(&frame.bounds(), frame.width(), frame.height())
             .ok_or_else(|| port("empty frame"))?;
-        let (input_width, input_height) = (self.spec.input_width, self.spec.input_height);
+        let reference = self.spec.input_sizes.len() - 1;
+        let (input_width, input_height) = self.spec.input_sizes[reference];
         let letterbox = Letterbox::fit(rect.width, rect.height, input_width, input_height)
             .ok_or_else(|| port("empty frame"))?;
-        let candidates = self.infer(letterbox.tensor(&crop_bgra(frame, rect)))?;
+        let candidates = self.infer(reference, letterbox.tensor(&crop_bgra(frame, rect)))?;
         Ok(nms(candidates, self.spec.nms_iou))
+    }
+
+    /// The index in [`input_sizes`](Self::input_sizes) a `region` of `frame` is fed through:
+    /// the smallest input that holds its pixels at their own resolution, or the one that
+    /// reduces it least. `None` when the region has no pixel inside the frame.
+    pub fn input_for(&self, frame: &BgraFrame, region: &BBox) -> Option<usize> {
+        let rect = PixelRect::cover(region, frame.width(), frame.height())?;
+        best_fit(&self.spec.input_sizes, rect.width, rect.height)
+    }
+
+    /// The controls of one region through the input `size` of
+    /// [`input_sizes`](Self::input_sizes): the one [`input_for`](Self::input_for) chooses,
+    /// or any other to compare them. For measurement tools.
+    pub fn detect_at(
+        &mut self,
+        frame: &BgraFrame,
+        region: &BBox,
+        size: usize,
+    ) -> Result<Vec<Control>, PortError> {
+        Ok(self
+            .scored_at(frame, region, size)?
+            .into_iter()
+            .map(|(control, _)| control)
+            .collect())
+    }
+
+    /// [`detect_at`](Self::detect_at) with each control's score, in the order of the
+    /// candidates after NMS (highest score first), for measurement tools.
+    pub fn scored_at(
+        &mut self,
+        frame: &BgraFrame,
+        region: &BBox,
+        size: usize,
+    ) -> Result<Vec<(Control, f32)>, PortError> {
+        let Some(&(input_width, input_height)) = self.spec.input_sizes.get(size) else {
+            return Err(port("no such input size"));
+        };
+        let Some(rect) = PixelRect::cover(region, frame.width(), frame.height()) else {
+            return Ok(Vec::new());
+        };
+        let Some(clip) = region.clip(&frame.bounds()) else {
+            return Ok(Vec::new());
+        };
+        let letterbox = Letterbox::fit(rect.width, rect.height, input_width, input_height)
+            .ok_or_else(|| port("empty crop"))?;
+        let candidates = self.infer(size, letterbox.tensor(&crop_bgra(frame, rect)))?;
+        let kept = nms(candidates, self.spec.nms_iou);
+        let origin = (f64::from(rect.x), f64::from(rect.y));
+        Ok(kept
+            .iter()
+            .filter_map(|candidate| {
+                let one = std::slice::from_ref(candidate);
+                controls_from_candidates(one, &letterbox, origin, &clip, &self.spec.classes)
+                    .pop()
+                    .map(|control| (control, candidate.score))
+            })
+            .collect())
     }
 
     fn detect_region(
@@ -314,24 +473,10 @@ impl OnnxVisionDetector {
         frame: &BgraFrame,
         region: &BBox,
     ) -> Result<Vec<Control>, PortError> {
-        let Some(rect) = PixelRect::cover(region, frame.width(), frame.height()) else {
-            return Ok(Vec::new());
-        };
-        let Some(clip) = region.clip(&frame.bounds()) else {
-            return Ok(Vec::new());
-        };
-        let (input_width, input_height) = (self.spec.input_width, self.spec.input_height);
-        let letterbox = Letterbox::fit(rect.width, rect.height, input_width, input_height)
-            .ok_or_else(|| port("empty crop"))?;
-        let candidates = self.infer(letterbox.tensor(&crop_bgra(frame, rect)))?;
-        let kept = nms(candidates, self.spec.nms_iou);
-        Ok(controls_from_candidates(
-            &kept,
-            &letterbox,
-            (f64::from(rect.x), f64::from(rect.y)),
-            &clip,
-            &self.spec.classes,
-        ))
+        match self.input_for(frame, region) {
+            Some(size) => self.detect_at(frame, region, size),
+            None => Ok(Vec::new()),
+        }
     }
 }
 
