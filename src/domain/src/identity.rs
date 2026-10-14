@@ -367,7 +367,9 @@ pub enum ActionStatus {
 }
 
 impl ActionStatus {
-    /// Whether input reached the OS. Never true for a simulation or a rejection.
+    /// Whether the status itself implies that input reached the OS. Never true for a
+    /// simulation or a rejection; false for `Indeterminate`, whose results say separately
+    /// whether the actuator reported the delivery.
     pub const fn input_delivered(self) -> bool {
         matches!(self, Self::InputDelivered | Self::EffectObserved)
     }

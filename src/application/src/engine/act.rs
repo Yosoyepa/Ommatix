@@ -16,6 +16,8 @@
 //! that meets it is `POLICY_DENIED` and sends nothing. It never undoes what was already
 //! delivered: those results stay recorded as they were reported.
 
+use std::time::Duration;
+
 use ommatix_domain::fusion::Role;
 use ommatix_domain::identity::{ActionRef, ActionRejection, ActionStatus, Clearance, Delivery};
 use ommatix_domain::incremental::{BgraFrame, dirty_tiles};
@@ -120,19 +122,69 @@ fn check_arguments(request: &ActionRequest) -> Result<(), ToolError> {
     }
 }
 
+/// What the gate and the actuator established about one action.
+struct Outcome {
+    status: ActionStatus,
+    error: Option<ToolError>,
+    observed_effect: Option<ObservedEffect>,
+    /// The actuator reported every event inserted.
+    delivered: bool,
+}
+
+impl Outcome {
+    fn rejected(error: ToolError) -> Self {
+        Self {
+            status: ActionStatus::Rejected,
+            error: Some(error),
+            observed_effect: None,
+            delivered: false,
+        }
+    }
+
+    const fn simulated() -> Self {
+        Self {
+            status: ActionStatus::Simulated,
+            error: None,
+            observed_effect: None,
+            delivered: false,
+        }
+    }
+
+    const fn delivered(status: ActionStatus, observed_effect: Option<ObservedEffect>) -> Self {
+        Self {
+            status,
+            error: None,
+            observed_effect,
+            delivered: true,
+        }
+    }
+
+    /// `indeterminate`: `delivered` says whether the actuator reported the input
+    /// delivered; the effect is unknown either way.
+    fn uncertain(delivered: bool, message: &str) -> Self {
+        Self {
+            status: ActionStatus::Indeterminate,
+            error: Some(indeterminate(message)),
+            observed_effect: Some(ObservedEffect::Unknown),
+            delivered,
+        }
+    }
+}
+
 impl Engine {
     pub(super) fn act(&mut self, request: &ActionRequest) -> ActionResult {
-        let reply = |status, error, observed_effect| ActionResult {
+        let reply = |outcome: Outcome| ActionResult {
             request_id: request.request_id.clone(),
-            status,
+            status: outcome.status,
             target_id: request.target_id.clone(),
             snapshot_id: request.snapshot_id.clone(),
-            error,
-            observed_effect,
+            error: outcome.error,
+            observed_effect: outcome.observed_effect,
+            delivered: outcome.delivered,
         };
         if let Err(error) = check_arguments(request) {
             self.counters.rejected_actions += 1;
-            return reply(ActionStatus::Rejected, Some(error), None);
+            return reply(Outcome::rejected(error));
         }
         let hash = arguments_hash(request);
         match self.journal.lookup(&request.request_id, hash) {
@@ -143,21 +195,21 @@ impl Engine {
                     ErrorCode::RequestConflict,
                     "this request_id was already used with other arguments",
                 );
-                return reply(ActionStatus::Rejected, Some(error), None);
+                return reply(Outcome::rejected(error));
             }
             Lookup::New => {}
         }
 
-        let result = match self.gate_and_perform(request) {
-            Ok((status, error, effect)) => reply(status, error, effect),
-            Err(error) => reply(ActionStatus::Rejected, Some(error), None),
-        };
-        match result.status {
-            ActionStatus::Rejected => self.counters.rejected_actions += 1,
-            ActionStatus::InputDelivered | ActionStatus::EffectObserved => {
-                self.counters.delivered_actions += 1;
-            }
-            ActionStatus::Simulated | ActionStatus::Indeterminate => {}
+        let result = reply(
+            self.gate_and_perform(request)
+                .unwrap_or_else(Outcome::rejected),
+        );
+        // Every action whose input the actuator reported delivered counts, including an
+        // indeterminate one whose effect could not be verified.
+        if result.status == ActionStatus::Rejected {
+            self.counters.rejected_actions += 1;
+        } else if result.delivered {
+            self.counters.delivered_actions += 1;
         }
         self.journal
             .record(&request.request_id, hash, result.clone());
@@ -165,11 +217,7 @@ impl Engine {
     }
 
     /// Runs the checks and, if they pass, simulates or delivers the action.
-    #[allow(clippy::type_complexity)] // a private triple, named by its only caller
-    fn gate_and_perform(
-        &mut self,
-        request: &ActionRequest,
-    ) -> Result<(ActionStatus, Option<ToolError>, Option<ObservedEffect>), ToolError> {
+    fn gate_and_perform(&mut self, request: &ActionRequest) -> Result<Outcome, ToolError> {
         if !self.store.actions_allowed() || self.snapshot_spent {
             return Err(stale_snapshot());
         }
@@ -201,7 +249,7 @@ impl Engine {
         }
 
         if request.dry_run {
-            return Ok((ActionStatus::Simulated, None, None));
+            return Ok(Outcome::simulated());
         }
 
         let policy = self.ports.policy.current();
@@ -306,49 +354,78 @@ impl Engine {
         action: &ValidatedAction,
         before: &BgraFrame,
         expected: ExpectedEffect,
-    ) -> (ActionStatus, Option<ToolError>, Option<ObservedEffect>) {
+    ) -> Outcome {
         // Whatever happens next, input may have reached the OS: the snapshot is spent.
         self.snapshot_spent = true;
-        let uncertain = |message| {
-            (
-                ActionStatus::Indeterminate,
-                Some(indeterminate(message)),
-                Some(ObservedEffect::Unknown),
-            )
-        };
         let Ok(receipt) = self.ports.actuator.deliver(action) else {
-            return uncertain(
+            return Outcome::uncertain(
+                false,
                 "the actuator failed; input may or may not have reached the OS; do not retry",
             );
         };
         if receipt.submitted == 0 || receipt.inserted != receipt.submitted {
-            return uncertain("the OS did not accept every input event; do not retry");
+            return Outcome::uncertain(
+                false,
+                "the OS did not accept every input event; do not retry",
+            );
         }
+        // From here on the actuator reported every event delivered: an unverified effect
+        // keeps `input_delivered` true (chapter 07 §7.5).
         match expected {
-            ExpectedEffect::None => (ActionStatus::InputDelivered, None, None),
+            ExpectedEffect::None => Outcome::delivered(ActionStatus::InputDelivered, None),
             ExpectedEffect::VisualChange => {
                 if self.screen_changed_since(before) {
-                    (
+                    Outcome::delivered(
                         ActionStatus::EffectObserved,
-                        None,
                         Some(ObservedEffect::VisualChange),
                     )
                 } else {
-                    uncertain("input was delivered but no visual change was observed")
+                    Outcome::uncertain(
+                        true,
+                        "input was delivered but no visual change was observed within the \
+                         verification window; do not retry",
+                    )
                 }
             }
             ExpectedEffect::FocusChanged
             | ExpectedEffect::ValueUpdated
-            | ExpectedEffect::ScrollMoved => {
-                uncertain("input was delivered; this effect cannot be verified yet")
-            }
+            | ExpectedEffect::ScrollMoved => Outcome::uncertain(
+                true,
+                "input was delivered; this effect cannot be verified yet",
+            ),
         }
     }
 
-    /// Whether a fresh capture differs from `before`, the frame captured right before
-    /// delivery; changes that happened earlier are not this action's effect. Nothing is
-    /// published.
+    /// Whether the screen differs from `before`, the frame captured right before
+    /// delivery, within the settle window ([`VerifyParams`](super::VerifyParams)): a
+    /// check right away, then one every `poll` on the injected clock until `timeout` has
+    /// elapsed. Changes that happened before delivery are not this action's effect. Only
+    /// captures: nothing is published and no input is sent again.
     fn screen_changed_since(&mut self, before: &BgraFrame) -> bool {
+        let verify = self.config.verify;
+        let poll = verify.poll.max(Duration::from_millis(1));
+        // Bounds the captures even under a clock that does not advance.
+        let max_waits = verify.timeout.as_nanos().div_ceil(poll.as_nanos());
+        let start = self.ports.clock.now();
+        let mut waits = 0u128;
+        loop {
+            if self.capture_differs(before) {
+                return true;
+            }
+            let elapsed = self.ports.clock.now().saturating_sub(start);
+            let Some(left) = verify.timeout.checked_sub(elapsed) else {
+                return false;
+            };
+            if left.is_zero() || waits >= max_waits {
+                return false;
+            }
+            self.ports.clock.sleep(poll.min(left));
+            waits += 1;
+        }
+    }
+
+    /// Whether one fresh capture differs from `before`; a failed capture shows nothing.
+    fn capture_differs(&mut self, before: &BgraFrame) -> bool {
         let Ok(captured) = self.ports.capturer.capture() else {
             return false;
         };

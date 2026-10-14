@@ -1,5 +1,6 @@
 # S0 spike: operator configuration for the OmniParser icon_detect_v3 detector (ONNX, CPU)
-# and Windows OCR (es-ES). See docs/thesis/S0_RESULTADOS.md.
+# and Windows OCR (es-ES). See docs/thesis/S0_RESULTADOS.md. For DirectML, see
+# ommatix.s0.directml.toml next to this file.
 #
 # Copy this file to %LOCALAPPDATA%\Ommatix\ommatix.s0.toml. Relative paths resolve against
 # the configuration file, so that directory must hold:
@@ -21,8 +22,11 @@ allowed_applications = []
 
 [models]
 detector_manifest = "models/manifest.json"
-detector_manifest_sha256 = "8e1c7ad6ffbab6ba543b34774accd67f434a4ac71342afc12f36f7031b7014f1"
+detector_manifest_sha256 = "63d9df24109308d1e2b354648139fee0c1d4e2563f8cb2a83497d4e26b7d728e"
 onnxruntime_path = "runtime/onnxruntime-1.28.0/lib/onnxruntime.dll"
 onnxruntime_sha256 = "18370c375f07357fa5874344a9d9ac17e6b6fe1eb18b1dd209d79483b4470257"
+detector_execution_provider = "cpu"
+# 0: ONNX Runtime's default, the number of physical cores (8 on the reference machine).
+detector_threads = 0
 ocr = "winrt"
 ocr_language = "es-ES"

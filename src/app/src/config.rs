@@ -18,15 +18,21 @@
 //! loosens `[safety]`.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use ommatix_adapter_mcp::config::MIN_MAX_MESSAGE_BYTES;
 use ommatix_adapter_mcp::{DEFAULT_MAX_MESSAGE_BYTES, MODERN_PROTOCOL_VERSION, McpConfig};
 use ommatix_adapter_vision::model::integrity::Sha256Digest;
-use ommatix_application::{IconResolverConfig, LocalPolicy};
+use ommatix_application::{IconResolverConfig, LocalPolicy, VerifyParams};
 use ommatix_domain::appearance::CachePolicy;
 use ommatix_domain::incremental::PlanParams;
 use serde::Deserialize;
+
+/// Longest effect-verification window accepted, in milliseconds.
+const MAX_VERIFY_TIMEOUT_MS: u64 = 5_000;
+/// Longest wait between two verification captures accepted, in milliseconds.
+const MAX_VERIFY_POLL_MS: u64 = 1_000;
 
 /// Largest configuration file read, in bytes.
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
@@ -54,6 +60,11 @@ pub struct EngineSection {
     pub max_regions: usize,
     pub full_refresh_area_ratio: f64,
     pub max_snapshot_age_ms: u64,
+    /// How long after delivering an action the engine looks for its visual effect
+    /// (SDD §2.9, the deadline of BDD-29). 0: a single check right after delivery.
+    pub verify_timeout_ms: u64,
+    /// The wait between two verification captures inside that window.
+    pub verify_poll_ms: u64,
 }
 
 impl Default for EngineSection {
@@ -67,6 +78,8 @@ impl Default for EngineSection {
             max_regions: 4,
             full_refresh_area_ratio: 0.40,
             max_snapshot_age_ms: 250,
+            verify_timeout_ms: 500,
+            verify_poll_ms: 50,
         }
     }
 }
@@ -119,6 +132,22 @@ pub enum OcrKind {
     Winrt,
 }
 
+/// The ONNX Runtime execution provider of the detector (`[models]
+/// detector_execution_provider`). The model manifest must list it as validated.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    /// The CPU, the baseline.
+    #[default]
+    Cpu,
+    /// DirectML (DirectX 12, Windows), with a pinned `DirectML.dll`; never falls back to
+    /// the CPU.
+    Directml,
+}
+
+/// Most intra-op threads `[models] detector_threads` accepts.
+pub const MAX_DETECTOR_THREADS: u32 = 64;
+
 /// `[models]`: the perception models, chosen in the S0 spike. Empty (no model, no OCR)
 /// until the operator pins them; every file is pinned by SHA-256 and refused on mismatch.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -132,6 +161,15 @@ pub struct ModelsSection {
     /// The ONNX Runtime library the detector runs on (`onnxruntime.dll`).
     pub onnxruntime_path: String,
     pub onnxruntime_sha256: String,
+    /// The detector's execution provider (`cpu` unless the operator chooses `directml`).
+    pub detector_execution_provider: ProviderKind,
+    /// With `directml`: the `DirectML.dll` ONNX Runtime binds to, pinned like the runtime.
+    /// Empty with `cpu`.
+    pub directml_path: String,
+    pub directml_sha256: String,
+    /// Intra-op threads of the detector, `1..=MAX_DETECTOR_THREADS`; `0` (the default)
+    /// lets ONNX Runtime choose, which is the number of physical cores.
+    pub detector_threads: u32,
     pub ocr: OcrKind,
     /// BCP-47 tag of the OCR language; never replaced by another language.
     pub ocr_language: String,
@@ -149,6 +187,10 @@ impl Default for ModelsSection {
             detector_manifest_sha256: String::new(),
             onnxruntime_path: String::new(),
             onnxruntime_sha256: String::new(),
+            detector_execution_provider: ProviderKind::Cpu,
+            directml_path: String::new(),
+            directml_sha256: String::new(),
+            detector_threads: 0,
             ocr: OcrKind::None,
             ocr_language: "es-ES".to_owned(),
             detector_path: String::new(),
@@ -196,11 +238,35 @@ impl ModelsSection {
              model)",
         );
         check(
-            [&self.detector_manifest_sha256, &self.onnxruntime_sha256]
-                .iter()
-                .all(|v| v.is_empty() || is_sha256(v)),
-            "[models] detector_manifest_sha256 and onnxruntime_sha256 must be SHA-256 \
-             digests (64 hexadecimal characters)",
+            [
+                &self.detector_manifest_sha256,
+                &self.onnxruntime_sha256,
+                &self.directml_sha256,
+            ]
+            .iter()
+            .all(|v| v.is_empty() || is_sha256(v)),
+            "[models] detector_manifest_sha256, onnxruntime_sha256 and directml_sha256 must \
+             be SHA-256 digests (64 hexadecimal characters)",
+        );
+        let directml_pinned = !self.directml_path.is_empty() && !self.directml_sha256.is_empty();
+        let directml_empty = self.directml_path.is_empty() && self.directml_sha256.is_empty();
+        match self.detector_execution_provider {
+            ProviderKind::Cpu => check(
+                directml_empty,
+                "[models] directml_path and directml_sha256 are only used with \
+                 detector_execution_provider = \"directml\"",
+            ),
+            ProviderKind::Directml => check(
+                directml_pinned && self.has_detector(),
+                "[models] detector_execution_provider = \"directml\" needs a detector and \
+                 directml_path with directml_sha256 (the DirectML.dll ONNX Runtime binds to); \
+                 it never falls back to the CPU",
+            ),
+        }
+        check(
+            self.detector_threads <= MAX_DETECTOR_THREADS,
+            "[models] detector_threads must be between 0 (ONNX Runtime's default: the \
+             physical cores) and 64",
         );
         check(
             is_language_tag(&self.ocr_language),
@@ -409,6 +475,14 @@ impl Config {
             e.max_snapshot_age_ms >= 1,
             "[engine] max_snapshot_age_ms must be at least 1",
         );
+        check(
+            e.verify_timeout_ms <= MAX_VERIFY_TIMEOUT_MS,
+            "[engine] verify_timeout_ms must be between 0 and 5000",
+        );
+        check(
+            (1..=MAX_VERIFY_POLL_MS).contains(&e.verify_poll_ms),
+            "[engine] verify_poll_ms must be between 1 and 1000",
+        );
 
         let m = &self.mcp;
         check(
@@ -516,6 +590,14 @@ impl Config {
         }
     }
 
+    /// The settle window of effect verification.
+    pub fn verify_params(&self) -> VerifyParams {
+        VerifyParams {
+            timeout: Duration::from_millis(self.engine.verify_timeout_ms),
+            poll: Duration::from_millis(self.engine.verify_poll_ms),
+        }
+    }
+
     /// The MCP adapter's settings. `--legacy` can only add the legacy profile.
     pub fn mcp_config(&self, legacy_flag: bool) -> McpConfig {
         McpConfig {
@@ -560,6 +642,7 @@ mod tests {
     fn the_defaults_map_to_the_engine_defaults_and_deny_everything() {
         let config = Config::default();
         assert_eq!(config.plan_params(), PlanParams::default());
+        assert_eq!(config.verify_params(), VerifyParams::default());
         assert_eq!(config.mcp_config(false), McpConfig::default());
         assert_eq!(config.local_policy(), LocalPolicy::default());
     }
@@ -590,6 +673,10 @@ mod tests {
                 "full_refresh_area_ratio",
             ),
             ("[engine]\nmax_snapshot_age_ms = 0\n", "max_snapshot_age_ms"),
+            ("[engine]\nverify_timeout_ms = 5001\n", "verify_timeout_ms"),
+            ("[engine]\nverify_timeout_ms = -1\n", "verify_timeout_ms"),
+            ("[engine]\nverify_poll_ms = 0\n", "verify_poll_ms"),
+            ("[engine]\nverify_poll_ms = 1001\n", "verify_poll_ms"),
             ("[engine]\nmode = \"live\"\n", "mode"),
             ("[engine]\nplatform = \"linux\"\n", "platform"),
             (
@@ -654,6 +741,22 @@ mod tests {
     }
 
     #[test]
+    fn the_verification_window_is_configurable_within_bounds() {
+        let config =
+            Config::parse("[engine]\nverify_timeout_ms = 0\nverify_poll_ms = 1\n").unwrap();
+        assert_eq!(
+            config.verify_params(),
+            VerifyParams {
+                timeout: Duration::ZERO,
+                poll: Duration::from_millis(1),
+            }
+        );
+        let config =
+            Config::parse("[engine]\nverify_timeout_ms = 5000\nverify_poll_ms = 1000\n").unwrap();
+        assert_eq!(config.verify_params().timeout, Duration::from_secs(5));
+    }
+
+    #[test]
     fn the_stop_file_is_optional_and_relative_to_the_configuration() {
         assert_eq!(Config::default().stop_file(), None);
         let mut config = Config::parse("[safety]\nstop_file = \"STOP\"\n").unwrap();
@@ -687,6 +790,29 @@ mod tests {
         assert_eq!(config.models.ocr_language, "es-MX");
     }
 
+    const DETECTOR: &str = "[models]\ndetector_manifest = \"m.json\"\n\
+                            detector_manifest_sha256 = \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n\
+                            onnxruntime_path = \"o.dll\"\n\
+                            onnxruntime_sha256 = \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\"\n";
+
+    #[test]
+    fn the_detector_runs_on_the_cpu_with_onnx_runtime_threads_unless_configured() {
+        let models = Config::parse(DETECTOR).unwrap().models;
+        assert_eq!(models.detector_execution_provider, ProviderKind::Cpu);
+        assert_eq!(models.detector_threads, 0);
+
+        let models = Config::parse(&format!(
+            "{DETECTOR}detector_execution_provider = \"directml\"\n\
+             directml_path = \"runtime/DirectML.dll\"\ndirectml_sha256 = \"{DIGEST}\"\n\
+             detector_threads = 8\n"
+        ))
+        .unwrap()
+        .models;
+        assert_eq!(models.detector_execution_provider, ProviderKind::Directml);
+        assert_eq!(models.directml_path, "runtime/DirectML.dll");
+        assert_eq!(models.detector_threads, 8);
+    }
+
     #[test]
     fn half_configured_or_unpinned_models_are_rejected() {
         for (text, expected) in [
@@ -712,6 +838,33 @@ mod tests {
             (
                 "[models]\nocr_language = \"-es\"\n".to_owned(),
                 "ocr_language",
+            ),
+            (
+                "[models]\ndetector_execution_provider = \"cuda\"\n".to_owned(),
+                "detector_execution_provider",
+            ),
+            (
+                format!("{DETECTOR}detector_execution_provider = \"directml\"\n"),
+                "never falls back to the CPU",
+            ),
+            (
+                format!(
+                    "{DETECTOR}detector_execution_provider = \"directml\"\n\
+                     directml_path = \"DirectML.dll\"\ndirectml_sha256 = \"abc\"\n"
+                ),
+                "directml_sha256",
+            ),
+            (
+                format!("{DETECTOR}directml_path = \"DirectML.dll\"\n"),
+                "only used with",
+            ),
+            (
+                "[models]\ndetector_threads = 65\n".to_owned(),
+                "detector_threads",
+            ),
+            (
+                "[models]\ndetector_threads = -1\n".to_owned(),
+                "detector_threads",
             ),
         ] {
             let message = error(&text);

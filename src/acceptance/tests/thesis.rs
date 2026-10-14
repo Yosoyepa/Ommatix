@@ -31,8 +31,8 @@ use ommatix_adapter_mcp::{
 use ommatix_adapter_sim::{FixtureDesktop, FixtureScene, confirmed};
 use ommatix_application::contract::{ActionKind, ValidatedAction};
 use ommatix_application::{
-    DeliveryReceipt, Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock, OsActuator,
-    PolicyStore, PortError, Ports,
+    Clock, DeliveryReceipt, Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock,
+    OsActuator, PolicyStore, PortError, Ports, VerifyParams,
 };
 use ommatix_domain::appearance::{
     CachePolicy, DESCRIPTOR_VERSION, GRID_LEN, GradientDescriptor, IconCache, IconMatch, Prototype,
@@ -794,6 +794,8 @@ impl PolicyStore for FixedPolicy {
 struct Agent {
     conn: Connection,
     desktop: FixtureDesktop,
+    /// The engine's clock: only the engine's own waits advance it.
+    clock: Arc<ManualClock>,
     /// The operator's policy store the engine reads.
     policy: Arc<dyn PolicyStore>,
     /// The foreground the [`LiveDouble`] attests, when it is the actuator.
@@ -976,12 +978,13 @@ impl Agent {
                     recorder
                 },
                 policy: policy.clone(),
-                clock,
+                clock: clock.clone(),
             },
         );
         Self {
             conn: McpServer::new(engine, config).connect(),
             desktop,
+            clock,
             policy,
             foreground,
             stop_file: None,
@@ -1544,11 +1547,19 @@ fn input_the_actuator_reports_delivered(e: &mut Engine) {
 
 #[when("vence el plazo sin comprobar la postcondición")]
 fn verification_ends_without_the_postcondition(e: &mut Engine) {
-    // The click expects a visual change; the screen does not change, so the engine's
-    // verification capture after delivery finds no evidence of the effect.
+    // The click expects a visual change and the screen does not change. The deadline is
+    // the engine's verification window (`[engine] verify_timeout_ms`, 500 ms by default):
+    // it captures again every `verify_poll_ms` on its clock until the window ends, and
+    // finds no evidence of the effect.
     let agent = e.agent();
+    let start = agent.clock.now();
     let args = agent.live_click_args(agent.target(), "bdd29-click", "visual_change");
     agent.tool_result("execute_action", args);
+    assert_eq!(
+        agent.clock.now().saturating_sub(start),
+        VerifyParams::DEFAULT_TIMEOUT,
+        "the engine waited out the whole verification window"
+    );
 }
 
 #[then("se informa indeterminate y no se reintenta automáticamente")]
@@ -1562,6 +1573,9 @@ fn indeterminate_without_retry(e: &mut Engine) {
     assert_eq!(outcome["error"]["next_step"], "reconcile_effect");
     assert_eq!(outcome["observed_effect"], "unknown");
     assert_eq!(outcome["verified"], false, "no effect is claimed");
+    // The actuator reported the click delivered, and the report says so.
+    assert_eq!(outcome["input_delivered"], true, "{outcome}");
+    assert_eq!(agent.metric("delivered_actions"), 1);
     // Exactly one delivery: the engine did not retry on its own.
     assert_eq!(agent.desktop.handed_actions().len(), 1);
     // Asking again with the same request_id replays the report; it delivers nothing.

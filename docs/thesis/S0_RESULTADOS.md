@@ -13,7 +13,7 @@ Mismo formato que `plantillas/hardware_profile.json`; copia en `plantillas/hardw
 | `os_build` | Windows 11 Pro 26H2, build 26300.9550 |
 | `cpu_model` | AMD Ryzen 7 5700X (8 núcleos, 16 hilos) |
 | `ram_gib` | 32 (31,9 visibles) |
-| `gpu_model` | AMD Radeon RX 6700 XT (no se usa: proveedor CPU) |
+| `gpu_model` | AMD Radeon RX 6700 XT (sin uso en §§3–7, que miden la CPU; con DirectML en §9) |
 | `vram_gib` | 12 (ficha del fabricante; WMI la satura en 4 GiB) |
 | `driver` | AMD 32.0.21045.5002 |
 | `power_plan` | Alto rendimiento |
@@ -21,7 +21,7 @@ Mismo formato que `plantillas/hardware_profile.json`; copia en `plantillas/hardw
 | `dpi_percent` | 100 |
 | `runtime_commit` | rama `feat/s0-omniparser-v3` sobre `eee5c85`; `rustc 1.99.0`, perfil `release` |
 | `onnx_runtime` | 1.28.0 (commit `da9b5e364c465de65c49d91e696cd6485270757f`), `load-dynamic` desde `ort` 2.0.0-rc.13 |
-| `execution_provider` | `CPUExecutionProvider`, 1 hilo intra-op, `GraphOptimizationLevel::Level3`, cómputo determinista |
+| `execution_provider` | §§3–7: `CPUExecutionProvider`, 1 hilo intra-op, `GraphOptimizationLevel::Level3`, cómputo determinista. §9: además CPU con 4, 8 y 16 hilos, y `DmlExecutionProvider` (ONNX Runtime 1.24.4 con DirectML 1.15.4) |
 | `mcp_profile` | 2026-07-28 (no se usó MCP: se midió con `ommatix demo`) |
 
 ## 2. Procedencia, licencia y hashes
@@ -36,9 +36,14 @@ Los artefactos viven fuera del repositorio, bajo `%LOCALAPPDATA%\Ommatix\`.
 | `icon_detect_v3.onnx` (exportado) | `tools/s0/export_omniparser_v3.py` | 232 614 657 | `bcbec780f2b3e5fcbc13c26a73a73541c84ea3482a7696540eb258a076c9d968` |
 | `onnxruntime-win-x64-1.28.0.zip` | GitHub `microsoft/onnxruntime`, release v1.28.0 | 78 796 801 | `abef733dacbe2f571547a7150b479b5cb9cc0df22f96c24983a42cadb1b4f8bc` (coincide con el digest publicado en la release) |
 | `onnxruntime.dll` (de ese zip) | — | 15 809 848 | `18370c375f07357fa5874344a9d9ac17e6b6fe1eb18b1dd209d79483b4470257` |
-| `manifest.json` (= `plantillas/model_manifest.s0.json`) | este repositorio | 2 920 | `8e1c7ad6ffbab6ba543b34774accd67f434a4ac71342afc12f36f7031b7014f1` |
+| `manifest.json` (= `plantillas/model_manifest.s0.json`), §§3–7 | este repositorio | 2 920 | `8e1c7ad6ffbab6ba543b34774accd67f434a4ac71342afc12f36f7031b7014f1` |
+| `manifest.json` desde §9 (`execution_provider: "cpu,directml"`) | este repositorio | 2 929 | `63d9df24109308d1e2b354648139fee0c1d4e2563f8cb2a83497d4e26b7d728e` |
+| `microsoft.ml.onnxruntime.directml.1.24.4.nupkg` | NuGet `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4 (commit `2d924974ef147392ced8409d36bd6d2e7fcc8a74`) | 12 458 649 | `57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681` (su SHA-512 coincide con el `packageHash` del catálogo de NuGet) |
+| `onnxruntime.dll` (de ese paquete, `runtimes/win-x64/native/`) | — | 17 328 152 | `e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40` (firma Authenticode válida de Microsoft Corporation) |
+| `microsoft.ai.directml.1.15.4.nupkg` | NuGet `Microsoft.AI.DirectML` 1.15.4 (la dependencia que declara el paquete anterior) | 202 292 617 | `4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9` (su SHA-512 coincide con el catálogo) |
+| `DirectML.dll` (de ese paquete, `bin/x64-win/`, versión 1.15.4) | — | 18 527 776 | `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1` (firma Authenticode válida de Microsoft Corporation) |
 
-**Licencias.** `icon_detect_v3/LICENSE` es el texto MIT de Microsoft Corporation. La ficha del modelo (metadato `license: mit`) dice que `icon_detect_v3` es "an MIT licensed interactable region detector finetuned from YOLOv9-E using the MIT licensed MultimediaTechLab/YOLO implementation", y que los pesos `icon_detect` (YOLOv8) son AGPL-3.0. **Los pesos AGPL no se descargaron ni se usaron.** ONNX Runtime 1.28.0 es MIT (`LICENSE` del zip). La exportación usa torch, onnx y onnxruntime en un entorno virtual temporal fuera del repositorio; ninguno es dependencia del binario.
+**Licencias.** `icon_detect_v3/LICENSE` es el texto MIT de Microsoft Corporation. La ficha del modelo (metadato `license: mit`) dice que `icon_detect_v3` es "an MIT licensed interactable region detector finetuned from YOLOv9-E using the MIT licensed MultimediaTechLab/YOLO implementation", y que los pesos `icon_detect` (YOLOv8) son AGPL-3.0. **Los pesos AGPL no se descargaron ni se usaron.** ONNX Runtime 1.28.0 y 1.24.4 son MIT (`LICENSE` del zip y del paquete). `DirectML.dll` se distribuye con los términos de licencia de software de Microsoft para DirectML (`LICENSE.txt` del paquete): no es MIT, y el repositorio no la incluye ni la redistribuye. La exportación usa torch, onnx y onnxruntime en un entorno virtual temporal fuera del repositorio; ninguno es dependencia del binario.
 
 **Versión de ONNX Runtime.** Con las features `std` y `load-dynamic`, `ort` 2.0.0-rc.13 pide la versión 17 de la API C (`ORT_API_VERSION`), así que acepta ONNX Runtime 1.17 o posterior. Se fija 1.28.0, la versión con la que se publica esa versión de `ort`. Existe un parche 1.28.3; cambiar a él exige actualizar `onnxruntime_sha256`.
 
@@ -109,7 +114,7 @@ Lectura:
 - **La inferencia domina.** Una pasada del detector cuesta unos 7,5 s en CPU con un hilo. Comparado con las metas iniciales de RNF-05 (refresco completo en caliente p95 ≤ 700 ms, incremental p95 ≤ 150 ms), el resultado está un orden de magnitud por encima. Esas metas siguen siendo hipótesis (ADR-0010) y este resultado no las cierra ni las descarta para otro proveedor o modelo.
 - **Sin regiones planificadas no hay inferencia.** Con la pantalla quieta, la observación cuesta unos 16 ms de mediana; casi todo es la espera de `AcquireNextFrame`.
 - **Regiones frente a pantalla completa.** Con este modelo, una región pequeña cuesta lo mismo que la pantalla completa, porque toda región se rellena hasta la entrada fija de 1280×1280. Cada región planificada añade una inferencia completa (dos regiones, unos 15,8 s). La incrementalidad ahorra cuando no hay nada que analizar, pero no abarata el análisis de una región. Hacen falta otra estrategia (agrupar regiones en una sola entrada, una entrada más pequeña o un modelo más ligero) o más cómputo.
-- **Hilos [V, fuera del motor].** Con ONNX Runtime 1.31 en Python sobre una entrada sintética, el mismo ONNX tarda 7 339 ms de mediana con 1 hilo intra-op y 2 601 ms con 8 (n = 10 cada uno). El adaptador fija 1 hilo y cómputo determinista. Cambiarlo es una decisión de rendimiento que debe medirse en el motor.
+- **Hilos [V, fuera del motor].** Con ONNX Runtime 1.31 en Python sobre una entrada sintética, el mismo ONNX tarda 7 339 ms de mediana con 1 hilo intra-op y 2 601 ms con 8 (n = 10 cada uno). El adaptador fija 1 hilo y cómputo determinista. Cambiarlo es una decisión de rendimiento que debe medirse en el motor (se mide en §9).
 - OCR: unos 40 ms para la pantalla completa de notepad y de 2 a 5 ms para regiones pequeñas. Fusión y tracking quedan por debajo de 6 ms en todos los casos.
 
 ## 6. Defecto encontrado y corregido: regiones pequeñas ampliadas
@@ -125,8 +130,91 @@ Corrección (`ommatix-adapter-vision`, `model/letterbox.rs`): la escala nunca su
 - **Precisión sin medir.** No hay corpus etiquetado. La cifra de 142 elementos `confirmed` no es precisión ni cobertura.
 - **OCR.** `Windows.Media.Ocr` sólo tiene es-ES y es-MX instalados, no informa confianza y pierde signos como `¡`.
 - **Privacidad de la corrida.** El Bloc de notas de Windows 11 restaura las pestañas de sesiones anteriores. Sus títulos estaban en pantalla y pasaron por el OCR en memoria, aunque no se guardaron ni se registran aquí. Antes de la próxima corrida conviene usar una sesión limpia del Bloc de notas.
-- **Una aplicación, un DPI (100 %), un tema y CPU.** Quedan sin probar DirectML, otros DPI (IT-07), RSS y VRAM (RNF-06), y un cliente MCP real.
+- **Una aplicación, un DPI (100 %) y un tema.** Quedan sin probar otros DPI (IT-07), RSS y VRAM (RNF-06), y un cliente MCP real. DirectML se mide en §9.
 
 ## 8. Decisión de S0 para este detector
 
 `icon_detect_v3` (MIT) queda **seleccionado para el spike** como el detector con el que se integra y mide el motor: manifiesto `SELECCIONADO`, roles `unknown`, affordance de la ficha y CPU. No queda aceptado como detector del producto: su latencia en CPU y su precisión sin medir lo impiden. ADR-0009 no se edita; esta decisión se registra en `CHANGELOG.md` (1.0.8).
+
+Adenda (1.0.11, §9): el manifiesto declara ahora `execution_provider: "cpu,directml"`, porque DirectML dio las mismas detecciones que la CPU en las imágenes sintéticas de §9.2. Con DirectML la latencia deja de impedir la aceptación en esta máquina; la precisión sin medir y la única clase siguen impidiéndola.
+
+## 9. Proveedor de ejecución, hilos y agrupación de regiones (1.0.11)
+
+**Fecha:** 14 de octubre de 2026, misma máquina (§1), rama `perf/s0-detector-ep` sobre `feat/s3-supervised-runs`. Dentro del spike que autorizó el responsable del proyecto, que incluye elegir el proveedor de ejecución. No se envió ninguna tecla ni ningún clic. Ningún frame ni ningún texto de pantalla se guardó: de las corridas con DXGI sólo se conservaron los tiempos de stderr y el número de elementos de cada observación.
+
+### 9.1 Qué cambia en el adaptador
+
+- **Hilos intra-op configurables:** `[models] detector_threads`, de 1 a 64. Con `0`, el valor por defecto, ONNX Runtime usa el número de núcleos físicos (8 en esta máquina; §9.3 lo confirma). El cómputo sigue siendo determinista.
+- **Proveedor configurable:** `[models] detector_execution_provider = "cpu" | "directml"`. DirectML necesita la feature de compilación `directml` y una `DirectML.dll` fijada por SHA-256 (`directml_path`, `directml_sha256`). El adaptador la carga por ruta absoluta antes que ONNX Runtime, para que no se use la copia de `System32` (versión 1.15.5 en esta máquina). La sesión se crea con ejecución secuencial, sin patrón de memoria (las dos restricciones de DirectML que cita el SDD §2.4), con `error_on_failure` y con `session.disable_cpu_ep_fallback = 1`. Si DirectML no puede crearse, o si algún nodo fuera a ejecutarse en la CPU, el detector se rechaza y el motor no arranca. No hay vuelta silenciosa a la CPU. Con este modelo la sesión se crea con esa opción, así que **todos los nodos corren en DirectML**.
+- **El manifiesto declara los proveedores validados:** `execution_provider` admite ahora `"cpu"`, `"directml"` o `"cpu,directml"`, y el proveedor configurado tiene que estar en esa lista. `plantillas/model_manifest.s0.json` pasa a `"cpu,directml"` por la equivalencia de §9.2. Su nuevo SHA-256 está en §2 y en `tools/s0/ommatix.s0.toml`.
+- **Runtime con DirectML.** Microsoft no publica DirectML para ONNX Runtime 1.28: la release v1.28.0 sólo trae compilaciones CPU, CUDA y ARM, y el último paquete NuGet `Microsoft.ML.OnnxRuntime.DirectML` es el 1.24.4. Se usa ese paquete oficial con `Microsoft.AI.DirectML` 1.15.4, la versión de la que depende (procedencia y hashes en §2). `ort` 2.0.0-rc.13 acepta ONNX Runtime 1.17 o posterior. La configuración está en `tools/s0/ommatix.s0.directml.toml`, y la CPU sigue en 1.28.0 (`tools/s0/ommatix.s0.toml`).
+
+Pruebas nuevas: `the_execution_provider_fails_closed` (proveedor no validado por el manifiesto, DirectML sin DLL fijada, DLL con otro hash, DLL fijada con proveedor CPU, demasiados hilos: todo se rechaza antes de cargar ONNX Runtime), `the_manifest_lists_its_validated_execution_providers` y los casos nuevos de `incomplete_or_unsupported_manifests_are_refused` y de la configuración.
+
+### 9.2 Equivalencia de detecciones entre proveedores [V]
+
+Herramientas: `tools/s0/synthetic_frames.py` dibuja los frames sintéticos, y el ejemplo `s0_probe` (`ommatix-adapter-vision`) carga el detector con todas las comprobaciones del motor, hace una inferencia sobre el frame completo de 1920×1080 y emite las cajas tras la NMS (coordenadas de la entrada de 1280) con su puntuación. Las cajas se emparejan por IoU.
+
+| Comparación | Frames | Candidatos | Máx. dif. de caja (px de la entrada) | Máx. dif. de puntuación | IoU mínimo |
+|---|---|---|---|---|---|
+| DirectML (ORT 1.24.4) frente a CPU 1 hilo (ORT 1.28.0) | ventana, ventana con 3 cambios, ruido | 24 / 24, 24 / 24, 4 / 4 | 0,0002 | 8·10⁻⁷ | 1,0000 |
+| DirectML frente a CPU 8 hilos (ORT 1.24.4) | los mismos | iguales | 0,0002 | 8·10⁻⁷ | 1,0000 |
+| CPU 1 hilo frente a 8 hilos (ORT 1.28.0) | los mismos | iguales | 0 (con 4 decimales) | 0 (con 7 decimales) | 1,0000 |
+| CPU ORT 1.28.0 frente a CPU ORT 1.24.4 (8 hilos) | los mismos | iguales | 0 (con 4 decimales) | 0 (con 7 decimales) | 1,0000 |
+
+Las diferencias de DirectML son del orden del redondeo de float32. Ningún candidato aparece ni desaparece. Más hilos no cambian el resultado.
+
+### 9.3 Una inferencia, fuera del motor [V]
+
+`s0_probe`, frame completo (letterbox incluido), mediana / p95 en ms. n = 10 por frame en CPU y 20 en DirectML, todas en el mismo proceso tras cargar el detector.
+
+| Proveedor | Hilos | Ventana | Ventana con 3 cambios | Ruido |
+|---|---|---|---|---|
+| CPU, ORT 1.28.0 | 1 | 7 590 / 8 489 | 7 559 / 7 706 | 7 503 / 7 836 |
+| CPU, ORT 1.28.0 | 4 | 3 592 / 3 742 | — | — |
+| CPU, ORT 1.28.0 | 8 | 2 605 / 2 748 | 2 589 / 2 651 | 2 590 / 2 699 |
+| CPU, ORT 1.28.0 | 0 (por defecto de ORT) | 2 650 / 2 857 | — | — |
+| CPU, ORT 1.28.0 | 16 (con SMT) | 3 614 / 4 212 | — | — |
+| CPU, ORT 1.24.4 | 8 | 2 795 / 2 900 | 2 777 / 2 846 | 2 745 / 2 810 |
+| DirectML, ORT 1.24.4 | — | 117,8 / 126,6 | 119,3 / 126,0 | 119,4 / 121,7 |
+
+Lectura: 8 hilos son unas 2,9 veces más rápidos que 1, y el valor por defecto de ORT se comporta como 8. Con los 16 hilos lógicos es más lento que con 8. DirectML es unas 64 veces más rápido que un hilo y unas 22 veces más rápido que 8. Cargar el detector cuesta de 0,7 a 0,8 s en CPU y de 1,2 a 2,4 s con DirectML. La primera inferencia de una sesión DirectML cuesta de 264 a 291 ms (calentamiento).
+
+### 9.4 En el motor: `ommatix demo --timings` [V]
+
+Mediana / p95 en ms del total de la observación, con la etapa `detect` entre paréntesis.
+
+**Notepad en primer plano, maximizado, DXGI salida 0, sin entrada.** `notepad` se lanzó con `Start-Process` y se comprobó con `GetForegroundWindow` antes y después de cada proceso: siempre fue Notepad maximizado, así que no hubo exclusiones. Notepad restauró las pestañas del responsable; su contenido pasó sólo en memoria por el detector y el OCR, y no se registró ni se guardó nada. Hubo 10 procesos por configuración. La observación 1 es el primer frame en blanco ya conocido (§7), así que el refresco completo útil es la observación 2.
+
+| Configuración | Obs. 1 (en blanco), n = 10 | Obs. 2, refresco completo, n = 10 | Obs. ≥ 3 sin regiones | Elementos (obs. 2) |
+|---|---|---|---|---|
+| CPU, 1 hilo (antes) | 7 569 / 8 019 (7 538) | 7 654 / 7 857 (7 622) | 24,9 / 7 639, n = 10 (una observación tuvo una región) | 94–107 |
+| CPU, 8 hilos | 2 674 / 2 807 (2 638) | 2 686 / 2 873 (2 637) | 15,5 / 25,5, n = 20 | 94–105 |
+| DirectML | 295 / 359 (264) | **152 / 202** (122) | 15,1 / 25,5, n = 40 | 94 |
+
+El número de elementos varía entre procesos con CPU, pero no con DirectML. La causa no se investigó: la pantalla no se guarda, así que no puede revisarse qué cambió (un cursor, un reloj o un aviso). En la observación 2 con DirectML, OCR cuesta 26,8 ms de mediana.
+
+**Frames sintéticos (`--source images`, `tools/s0/synthetic_frames.py`).** Observaciones 2 en adelante, dentro de un proceso:
+
+| Caso | CPU, 1 hilo | CPU, 8 hilos | DirectML |
+|---|---|---|---|
+| Refresco completo en caliente (`seqfull`) | 7 410 / 7 666 (7 364), n = 10 | 2 664 / 2 747 (2 610), n = 11 | **170 / 179** (123), n = 19 |
+| Incremental, 1 región (`seq1`) | 7 245 / 7 532 (7 235), n = 10 | 2 579 / 2 772 (2 570), n = 19 | **118 / 123** (110), n = 19 |
+| Incremental, 2 regiones (`seq2`) | — | — | 231 / 243 (221), n = 19 |
+| Incremental, 3 regiones (`seq3`) | — | 7 965 / 8 601 (7 954), n = 10 | 340 / 348 (329), n = 19 |
+
+Cada región planificada sigue costando una inferencia completa de 1280×1280 (de 110 a 123 ms con DirectML). El costo del incremental crece de forma lineal con el número de regiones.
+
+### 9.5 Agrupar regiones en una sola inferencia: medido y descartado
+
+Se implementó y se midió la idea de §5.2: colocar los recortes de todas las regiones planificadas lado a lado, a escala 1, en una sola entrada de 1280×1280, separados por 32 px de relleno, y llevar cada detección a la región cuyo recorte contiene su centro. La geometría era exacta y tenía pruebas unitarias. Con tres regiones de 128×88 a 192×128 px sobre la ventana sintética, una inferencia agrupada costó 109 a 110 ms con DirectML (n = 10), frente a 329 ms con una inferencia por región, y unos 2,6 a 3,2 s con 8 hilos de CPU (n = 3), frente a 7,8 a 8,1 s.
+
+**Las detecciones cambiaron.** Con el bloque en la esquina de la entrada, aparecieron 6 cajas sobre bloques de texto que ni el refresco completo ni la inferencia por región detectan, de 3 a 8 controles en el frame con cambios. Todas habrían salido `confirmed` (§4). Con el bloque centrado, se perdió el cambio de la barra de estado que sí detectan el refresco completo y la inferencia por región. El modelo depende del contexto que rodea a cada recorte, así que agrupar no es una transformación neutra. **No se adopta:** el adaptador sigue haciendo una inferencia por región. Una alternativa futura tendría que validarse contra el refresco completo con datos etiquetados.
+
+### 9.6 RNF-05
+
+Metas iniciales de RNF-05: refresco completo en caliente p95 ≤ 700 ms e incremental p95 ≤ 150 ms. Siguen siendo hipótesis (ADR-0010) y este resultado no cierra el requisito: hay una máquina, un modelo, una aplicación, pocas observaciones que no son independientes dentro de un proceso (capítulo 09 §9.6) y ninguna medición de RSS ni de VRAM (RNF-06).
+
+- **DirectML: cumple en esta medición el refresco completo** (p95 202 ms en Notepad, n = 10; 179 ms en sintéticos, n = 19) **y el incremental con una región** (p95 123 ms, n = 19). **No cumple el incremental con dos o más regiones** (p95 243 ms con dos y 348 ms con tres), porque cada región cuesta una inferencia completa. Tampoco lo cumple la primera observación de una sesión, que paga el calentamiento.
+- **CPU: no cumple ninguna meta** con ningún número de hilos. Con 8 hilos, el refresco completo tiene p95 2,7 a 2,9 s y una sola región p95 2,8 s.
+- Con la pantalla quieta, sin regiones planificadas, la observación cuesta p95 25,5 ms con cualquier proveedor.

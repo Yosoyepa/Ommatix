@@ -78,11 +78,26 @@ unless the agent and a local policy both allow them. More in the
   [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (accepted on 2026-10-14). CI builds, lints and tests them on Windows. The operator
   can stop live input locally with a stop file (`[safety] stop_file`), and `type` sends
   its keys only once keyboard focus is verified on the target field.
-- What is **not** done yet: no model has been selected (S0, ADR-0009), so by default the
-  detector is the bootstrap's flat-colour region finder (roles `unknown`) and there is no
-  OCR; no real MCP client has been tested; and none of the integration and security tests
-  (IT-01..07, SEC-01..06) has been run: they need supervised runs on the reference
-  hardware (the stop and the focus check included). Live input stays **off** unless the
+- **S3, supervised runs** ([report, in Spanish](docs/thesis/S3_CORRIDAS_SUPERVISADAS.md)):
+  real DXGI capture and real `SendInput` on `notepad.exe` with disposable data, driven over
+  MCP by `tools/s3/mcp_driver.py`. Four live clicks on the File menu reached the OS; the
+  operator's stop, the freshness check and the policy refused the rest without sending
+  anything. SEC-01 is executed; IT-01, IT-03, IT-05, SEC-02 and SEC-05 in part. An
+  `indeterminate` result now says whether the actuator delivered the input. Two findings
+  were fixed since and a second supervised run (with the DirectML detector) confirmed both
+  live: the effect check waits a bounded settle window for the redraw (`[engine]
+  verify_timeout_ms`, 500 ms, polling every `verify_poll_ms`, 50 ms; never resending
+  input), so 2 of 2 delivered clicks were `effect_observed`, and the first DXGI frame of
+  every session shows the desktop. IT-04 ran in part: with a 0 ms window a delivered click
+  is `indeterminate` and is never retried.
+- What is **not** done yet: no detector is accepted for the product (the S0 spike selected
+  OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
+  one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML,
+  where the initial RNF-05 targets are met for a full refresh and a one-region update but
+  not for two or more regions), so by default the detector is the bootstrap's flat-colour region finder (roles
+  `unknown`) and there is no OCR; no third-party MCP client has been tested; IT-02 ran only
+  in part (S0); and IT-06, IT-07, SEC-03, SEC-04 and SEC-06 have not been run under
+  supervision. Live input stays **off** unless the
   operator enables it (below). The [overview](docs/architecture/overview.md#where-the-code-is-today) lists what
   remains.
 - First platform: **Windows 11 x64**, one monitor, DPI 100/125/150 %
@@ -104,8 +119,9 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
 - [ ] **S3, real adapters and action loop on Windows 11:** DXGI, ONNX Runtime, `SendInput`,
   policy, stop and effect verification; the bootstrap's macOS and X11 adapters are retired.
   First part done: the DXGI, `SendInput`, ONNX and Windows OCR adapters behind build
-  features, the operator's stop file and the focus check before typing; pending: models
-  (S0), effect checks beyond the visual change, a real MCP client and the supervised runs
+  features, the operator's stop file and the focus check before typing; first supervised
+  runs with real input on `notepad.exe`; pending: a product detector, effect checks beyond the visual change, a third-party MCP client and the
+  remaining supervised runs
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
   and the acceptance report
 
@@ -138,6 +154,7 @@ Build features, all off by default:
 | `dxgi` | `--source dxgi`: DXGI Desktop Duplication of one output | Windows |
 | `sendinput` | `--input sendinput`: Win32 `SendInput` (implies `dxgi`) | Windows |
 | `onnx` | the ONNX detector of `[models]`; ONNX Runtime is loaded at run time from the library the operator pins, nothing is downloaded at build time | any |
+| `directml` | `[models] detector_execution_provider = "directml"`: the detector on DirectML (implies `onnx`); needs an ONNX Runtime build with DirectML and a pinned `DirectML.dll` | Windows |
 | `winrt-ocr` | `[models] ocr = "winrt"`: the OCR built into Windows | Windows |
 
 `serve` and `demo` take the same options:
@@ -197,7 +214,7 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
 
 - **Refused** (the server does not start): unknown sections or keys; out-of-range values
   (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024, `full_refresh_area_ratio`
-  in (0, 1], `max_snapshot_age_ms` ≥ 1, `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
+  in (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
   blank `allowed_applications` entries, a blank `stop_file`); and values this build cannot
   honour: a `platform` other than `windows`, a `snapshot_policy` other than `strict`, a `profile` other than
   `2026-07-28` (the legacy profile is enabled with `legacy_enabled`), a `transport` other than
@@ -226,6 +243,9 @@ can select:
 |---|---|
 | `detector_manifest`, `detector_manifest_sha256` | a manifest shaped like [`model_manifest.json`](docs/thesis/plantillas/model_manifest.json), with status `SELECCIONADO`, whose detector entry names the weights, their SHA-256 and the roles and affordances of each class; and the manifest's own SHA-256 (64 hex characters) |
 | `onnxruntime_path`, `onnxruntime_sha256` | the ONNX Runtime library (`onnxruntime.dll`) and its SHA-256; keep it in a directory only the operator can write |
+| `detector_execution_provider` | `"cpu"` (default) or `"directml"` (build feature `directml`); the manifest's `execution_provider` must list it. DirectML never falls back to the CPU: if it cannot be created, or any node would run on the CPU, the detector is refused |
+| `directml_path`, `directml_sha256` | with `directml` only: the `DirectML.dll` loaded by absolute path before ONNX Runtime (never the copy in System32), and its SHA-256 |
+| `detector_threads` | intra-op threads, `1`–`64`; `0` (default) lets ONNX Runtime choose the number of physical cores |
 | `ocr` | `"none"` (default) or `"winrt"`, the OCR built into Windows |
 | `ocr_language` | the BCP-47 tag of the OCR language, default `es-ES`; never replaced by another |
 

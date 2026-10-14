@@ -118,6 +118,47 @@ pub(crate) fn check_rotation(rotation: i32) -> Result<(), PortError> {
     }
 }
 
+/// How long the first capture after (re)creating the duplication, or after the image size
+/// changed, waits for a real desktop image.
+pub(crate) const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// What a capture does with a desktop update it acquired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UpdateUse {
+    /// A desktop image was presented: copy it.
+    Copy,
+    /// Only the pointer or the metadata changed: return the last frame again.
+    ReuseLast,
+    /// No desktop image has been presented since the duplication was (re)created and
+    /// there is no last frame to fall back on: the texture would be blank (S0 §7). Release
+    /// the update and wait at most this long for another one.
+    AcquireAgain(Duration),
+    /// No desktop image arrived within [`FIRST_FRAME_TIMEOUT`]: fail rather than hand the
+    /// engine a blank frame.
+    Fail,
+}
+
+/// Decides what to do with an acquired update whose `LastPresentTime` is
+/// `last_present_time` (0 when no desktop image was presented with it). `has_last_frame`
+/// says whether a last frame of the current size exists; `waited` is how long this
+/// capture has waited for updates so far.
+pub(crate) fn classify_update(
+    last_present_time: i64,
+    has_last_frame: bool,
+    waited: Duration,
+) -> UpdateUse {
+    if last_present_time != 0 {
+        return UpdateUse::Copy;
+    }
+    if has_last_frame {
+        return UpdateUse::ReuseLast;
+    }
+    match FIRST_FRAME_TIMEOUT.checked_sub(waited) {
+        Some(left) if !left.is_zero() => UpdateUse::AcquireAgain(left),
+        _ => UpdateUse::Fail,
+    }
+}
+
 /// Copies `height` rows of `width` BGRA pixels out of a mapped surface whose rows are
 /// `row_pitch` bytes apart, into a tightly packed buffer. `None` if the surface is too
 /// small for those dimensions.
@@ -319,6 +360,32 @@ mod tests {
         assert_eq!(pack_rows(&[0; 64], 8, 2, 0), None);
         assert_eq!(pack_rows(&[0; 64], usize::MAX, 2, 2), None);
         assert_eq!(mapped_len(8, 2, 0), None);
+    }
+
+    #[test]
+    fn a_first_update_without_a_desktop_image_is_never_a_frame() {
+        // Found in S0 and the S3 supervised runs: the first update after opening the
+        // duplication carried no presented image, and its blank texture became frame 1.
+        let ms = Duration::from_millis;
+        assert_eq!(
+            classify_update(0, false, Duration::ZERO),
+            UpdateUse::AcquireAgain(FIRST_FRAME_TIMEOUT)
+        );
+        assert_eq!(
+            classify_update(0, false, ms(120)),
+            UpdateUse::AcquireAgain(ms(380))
+        );
+        assert_eq!(
+            classify_update(0, false, FIRST_FRAME_TIMEOUT),
+            UpdateUse::Fail
+        );
+        assert_eq!(classify_update(0, false, ms(900)), UpdateUse::Fail);
+        // A presented image is copied, first or not.
+        assert_eq!(classify_update(1, false, Duration::ZERO), UpdateUse::Copy);
+        assert_eq!(classify_update(-5, false, ms(499)), UpdateUse::Copy);
+        assert_eq!(classify_update(42, true, Duration::ZERO), UpdateUse::Copy);
+        // Only the pointer moved: the last frame stands.
+        assert_eq!(classify_update(0, true, ms(900)), UpdateUse::ReuseLast);
     }
 
     #[test]

@@ -144,6 +144,7 @@ mod tests {
             snapshot_id: "s1".into(),
             error: None,
             observed_effect: None,
+            delivered: false,
         }
     }
 

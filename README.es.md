@@ -86,11 +86,26 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   prueba en Windows. El operador puede detener localmente la entrada real con un archivo de
   parada (`[safety] stop_file`), y `type` sólo envía sus teclas tras verificar que el foco
   de teclado está en el campo objetivo.
-- Lo que **todavía no** está: no se ha seleccionado ningún modelo (S0, ADR-0009), así que por
-  defecto el detector es el buscador de regiones de color plano del arranque (roles
-  `unknown`) y no hay OCR; no se ha probado un cliente MCP real; y no se ha ejecutado
-  ninguna prueba de integración ni de seguridad (IT-01..07, SEC-01..06): necesitan corridas
-  supervisadas en el hardware de referencia (también la parada y la comprobación del foco). La
+- **S3, corridas supervisadas** ([informe](docs/thesis/S3_CORRIDAS_SUPERVISADAS.md)): captura
+  DXGI y `SendInput` reales sobre `notepad.exe` con datos desechables, guiadas por MCP con
+  `tools/s3/mcp_driver.py`. Cuatro clics reales sobre el menú Archivo llegaron al SO; la
+  parada del operador, la comprobación de vigencia y la política rechazaron el resto sin
+  enviar nada. SEC-01 queda ejecutada; IT-01, IT-03, IT-05, SEC-02 y SEC-05, en parte. Un
+  resultado `indeterminate` dice ahora si el actuador entregó la entrada. Desde entonces se
+  corrigieron dos hallazgos, y una segunda corrida supervisada (con el detector en DirectML)
+  confirmó los dos en vivo: la comprobación del efecto espera el redibujado dentro de un
+  plazo acotado (`[engine] verify_timeout_ms`, 500 ms, con capturas cada `verify_poll_ms`,
+  50 ms; nunca reenvía la entrada), así que 2 de 2 clics entregados dieron `effect_observed`,
+  y el primer frame DXGI de cada sesión ya muestra el escritorio. IT-04 se ejecutó en parte:
+  con un plazo de 0 ms, un clic entregado es `indeterminate` y nunca se reintenta.
+- Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
+  seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
+  medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
+  DirectML, donde se cumplen las metas iniciales de RNF-05 para el refresco completo y para
+  una región, pero no para dos o más), así que por defecto el detector es el buscador de regiones de color
+  plano del arranque (roles `unknown`) y no hay OCR; no se ha probado un cliente MCP de
+  terceros; IT-02 sólo se ejecutó en parte (S0); e IT-06, IT-07, SEC-03,
+  SEC-04 y SEC-06 no se han ejecutado de forma supervisada. La
   entrada real sigue **apagada** salvo que el operador la habilite (abajo). La
   [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo que
   falta.
@@ -114,8 +129,9 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   `SendInput`, política, parada y verificación del efecto; se retiran los adaptadores de
   macOS y X11 del arranque. Primera parte hecha: los adaptadores DXGI, `SendInput`, ONNX y
   OCR de Windows tras features de compilación, el archivo de parada del operador y la
-  comprobación del foco antes de escribir; falta: modelos (S0), comprobar efectos más allá
-  del cambio visual, un cliente MCP real y las corridas supervisadas
+  comprobación del foco antes de escribir; primeras corridas supervisadas con entrada real
+  sobre `notepad.exe`; falta: un detector para el producto, comprobar efectos más allá del cambio visual, un cliente MCP de terceros y el resto de
+  corridas supervisadas
 - [ ] **S4, aceptación:** 450 corridas de extremo a extremo en aplicaciones controladas,
   benchmarks, soak e informe de aceptación
 
@@ -148,6 +164,7 @@ Features de compilación, todas apagadas por defecto:
 | `dxgi` | `--source dxgi`: DXGI Desktop Duplication de una salida | Windows |
 | `sendinput` | `--input sendinput`: `SendInput` de Win32 (implica `dxgi`) | Windows |
 | `onnx` | el detector ONNX de `[models]`; ONNX Runtime se carga al ejecutar desde la biblioteca que fija el operador, nada se descarga al compilar | cualquiera |
+| `directml` | `[models] detector_execution_provider = "directml"`: el detector sobre DirectML (implica `onnx`); necesita una compilación de ONNX Runtime con DirectML y una `DirectML.dll` fijada | Windows |
 | `winrt-ocr` | `[models] ocr = "winrt"`: el OCR incluido en Windows | Windows |
 
 `serve` y `demo` aceptan las mismas opciones:
@@ -211,7 +228,7 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
 
 - **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
   rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
-  `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `max_message_bytes`
+  `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `max_message_bytes`
   4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`
   en blanco); y valores que este binario no puede cumplir: un `platform` distinto de
   `windows`, un `snapshot_policy`
@@ -242,6 +259,9 @@ detector es el de regiones de color plano y no hay OCR. Con la fuente `images`, 
 |---|---|
 | `detector_manifest`, `detector_manifest_sha256` | un manifiesto con la forma de [`model_manifest.json`](docs/thesis/plantillas/model_manifest.json), con estado `SELECCIONADO`, cuya entrada de detector nombra los pesos, su SHA-256 y los roles y affordances de cada clase; y el SHA-256 del propio manifiesto (64 caracteres hexadecimales) |
 | `onnxruntime_path`, `onnxruntime_sha256` | la biblioteca de ONNX Runtime (`onnxruntime.dll`) y su SHA-256; debe estar en un directorio que sólo el operador pueda escribir |
+| `detector_execution_provider` | `"cpu"` (por defecto) o `"directml"` (feature de compilación `directml`); el `execution_provider` del manifiesto debe incluirlo. DirectML nunca recurre a la CPU: si no puede crearse, o algún nodo se ejecutaría en la CPU, el detector se rechaza |
+| `directml_path`, `directml_sha256` | sólo con `directml`: la `DirectML.dll` que se carga por ruta absoluta antes de ONNX Runtime (nunca la copia de System32), y su SHA-256 |
+| `detector_threads` | hilos intra-op, de `1` a `64`; `0` (por defecto) deja que ONNX Runtime use el número de núcleos físicos |
 | `ocr` | `"none"` (por defecto) o `"winrt"`, el OCR incluido en Windows |
 | `ocr_language` | la etiqueta BCP-47 del idioma del OCR, por defecto `es-ES`; nunca se sustituye por otro |
 

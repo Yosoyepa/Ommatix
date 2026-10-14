@@ -16,12 +16,17 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | #5 | S2a: `appearance` (algoritmo 3A, caché de íconos con rechazo) e `identity` (algoritmo 3B, registro de sesión, comprobaciones de vigencia de una acción); UT-27..43; este documento | Fusionado |
 | #6 | S2b: puertos del SDD y `Engine` en `ommatix-application` (`observe_screen`, `execute_action`, `get_engine_metrics`); adaptador MCP con tipos de `rmcp` 3.5.1 y bucle acotado (ADR-0015); CT-01..10 y los 17 ejemplos del dossier; BDD-11..27 ejecutados; `serve`/`demo` con el motor nuevo y `--config`; algoritmo 3A dentro de la observación; se retira el prototipo; revisión en [`reviews/2026-10-14-s2b-engine-and-mcp.md`](reviews/2026-10-14-s2b-engine-and-mcp.md) | Fusionado |
 | #7 | S3, primera parte (rama `feat/s3-windows-adapters`, sobre S2b): captura DXGI (`--source dxgi`, `--output N`) y entrada `SendInput` (`--input sendinput`) con `unsafe` acotado (ADR-0016); detector ONNX que falla de forma segura con manifiesto y SHA-256 y OCR de Windows (`[models]`); job `windows` en la CI; parada del operador (`[safety] stop_file`) y comprobación del foco antes de escribir; BDD-28..32 ejecutados sobre un doble del actuador real | Fusionado |
-| — | Spike S0 (rama `feat/s0-omniparser-v3`): detector OmniParser `icon_detect_v3` (MIT) exportado a ONNX con `tools/s0/export_omniparser_v3.py`, manifiesto `SELECCIONADO` (`docs/thesis/plantillas/model_manifest.s0.json`), ONNX Runtime 1.28.0 en CPU, OCR de Windows es-ES; corridas supervisadas sobre `notepad.exe` sin entrada; letterbox sin ampliación; `demo --timings`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) | Abierto |
+| — | Spike S0 (rama `feat/s0-omniparser-v3`): detector OmniParser `icon_detect_v3` (MIT) exportado a ONNX con `tools/s0/export_omniparser_v3.py`, manifiesto `SELECCIONADO` (`docs/thesis/plantillas/model_manifest.s0.json`), ONNX Runtime 1.28.0 en CPU, OCR de Windows es-ES; corridas supervisadas sobre `notepad.exe` sin entrada; letterbox sin ampliación; `demo --timings`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) | Abierto (#8) |
+| — | S3, corridas supervisadas (rama `feat/s3-supervised-runs`, apilada sobre #8): captura y entrada reales sobre `notepad.exe` con `tools/s3/mcp_driver.py`; SEC-01 ejecutada, IT-01/03/05 y SEC-02/05 en parte; `indeterminate` informa la entrega del actuador; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) y revisión en [`reviews/2026-10-14-s3-supervised-runs.md`](reviews/2026-10-14-s3-supervised-runs.md) | Abierto (#9) |
+| — | S3, plazo de verificación y primer frame DXGI (rama `fix/s3-verify-settle`, apilada sobre #9): la verificación del cambio visual vuelve a capturar dentro de `[engine] verify_timeout_ms`/`verify_poll_ms` sin reenviar la entrada; el capturador DXGI ya no entrega un primer frame en blanco; `CHANGELOG.md` 1.0.10 y revisión en [`reviews/2026-10-14-s3-verify-settle-and-first-frame.md`](reviews/2026-10-14-s3-verify-settle-and-first-frame.md) | Abierto |
+| — | S3, segunda corrida supervisada (rama `feat/s3-supervised-runs`, #9, con DirectML): plazo de verificación (`effect_observed` 2 de 2) y primer frame DXGI (2 de 2 sesiones) confirmados en vivo; IT-04 ejecutada en parte con `verify_timeout_ms = 0`; paso `it04` en `tools/s3/mcp_driver.py`; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) §8 (CHANGELOG 1.0.12) | Abierto (#9) |
+| — | S0, proveedor e hilos del detector (rama `perf/s0-detector-ep`, apilada sobre `feat/s3-supervised-runs`): `[models] detector_execution_provider = "cpu" \| "directml"` (feature `directml`, `DirectML.dll` fijada, sin vuelta a la CPU) y `detector_threads`; manifiesto S0 con `"cpu,directml"`; DirectML equivalente a la CPU; agrupar regiones se midió y se descartó porque cambia las detecciones; `tools/s0/synthetic_frames.py` y el ejemplo `s0_probe`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §9 (CHANGELOG 1.0.11) | Sin PR |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.8)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.12)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
-Ninguna prueba IT ni SEC se ha ejecutado.
+S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
+en parte, IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ejecutado.
 
 ## Cómo está el código
 
@@ -58,9 +63,13 @@ Ninguna prueba IT ni SEC se ha ejecutado.
     atestiguada por el actuador (`OsActuator::foreground_application`: la atestigua
     `SendInput`; `enigo` no, así que con él se deniega siempre);
     comprobación de vigencia con una captura justo antes de entregar (`STALE_SNAPSHOT` si la
-    pantalla cambió); recibo de entrega → `input_delivered` o `indeterminate`;
-    `visual_change` se verifica con una captura posterior comparada con la previa a la
-    entrega y los demás efectos quedan `indeterminate`; un error del actuador también es
+    pantalla cambió); recibo de entrega → `input_delivered` o `indeterminate` (un
+    `indeterminate` con el recibo completo informa `input_delivered: true` y cuenta en
+    `delivered_actions`);
+    `visual_change` se verifica comparando con la captura previa a la entrega dentro de un
+    plazo acotado (`EngineConfig::verify`: capturas cada `verify_poll_ms` con el `Clock`
+    hasta `verify_timeout_ms`; si vence, `indeterminate`, sin reenviar la entrada) y los
+    demás efectos quedan `indeterminate`; un error del actuador también es
     `indeterminate`, nunca se reintenta; cualquier entrega agota el snapshot hasta la
     siguiente observación.
   - `get_engine_metrics`. Pruebas del motor: `ut_14`, `ut_38`..`ut_43` y las del módulo
@@ -78,7 +87,10 @@ Ninguna prueba IT ni SEC se ha ejecutado.
     provisional) y `DxgiCapturer` (feature `dxgi`, Windows): DXGI Desktop Duplication de una
     salida en píxeles físicos, copia a staging con stride, salida rotada rechazada, epoch
     nuevo ante cambios de tamaño, DPI u origen, duplicación perdida recreada una vez,
-    correspondencia de pantalla compartida con la entrada (`mapping_source`). El `unsafe`
+    correspondencia de pantalla compartida con la entrada (`mapping_source`); la primera
+    captura tras abrir o recrear la duplicación espera hasta 500 ms una actualización con
+    imagen presentada (`LastPresentTime != 0`) y falla antes que entregar un frame en
+    blanco. El `unsafe`
     vive sólo en `dxgi/win.rs`.
   - `ommatix-adapter-input`: dry run, `enigo` (feature `native`, provisional) y
     `SendInputActuator` (feature `sendinput`, Windows): atestigua la aplicación en primer
@@ -126,28 +138,39 @@ Ninguna prueba IT ni SEC se ha ejecutado.
   comprueba el actuador `SendInput`, que ninguna prueba ejecuta. Se retiraron las siete herramientas del prototipo y su suite de
   aceptación (`src/acceptance/features/` y `tests/acceptance.rs`).
 - **Límites conocidos**: la entrada real sólo es posible con `--source dxgi --input
-  sendinput` y el consentimiento del operador, y nunca se ha ejecutado de forma supervisada;
-  la parada del operador (`[safety] stop_file`) y la comprobación del foco antes de
-  escribir sólo se han probado sobre dobles (SEC-02 y SEC-05 esperan corridas supervisadas);
-  sólo se verifica el efecto `visual_change`; el único detector seleccionado (spike S0, `icon_detect_v3`) tiene una sola clase, así que los roles
+  sendinput` y el consentimiento del operador; en S3 se ejecutó supervisada con cuatro clics
+  sobre un menú de `notepad.exe` (`thesis/S3_CORRIDAS_SUPERVISADAS.md`); la parada por
+  archivo se ejecutó en vivo, pero la comprobación del foco antes de escribir y el cambio de
+  primer plano sólo se han probado sobre dobles; sólo se verifica el efecto
+  `visual_change`; en vivo una única captura justo después de entregar nunca vio el cambio
+  (4 de 4 `indeterminate`), y con el plazo de verificación de 1.0.10 la segunda corrida vio
+  el cambio en 2 de 2 clics (`effect_observed`, 1.0.12); el recibo de `SendInput` no es visible; el único detector seleccionado (spike S0, `icon_detect_v3`) tiene una sola clase, así que los roles
   siguen `unknown`, una inferencia cuesta unos 7,5 s en CPU y su precisión no está medida; el
-  primer frame DXGI de una sesión llega en blanco (`thesis/S0_RESULTADOS.md` §7); no hay OCR por defecto; OR-44 espera "actuación no implementada" y el
+  primer frame DXGI en blanco (`thesis/S0_RESULTADOS.md` §7) está corregido (1.0.10) y
+  confirmado en vivo (2 de 2 sesiones, 1.0.12); no hay OCR por defecto; OR-44 espera "actuación no implementada" y el
   motor responde `POLICY_DENIED` sin entregar nada; el contexto del caché de íconos lo fija
   el operador y sus umbrales no están calibrados; no se ha probado un cliente MCP real
   (capítulo 07 §7.1).
 
 ## Qué sigue
 
-1. **Revisar y fusionar** el PR del spike S0 (`feat/s0-omniparser-v3`).
+1. **Revisar y fusionar** el PR del spike S0 (`feat/s0-omniparser-v3`, #8), después el de
+   las corridas supervisadas de S3 (`feat/s3-supervised-runs`, #9, apilado sobre #8) y el
+   de sus correcciones (`fix/s3-verify-settle`, apilado sobre #9).
 2. **Decisiones que esperan al responsable** (ningún agente puede tomarlas):
    - Detector del producto (ADR-0009). El spike S0 (`thesis/S0_RESULTADOS.md`) seleccionó
      `icon_detect_v3` de OmniParser (MIT, revisión `f55d0750`) para integrar y medir:
      ONNX opset 17 con la cabeza decodificada, ONNX Runtime 1.28.0 en CPU, rol `unknown` y
      affordance `interactive` tomada de su ficha. Queda por decidir si se acepta para el
-     producto: una inferencia cuesta unos 7,5 s en CPU con un hilo (2,6 s con 8 hilos, medido
-     fuera del motor), cada región planificada cuesta una inferencia completa y la precisión
-     no está medida. Opciones: más hilos, DirectML (en ingeniería sostenida), agrupar regiones
-     en una entrada o un modelo más ligero. Los pesos `icon_detect` v2 (AGPL-3.0) no se usan.
+     producto. Medido en el motor (`thesis/S0_RESULTADOS.md` §9): una inferencia cuesta unos
+     7,5 s con un hilo de CPU, 2,6 s con 8 y 0,12 s con DirectML (mismas detecciones). Con
+     DirectML se cumplen las metas iniciales de RNF-05 para el refresco completo (p95 202 ms
+     en Notepad) y para una región (p95 123 ms), pero no para dos o más, porque cada región
+     planificada cuesta una inferencia completa. Agrupar regiones en una entrada se midió y se
+     descartó porque cambia las detecciones. Falta: decidir si DirectML (ONNX Runtime 1.24.4,
+     la última versión con DirectML, en ingeniería sostenida) es aceptable como proveedor del
+     producto, medir RSS y VRAM (RNF-06) y la precisión, o buscar un modelo más ligero. Los
+     pesos `icon_detect` v2 (AGPL-3.0) no se usan.
    - OCR: `Windows.Media.Ocr` (es-ES) funciona, pero no informa confianza y pierde signos como
      "¡"; el candidato PP-OCRv5 mobile (Apache-2.0, ONNX oficial) tampoco tiene "¡" en su
      diccionario.
@@ -156,9 +179,13 @@ Ninguna prueba IT ni SEC se ha ejecutado.
      corridas IT y la evaluación de S4).
 3. **Corridas supervisadas en el hardware de referencia**, con el operador presente y una
    aplicación de prueba en `allowed_applications`. S0 ejecutó en parte IT-01 e IT-02 sin
-   entrada; las demás no están hechas y ninguna prueba automática las sustituye. Antes de la
-   próxima corrida: corregir el primer frame DXGI en blanco y abrir el Bloc de notas en una
-   sesión limpia (restaura pestañas de sesiones anteriores):
+   entrada; S3 (`thesis/S3_CORRIDAS_SUPERVISADAS.md`, cliente `tools/s3/mcp_driver.py`)
+   ejecutó SEC-01 y en parte IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05; ninguna prueba
+   automática sustituye a las que faltan. La segunda corrida (1.0.12) confirmó en vivo el
+   plazo de la verificación visual y el primer frame DXGI. Antes de la próxima: abrir el Bloc de notas en una
+   sesión limpia (restaura pestañas) y traer al primer plano a mano la ventana de prueba (Windows no
+   se lo da a un proceso lanzado en segundo plano; por eso SEC-05 no pudo cambiar el primer
+   plano):
    - IT-01 (captura DXGI: frames reales, stride, rotación, pérdida de acceso;
      `cargo test -p ommatix-adapter-capture --features dxgi -- --ignored` toma un frame sin
      guardarlo), IT-02 (detector y OCR reales, deshacer el letterbox; necesita modelos),

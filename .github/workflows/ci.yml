@@ -102,10 +102,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build -p ommatix --features dxgi,sendinput,onnx,winrt-ocr
       - run: cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr --all-targets -- -D warnings
+      - run: cargo clippy -p ommatix --features dxgi,sendinput,directml,winrt-ocr --all-targets -- -D warnings
       - run: >-
           cargo clippy --all-targets -p ommatix-adapter-capture -p ommatix-adapter-input -p ommatix-adapter-vision
           --features ommatix-adapter-capture/dxgi,ommatix-adapter-input/sendinput
-          --features ommatix-adapter-vision/onnx,ommatix-adapter-vision/winrt-ocr
+          --features ommatix-adapter-vision/directml,ommatix-adapter-vision/winrt-ocr
           -- -D warnings
       # Unit tests only: the DXGI test that reads a real screen and the OCR tests that need
       # an installed language are #[ignore]d (a hosted runner has no interactive desktop),
@@ -114,7 +115,7 @@ jobs:
       - run: >-
           cargo test -p ommatix-adapter-capture -p ommatix-adapter-input -p ommatix-adapter-vision
           --features ommatix-adapter-capture/dxgi,ommatix-adapter-input/sendinput
-          --features ommatix-adapter-vision/onnx,ommatix-adapter-vision/winrt-ocr
+          --features ommatix-adapter-vision/directml,ommatix-adapter-vision/winrt-ocr
 
   cross-check:
     name: capture + native input compile for ${{ matrix.target }}

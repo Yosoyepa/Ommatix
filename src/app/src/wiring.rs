@@ -208,6 +208,17 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
     );
     let mut notes = config.notes();
     notes.push(icon_note(icons.as_ref()));
+    if args.source != SourceKind::Sim && config.models.has_detector() {
+        let m = &config.models;
+        notes.push(format!(
+            "[models] detector: intra-op threads {}",
+            if m.detector_threads == 0 {
+                "ONNX Runtime default (physical cores)".to_owned()
+            } else {
+                m.detector_threads.to_string()
+            }
+        ));
+    }
     if args.source == SourceKind::Sim
         && (config.models.has_detector() || config.models.ocr != OcrKind::None)
     {
@@ -222,6 +233,7 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
 
     let mut engine_config = EngineConfig::new(session_id);
     engine_config.plan = config.plan_params();
+    engine_config.verify = config.verify_params();
     engine_config.icons = icons;
     let engine = Engine::new(
         engine_config,
@@ -328,12 +340,29 @@ fn detector(config: &Config) -> Result<Box<dyn VisionDetector>> {
 
 #[cfg(feature = "onnx")]
 fn onnx_detector(config: &Config) -> Result<Box<dyn VisionDetector>> {
+    use ommatix_adapter_vision::model::manifest::ExecutionProvider;
+
+    use crate::config::ProviderKind;
+
     let m = &config.models;
+    let (execution_provider, directml) = match m.detector_execution_provider {
+        ProviderKind::Cpu => (ExecutionProvider::Cpu, None),
+        ProviderKind::Directml => (
+            ExecutionProvider::DirectMl,
+            Some((
+                config.resolve_path(&m.directml_path),
+                m.directml_sha256.clone(),
+            )),
+        ),
+    };
     let source = ommatix_adapter_vision::OnnxDetectorSource {
         manifest_path: config.resolve_path(&m.detector_manifest),
         manifest_sha256: m.detector_manifest_sha256.clone(),
         runtime_path: config.resolve_path(&m.onnxruntime_path),
         runtime_sha256: m.onnxruntime_sha256.clone(),
+        execution_provider,
+        directml,
+        intra_threads: m.detector_threads as usize,
     };
     Ok(Box::new(
         ommatix_adapter_vision::OnnxVisionDetector::load(&source)

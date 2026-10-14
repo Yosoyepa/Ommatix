@@ -30,7 +30,7 @@ Campos obligatorios: request_id, session_id, snapshot_id, geometry_epoch, target
 
 La precondición de snapshot es estricta en el MVP. Una petición vieja no se redirige a otro target cercano. Tras una nueva observación, el agente selecciona explícitamente de nuevo y usa otro request_id si cambia la intención. El diario de deduplicación asocia request_id con hash de argumentos; un mismo ID con argumentos diferentes produce REQUEST_CONFLICT.
 
-`expected_effect` permite una postcondición limitada: foco, texto de prueba, desplazamiento o cambio visual. Confirmar un cambio visual no equivale a confirmar un objetivo de negocio. No se permiten instrucciones arbitrarias de shell o afirmaciones del agente que reemplacen la política de seguridad.
+`expected_effect` permite una postcondición limitada: foco, texto de prueba, desplazamiento o cambio visual. Confirmar un cambio visual no equivale a confirmar un objetivo de negocio. El cambio visual se busca dentro del plazo de verificación configurado por el operador (`[engine] verify_timeout_ms` y `verify_poll_ms`, SDD §2.9); es el "plazo" de BDD-29. Si vence sin evidencia, el resultado es `indeterminate` con `INDETERMINATE_EFFECT` y `next_step: reconcile_effect`, y la entrada no se reenvía. No se permiten instrucciones arbitrarias de shell o afirmaciones del agente que reemplacen la política de seguridad.
 
 ## 7.5 Estados de respuesta
 
@@ -42,7 +42,7 @@ La precondición de snapshot es estricta en el MVP. Una petición vieja no se re
 | effect_observed | Se verificó la postcondición declarada | No prueba objetivos no verificados |
 | indeterminate | No hay certeza suficiente del efecto/entrega | No autoriza retry automático |
 
-Los resultados incluyen `input_delivered` y `verified` para evitar el ambiguo `status: ok` original. Las coordenadas ejecutadas no se exportan por defecto; pueden existir en diagnóstico local protegido. El modo simulado tiene prohibido marcar input_delivered=true.
+Los resultados incluyen `input_delivered` y `verified` para evitar el ambiguo `status: ok` original. Las coordenadas ejecutadas no se exportan por defecto; pueden existir en diagnóstico local protegido. El modo simulado tiene prohibido marcar input_delivered=true. En `indeterminate`, `input_delivered` dice si el actuador reportó la entrega completa de los eventos: `true` cuando sólo falta verificar el efecto declarado, `false` cuando la propia entrega es incierta (fallo del actuador o eventos no aceptados por el SO); `verified` es siempre `false`. En los demás estados ambos campos se deducen del estado.
 
 ## 7.6 get_engine_metrics y recortes
 

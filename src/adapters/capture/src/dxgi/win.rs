@@ -27,13 +27,9 @@ use windows::Win32::UI::HiDpi::{
 use windows::core::{HRESULT, Interface};
 
 use super::{
-    ADAPTER, DxgiDiagnostics, DxgiOptions, FrameState, Geometry, check_rotation, mapped_len,
-    pack_rows, read_mapping,
+    ADAPTER, DxgiDiagnostics, DxgiOptions, FIRST_FRAME_TIMEOUT, FrameState, Geometry, UpdateUse,
+    check_rotation, classify_update, mapped_len, pack_rows, read_mapping,
 };
-
-/// How long the first capture after (re)creating the duplication waits for the desktop
-/// image; DXGI normally hands the current image over at once.
-const FIRST_FRAME_TIMEOUT: Duration = Duration::from_millis(500);
 
 fn port(message: impl Into<String>) -> impl FnOnce(windows::core::Error) -> PortError {
     let message = message.into();
@@ -417,8 +413,9 @@ enum Failure {
 ///   `SendInput` share physical pixels.
 /// - Each capture waits at most [`DxgiOptions::acquire_timeout`] for a desktop update.
 ///   With none, the screen has not changed since the last frame, which is returned again
-///   with a new `frame_seq` (the first capture after opening waits up to 500 ms for the
-///   desktop image instead, and fails if none arrives).
+///   with a new `frame_seq`. The first capture after opening (or after the image size
+///   changed) waits up to 500 ms for an update that carries a presented desktop image
+///   (`LastPresentTime != 0`), skipping the blank ones, and fails if none arrives.
 /// - A lost duplication (mode change, secure desktop, ...) is recreated once within the
 ///   capture, and the next frame starts a new geometry epoch, as does any change of size,
 ///   origin or DPI. A rotated output or a non-BGRA8 desktop is out of profile: an error.
@@ -504,40 +501,63 @@ impl DxgiCapturer {
                 return Err(Failure::Port(e));
             }
         };
-        let timeout = if state.has_frame_of(geometry.size) {
+        let has_last_frame = state.has_frame_of(geometry.size);
+        let mut timeout = if has_last_frame {
             options.acquire_timeout
         } else {
             FIRST_FRAME_TIMEOUT
         };
-        let acquired = session.acquire(timeout).map_err(|e| {
-            if is_lost(e.code()) {
-                Failure::Lost(e)
-            } else {
-                Failure::Port(port("cannot acquire the desktop image")(e))
+        // Without a last frame, wait (at most FIRST_FRAME_TIMEOUT in all) for an update
+        // that carries a presented desktop image: the first updates after (re)creating the
+        // duplication may carry none, and their texture is blank.
+        let started = std::time::Instant::now();
+        let (info, resource, held, captured_at) = loop {
+            let acquired = session.acquire(timeout).map_err(|e| {
+                if is_lost(e.code()) {
+                    Failure::Lost(e)
+                } else {
+                    Failure::Port(port("cannot acquire the desktop image")(e))
+                }
+            })?;
+            let captured_at = state.now();
+            let Some((info, resource, held)) = acquired else {
+                diagnostics.unchanged += 1;
+                return state.unchanged(geometry, captured_at).ok_or_else(|| {
+                    Failure::Port(PortError::new(
+                        ADAPTER,
+                        "no desktop image arrived from the duplication",
+                    ))
+                });
+            };
+            match classify_update(info.LastPresentTime, has_last_frame, started.elapsed()) {
+                UpdateUse::Copy => break (info, resource, held, captured_at),
+                UpdateUse::ReuseLast => {
+                    // Only the pointer moved: the desktop image is the last one.
+                    if let Some(frame) = state.unchanged(geometry, captured_at) {
+                        drop(held);
+                        diagnostics.unchanged += 1;
+                        return Ok(frame);
+                    }
+                    break (info, resource, held, captured_at);
+                }
+                UpdateUse::AcquireAgain(left) => {
+                    drop(held);
+                    timeout = left;
+                }
+                UpdateUse::Fail => {
+                    drop(held);
+                    return Err(Failure::Port(PortError::new(
+                        ADAPTER,
+                        "no desktop image was presented within 500 ms of opening the \
+                         duplication",
+                    )));
+                }
             }
-        })?;
-        let captured_at = state.now();
-        let Some((info, resource, held)) = acquired else {
-            diagnostics.unchanged += 1;
-            return state.unchanged(geometry, captured_at).ok_or_else(|| {
-                Failure::Port(PortError::new(
-                    ADAPTER,
-                    "no desktop image arrived from the duplication",
-                ))
-            });
         };
         let (dirty, moves) = session.metadata_counts(&info);
         diagnostics.last_dirty_rects = dirty;
         diagnostics.last_move_rects = moves;
         diagnostics.protected_content_masked = info.ProtectedContentMaskedOut.as_bool();
-        // Only the pointer moved: the desktop image is the last one.
-        if info.LastPresentTime == 0
-            && let Some(frame) = state.unchanged(geometry, captured_at)
-        {
-            drop(held);
-            diagnostics.unchanged += 1;
-            return Ok(frame);
-        }
         let pixels = session
             .copy(&resource, geometry.size, held)
             .map_err(Failure::Port)?;
@@ -598,6 +618,11 @@ mod tests {
             frame.row_stride() * frame.height() as usize
         );
         assert_eq!((captured.frame_seq, frame.geometry_epoch()), (1, 1));
+        // The first frame shows the desktop, not a blank image (S0 §7, S3 finding 4).
+        // Only whether the pixels vary is checked; nothing about them is printed or kept.
+        let (pixels, _) = frame.pixels().as_chunks::<4>();
+        let uniform = pixels.iter().all(|px| px == &pixels[0]);
+        assert!(!uniform, "the first frame is a uniform (blank) image");
         let mapping = dxgi.display_mapping().expect("a mapping after a frame");
         eprintln!(
             "dxgi output 0: {}x{} stride {} epoch {} mapping {mapping:?} {:?}",
