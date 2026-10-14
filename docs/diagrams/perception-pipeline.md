@@ -32,3 +32,27 @@ sequenceDiagram
     E-->>M: elements (smallest first)
     M-->>A: bounds + click center
 ```
+
+## Act and observe / Actuar y observar
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Agent
+    participant M as adapter-mcp
+    participant U as ActuationService
+    participant E as PerceptionEngine (ScreenModel)
+    participant I as InputController
+
+    A->>M: tools/call click {element_id: "e4"}
+    M->>U: click(screen = E, Element(e4), Left)
+    U->>E: screen_bounds(), element(e4)
+    E-->>U: last frame bounds, element bounds
+    U->>U: validate (perceived? on screen? exists?)
+    U->>I: perform(Click at center)
+    I-->>U: ok
+    U-->>M: ActionReceipt {live}
+    M->>E: tick()  (observe = true)
+    E-->>M: PerceptionReport (what changed)
+    M-->>A: {performed, observed}
+```

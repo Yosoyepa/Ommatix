@@ -26,9 +26,11 @@ See the [hexagon diagram](../diagrams/hexagon.md).
 | Crate | Responsibility | Key types |
 |---|---|---|
 | `ommatix-domain` | Geometry, grid signatures, region merging, scene with identity tracking, spatial index | `Frame`, `GridSpec`, `GridSignature`, `Scene`, `SpatialIndex`, `Element` |
-| `ommatix-application` | Use case orchestration; ports to the outside | `PerceptionEngine`, `FrameSource`, `ElementDetector`, `PerceptionReport` |
+| `ommatix-application` | Use cases and ports to the outside | `PerceptionEngine`, `ActuationService`, `FrameSource`, `ElementDetector`, `InputController`, `ScreenModel` |
 | `ommatix-adapter-capture` | Frame sources | `ScriptedSource`, `ImageSequenceSource`, `ScreenSource` |
 | `ommatix-adapter-vision` | Element detection | `ContrastBlobDetector` |
+| `ommatix-adapter-input` | Desktop input | `DryRunInput`, `NativeInput` |
+| `ommatix-adapter-sim` | Simulated desktop for tests and demos (both ports) | `SimulatedDesktop` |
 | `ommatix-adapter-mcp` | Agent-facing protocol | `McpServer`, tool DTOs |
 | `ommatix` | Composition root, CLI (`serve`, `demo`) | `main.rs` |
 
@@ -44,6 +46,20 @@ See the [pipeline sequence](../diagrams/perception-pipeline.md) and
 5. Update the scene: re-identify elements by IoU, add new ones, remove vanished ones.
 6. Report the delta and per-stage timings.
 
+## Acting
+
+See [ADR-0008](../adr/0008-actuation-port-dry-run-default.md). `ActuationService` checks
+each request against the last perceived frame (target on screen, element id exists, text
+length) and only then calls the injected `InputController`. MCP action tools then perceive
+again, so the agent receives the effect of its action in the same response. Input is
+dry-run unless the binary is built with `native-input` and started with `--input native`.
+
+## Acceptance specification
+
+See [ADR-0009](../adr/0009-gherkin-acceptance-through-mcp.md). The MVP is specified in
+Gherkin (`src/acceptance/features/`) and executed with `cucumber` through the MCP adapter
+against a simulated desktop that reacts to input.
+
 ## Quality attributes
 
 | Attribute | How it is addressed |
@@ -57,5 +73,5 @@ See the [pipeline sequence](../diagrams/perception-pipeline.md) and
 ## Current limitations (MVP)
 
 - Detector reports geometry only (`kind = blob`), no text.
-- No input actuation yet: the agent must click through other tooling.
+- Live input has only been exercised through the dry-run and simulated adapters.
 - Single-threaded; detection per region is a natural parallelisation point.

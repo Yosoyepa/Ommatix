@@ -27,9 +27,11 @@ Ver el [diagrama hexagonal](../diagrams/hexagon.md).
 | Crate | Responsabilidad | Tipos clave |
 |---|---|---|
 | `ommatix-domain` | Geometría, firmas de cuadrícula, fusión de regiones, escena con seguimiento de identidad, índice espacial | `Frame`, `GridSpec`, `GridSignature`, `Scene`, `SpatialIndex`, `Element` |
-| `ommatix-application` | Orquestación del caso de uso; puertos hacia el exterior | `PerceptionEngine`, `FrameSource`, `ElementDetector`, `PerceptionReport` |
+| `ommatix-application` | Casos de uso y puertos hacia el exterior | `PerceptionEngine`, `ActuationService`, `FrameSource`, `ElementDetector`, `InputController`, `ScreenModel` |
 | `ommatix-adapter-capture` | Fuentes de frames | `ScriptedSource`, `ImageSequenceSource`, `ScreenSource` |
 | `ommatix-adapter-vision` | Detección de elementos | `ContrastBlobDetector` |
+| `ommatix-adapter-input` | Entrada al escritorio | `DryRunInput`, `NativeInput` |
+| `ommatix-adapter-sim` | Escritorio simulado para pruebas y demos (ambos puertos) | `SimulatedDesktop` |
 | `ommatix-adapter-mcp` | Protocolo hacia el agente | `McpServer`, DTOs de herramientas |
 | `ommatix` | Raíz de composición, CLI (`serve`, `demo`) | `main.rs` |
 
@@ -46,6 +48,21 @@ Ver la [secuencia del pipeline](../diagrams/perception-pipeline.md) y el
    desaparecieron.
 6. Reportar el delta y los tiempos por etapa.
 
+## Actuar
+
+Ver el [ADR-0008](../adr/0008-actuation-port-dry-run-default.md). `ActuationService` valida
+cada petición contra el último frame percibido (objetivo dentro de la pantalla, id de
+elemento existente, longitud del texto) y solo entonces llama al `InputController`
+inyectado. Las herramientas MCP de acción vuelven a percibir, así que el agente recibe el
+efecto de su acción en la misma respuesta. La entrada es dry-run salvo que el binario se
+compile con `native-input` y se inicie con `--input native`.
+
+## Especificación de aceptación
+
+Ver el [ADR-0009](../adr/0009-gherkin-acceptance-through-mcp.md). El MVP está especificado
+en Gherkin (`src/acceptance/features/`) y se ejecuta con `cucumber` a través del adaptador
+MCP sobre un escritorio simulado que reacciona a la entrada.
+
 ## Atributos de calidad
 
 | Atributo | Cómo se aborda |
@@ -59,5 +76,5 @@ Ver la [secuencia del pipeline](../diagrams/perception-pipeline.md) y el
 ## Limitaciones actuales (MVP)
 
 - El detector reporta solo geometría (`kind = blob`), sin texto.
-- Aún no hay actuación (clic, escribir): el agente debe usar otra herramienta para actuar.
+- La entrada real solo se ha ejercitado con los adaptadores dry-run y simulado.
 - Un solo hilo; la detección por región es el punto natural de paralelización.

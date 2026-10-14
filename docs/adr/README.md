@@ -13,3 +13,5 @@ and open it in the same PR as the change it justifies. Superseded ADRs are kept 
 | [0005](0005-grid-incremental-perception.md) | Grid-based incremental perception and uniform-grid spatial index | Accepted |
 | [0006](0006-deterministic-classical-detector.md) | Deterministic classical detector for the MVP | Accepted |
 | [0007](0007-bilingual-documentation.md) | Bilingual (EN/ES) documentation | Accepted |
+| [0008](0008-actuation-port-dry-run-default.md) | Actuation through an InputController port, dry-run by default | Accepted |
+| [0009](0009-gherkin-acceptance-through-mcp.md) | Executable Gherkin acceptance tests through MCP on a simulated desktop | Accepted |
