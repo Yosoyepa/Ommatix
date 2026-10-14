@@ -186,7 +186,7 @@ comprobarlos.
 |---|---|---|---|
 | Detección de cambios, fusión, identidad, snapshots | Algoritmos 1, 2 y 3B; commit transaccional | Implementados en `ommatix-domain` y ejecutados por el `Engine` | S1–S2 (hecho) |
 | Caché de íconos | Algoritmo 3A dentro de la observación | Implementado en `ommatix-domain` (`appearance`), todavía fuera de la observación: ningún detector informa íconos sin texto | S3 |
-| Percepción | Detector y OCR en ONNX Runtime, roles según el spike S0 | Detector de regiones de color plano (roles `unknown`), sin OCR (`NullTextRecognizer`); los escritorios simulados informan la verdad de terreno | S0, S3 |
+| Percepción | Detector y OCR en ONNX Runtime, roles según el spike S0 | Por defecto, detector de regiones de color plano (roles `unknown`) y sin OCR (`NullTextRecognizer`); los escritorios simulados informan la verdad de terreno. Hay adaptadores opcionales, pero ningún modelo seleccionado: un detector ONNX que falla de forma segura, guiado por un manifiesto fijado por SHA-256 (feature `onnx`), y el OCR de Windows para un único idioma (feature `winrt-ocr`) | S0, S3 |
 | Contrato con el agente | Ommatix 1.0 por MCP 2026-07-28; 2025-11-25 opcional | Implementado (CT-01..10); sin probar todavía con un cliente real | S0/S3 para el cliente |
 | Compuerta de acciones | Vigencia, política, allowlist, foco, parada | Vigencia, política y parada; `allowed_applications` no se aplica (aún no hay evidencia de la ventana en primer plano); sin comprobación de foco | S3 |
 | Verificación del efecto | Postcondiciones de foco, valor, desplazamiento y cambio visual | Sólo cambio visual, con una nueva captura | S3 |

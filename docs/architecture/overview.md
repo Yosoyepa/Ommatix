@@ -178,7 +178,7 @@ the other effects are reported `indeterminate` until S3 can check them.
 |---|---|---|---|
 | Change detection, fusion, identity, snapshots | Algorithms 1, 2, 3B; transactional commit | Implemented in `ommatix-domain` and run by the `Engine` | S1–S2 (done) |
 | Icon cache | Algorithm 3A in the observation | Implemented in `ommatix-domain` (`appearance`), not yet in the observation: no detector reports text-less icons | S3 |
-| Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | Flat-colour region detector (roles `unknown`), no OCR (`NullTextRecognizer`); the simulated desktops report ground truth | S0, S3 |
+| Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | By default, flat-colour region detector (roles `unknown`) and no OCR (`NullTextRecognizer`); the simulated desktops report ground truth. Opt-in adapters exist but no model is selected: a fail-closed ONNX detector driven by a SHA-256-pinned manifest (feature `onnx`) and Windows OCR for one language (feature `winrt-ocr`) | S0, S3 |
 | Agent contract | Ommatix 1.0 over MCP 2026-07-28; 2025-11-25 opt-in | Implemented (CT-01..10); not yet tested against a real client | S0/S3 for the client |
 | Action gate | Freshness, policy, allowlist, focus, stop | Freshness, policy and stop; `allowed_applications` not enforced (no foreground-window evidence yet); no focus check | S3 |
 | Effect verification | Focus, value, scroll and visual postconditions | Visual change by re-capture only | S3 |
