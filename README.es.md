@@ -138,8 +138,11 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
-  DirectML, donde se cumplen las metas iniciales de RNF-05 para el refresco completo y para
-  una región, pero no para dos o más), así que por defecto el detector es el buscador de regiones de color
+  DirectML; con las etapas de una observación en concurrencia y la red en float16
+  ([ADR-0019](docs/adr/0019-concurrent-observation-stages.md), [CHANGELOG 1.0.22](docs/thesis/CHANGELOG.md))
+  se cumplen en la máquina de referencia las metas iniciales de RNF-05 para el refresco
+  completo (p95 98 ms) y para una región (p95 102 ms), pero no, por 3 ms, para dos regiones
+  (p95 153 ms), así que RNF-05 no queda cerrado), así que por defecto el detector es el buscador de regiones de color
   plano del arranque (roles `unknown`) y no hay OCR; no se ha probado un cliente MCP de
   terceros; IT-02 sólo se ejecutó en parte (S0); e IT-06, IT-07, SEC-03,
   SEC-04 y SEC-06 no se han ejecutado de forma supervisada. La
@@ -273,7 +276,7 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
 
 - **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
   rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
-  `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `max_message_bytes`
+  `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` booleano (por defecto `true`), `max_message_bytes`
   4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`
   en blanco); y valores que este binario no puede cumplir: un `platform` distinto de
   `windows`, un `snapshot_policy`
@@ -357,6 +360,12 @@ docs/
 ├── architecture/          visión general (EN/ES)
 ├── diagrams/              diagramas Mermaid, etiquetas en inglés
 └── reviews/               revisiones de código: hallazgo, corrección, prueba de regresión
+tools/                     herramientas de medición y aceptación fuera del workspace (nunca
+├── s0/                    enlazadas al binario): exportación del modelo (`--fp16`, `--dynamic`),
+│                          frames sintéticos, configuraciones del operador
+├── s3/, s4/               clientes MCP y la aplicación de prueba controlada (`s4/testapp`, con
+│                          las banderas ocultas `--animate` de las mediciones de RNF-05)
+└── perf/                  `measure_latency.py`: latencia por etapa contra la aplicación de prueba
 ```
 
 Cómo se reparten los componentes del SDD del dossier

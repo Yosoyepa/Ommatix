@@ -68,7 +68,7 @@ compiler-enforced boundary.
 | Crate | May depend on |
 |---|---|
 | `ommatix-domain` | `thiserror`, plus pure-computation crates listed here: `unicode-normalization` (NFC for labels). No I/O, no threads, no clocks, no serialisation, no other Ommatix crate |
-| `ommatix-application` | `ommatix-domain` + `thiserror`. No adapter crate; time only through the `Clock` port |
+| `ommatix-application` | `ommatix-domain` + `thiserror`. No adapter crate; time only through the `Clock` port. Standard-library scoped threads only for the stages of one observation (ADR-0019) |
 | `ommatix-adapter-*` | `ommatix-application`, `ommatix-domain`, their own external libs. **Never another adapter** (dev-dependencies for integration tests are fine) |
 | `ommatix` (app) | everything; it is the only place where concrete adapters are chosen |
 | `ommatix-acceptance` | anything, as dev-dependencies only (test crate, never linked into the binary) |
@@ -113,9 +113,10 @@ Nothing MVP-related goes in the repository root except workspace configuration.
 
 1. **Determinism.** Same frames ⇒ same elements, ids and JSON. Use `BTreeMap`/`BTreeSet` or
    sort explicitly before anything is emitted; never iterate a `HashMap` into output; no
-   randomness in domain or application. Time comes from the injected `Clock` (`ManualClock`
-   in tests); run-dependent values (timings) go in MCP `_meta`, never in
-   `structuredContent`.
+   randomness in domain or application. The stages of one observation run concurrently
+   (ADR-0019) and are collected by stage, never by arrival order, so the evidence is the same
+   as in sequence. Time comes from the injected `Clock` (`ManualClock` in tests);
+   run-dependent values (timings) go in MCP `_meta`, never in `structuredContent`.
 2. **Incrementality.** Compare against the last committed base, not the previous frame, and
    never re-process the full frame when only regions changed. The full refresh is Algorithm
    1's explicit fallback (geometry change, budget exceeded), never a shortcut. Any new
@@ -180,6 +181,7 @@ cargo fmt --all                                        # format
 cargo clippy --workspace --all-targets -- -D warnings  # lint (CI-blocking)
 cargo test --workspace                                 # unit + integration + Gherkin (CI-blocking)
 cargo run -- demo                                      # smoke test: the engine on the simulated desktop
+python tools/perf/measure_latency.py --variant NAME=EXE,CONFIG ... --out perf.json  # RNF-05 latency, Windows, no input (S0_RESULTADOS.md §10)
 cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings  # when touching capture/input
 cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia --all-targets -- -D warnings  # on Windows (CI job `windows`)
 cargo test -p ommatix-adapter-capture --features dxgi -- --ignored                   # manual: one DXGI frame, never saved
@@ -239,8 +241,8 @@ Do not bypass them with `--no-verify` unless the PR says why.
 ## 9. Decisions already made (do not re-litigate without a new ADR)
 
 See `docs/adr/README.md`. ADR-0001..0012 come from the thesis; the project owner accepted
-them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015, ADR-0016, ADR-0017 and
-ADR-0018 were accepted on 2026-10-14 too.
+them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015, ADR-0016, ADR-0017,
+ADR-0018 and ADR-0019 were accepted on 2026-10-14 too.
 Highlights: Rust runtime with independent oracles (0001), MCP over stdio with explicit
 profiles (0002), conservative spatial fusion with IoC (0003), masked open-set icon cache
 (0004), persistent tracking instead of cell hashes (0005), transactional snapshots (0006),
@@ -250,5 +252,6 @@ modular monolith with adaptive incrementality (0011), data minimisation (0012), 
 documentation (0013), the hexagonal crate layout (0014), the MCP transport on `rmcp` wire
 types with a bounded message loop (0015), bounded `unsafe` for the Windows
 capture and input adapters (0016), UI Automation evidence fused with the visual path,
-with no `unsafe` of our own (0017) and `type` in two phases whose keys wait for
-element-level keyboard focus (0018).
+with no `unsafe` of our own (0017), `type` in two phases whose keys wait for
+element-level keyboard focus (0018) and the perception stages of one observation running
+concurrently on scoped threads (0019).
