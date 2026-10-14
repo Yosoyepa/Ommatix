@@ -363,11 +363,13 @@ Mediana / p95 (máximo), en milisegundos, de las observaciones de las corridas p
 Detalle, resolución y prueba de regresión en [`reviews/2026-10-14-s4-third-round.md`](../reviews/2026-10-14-s4-third-round.md).
 
 1. **Corregido: activación de la ventana del cliente** (§3). Prueba: `tools/s4/test_e2e_driver.py`.
-2. **Abierto, motor:** lectura de accesibilidad parcial sin relectura en observaciones incrementales (§4.5).
-3. **Abierto, especificación:** «Borrar» no se expone tras «Es igual a» en la Calculadora, modo Científica (§4.2).
-4. **Abierto, cliente y motor:** un clic en «Editar» no produce un menú observable de forma fiable, y el cliente no verifica ni cierra el estado del menú (§4.3).
+2. **Corregido después (CHANGELOG 1.0.18), motor:** lectura de accesibilidad parcial sin relectura en observaciones incrementales (§4.5). El proveedor informa de la lectura truncada y el motor la repite en la observación siguiente.
+3. **Corregido después (1.0.18), cliente:** «Borrar» no se expone tras «Es igual a» en la Calculadora, modo Científica (§4.2). El control de borrado se elige entre «Borrar», «Borrar todo» y «Borrar entrada».
+4. **Corregido después (1.0.18), cliente:** el cliente no verificaba ni cerraba el estado del menú (§4.3). Ahora comprueba `Collapsed` al empezar y cierra un menú abierto tras un fallo. La causa de que el clic no produjera un menú observable sigue sin establecerse.
 5. **Abierto, entorno:** eventos de entrada sin origen identificado (§3).
-6. **Abierto, de rondas anteriores:** `execute_action` no devuelve etapas de `_meta`, y el recibo de `SendInput` no llega al agente.
+6. **Corregido después (1.0.18):** `execute_action` devuelve etapas en `_meta` (`io.ommatix/action_timings`). El recibo de `SendInput` sigue sin llegar al agente.
+
+Las correcciones de 1.0.18 se probaron con dobles, sin entrada real: no se han medido en vivo.
 
 ### 5. Estado en la matriz
 
@@ -375,8 +377,8 @@ Detalle, resolución y prueba de regresión en [`reviews/2026-10-14-s4-third-rou
 
 ### 6. Qué queda y cómo reanudar
 
-- **Decisión del responsable sobre el flujo de E2E-02** (§4.2). El cuaderno está en 291 de 400.
-- **Decisión de diseño sobre la lectura de accesibilidad parcial** (hallazgo 2), antes de repetir corridas en aplicaciones con árboles grandes.
-- **Revisar E2E-03 con el responsable presente:** el estado del menú «Editar» del Bloc de notas, y una comprobación real del estado inicial y una limpieza tras un fallo.
+- **Repetir E2E-02** con el cliente de 1.0.18 (el control de borrado se elige por nombre). Si tras «=» no existe ninguno de «Borrar», «Borrar todo» y «Borrar entrada» (modo Científica), la corrida falla sin entrada: el responsable decide el modo de la Calculadora. El cuaderno está en 291 de 400.
+- **Repetir E2E-03 con el responsable presente:** el cliente comprueba `Collapsed` al empezar y cierra el menú tras un fallo; falta ver por qué un clic en «Editar» no producía un menú observable.
+- **Medir en vivo la relectura de accesibilidad** (hallazgo 2, corregido con dobles): cuántas observaciones vuelven a leer el árbol y cuánto cuesta en aplicaciones con árboles grandes. Una ventana que siempre se trunca se lee entera en cada observación.
 - **Identificar el origen de los eventos de entrada** sin acción (§3) y confirmar que nadie usa el equipo durante las corridas.
 - **Para reanudar:** el responsable retira `stop.flag`; después, un sondeo sin entrada, un piloto y la serie puntuada.

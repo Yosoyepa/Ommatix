@@ -135,8 +135,10 @@ unless the agent sets it to false, and even then the local consent and allowlist
   `POLICY_DENIED`, `REQUEST_CONFLICT` and others), `retryable` and a `next_step` such as
   `observe_again` or `operator_review`; they are tool results with `isError: true`.
   Malformed messages, unknown methods or tools and schema-invalid arguments (`-32602`) are
-  JSON-RPC errors. Messages are limited to 64 KiB in both directions. Stage timings go in
-  the result's `_meta` (`io.ommatix/timings`), never in `structuredContent`.
+  JSON-RPC errors. Messages are limited to 64 KiB in both directions. Run-dependent values
+  go in the result's `_meta`, never in `structuredContent`: an observation's stage timings
+  (`io.ommatix/timings`) and whether its accessibility evidence is complete
+  (`io.ommatix/accessibility`), and an action's stage timings (`io.ommatix/action_timings`).
 
 ## Quality attributes
 
@@ -211,7 +213,10 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   input and pattern calls are forbidden by the adapter's `clippy.toml`). Evidence, not a
   replacement: an enabled, on-screen element with an action pattern is `confirmed` with its
   role and name (`label_source: accessibility`), the detector boxes that are the same control
-  merge into it, and a box centred on another accessible control stops being confirmed. It
+  merge into it, and a box centred on another accessible control stops being confirmed. A walk
+  that ends on its budget says so (`truncated`): those regions are read again on the next
+  observation even if no pixel changed, evidence the partial read does not repeat is kept while
+  its pixels are unchanged, and a visual box inside such a gap is not confirmed. It
   never reads a field's value, and a password field is no input. Allowed only with `dxgi` or
   `screen`; off by default.
 - *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` for exactly

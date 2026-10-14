@@ -300,7 +300,10 @@ The MCP server exposes three tools, with the dossier's JSON schemas:
 | `get_engine_metrics` | Mode, observations, rejected and delivered actions, pending regions, whether models are loaded |
 
 Domain errors come back as tool results with `isError: true`, a `code`, `retryable` and a
-`next_step`; stage timings travel in the result's `_meta` under `io.ommatix/timings`.
+`next_step`; run-dependent values travel in the result's `_meta`: stage timings under
+`io.ommatix/timings` and whether the accessibility evidence is complete under
+`io.ommatix/accessibility` (`observe_screen`), the stage timings of the action under
+`io.ommatix/action_timings` (`execute_action`).
 
 ## Repository layout
 

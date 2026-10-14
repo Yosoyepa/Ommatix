@@ -141,8 +141,10 @@ schemas JSON de [`docs/thesis/contratos/`](../thesis/contratos/README.md):
   `observe_again` u `operator_review`; son resultados de herramienta con `isError: true`. Los
   mensajes mal formados, los métodos o herramientas desconocidos y los argumentos que violan
   el schema (`-32602`) son errores JSON-RPC. Los mensajes se limitan a 64 KiB en ambos
-  sentidos. Los tiempos por etapa van en el `_meta` del resultado (`io.ommatix/timings`),
-  nunca en `structuredContent`.
+  sentidos. Los valores que dependen de la ejecución van en el `_meta` del resultado, nunca en
+  `structuredContent`: los tiempos por etapa de una observación (`io.ommatix/timings`) y si su
+  evidencia de accesibilidad es completa (`io.ommatix/accessibility`), y los tiempos por etapa
+  de una acción (`io.ommatix/action_timings`).
 
 ## Atributos de calidad
 
@@ -223,8 +225,11 @@ sin OCR, entrada en dry run y política que lo niega todo.
   entrada y de patrones del crate). Es evidencia, no un reemplazo: un elemento habilitado, en
   pantalla y con un patrón de acción es `confirmed` con su rol y su nombre (`label_source:
   accessibility`), las cajas del detector que son el mismo control se funden con él y una caja
-  centrada sobre otro control accesible deja de estar confirmada. Nunca lee el valor de un
-  campo y un campo de contraseña no es una entrada. Sólo con `dxgi` o `screen`; apagado por
+  centrada sobre otro control accesible deja de estar confirmada. Un recorrido que termina por
+  su presupuesto lo declara (`truncated`): esas regiones se leen otra vez en la observación
+  siguiente aunque ningún píxel haya cambiado, la evidencia que la lectura parcial no repite se
+  conserva mientras sus píxeles no cambien y una caja visual dentro de un hueco no se confirma.
+  Nunca lee el valor de un campo y un campo de contraseña no es una entrada. Sólo con `dxgi` o `screen`; apagado por
   defecto.
 - *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` para exactamente
   `ocr_language`, nunca otro idioma, sin inventar confianzas; el texto reconocido nunca se

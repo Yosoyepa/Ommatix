@@ -321,8 +321,10 @@ El servidor MCP expone tres herramientas, con los schemas JSON del dossier:
 | `get_engine_metrics` | Modo, observaciones, acciones rechazadas y entregadas, regiones pendientes, si hay modelos cargados |
 
 Los errores del dominio vuelven como resultados de herramienta con `isError: true`, un
-`code`, `retryable` y un `next_step`; los tiempos por etapa viajan en el `_meta` del resultado,
-bajo `io.ommatix/timings`.
+`code`, `retryable` y un `next_step`; los valores que dependen de la ejecución viajan en el
+`_meta` del resultado: los tiempos por etapa bajo `io.ommatix/timings` y si la evidencia de
+accesibilidad es completa bajo `io.ommatix/accessibility` (`observe_screen`), y los tiempos
+por etapa de la acción bajo `io.ommatix/action_timings` (`execute_action`).
 
 ## Estructura del repositorio
 
