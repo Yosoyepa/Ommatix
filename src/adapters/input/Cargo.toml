@@ -1,6 +1,6 @@
 [package]
 name = "ommatix-adapter-input"
-description = "Ommatix driven adapters for the OsActuator port: dry-run recorder and native mouse/keyboard via enigo."
+description = "Ommatix driven adapters for the OsActuator port: dry-run recorder, native mouse/keyboard via enigo and Win32 SendInput."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,11 +12,45 @@ publish.workspace = true
 default = []
 ## Send real mouse/keyboard events to the OS through `enigo`.
 native = ["dep:enigo"]
+## Real mouse/keyboard through Win32 `SendInput` (Windows only; ADR-0016).
+sendinput = ["dep:windows"]
 
 [dependencies]
 ommatix-application = { workspace = true }
 ommatix-domain = { workspace = true }
 enigo = { workspace = true, optional = true }
 
-[lints]
-workspace = true
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# The workspace lints, except `unsafe_code`: `forbid` cannot be relaxed by an inner
+# `allow`, so this crate denies it and allows it only on its `#[cfg(windows)] mod win`
+# (ADR-0016). Keep in sync with `[workspace.lints]`.
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+many_single_char_names = "allow"
+return_self_not_must_use = "allow"
+doc_markdown = "allow"
+print_stdout = "deny"
+# Every unsafe block states why it is sound (ADR-0016).
+undocumented_unsafe_blocks = "deny"

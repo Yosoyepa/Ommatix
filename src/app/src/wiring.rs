@@ -1,16 +1,19 @@
 //! Composition root: the only place that chooses concrete adapters and injects them into
 //! the engine.
 //!
-//! | `--source` | capturer | detector | recogniser | `--input dry-run` | `--input native` |
+//! | `--source` | capturer | detector | recogniser | `--input dry-run` | live input |
 //! |---|---|---|---|---|---|
 //! | `sim` | simulated desktop | simulated desktop | simulated desktop | simulated desktop (never live) | refused |
 //! | `images` | PNG sequence | flat-region | none | dry-run recorder | refused |
-//! | `screen` | primary monitor | flat-region | none | dry-run recorder | `enigo`, if `[safety] actuation_enabled` |
+//! | `screen` | primary monitor (`xcap`) | flat-region | none | dry-run recorder | `--input native` (`enigo`) |
+//! | `dxgi` | one output (DXGI Desktop Duplication, Windows) | flat-region | none | dry-run recorder | `--input sendinput` (Win32 `SendInput`) |
 //!
-//! Live input needs all of: `--input native` (or `[engine] mode = "native"`), the
-//! `native-input` build, `--source screen` and `[safety] actuation_enabled = true`. Even
-//! then the engine only delivers an action the agent explicitly asks for with
-//! `dry_run: false`, after its own gate.
+//! Live input needs all of: `--input native` with `--source screen` (or `[engine] mode =
+//! "native"`) and the `native-input` build, or `--input sendinput` with `--source dxgi`
+//! and the Windows `sendinput` build; plus `[safety] actuation_enabled = true`. Even then
+//! the engine only delivers an action the agent explicitly asks for with `dry_run: false`,
+//! after its own gate, which checks the foreground application against `[safety]
+//! allowed_applications`: only `sendinput` can attest it, so `native` never acts live.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -82,23 +85,60 @@ pub fn input_kind(args: &RunArgs, config: &Config) -> InputKind {
 
 /// Refuses live input unless every condition holds. Checked before any adapter opens.
 pub fn check_input(source: SourceKind, input: InputKind, config: &Config) -> Result<()> {
-    if input == InputKind::DryRun {
-        return Ok(());
+    match input {
+        InputKind::DryRun => Ok(()),
+        InputKind::Native => check_native(source, config),
+        InputKind::Sendinput => check_sendinput(source, config),
     }
+}
+
+fn check_native(source: SourceKind, config: &Config) -> Result<()> {
     if source != SourceKind::Screen {
         bail!(
             "native input requires --source screen: input must land on the screen the agent \
              observes"
         );
     }
-    if !config.safety.actuation_enabled {
-        bail!(
-            "native input requires `[safety] actuation_enabled = true` in the --config file; \
-             the agent can never enable actuation"
-        );
-    }
+    check_consent("native", config)?;
     if !cfg!(feature = "native-input") {
         bail!("this build has no native input; rebuild with `--features native-input`");
+    }
+    Ok(())
+}
+
+fn check_sendinput(source: SourceKind, config: &Config) -> Result<()> {
+    if source != SourceKind::Dxgi {
+        bail!(
+            "sendinput input requires --source dxgi: input must land on the screen the agent \
+             observes"
+        );
+    }
+    check_consent("sendinput", config)?;
+    let apps = &config.safety.allowed_applications;
+    if apps.is_empty() {
+        bail!(
+            "sendinput input requires a non-empty `[safety] allowed_applications`: the engine \
+             only acts on a foreground application listed there"
+        );
+    }
+    if let Some(app) = apps.iter().find(|a| **a != a.trim().to_lowercase()) {
+        bail!(
+            "[safety] allowed_applications entry {app:?} would never match: list lowercase \
+             executable file names such as \"notepad.exe\""
+        );
+    }
+    if !cfg!(all(windows, feature = "sendinput")) {
+        bail!("this build has no SendInput; rebuild on Windows with `--features sendinput`");
+    }
+    Ok(())
+}
+
+fn check_consent(input: &str, config: &Config) -> Result<()> {
+    if !config.safety.actuation_enabled {
+        bail!(
+            "{input} input requires `[safety] actuation_enabled = true` in the --config file; \
+             the agent can never enable actuation"
+        );
     }
     Ok(())
 }
@@ -145,6 +185,15 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
                 actuator,
             )
         }
+        SourceKind::Dxgi => {
+            let (capturer, actuator) = dxgi_ports(&clock, input, args.output)?;
+            (
+                capturer,
+                Box::new(FlatRegionDetector::default()),
+                Box::new(NullTextRecognizer),
+                actuator,
+            )
+        }
     };
 
     let live = actuator.is_live();
@@ -158,10 +207,11 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
     );
     let mut notes = config.notes();
     notes.push(icon_note(icons.as_ref()));
-    if live && config.safety.actuation_enabled {
+    if live && input == InputKind::Native {
         notes.push(
-            "[safety] live input is denied until the input adapter can attest that the \
-             foreground application is in allowed_applications (none can before S3)"
+            "--input native cannot attest the foreground application, so the engine refuses \
+             every live action against [safety] allowed_applications; on Windows use \
+             --source dxgi --input sendinput"
                 .to_owned(),
         );
     }
@@ -239,6 +289,7 @@ fn screen_ports(
     let actuator = match input {
         InputKind::DryRun => dry_run(),
         InputKind::Native => native_input(&screen)?,
+        InputKind::Sendinput => bail!("sendinput input requires --source dxgi"),
     };
     Ok((Box::new(screen), actuator))
 }
@@ -263,6 +314,51 @@ fn native_input(screen: &ommatix_adapter_capture::ScreenSource) -> Result<Box<dy
 #[cfg(all(feature = "screen", not(feature = "native-input")))]
 fn native_input(_: &ommatix_adapter_capture::ScreenSource) -> Result<Box<dyn OsActuator>> {
     bail!("this build has no native input; rebuild with `--features native-input`")
+}
+
+#[cfg(all(windows, feature = "dxgi"))]
+fn dxgi_ports(
+    clock: &Arc<dyn Clock>,
+    input: InputKind,
+    output: u32,
+) -> Result<(Box<dyn FrameCapturer>, Box<dyn OsActuator>)> {
+    use ommatix_adapter_capture::{DxgiCapturer, DxgiOptions};
+
+    let options = DxgiOptions {
+        output_index: output,
+        ..DxgiOptions::default()
+    };
+    let dxgi = DxgiCapturer::open(options, clock.clone())
+        .with_context(|| format!("cannot capture output {output} through DXGI"))?;
+    let actuator = match input {
+        InputKind::DryRun => dry_run(),
+        InputKind::Sendinput => send_input(&dxgi)?,
+        InputKind::Native => bail!("native input requires --source screen"),
+    };
+    Ok((Box::new(dxgi), actuator))
+}
+
+#[cfg(not(all(windows, feature = "dxgi")))]
+fn dxgi_ports(
+    _: &Arc<dyn Clock>,
+    _: InputKind,
+    _: u32,
+) -> Result<(Box<dyn FrameCapturer>, Box<dyn OsActuator>)> {
+    bail!("this build has no DXGI capture; rebuild on Windows with `--features dxgi`")
+}
+
+/// `SendInput` aimed through the DXGI capturer's live mapping, which fails closed while
+/// the capture is lost or out of profile.
+#[cfg(all(windows, feature = "sendinput"))]
+fn send_input(dxgi: &ommatix_adapter_capture::DxgiCapturer) -> Result<Box<dyn OsActuator>> {
+    Ok(Box::new(
+        ommatix_adapter_input::SendInputActuator::with_mapping_source(dxgi.mapping_source())?,
+    ))
+}
+
+#[cfg(all(windows, feature = "dxgi", not(feature = "sendinput")))]
+fn send_input(_: &ommatix_adapter_capture::DxgiCapturer) -> Result<Box<dyn OsActuator>> {
+    bail!("this build has no SendInput; rebuild on Windows with `--features sendinput`")
 }
 
 #[cfg(test)]
@@ -317,6 +413,69 @@ mod tests {
         assert!(error("serve", &native_mode).contains("requires --source screen"));
         // And `--input dry-run` always wins over it.
         assert!(build(&args("serve --input dry-run"), &native_mode).is_ok());
+    }
+
+    fn allowlisted(apps: &str) -> Config {
+        Config::parse(&format!(
+            "[safety]\nactuation_enabled = true\nallowed_applications = [{apps}]\n"
+        ))
+        .unwrap()
+    }
+
+    fn check(source: SourceKind, input: InputKind, config: &Config) -> Result<(), String> {
+        check_input(source, input, config).map_err(|e| format!("{e:#}"))
+    }
+
+    #[test]
+    fn sendinput_needs_dxgi_consent_and_an_allowlist() {
+        let ready = allowlisted("\"notepad.exe\"");
+        for line in [
+            "serve --input sendinput",
+            "serve --source screen --input sendinput",
+            "serve --source images --input sendinput",
+        ] {
+            assert!(
+                error(line, &ready).contains("requires --source dxgi"),
+                "{line}"
+            );
+        }
+        let sendinput = |config: &Config| check(SourceKind::Dxgi, InputKind::Sendinput, config);
+        assert!(
+            sendinput(&Config::default())
+                .unwrap_err()
+                .contains("actuation_enabled = true")
+        );
+        assert!(
+            sendinput(&actuation_enabled())
+                .unwrap_err()
+                .contains("non-empty `[safety] allowed_applications`")
+        );
+        assert!(
+            sendinput(&allowlisted("\"Notepad.exe\""))
+                .unwrap_err()
+                .contains("would never match")
+        );
+        if cfg!(all(windows, feature = "sendinput")) {
+            assert_eq!(sendinput(&ready), Ok(()));
+        } else {
+            assert!(
+                sendinput(&ready)
+                    .unwrap_err()
+                    .contains("--features sendinput")
+            );
+        }
+    }
+
+    #[test]
+    fn native_input_never_pairs_with_dxgi() {
+        assert!(
+            check(SourceKind::Dxgi, InputKind::Native, &actuation_enabled())
+                .unwrap_err()
+                .contains("requires --source screen")
+        );
+        if !cfg!(all(windows, feature = "dxgi")) {
+            assert!(error("serve --source dxgi", &Config::default()).contains("--features dxgi"));
+        }
     }
 
     #[test]

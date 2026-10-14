@@ -19,6 +19,11 @@ screen = ["ommatix-adapter-capture/screen"]
 ## Enable real mouse/keyboard input (`--input native`). Native input only aims at the
 ## captured screen, so it implies `screen`.
 native-input = ["screen", "ommatix-adapter-input/native"]
+## Enable DXGI Desktop Duplication capture (`--source dxgi`, Windows only).
+dxgi = ["ommatix-adapter-capture/dxgi"]
+## Enable Win32 SendInput (`--input sendinput`, Windows only). It only aims at the DXGI
+## capture, so it implies `dxgi`.
+sendinput = ["dxgi", "ommatix-adapter-input/sendinput"]
 
 [dependencies]
 ommatix-adapter-capture = { workspace = true }

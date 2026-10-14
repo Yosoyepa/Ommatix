@@ -1,7 +1,9 @@
 use enigo::{Axis, Button, Coordinate, Direction, Enigo, Keyboard, Mouse, Settings};
 use ommatix_application::contract::{ActionKind, ScrollDirection, ValidatedAction};
 use ommatix_application::{DeliveryReceipt, OsActuator, PortError};
-use ommatix_domain::{DisplayMapping, Point};
+use ommatix_domain::DisplayMapping;
+
+use crate::aim::frame_pixel;
 
 const ADAPTER: &str = "native-input";
 
@@ -29,13 +31,6 @@ impl Step {
             Self::Scroll(n) => n.unsigned_abs(),
         }
     }
-}
-
-/// The frame pixel an action aims at; `None` when the point is not a valid pixel.
-fn frame_pixel((x, y): (f64, f64)) -> Option<Point> {
-    let px =
-        |v: f64| (v.is_finite() && v >= 0.0 && v < f64::from(u32::MAX)).then(|| v.floor() as u32);
-    Some(Point::new(px(x)?, px(y)?))
 }
 
 /// The OS calls for `kind` at OS coordinates `at`: move there, then click, type (after a
@@ -141,14 +136,6 @@ impl OsActuator for NativeInput {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn points_must_be_frame_pixels() {
-        assert_eq!(frame_pixel((10.5, 3.9)), Some(Point::new(10, 3)));
-        assert_eq!(frame_pixel((-1.0, 3.0)), None);
-        assert_eq!(frame_pixel((f64::NAN, 3.0)), None);
-        assert_eq!(frame_pixel((1e12, 3.0)), None);
-    }
 
     #[test]
     fn each_action_moves_first_and_counts_its_events() {
