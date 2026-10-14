@@ -1,6 +1,6 @@
 [package]
 name = "ommatix-adapter-input"
-description = "Ommatix driven adapters for the InputController port: dry-run recorder and native mouse/keyboard via enigo."
+description = "Ommatix driven adapters for the OsActuator port: dry-run recorder and native mouse/keyboard via enigo."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
