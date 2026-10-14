@@ -320,7 +320,8 @@ pub struct ActionRequest {
     pub expected_effect: ExpectedEffect,
 }
 
-/// The outcome of `execute_action`. `input_delivered` and `verified` derive from `status`.
+/// The outcome of `execute_action`. `verified` derives from `status`; so does
+/// `input_delivered`, except for `indeterminate`, which carries its own (chapter 07 §7.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionResult {
     pub request_id: String,
@@ -330,11 +331,16 @@ pub struct ActionResult {
     /// Present when rejected; may be present when indeterminate.
     pub error: Option<ToolError>,
     pub observed_effect: Option<ObservedEffect>,
+    /// Whether the actuator reported every input event as inserted by the OS. Implied by
+    /// `input_delivered` and `effect_observed`, never true for `simulated` or `rejected`;
+    /// for `indeterminate` it tells a delivered action whose effect is unverified (true)
+    /// from one whose delivery itself is uncertain (false). It never claims an effect.
+    pub delivered: bool,
 }
 
 impl ActionResult {
     pub const fn input_delivered(&self) -> bool {
-        self.status.input_delivered()
+        self.delivered
     }
 
     pub const fn verified(&self) -> bool {

@@ -720,6 +720,7 @@ mod tests {
                 snapshot_id: worst.clone(),
                 error,
                 observed_effect,
+                delivered: status.input_delivered(),
             };
             let output = ToolOutput::new(
                 EXECUTE_ACTION,

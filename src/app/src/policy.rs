@@ -107,15 +107,19 @@ impl ConfigPolicy {
         if !self.notices || was == stopped {
             return;
         }
-        match reason {
-            Some(reason) => eprintln!(
-                "ommatix: STOP engaged by the operator ({reason}): no new input will be sent;                  actions already delivered keep their reported status"
-            ),
-            None => {
-                eprintln!(
-                    "ommatix: stop cleared by the operator: [safety] governs live input again"
-                );
-            }
+        eprintln!("{}", stop_notice(reason));
+    }
+}
+
+/// The stderr line for the stop being engaged (`Some(reason)`) or cleared (`None`).
+fn stop_notice(reason: Option<&str>) -> String {
+    match reason {
+        Some(reason) => format!(
+            "ommatix: STOP engaged by the operator ({reason}): no new input will be sent; \
+             actions already delivered keep their reported status"
+        ),
+        None => {
+            "ommatix: stop cleared by the operator: [safety] governs live input again".to_owned()
         }
     }
 }
@@ -198,6 +202,21 @@ mod tests {
         );
         switch.clear();
         assert!(!store.current().stopped);
+    }
+
+    #[test]
+    fn the_stop_notice_reads_as_one_sentence() {
+        // Found in the S3 supervised runs: a lost line continuation put a run of spaces in
+        // the middle of the STOP line on stderr.
+        let engaged = stop_notice(Some("the stop file STOP exists"));
+        assert_eq!(
+            engaged,
+            "ommatix: STOP engaged by the operator (the stop file STOP exists): no new input \
+             will be sent; actions already delivered keep their reported status"
+        );
+        for line in [engaged, stop_notice(None)] {
+            assert!(!line.contains("  "), "{line:?}");
+        }
     }
 
     #[test]

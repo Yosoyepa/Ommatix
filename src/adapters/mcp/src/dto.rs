@@ -729,9 +729,9 @@ impl From<&ActionResult> for ExecuteActionOutput {
 impl TryFrom<ExecuteActionOutput> for ActionResult {
     type Error = InvalidPayload;
 
-    /// Besides the schema rules, `input_delivered`/`verified` must be the ones the status
-    /// implies: the contract derives them from the status, so an `indeterminate` result
-    /// claiming delivery is not representable.
+    /// Besides the schema rules, `verified` must be the one the status implies, and so must
+    /// `input_delivered` except for `indeterminate`, which may report either: a delivered
+    /// action with an unverified effect, or an uncertain delivery (chapter 07 §7.5).
     fn try_from(o: ExecuteActionOutput) -> Result<Self, InvalidPayload> {
         check_schema_version(&o.schema_version)?;
         for (field, value) in [
@@ -742,7 +742,9 @@ impl TryFrom<ExecuteActionOutput> for ActionResult {
             check_len(field, value, 1, limits::MAX_ID_CHARS).map_err(bad)?;
         }
         let status: ActionStatus = o.status.into();
-        if o.input_delivered != status.input_delivered() || o.verified != status.verified() {
+        let delivery_ok =
+            status == ActionStatus::Indeterminate || o.input_delivered == status.input_delivered();
+        if !delivery_ok || o.verified != status.verified() {
             return Err(bad(
                 "`input_delivered`/`verified` contradict the status (a simulation never claims delivery)",
             ));
@@ -760,6 +762,7 @@ impl TryFrom<ExecuteActionOutput> for ActionResult {
             snapshot_id: o.snapshot_id,
             error: o.error.map(ToolError::try_from).transpose()?,
             observed_effect: o.observed_effect.map(Into::into),
+            delivered: o.input_delivered,
         })
     }
 }
@@ -840,6 +843,43 @@ mod tests {
             "request_id": "r1", "session_id": "s", "snapshot_id": "s1",
             "geometry_epoch": 1, "target_id": "e1", "expected_revision": 1, "action": "click"
         })
+    }
+
+    fn indeterminate(delivered: bool) -> ActionResult {
+        ActionResult {
+            request_id: "r1".into(),
+            status: ActionStatus::Indeterminate,
+            target_id: "e1".into(),
+            snapshot_id: "s1".into(),
+            error: Some(ToolError::new(
+                ErrorCode::IndeterminateEffect,
+                "input was delivered but no visual change was observed",
+            )),
+            observed_effect: Some(ObservedEffect::Unknown),
+            delivered,
+        }
+    }
+
+    #[test]
+    fn an_indeterminate_result_reports_whether_its_input_was_delivered() {
+        // Found in the S3 supervised runs: a click the OS accepted, whose visual change the
+        // engine did not see, went out as `input_delivered: false`.
+        for delivered in [true, false] {
+            let result = indeterminate(delivered);
+            let output = ExecuteActionOutput::from(&result);
+            assert_eq!(output.input_delivered, delivered);
+            assert!(!output.verified, "an unverified effect is never claimed");
+            assert_eq!(ActionResult::try_from(output).unwrap(), result);
+        }
+        // Every other status still fixes both flags.
+        let mut output = ExecuteActionOutput::from(&indeterminate(true));
+        output.status = StatusDto::Simulated;
+        output.error = None;
+        output.observed_effect = None;
+        assert!(
+            ActionResult::try_from(output).is_err(),
+            "a simulation never claims delivery"
+        );
     }
 
     #[test]

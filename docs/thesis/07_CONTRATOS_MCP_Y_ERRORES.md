@@ -42,7 +42,7 @@ La precondición de snapshot es estricta en el MVP. Una petición vieja no se re
 | effect_observed | Se verificó la postcondición declarada | No prueba objetivos no verificados |
 | indeterminate | No hay certeza suficiente del efecto/entrega | No autoriza retry automático |
 
-Los resultados incluyen `input_delivered` y `verified` para evitar el ambiguo `status: ok` original. Las coordenadas ejecutadas no se exportan por defecto; pueden existir en diagnóstico local protegido. El modo simulado tiene prohibido marcar input_delivered=true.
+Los resultados incluyen `input_delivered` y `verified` para evitar el ambiguo `status: ok` original. Las coordenadas ejecutadas no se exportan por defecto; pueden existir en diagnóstico local protegido. El modo simulado tiene prohibido marcar input_delivered=true. En `indeterminate`, `input_delivered` dice si el actuador reportó la entrega completa de los eventos: `true` cuando sólo falta verificar el efecto declarado, `false` cuando la propia entrega es incierta (fallo del actuador o eventos no aceptados por el SO); `verified` es siempre `false`. En los demás estados ambos campos se deducen del estado.
 
 ## 7.6 get_engine_metrics y recortes
 

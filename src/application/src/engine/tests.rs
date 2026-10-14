@@ -1085,12 +1085,14 @@ fn unverifiable_or_partial_delivery_is_indeterminate_and_never_retried() {
         r.engine.execute_action(&live_click(&page, id, effect))
     };
 
-    // No visual change although one was expected.
+    // No visual change although one was expected: the input itself was delivered.
     let result = live(&mut r, "r1", ExpectedEffect::VisualChange);
     assert_eq!(result.status, ActionStatus::Indeterminate);
+    assert!(result.input_delivered() && !result.verified());
     // An effect this engine cannot check yet.
     let result = live(&mut r, "r2", ExpectedEffect::FocusChanged);
     assert_eq!(result.status, ActionStatus::Indeterminate);
+    assert!(result.input_delivered() && !result.verified());
     let error = result.error.unwrap();
     assert_eq!(
         (error.code, error.retryable, error.next_step),
@@ -1114,10 +1116,41 @@ fn unverifiable_or_partial_delivery_is_indeterminate_and_never_retried() {
     r.world().receipt = Err(());
     let result = live(&mut r, "r4", ExpectedEffect::None);
     assert_eq!(result.status, ActionStatus::Indeterminate);
+    assert!(!result.input_delivered());
 
     assert_eq!(r.world().delivered.len(), 4, "one attempt each, no retries");
+    // Only the two actions the actuator reported delivered count as delivered.
     let m = r.engine.engine_metrics();
-    assert_eq!((m.delivered_actions, m.rejected_actions), (0, 0));
+    assert_eq!((m.delivered_actions, m.rejected_actions), (2, 0));
+}
+
+#[test]
+fn an_unverified_effect_still_reports_the_delivered_input() {
+    // Found in the S3 supervised runs: a live click the OS accepted, whose visual change
+    // the engine's capture right after delivery did not see yet, was reported as
+    // `input_delivered: false` and left `delivered_actions` at 0.
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::VisualChange));
+    assert_eq!(result.status, ActionStatus::Indeterminate);
+    assert!(
+        result.input_delivered(),
+        "the actuator reported the click delivered"
+    );
+    assert!(!result.verified());
+    assert_eq!(result.observed_effect, Some(ObservedEffect::Unknown));
+    assert_eq!(r.engine.engine_metrics().delivered_actions, 1);
+    // The replay is the stored report: same flags, no new delivery, no new count.
+    let replay = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::VisualChange));
+    assert_eq!(replay, result);
+    assert_eq!(r.world().delivered.len(), 1);
+    assert_eq!(r.engine.engine_metrics().delivered_actions, 1);
 }
 
 /// A live click on the Save button of `page`, expecting `effect`.

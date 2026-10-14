@@ -78,11 +78,19 @@ unless the agent and a local policy both allow them. More in the
   [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (accepted on 2026-10-14). CI builds, lints and tests them on Windows. The operator
   can stop live input locally with a stop file (`[safety] stop_file`), and `type` sends
   its keys only once keyboard focus is verified on the target field.
-- What is **not** done yet: no model has been selected (S0, ADR-0009), so by default the
-  detector is the bootstrap's flat-colour region finder (roles `unknown`) and there is no
-  OCR; no real MCP client has been tested; and none of the integration and security tests
-  (IT-01..07, SEC-01..06) has been run: they need supervised runs on the reference
-  hardware (the stop and the focus check included). Live input stays **off** unless the
+- **S3, supervised runs** ([report, in Spanish](docs/thesis/S3_CORRIDAS_SUPERVISADAS.md)):
+  real DXGI capture and real `SendInput` on `notepad.exe` with disposable data, driven over
+  MCP by `tools/s3/mcp_driver.py`. Four live clicks on the File menu reached the OS; the
+  operator's stop, the freshness check and the policy refused the rest without sending
+  anything. SEC-01 is executed; IT-01, IT-03, IT-05, SEC-02 and SEC-05 in part. An
+  `indeterminate` result now says whether the actuator delivered the input.
+- What is **not** done yet: no detector is accepted for the product (the S0 spike selected
+  OmniParser `icon_detect_v3` to integrate and measure: one class, about 7.5 s per inference
+  on CPU), so by default the detector is the bootstrap's flat-colour region finder (roles
+  `unknown`) and there is no OCR; no third-party MCP client has been tested; the visual
+  check right after delivery never saw the effect live (it needs a deadline); IT-02 ran only
+  in part (S0); and IT-04, IT-06, IT-07, SEC-03, SEC-04 and SEC-06 have not been run under
+  supervision. Live input stays **off** unless the
   operator enables it (below). The [overview](docs/architecture/overview.md#where-the-code-is-today) lists what
   remains.
 - First platform: **Windows 11 x64**, one monitor, DPI 100/125/150 %
@@ -104,8 +112,10 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
 - [ ] **S3, real adapters and action loop on Windows 11:** DXGI, ONNX Runtime, `SendInput`,
   policy, stop and effect verification; the bootstrap's macOS and X11 adapters are retired.
   First part done: the DXGI, `SendInput`, ONNX and Windows OCR adapters behind build
-  features, the operator's stop file and the focus check before typing; pending: models
-  (S0), effect checks beyond the visual change, a real MCP client and the supervised runs
+  features, the operator's stop file and the focus check before typing; first supervised
+  runs with real input on `notepad.exe`; pending: a product detector, a verification
+  deadline and effect checks beyond the visual change, a third-party MCP client and the
+  remaining supervised runs
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
   and the acceptance report
 

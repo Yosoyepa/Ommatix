@@ -1,5 +1,16 @@
 # Historial documental
 
+## 1.0.9 — 2026-10-14: S3, corridas supervisadas con entrada real
+
+Aclara un punto del contrato (capítulo 07 §7.5, sin cambiar los schemas) y cambia el estado de las matrices. El informe está en [`S3_CORRIDAS_SUPERVISADAS.md`](S3_CORRIDAS_SUPERVISADAS.md).
+
+- **Autorización:** el responsable del proyecto autorizó el 14 de octubre de 2026 corridas supervisadas con captura DXGI real y entrada `SendInput` real limitadas a `notepad.exe` con datos desechables y parada por `stop_file`. Se enviaron 8 solicitudes `dry_run: false` (de 10 permitidas): 4 clics llegaron al SO, todos sobre el menú `Archivo`, y 3 se denegaron sin enviar nada. No se escribió, no se desplazó y no se guardó ningún frame ni ninguna etiqueta.
+- **Matrices (`matrices/plan_pruebas.csv`):** SEC-01 pasa a `EJECUTADO_SUPERVISADO` (el arranque con `--input sendinput` sin `actuation_enabled` se rechaza y `dry_run: false` con la actuación apagada es `POLICY_DENIED`). IT-01, IT-03, IT-05, SEC-02 y SEC-05 pasan a `EJECUTADO_SUPERVISADO_PARCIAL`: IT-01 sin pérdida de acceso ni salida rotada; IT-03 sin recibo visible ni casos de integridad, modificadores o foco; IT-05 sin caída ambigua; SEC-02 sin Ctrl+C ni informe de entregas previas bajo parada; SEC-05 sólo con la vigencia (`STALE_SNAPSHOT` real), porque Windows no dio el primer plano a la Calculadora. IT-04 e IT-07 no se ejecutaron y no cambian. Los requisitos RF/RNF, los riesgos y los escenarios Gherkin no cambian de estado.
+- **Contrato (§7.5):** en `indeterminate`, `input_delivered` dice si el actuador reportó la entrega completa (`true` cuando sólo falta verificar el efecto, `false` cuando la entrega misma es incierta); `verified` sigue siendo `false`. El schema de salida ya lo permitía.
+- **Corrección en el motor:** un clic entregado cuyo cambio visual no se vio salía como `input_delivered: false` y no contaba en `delivered_actions`, aunque el menú se había abierto. Ahora informa `true` y cuenta. Pruebas: `an_unverified_effect_still_reports_the_delivered_input`, `an_indeterminate_result_reports_whether_its_input_was_delivered` y el paso de BDD-29, que exige `input_delivered: true`. También se corrige una racha de espacios en el aviso de parada de stderr (`the_stop_notice_reads_as_one_sentence`). Revisión en `docs/reviews/2026-10-14-s3-supervised-runs.md`.
+- **Hallazgos abiertos:** la captura de verificación sigue inmediatamente a `SendInput` y no ve el menú (4 de 4 `indeterminate`), así que hace falta un plazo de verificación; el primer frame DXGI llega en blanco (6 de 6 sesiones); el recibo de `SendInput` no es visible para el agente.
+- **Herramientas:** `tools/s3/mcp_driver.py`, cliente MCP 2026-07-28 mínimo sobre stdio para estas corridas; imprime sólo estados, códigos, recuentos y tiempos.
+
 ## 1.0.8 — 2026-10-14: spike S0 con OmniParser `icon_detect_v3`
 
 No cambia ningún requisito, algoritmo, contrato ni escenario. El informe del spike está en [`S0_RESULTADOS.md`](S0_RESULTADOS.md); este registro recoge sus decisiones y los cambios de estado.

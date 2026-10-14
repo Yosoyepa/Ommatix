@@ -86,11 +86,19 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   prueba en Windows. El operador puede detener localmente la entrada real con un archivo de
   parada (`[safety] stop_file`), y `type` sólo envía sus teclas tras verificar que el foco
   de teclado está en el campo objetivo.
-- Lo que **todavía no** está: no se ha seleccionado ningún modelo (S0, ADR-0009), así que por
-  defecto el detector es el buscador de regiones de color plano del arranque (roles
-  `unknown`) y no hay OCR; no se ha probado un cliente MCP real; y no se ha ejecutado
-  ninguna prueba de integración ni de seguridad (IT-01..07, SEC-01..06): necesitan corridas
-  supervisadas en el hardware de referencia (también la parada y la comprobación del foco). La
+- **S3, corridas supervisadas** ([informe](docs/thesis/S3_CORRIDAS_SUPERVISADAS.md)): captura
+  DXGI y `SendInput` reales sobre `notepad.exe` con datos desechables, guiadas por MCP con
+  `tools/s3/mcp_driver.py`. Cuatro clics reales sobre el menú Archivo llegaron al SO; la
+  parada del operador, la comprobación de vigencia y la política rechazaron el resto sin
+  enviar nada. SEC-01 queda ejecutada; IT-01, IT-03, IT-05, SEC-02 y SEC-05, en parte. Un
+  resultado `indeterminate` dice ahora si el actuador entregó la entrada.
+- Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
+  seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase, unos 7,5 s por
+  inferencia en CPU), así que por defecto el detector es el buscador de regiones de color
+  plano del arranque (roles `unknown`) y no hay OCR; no se ha probado un cliente MCP de
+  terceros; la comprobación visual justo después de entregar nunca vio el efecto en vivo
+  (necesita un plazo); IT-02 sólo se ejecutó en parte (S0); e IT-04, IT-06, IT-07, SEC-03,
+  SEC-04 y SEC-06 no se han ejecutado de forma supervisada. La
   entrada real sigue **apagada** salvo que el operador la habilite (abajo). La
   [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo que
   falta.
@@ -114,8 +122,10 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   `SendInput`, política, parada y verificación del efecto; se retiran los adaptadores de
   macOS y X11 del arranque. Primera parte hecha: los adaptadores DXGI, `SendInput`, ONNX y
   OCR de Windows tras features de compilación, el archivo de parada del operador y la
-  comprobación del foco antes de escribir; falta: modelos (S0), comprobar efectos más allá
-  del cambio visual, un cliente MCP real y las corridas supervisadas
+  comprobación del foco antes de escribir; primeras corridas supervisadas con entrada real
+  sobre `notepad.exe`; falta: un detector para el producto, un plazo de verificación y
+  comprobar efectos más allá del cambio visual, un cliente MCP de terceros y el resto de
+  corridas supervisadas
 - [ ] **S4, aceptación:** 450 corridas de extremo a extremo en aplicaciones controladas,
   benchmarks, soak e informe de aceptación
 

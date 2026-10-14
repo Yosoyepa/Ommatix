@@ -1562,6 +1562,9 @@ fn indeterminate_without_retry(e: &mut Engine) {
     assert_eq!(outcome["error"]["next_step"], "reconcile_effect");
     assert_eq!(outcome["observed_effect"], "unknown");
     assert_eq!(outcome["verified"], false, "no effect is claimed");
+    // The actuator reported the click delivered, and the report says so.
+    assert_eq!(outcome["input_delivered"], true, "{outcome}");
+    assert_eq!(agent.metric("delivered_actions"), 1);
     // Exactly one delivery: the engine did not retry on its own.
     assert_eq!(agent.desktop.handed_actions().len(), 1);
     // Asking again with the same request_id replays the report; it delivers nothing.
