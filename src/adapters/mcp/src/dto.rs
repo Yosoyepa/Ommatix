@@ -1,322 +1,882 @@
-//! Wire representations. Domain and application types are never serialised directly, so
-//! the public contract with agents can evolve independently of the model
-//! (bootstrap ADR B0004).
+//! Wire DTOs of the Ommatix 1.0 tool contract and their mapping to the application
+//! contract types (`ommatix_application::contract`).
+//!
+//! The DTOs mirror the JSON schemas in `docs/thesis/contratos/esquemas/`:
+//!
+//! - **Inputs** (`observe_screen`, `execute_action`, `get_engine_metrics`) are parsed
+//!   strictly: unknown fields (coordinates included), `null` where the schema wants a value,
+//!   wrong types, values outside the bounds and the per-action conditions are rejected with
+//!   [`InvalidArguments`]. The runtime defaults the schemas only annotate are applied here:
+//!   `limit = 100`, `include_values = false`, `dry_run = true`, `expected_effect = none`.
+//! - **Outputs** serialise the contract objects field by field in schema order. They also
+//!   deserialise with the same strictness, so a payload can be checked by parsing it back
+//!   into the contract type (`TryFrom`); this is how the contract examples are verified.
+//!
+//! String lengths are counted in Unicode scalar values, as JSON Schema `maxLength` does.
 
-use std::time::Duration;
+use std::fmt;
 
-use ommatix_application::{ActionReceipt, Observation, PerceptionReport, Timings};
-use ommatix_domain::{
-    Action, Element, ElementId, ElementKind, Key, MouseButton, Point, Rect, SceneDelta,
+use ommatix_application::contract::{
+    ActionKind, ActionRequest, ActionResult, EngineMetrics, EngineMode, ErrorCode, ExpectedEffect,
+    LabelSource, NextStep, ObservePage, ObserveRequest, ObservedEffect, ScrollDirection,
+    StageTimings, TimingsSource, ToolError, Zone, limits,
 };
-use serde::Serialize;
-use serde_json::{Value, json};
+use ommatix_application::contract::{ElementView, SCHEMA_VERSION};
+use ommatix_domain::fusion::{Actionability, Role, TextKind};
+use ommatix_domain::identity::{ActionStatus, TargetId};
+use serde::de::{self, DeserializeOwned, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
-#[derive(Debug, Serialize)]
-pub struct RectDto {
-    pub x: u32,
-    pub y: u32,
-    pub w: u32,
-    pub h: u32,
+/// The only `mode` of `observe_screen` in the MVP (chapter 07 §7.3).
+pub const OBSERVE_MODE_FULL: &str = "full";
+
+/// Tool arguments that do not satisfy the tool's input schema. The message names the
+/// offending field or rule, never its value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidArguments(pub String);
+
+impl fmt::Display for InvalidArguments {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
-impl From<Rect> for RectDto {
-    fn from(r: Rect) -> Self {
+impl std::error::Error for InvalidArguments {}
+
+fn invalid(message: impl Into<String>) -> InvalidArguments {
+    InvalidArguments(message.into())
+}
+
+/// A payload that does not satisfy an output schema (or that the contract types cannot
+/// represent).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvalidPayload(pub String);
+
+impl fmt::Display for InvalidPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for InvalidPayload {}
+
+fn bad(message: impl Into<String>) -> InvalidPayload {
+    InvalidPayload(message.into())
+}
+
+// ---- strict serde helpers ----
+
+/// For optional fields: absent → `None` (via `#[serde(default)]`); present → must be a `T`
+/// (so `null` is rejected unless `T` itself accepts it).
+fn present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// For required, nullable fields: the key must be present; its value may be `null`.
+/// (`deserialize_with` disables serde's "missing `Option` is `None`" shortcut.)
+fn nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+/// A JSON Schema `integer`: any JSON number with no fractional part (`3` and `3.0`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SchemaInt(i128);
+
+impl<'de> Deserialize<'de> for SchemaInt {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct IntVisitor;
+
+        impl Visitor<'_> for IntVisitor {
+            type Value = SchemaInt;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("an integer")
+            }
+
+            fn visit_i64<E: de::Error>(self, v: i64) -> Result<SchemaInt, E> {
+                Ok(SchemaInt(i128::from(v)))
+            }
+
+            fn visit_u64<E: de::Error>(self, v: u64) -> Result<SchemaInt, E> {
+                Ok(SchemaInt(i128::from(v)))
+            }
+
+            #[allow(clippy::float_cmp)] // exact integrality test on a finite float
+            fn visit_f64<E: de::Error>(self, v: f64) -> Result<SchemaInt, E> {
+                // 2^63 bounds keep the cast exact; larger values are out of every bound here.
+                if v.is_finite() && v.trunc() == v && v.abs() < 9.223_372_036_854_776e18 {
+                    Ok(SchemaInt(v as i128))
+                } else {
+                    Err(E::invalid_type(de::Unexpected::Float(v), &self))
+                }
+            }
+        }
+
+        deserializer.deserialize_any(IntVisitor)
+    }
+}
+
+fn chars(s: &str) -> usize {
+    s.chars().count()
+}
+
+fn check_len(field: &str, s: &str, min: usize, max: usize) -> Result<(), String> {
+    let n = chars(s);
+    if n < min {
+        Err(format!("`{field}` must have at least {min} character(s)"))
+    } else if n > max {
+        Err(format!("`{field}` must have at most {max} characters"))
+    } else {
+        Ok(())
+    }
+}
+
+fn int_in(field: &str, v: SchemaInt, min: i128, max: i128) -> Result<i128, String> {
+    if v.0 < min {
+        Err(format!("`{field}` must be at least {min}"))
+    } else if v.0 > max {
+        Err(format!("`{field}` must be at most {max}"))
+    } else {
+        Ok(v.0)
+    }
+}
+
+/// Parses `value` (tool `arguments`) as `T`, turning serde's message into an
+/// [`InvalidArguments`] without echoing values.
+fn parse_object<T: DeserializeOwned>(value: &Value) -> Result<T, InvalidArguments> {
+    if !value.is_object() {
+        return Err(invalid("arguments must be a JSON object"));
+    }
+    T::deserialize(value).map_err(|e| invalid(sanitize_serde_message(&e.to_string())))
+}
+
+/// serde messages quote the offending value (`invalid type: string "…"`, ``unknown variant
+/// `…` ``). Drop the quoted values so agent or screen text is never echoed; field names and
+/// the expected alternatives stay.
+fn sanitize_serde_message(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+    if let Some(after) = rest.strip_prefix("unknown variant `") {
+        out.push_str("unknown variant");
+        rest = after.find('`').map_or("", |i| &after[i + 1..]);
+    }
+    let mut in_quotes = false;
+    for c in rest.chars() {
+        match (c, in_quotes) {
+            ('"', _) => in_quotes = !in_quotes,
+            (_, false) => out.push(c),
+            (_, true) => {}
+        }
+    }
+    let mut out: String = out
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(limits::MAX_MESSAGE_CHARS - 32)
+        .collect();
+    if out.is_empty() {
+        out.push_str("arguments do not match the input schema");
+    }
+    out
+}
+
+// ---- enums: one wire enum per contract enum ----
+
+macro_rules! wire_enum {
+    ($(#[$m:meta])* $dto:ident <=> $model:ident, $case:literal { $($v:ident),+ $(,)? }) => {
+        $(#[$m])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(rename_all = $case)]
+        pub enum $dto { $($v),+ }
+
+        impl From<$model> for $dto {
+            fn from(v: $model) -> Self {
+                match v { $($model::$v => Self::$v),+ }
+            }
+        }
+
+        impl From<$dto> for $model {
+            fn from(v: $dto) -> Self {
+                match v { $($dto::$v => Self::$v),+ }
+            }
+        }
+    };
+}
+
+wire_enum!(RoleDto <=> Role, "snake_case" {
+    Button, Input, Checkbox, Dropdown, IconButton, TextNode, Unknown
+});
+wire_enum!(LabelSourceDto <=> LabelSource, "snake_case" {
+    Ocr, CuratedIcon, Model, Accessibility, Unknown
+});
+wire_enum!(ActionabilityDto <=> Actionability, "snake_case" {
+    Confirmed, Unknown, NotActionable
+});
+wire_enum!(TextKindDto <=> TextKind, "snake_case" { Value, Placeholder, Unknown });
+wire_enum!(ZoneDto <=> Zone, "snake_case" {
+    TopBar, LeftSidebar, CenterMain, BottomBar, Unknown
+});
+wire_enum!(StatusDto <=> ActionStatus, "snake_case" {
+    Simulated, Rejected, InputDelivered, EffectObserved, Indeterminate
+});
+wire_enum!(ErrorCodeDto <=> ErrorCode, "SCREAMING_SNAKE_CASE" {
+    StaleSnapshot, StaleTarget, TargetNotFound, AmbiguousTarget, NotActionable,
+    PolicyDenied, PermissionDenied, CaptureUnavailable, InferenceFailed,
+    UnsupportedGeometry, IndeterminateEffect, RequestConflict, Cancelled, LimitExceeded,
+    SessionMismatch, EpochMismatch
+});
+wire_enum!(NextStepDto <=> NextStep, "snake_case" {
+    ObserveAgain, OperatorReview, ReduceRequest, ReconcileEffect, Stop
+});
+wire_enum!(ExpectedEffectDto <=> ExpectedEffect, "snake_case" {
+    None, FocusChanged, ValueUpdated, ScrollMoved, VisualChange
+});
+wire_enum!(ObservedEffectDto <=> ObservedEffect, "snake_case" {
+    None, FocusChanged, ValueUpdated, ScrollMoved, VisualChange, Unknown
+});
+wire_enum!(ScrollDirectionDto <=> ScrollDirection, "snake_case" { Up, Down });
+wire_enum!(EngineModeDto <=> EngineMode, "snake_case" { Simulation, Native });
+wire_enum!(TimingsSourceDto <=> TimingsSource, "snake_case" { NotMeasured, RuntimeMonotonic });
+
+/// `execute_action.action`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionNameDto {
+    Click,
+    Type,
+    Scroll,
+}
+
+// ---- inputs ----
+
+/// `observe_screen` arguments as they arrive.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObserveScreenInput {
+    #[serde(default, deserialize_with = "present")]
+    query: Option<String>,
+    #[serde(default, deserialize_with = "present")]
+    limit: Option<SchemaInt>,
+    #[serde(default, deserialize_with = "present")]
+    cursor: Option<String>,
+    #[serde(default, deserialize_with = "present")]
+    include_values: Option<bool>,
+}
+
+/// Validates `observe_screen` arguments and applies the runtime defaults.
+pub fn parse_observe_args(arguments: &Value) -> Result<ObserveRequest, InvalidArguments> {
+    let input: ObserveScreenInput = parse_object(arguments)?;
+    if let Some(query) = &input.query {
+        check_len("query", query, 0, limits::MAX_QUERY_CHARS).map_err(invalid)?;
+    }
+    let limit = match input.limit {
+        Some(v) => int_in(
+            "limit",
+            v,
+            i128::from(limits::MIN_LIMIT),
+            i128::from(limits::MAX_LIMIT),
+        )
+        .map_err(invalid)? as u16,
+        None => limits::DEFAULT_LIMIT,
+    };
+    if let Some(cursor) = &input.cursor {
+        check_len("cursor", cursor, 1, limits::MAX_CURSOR_CHARS).map_err(invalid)?;
+    }
+    Ok(ObserveRequest {
+        query: input.query,
+        limit,
+        cursor: input.cursor,
+        include_values: input.include_values.unwrap_or(false),
+    })
+}
+
+/// `execute_action` arguments as they arrive.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecuteActionInput {
+    request_id: String,
+    session_id: String,
+    snapshot_id: String,
+    geometry_epoch: SchemaInt,
+    target_id: String,
+    expected_revision: SchemaInt,
+    action: ActionNameDto,
+    #[serde(default, deserialize_with = "present")]
+    text: Option<String>,
+    #[serde(default, deserialize_with = "present")]
+    direction: Option<ScrollDirectionDto>,
+    #[serde(default, deserialize_with = "present")]
+    steps: Option<SchemaInt>,
+    #[serde(default, deserialize_with = "present")]
+    dry_run: Option<bool>,
+    #[serde(default, deserialize_with = "present")]
+    expected_effect: Option<ExpectedEffectDto>,
+}
+
+const U64_MAX: i128 = u64::MAX as i128;
+
+/// Validates `execute_action` arguments (bounds and the per-action conditions) and applies
+/// the runtime defaults (`dry_run = true`, `expected_effect = none`).
+pub fn parse_action_args(arguments: &Value) -> Result<ActionRequest, InvalidArguments> {
+    let input: ExecuteActionInput = parse_object(arguments)?;
+    for (field, value) in [
+        ("request_id", &input.request_id),
+        ("session_id", &input.session_id),
+        ("snapshot_id", &input.snapshot_id),
+        ("target_id", &input.target_id),
+    ] {
+        check_len(field, value, 1, limits::MAX_ID_CHARS).map_err(invalid)?;
+    }
+    let geometry_epoch =
+        int_in("geometry_epoch", input.geometry_epoch, 1, U64_MAX).map_err(invalid)? as u64;
+    let expected_revision =
+        int_in("expected_revision", input.expected_revision, 1, U64_MAX).map_err(invalid)? as u64;
+
+    let action = match input.action {
+        ActionNameDto::Click => {
+            if input.text.is_some() || input.direction.is_some() || input.steps.is_some() {
+                return Err(invalid(
+                    "`click` accepts no `text`, `direction` or `steps` (and never coordinates)",
+                ));
+            }
+            ActionKind::Click
+        }
+        ActionNameDto::Type => {
+            if input.direction.is_some() || input.steps.is_some() {
+                return Err(invalid("`type` accepts no `direction` or `steps`"));
+            }
+            let text = input
+                .text
+                .ok_or_else(|| invalid("`type` requires `text`"))?;
+            check_len("text", &text, 1, limits::MAX_TYPE_TEXT_CHARS).map_err(invalid)?;
+            ActionKind::Type { text }
+        }
+        ActionNameDto::Scroll => {
+            if input.text.is_some() {
+                return Err(invalid("`scroll` accepts no `text`"));
+            }
+            let (Some(direction), Some(steps)) = (input.direction, input.steps) else {
+                return Err(invalid("`scroll` requires `direction` and `steps`"));
+            };
+            let steps =
+                int_in("steps", steps, 1, i128::from(limits::MAX_SCROLL_STEPS)).map_err(invalid)?;
+            ActionKind::Scroll {
+                direction: direction.into(),
+                steps: steps as u8,
+            }
+        }
+    };
+
+    Ok(ActionRequest {
+        request_id: input.request_id,
+        session_id: input.session_id,
+        snapshot_id: input.snapshot_id,
+        geometry_epoch,
+        target_id: input.target_id,
+        expected_revision,
+        action,
+        dry_run: input.dry_run.unwrap_or(true),
+        expected_effect: input
+            .expected_effect
+            .map_or(ExpectedEffect::None, Into::into),
+    })
+}
+
+/// `get_engine_metrics` takes no arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EngineMetricsInput {}
+
+/// Validates `get_engine_metrics` arguments (an empty object).
+pub fn parse_metrics_args(arguments: &Value) -> Result<(), InvalidArguments> {
+    parse_object::<EngineMetricsInput>(arguments).map(|_| ())
+}
+
+// ---- outputs ----
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((cut, _)) => s[..cut].to_owned(),
+        None => s.to_owned(),
+    }
+}
+
+fn check_schema_version(v: &str) -> Result<(), InvalidPayload> {
+    if v == SCHEMA_VERSION {
+        Ok(())
+    } else {
+        Err(bad("`schema_version` must be \"1.0\""))
+    }
+}
+
+/// The `error` object shared by `execute_action.output` and `tool_error.output`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErrorOutput {
+    pub code: ErrorCodeDto,
+    pub message: String,
+    pub retryable: bool,
+    pub next_step: NextStepDto,
+}
+
+impl From<&ToolError> for ErrorOutput {
+    fn from(e: &ToolError) -> Self {
+        let mut message = truncate_chars(&e.message, limits::MAX_MESSAGE_CHARS);
+        if message.is_empty() {
+            e.code.as_str().clone_into(&mut message);
+        }
         Self {
-            x: r.x,
-            y: r.y,
-            w: r.w,
-            h: r.h,
+            code: e.code.into(),
+            message,
+            retryable: e.retryable,
+            next_step: e.next_step.into(),
         }
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct PointDto {
-    pub x: u32,
-    pub y: u32,
-}
+impl TryFrom<ErrorOutput> for ToolError {
+    type Error = InvalidPayload;
 
-impl From<Point> for PointDto {
-    fn from(p: Point) -> Self {
-        Self { x: p.x, y: p.y }
+    fn try_from(e: ErrorOutput) -> Result<Self, InvalidPayload> {
+        check_len("error.message", &e.message, 1, limits::MAX_MESSAGE_CHARS).map_err(bad)?;
+        Ok(Self {
+            code: e.code.into(),
+            message: e.message,
+            retryable: e.retryable,
+            next_step: e.next_step.into(),
+        })
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct ElementDto {
-    pub id: String,
-    pub kind: &'static str,
-    pub bounds: RectDto,
-    /// Suggested click target (geometric centre).
-    pub center: PointDto,
-    pub first_seen: u64,
-    pub last_changed: u64,
+/// `tool_error.output`: an expected domain error of a tool without its own error shape
+/// (`observe_screen`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolErrorOutput {
+    pub schema_version: String,
+    pub status: StatusDto,
+    pub error: ErrorOutput,
 }
 
-impl From<&Element> for ElementDto {
-    fn from(e: &Element) -> Self {
+impl From<&ToolError> for ToolErrorOutput {
+    fn from(e: &ToolError) -> Self {
         Self {
-            id: format_element_id(e.id),
-            kind: kind_name(e.kind),
-            bounds: e.bounds.into(),
-            center: e.bounds.center().into(),
-            first_seen: e.first_seen,
-            last_changed: e.last_changed,
+            schema_version: SCHEMA_VERSION.to_owned(),
+            status: StatusDto::Rejected,
+            error: e.into(),
         }
     }
 }
 
-pub fn elements(list: &[Element]) -> Vec<ElementDto> {
-    list.iter().map(ElementDto::from).collect()
+impl TryFrom<ToolErrorOutput> for ToolError {
+    type Error = InvalidPayload;
+
+    fn try_from(o: ToolErrorOutput) -> Result<Self, InvalidPayload> {
+        check_schema_version(&o.schema_version)?;
+        if o.status != StatusDto::Rejected {
+            return Err(bad("`status` of a tool error must be \"rejected\""));
+        }
+        o.error.try_into()
+    }
 }
 
-#[derive(Debug, Serialize)]
-pub struct DeltaDto {
-    pub added: Vec<ElementDto>,
-    pub updated: Vec<ElementDto>,
-    pub removed: Vec<String>,
+/// One element of `observe_screen.output.elements`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElementOutput {
+    pub target_id: String,
+    pub revision: u64,
+    pub role: RoleDto,
+    pub label: String,
+    pub label_source: LabelSourceDto,
+    pub actionability: ActionabilityDto,
+    #[serde(deserialize_with = "nullable")]
+    pub enabled: Option<bool>,
+    #[serde(deserialize_with = "nullable")]
+    pub visible: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub text: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub text_kind: Option<TextKindDto>,
+    pub zone: ZoneDto,
 }
 
-impl From<&SceneDelta> for DeltaDto {
-    fn from(d: &SceneDelta) -> Self {
+impl From<&ElementView> for ElementOutput {
+    fn from(e: &ElementView) -> Self {
+        let (text, text_kind) = match &e.text {
+            Some((text, kind)) => (
+                Some(truncate_chars(text, limits::MAX_TEXT_CHARS)),
+                Some((*kind).into()),
+            ),
+            None => (None, None),
+        };
         Self {
-            added: elements(&d.added),
-            updated: elements(&d.updated),
-            removed: d.removed.iter().copied().map(format_element_id).collect(),
+            target_id: e.target_id.to_string(),
+            revision: e.revision,
+            role: e.role.into(),
+            label: truncate_chars(&e.label, limits::MAX_LABEL_CHARS),
+            label_source: e.label_source.into(),
+            actionability: e.actionability.into(),
+            enabled: e.enabled,
+            visible: e.visible,
+            text,
+            text_kind,
+            zone: e.zone.into(),
         }
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct ReportDto {
-    pub frame_no: u64,
-    pub width: u32,
-    pub height: u32,
-    pub total_cells: usize,
-    pub dirty_cells: usize,
-    pub geometry_changed: bool,
-    pub analysed_regions: Vec<RectDto>,
-    pub analysed_px: u64,
-    #[serde(flatten)]
-    pub delta: DeltaDto,
-    pub element_count: usize,
+impl TryFrom<ElementOutput> for ElementView {
+    type Error = InvalidPayload;
+
+    fn try_from(e: ElementOutput) -> Result<Self, InvalidPayload> {
+        check_len("target_id", &e.target_id, 1, limits::MAX_ID_CHARS).map_err(bad)?;
+        let target_id: TargetId = e
+            .target_id
+            .parse()
+            .map_err(|()| bad("`target_id` is not an engine-issued id (`e<n>`)"))?;
+        if e.revision < 1 {
+            return Err(bad("`revision` must be at least 1"));
+        }
+        check_len("label", &e.label, 0, limits::MAX_LABEL_CHARS).map_err(bad)?;
+        let text = match (e.text, e.text_kind) {
+            (Some(text), Some(kind)) => {
+                check_len("text", &text, 0, limits::MAX_TEXT_CHARS).map_err(bad)?;
+                Some((text, kind.into()))
+            }
+            (None, None) => None,
+            _ => return Err(bad("`text` and `text_kind` go together")),
+        };
+        Ok(Self {
+            target_id,
+            revision: e.revision,
+            role: e.role.into(),
+            label: e.label,
+            label_source: e.label_source.into(),
+            actionability: e.actionability.into(),
+            enabled: e.enabled,
+            visible: e.visible,
+            text,
+            zone: e.zone.into(),
+        })
+    }
 }
 
-impl From<&PerceptionReport> for ReportDto {
-    fn from(r: &PerceptionReport) -> Self {
+/// `observe_screen.output`: one page of a full snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObserveScreenOutput {
+    pub schema_version: String,
+    pub session_id: String,
+    pub snapshot_id: String,
+    pub geometry_epoch: u64,
+    pub frame_seq: u64,
+    pub mode: String,
+    pub age_ms: u64,
+    pub degraded: bool,
+    pub elements: Vec<ElementOutput>,
+    pub total_elements: u64,
+    pub truncated: bool,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub next_cursor: Option<String>,
+}
+
+impl From<&ObservePage> for ObserveScreenOutput {
+    fn from(p: &ObservePage) -> Self {
         Self {
-            frame_no: r.frame_no,
-            width: r.screen.w,
-            height: r.screen.h,
-            total_cells: r.total_cells,
-            dirty_cells: r.dirty_cells,
-            geometry_changed: r.geometry_changed,
-            analysed_regions: r.analysed_regions.iter().copied().map(Into::into).collect(),
-            analysed_px: r.analysed_px,
-            delta: (&r.delta).into(),
-            element_count: r.element_count,
+            schema_version: SCHEMA_VERSION.to_owned(),
+            session_id: p.session_id.clone(),
+            snapshot_id: p.snapshot_id.clone(),
+            geometry_epoch: p.geometry_epoch,
+            frame_seq: p.frame_seq,
+            mode: OBSERVE_MODE_FULL.to_owned(),
+            age_ms: p.age_ms,
+            degraded: p.degraded,
+            elements: p.elements.iter().map(ElementOutput::from).collect(),
+            total_elements: p.total_elements as u64,
+            truncated: p.truncated(),
+            next_cursor: p.next_cursor.clone(),
         }
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct ObservationDto {
-    pub frames: u32,
-    pub settled: bool,
-    pub frame_no: u64,
-    pub dirty_cells: usize,
-    pub analysed_px: u64,
-    #[serde(flatten)]
-    pub delta: DeltaDto,
-    pub element_count: usize,
+impl TryFrom<ObserveScreenOutput> for ObservePage {
+    type Error = InvalidPayload;
+
+    /// Run-dependent timings are not part of the payload: they come back as zero.
+    fn try_from(o: ObserveScreenOutput) -> Result<Self, InvalidPayload> {
+        check_schema_version(&o.schema_version)?;
+        check_len("session_id", &o.session_id, 1, limits::MAX_ID_CHARS).map_err(bad)?;
+        check_len("snapshot_id", &o.snapshot_id, 1, limits::MAX_ID_CHARS).map_err(bad)?;
+        if o.geometry_epoch < 1 {
+            return Err(bad("`geometry_epoch` must be at least 1"));
+        }
+        if o.mode != OBSERVE_MODE_FULL {
+            return Err(bad("`mode` must be \"full\""));
+        }
+        if o.elements.len() > usize::from(limits::MAX_LIMIT) {
+            return Err(bad("`elements` has more than 200 items"));
+        }
+        if let Some(cursor) = &o.next_cursor {
+            check_len("next_cursor", cursor, 1, limits::MAX_CURSOR_CHARS).map_err(bad)?;
+        }
+        if o.truncated != o.next_cursor.is_some() {
+            return Err(bad(
+                "`next_cursor` must be present exactly when `truncated` is true",
+            ));
+        }
+        let elements = o
+            .elements
+            .into_iter()
+            .map(ElementView::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            session_id: o.session_id,
+            snapshot_id: o.snapshot_id,
+            geometry_epoch: o.geometry_epoch,
+            frame_seq: o.frame_seq,
+            age_ms: o.age_ms,
+            degraded: o.degraded,
+            elements,
+            total_elements: usize::try_from(o.total_elements)
+                .map_err(|_| bad("`total_elements` is out of range"))?,
+            next_cursor: o.next_cursor,
+            timings: StageTimings::default(),
+        })
+    }
 }
 
-impl From<&Observation> for ObservationDto {
-    fn from(o: &Observation) -> Self {
+/// `execute_action.output`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecuteActionOutput {
+    pub schema_version: String,
+    pub request_id: String,
+    pub status: StatusDto,
+    pub target_id: String,
+    pub snapshot_id: String,
+    pub input_delivered: bool,
+    pub verified: bool,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub error: Option<ErrorOutput>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub observed_effect: Option<ObservedEffectDto>,
+}
+
+impl From<&ActionResult> for ExecuteActionOutput {
+    fn from(r: &ActionResult) -> Self {
         Self {
-            frames: o.frames,
-            settled: o.settled,
-            frame_no: o.frame_no,
-            dirty_cells: o.dirty_cells,
-            analysed_px: o.analysed_px,
-            delta: (&o.delta).into(),
-            element_count: o.element_count,
+            schema_version: SCHEMA_VERSION.to_owned(),
+            request_id: r.request_id.clone(),
+            status: r.status.into(),
+            target_id: r.target_id.clone(),
+            snapshot_id: r.snapshot_id.clone(),
+            input_delivered: r.input_delivered(),
+            verified: r.verified(),
+            error: r.error.as_ref().map(ErrorOutput::from),
+            observed_effect: r.observed_effect.map(Into::into),
         }
     }
 }
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ActionDto {
-    Click { at: PointDto, button: &'static str },
-    TypeText { text: String },
-    PressKey { key: &'static str },
-}
+impl TryFrom<ExecuteActionOutput> for ActionResult {
+    type Error = InvalidPayload;
 
-impl From<&Action> for ActionDto {
-    fn from(a: &Action) -> Self {
-        match a {
-            Action::Click { at, button } => Self::Click {
-                at: (*at).into(),
-                button: button_name(*button),
-            },
-            Action::TypeText { text } => Self::TypeText { text: text.clone() },
-            Action::PressKey { key } => Self::PressKey {
-                key: key_name(*key),
-            },
+    /// Besides the schema rules, `input_delivered`/`verified` must be the ones the status
+    /// implies: the contract derives them from the status, so an `indeterminate` result
+    /// claiming delivery is not representable.
+    fn try_from(o: ExecuteActionOutput) -> Result<Self, InvalidPayload> {
+        check_schema_version(&o.schema_version)?;
+        for (field, value) in [
+            ("request_id", &o.request_id),
+            ("target_id", &o.target_id),
+            ("snapshot_id", &o.snapshot_id),
+        ] {
+            check_len(field, value, 1, limits::MAX_ID_CHARS).map_err(bad)?;
         }
+        let status: ActionStatus = o.status.into();
+        if o.input_delivered != status.input_delivered() || o.verified != status.verified() {
+            return Err(bad(
+                "`input_delivered`/`verified` contradict the status (a simulation never claims delivery)",
+            ));
+        }
+        if status == ActionStatus::Rejected && o.error.is_none() {
+            return Err(bad("a rejected action carries an `error`"));
+        }
+        if status == ActionStatus::EffectObserved && o.observed_effect.is_none() {
+            return Err(bad("`effect_observed` carries an `observed_effect`"));
+        }
+        Ok(Self {
+            request_id: o.request_id,
+            status,
+            target_id: o.target_id,
+            snapshot_id: o.snapshot_id,
+            error: o.error.map(ToolError::try_from).transpose()?,
+            observed_effect: o.observed_effect.map(Into::into),
+        })
     }
 }
 
-#[derive(Debug, Serialize)]
-pub struct ReceiptDto {
-    pub action: ActionDto,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub element_id: Option<String>,
-    /// `false` when the input controller is a dry-run or a simulator.
-    pub live: bool,
+/// `get_engine_metrics.output`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineMetricsOutput {
+    pub schema_version: String,
+    pub mode: EngineModeDto,
+    pub observations: u64,
+    pub rejected_actions: u64,
+    pub delivered_actions: u64,
+    pub pending_regions: u64,
+    pub models_loaded: bool,
+    pub timings_source: TimingsSourceDto,
 }
 
-impl From<&ActionReceipt> for ReceiptDto {
-    fn from(r: &ActionReceipt) -> Self {
+impl From<&EngineMetrics> for EngineMetricsOutput {
+    fn from(m: &EngineMetrics) -> Self {
         Self {
-            action: (&r.action).into(),
-            element_id: r.element.map(format_element_id),
-            live: r.live,
+            schema_version: SCHEMA_VERSION.to_owned(),
+            mode: m.mode.into(),
+            observations: m.observations,
+            rejected_actions: m.rejected_actions,
+            delivered_actions: m.delivered_actions,
+            pending_regions: m.pending_regions,
+            models_loaded: m.models_loaded,
+            timings_source: m.timings_source.into(),
         }
     }
 }
 
-/// Wall-clock measurements. They vary between runs, so they travel in `_meta` and keep
-/// `structuredContent` reproducible.
-pub fn timings_meta(t: &Timings) -> Value {
-    json!({ "ommatix/timings_us": {
-        "capture": micros(t.capture),
-        "diff": micros(t.diff),
-        "detect": micros(t.detect),
-        "total": micros(t.total),
-    }})
-}
+impl TryFrom<EngineMetricsOutput> for EngineMetrics {
+    type Error = InvalidPayload;
 
-pub fn elapsed_meta(elapsed: Duration) -> Value {
-    json!({ "ommatix/elapsed_us": micros(elapsed) })
-}
-
-fn micros(d: Duration) -> u64 {
-    u64::try_from(d.as_micros()).unwrap_or(u64::MAX)
-}
-
-pub fn format_element_id(id: ElementId) -> String {
-    format!("e{}", id.0)
-}
-
-/// Parses the wire form of an element id (`"e12"`). Only the form ids are written in is
-/// accepted, so one element has one id (`"e012"` is not `"e12"`).
-pub fn parse_element_id(s: &str) -> Result<ElementId, String> {
-    s.strip_prefix('e')
-        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-        .filter(|n| *n == "0" || !n.starts_with('0'))
-        .and_then(|n| n.parse::<u64>().ok())
-        .map(ElementId)
-        .ok_or_else(|| format!("invalid element id {s:?}, expected e.g. \"e4\""))
-}
-
-fn kind_name(kind: ElementKind) -> &'static str {
-    match kind {
-        ElementKind::Blob => "blob",
-        ElementKind::Text => "text",
-        ElementKind::Button => "button",
-        ElementKind::Icon => "icon",
+    fn try_from(o: EngineMetricsOutput) -> Result<Self, InvalidPayload> {
+        check_schema_version(&o.schema_version)?;
+        Ok(Self {
+            mode: o.mode.into(),
+            observations: o.observations,
+            rejected_actions: o.rejected_actions,
+            delivered_actions: o.delivered_actions,
+            pending_regions: o.pending_regions,
+            models_loaded: o.models_loaded,
+            timings_source: o.timings_source.into(),
+        })
     }
 }
 
-/// Wire names of the keys, in the order the tool schema lists them.
-pub const KEYS: [(&str, Key); 14] = [
-    ("enter", Key::Enter),
-    ("tab", Key::Tab),
-    ("escape", Key::Escape),
-    ("backspace", Key::Backspace),
-    ("delete", Key::Delete),
-    ("space", Key::Space),
-    ("arrow_up", Key::ArrowUp),
-    ("arrow_down", Key::ArrowDown),
-    ("arrow_left", Key::ArrowLeft),
-    ("arrow_right", Key::ArrowRight),
-    ("home", Key::Home),
-    ("end", Key::End),
-    ("page_up", Key::PageUp),
-    ("page_down", Key::PageDown),
-];
-
-pub const BUTTONS: [(&str, MouseButton); 3] = [
-    ("left", MouseButton::Left),
-    ("right", MouseButton::Right),
-    ("middle", MouseButton::Middle),
-];
-
-pub fn parse_key(name: &str) -> Result<Key, String> {
-    lookup(&KEYS, name).ok_or_else(|| format!("unknown key {name:?}"))
+/// Parses an output payload strictly into its DTO.
+pub fn parse_output<T: DeserializeOwned>(value: &Value) -> Result<T, InvalidPayload> {
+    T::deserialize(value).map_err(|e| bad(e.to_string()))
 }
 
-pub fn parse_button(name: &str) -> Result<MouseButton, String> {
-    lookup(&BUTTONS, name).ok_or_else(|| format!("unknown mouse button {name:?}"))
-}
-
-fn key_name(key: Key) -> &'static str {
-    name_of(&KEYS, key)
-}
-
-fn button_name(button: MouseButton) -> &'static str {
-    name_of(&BUTTONS, button)
-}
-
-fn lookup<T: Copy>(table: &[(&str, T)], name: &str) -> Option<T> {
-    table.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
-}
-
-fn name_of<T: Copy + PartialEq>(table: &[(&'static str, T)], value: T) -> &'static str {
-    table
-        .iter()
-        .find(|(_, v)| *v == value)
-        .map_or("unknown", |(n, _)| n)
+/// Run-dependent stage timings, in whole microseconds, for result `_meta`.
+pub fn timings_meta(t: &StageTimings) -> Value {
+    let us = |d: std::time::Duration| u64::try_from(d.as_micros()).unwrap_or(u64::MAX);
+    serde_json::json!({
+        "capture_us": us(t.capture),
+        "plan_us": us(t.plan),
+        "detect_us": us(t.detect),
+        "recognize_us": us(t.recognize),
+        "fuse_us": us(t.fuse),
+        "track_us": us(t.track),
+        "total_us": us(t.total),
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
-    #[test]
-    fn element_ids_round_trip_and_reject_junk() {
-        assert_eq!(parse_element_id("e42"), Ok(ElementId(42)));
-        assert_eq!(format_element_id(ElementId(42)), "e42");
-        assert_eq!(parse_element_id("e0"), Ok(ElementId(0)));
-        for junk in [
-            "42",
-            "e",
-            "e-1",
-            "e+1",
-            "E1",
-            "e1x",
-            "e99999999999999999999",
-            // Verification N12: one element, one id.
-            "e00001",
-            "e042",
-            "e00",
-        ] {
-            assert!(parse_element_id(junk).is_err(), "{junk}");
-        }
+    fn click() -> Value {
+        json!({
+            "request_id": "r1", "session_id": "s", "snapshot_id": "s1",
+            "geometry_epoch": 1, "target_id": "e1", "expected_revision": 1, "action": "click"
+        })
     }
 
     #[test]
-    fn every_key_and_button_has_one_wire_name() {
-        for (name, key) in KEYS {
-            assert_eq!(parse_key(name), Ok(key));
-            assert_eq!(key_name(key), name);
-        }
-        for (name, button) in BUTTONS {
-            assert_eq!(parse_button(name), Ok(button));
-            assert_eq!(button_name(button), name);
-        }
-        assert!(parse_key("Enter").is_err());
+    fn defaults_are_applied_at_runtime() {
+        let o = parse_observe_args(&json!({})).unwrap();
+        assert_eq!(o, ObserveRequest::default());
+        let a = parse_action_args(&click()).unwrap();
+        assert!(a.dry_run);
+        assert_eq!(a.expected_effect, ExpectedEffect::None);
+    }
+
+    #[test]
+    fn null_is_not_an_absent_field() {
+        assert!(parse_observe_args(&json!({ "query": null })).is_err());
+        assert!(parse_observe_args(&json!({ "limit": null })).is_err());
+        let mut a = click();
+        a["dry_run"] = Value::Null;
+        assert!(parse_action_args(&a).is_err());
+    }
+
+    #[test]
+    fn integral_floats_are_schema_integers() {
+        assert_eq!(
+            parse_observe_args(&json!({ "limit": 5.0 })).unwrap().limit,
+            5
+        );
+        assert!(parse_observe_args(&json!({ "limit": 5.5 })).is_err());
+        assert!(parse_observe_args(&json!({ "limit": 1e300 })).is_err());
+    }
+
+    #[test]
+    fn non_objects_and_unknown_fields_are_rejected() {
+        assert!(parse_observe_args(&json!([])).is_err());
+        assert!(parse_metrics_args(&json!({ "x": 1 })).is_err());
+        let mut a = click();
+        a["x"] = json!(10);
+        assert!(
+            parse_action_args(&a)
+                .unwrap_err()
+                .0
+                .contains("unknown field")
+        );
+    }
+
+    #[test]
+    fn messages_do_not_echo_values() {
+        let mut a = click();
+        a["action"] = json!("rm -rf secret");
+        let e = parse_action_args(&a).unwrap_err();
+        assert!(!e.0.contains("secret"), "{e}");
+        assert!(e.0.contains("expected one of"), "{e}");
+        a["action"] = json!("click");
+        a["geometry_epoch"] = json!("secret");
+        let e = parse_action_args(&a).unwrap_err();
+        assert!(!e.0.contains("secret"), "{e}");
     }
 }
