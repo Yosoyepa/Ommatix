@@ -126,7 +126,18 @@ pub fn check_input(source: SourceKind, input: InputKind, config: &Config) -> Res
 pub fn check_accessibility(source: SourceKind, config: &Config) -> Result<()> {
     if source == SourceKind::Images && config.models.accessibility == AccessibilityKind::Uia {
         bail!(
-            "[models] accessibility = \"uia\" needs a live source (--source dxgi or screen):              the desktop's accessibility tree does not describe recorded images"
+            "[models] accessibility = \"uia\" needs a live source (--source dxgi or screen): \
+             the desktop's accessibility tree does not describe recorded images"
+        );
+    }
+    // Refuse before any live source is opened (a headless host cannot open one).
+    if matches!(source, SourceKind::Dxgi | SourceKind::Screen)
+        && config.models.accessibility == AccessibilityKind::Uia
+        && !cfg!(all(windows, feature = "uia"))
+    {
+        bail!(
+            "[models] accessibility = \"uia\" but this build has no UI Automation; rebuild on \
+             Windows with `--features uia`"
         );
     }
     Ok(())
@@ -734,8 +745,10 @@ accessibility = \"uia\"
             error("serve --source images --images frames", &uia).contains("needs a live source")
         );
         assert!(check_accessibility(SourceKind::Images, &Config::default()).is_ok());
-        assert!(check_accessibility(SourceKind::Dxgi, &uia).is_ok());
-        assert!(check_accessibility(SourceKind::Screen, &uia).is_ok());
+        // A live source takes it only when this build has UI Automation.
+        let built = cfg!(all(windows, feature = "uia"));
+        assert_eq!(check_accessibility(SourceKind::Dxgi, &uia).is_ok(), built);
+        assert_eq!(check_accessibility(SourceKind::Screen, &uia).is_ok(), built);
         // The simulated desktop ignores it, with a note.
         let wired = build(&args("serve"), &uia).expect("the simulator ignores it");
         assert!(wired.summary.contains("accessibility=none"));
@@ -746,10 +759,9 @@ accessibility = \"uia\"
                 .any(|n| n.contains("not used with --source sim"))
         );
         // Without the Windows `uia` build, a live source refuses it before opening anything.
-        if !cfg!(all(windows, feature = "uia"))
-            && cfg!(any(feature = "screen", all(windows, feature = "dxgi")))
-        {
-            assert!(error("serve --source dxgi", &uia).contains("uia"));
+        if !built {
+            let refusal = check_accessibility(SourceKind::Screen, &uia).unwrap_err();
+            assert!(refusal.to_string().contains("--features uia"));
         }
     }
 
