@@ -19,10 +19,19 @@ accesibilidad (ADR-0017)"):
                text ``prueba 123``). The OS-side check is the window title, which mirrors the
                state and the typed text (``GetWindowTextW``) after every step.
 ``calculator`` E2E-02, the Windows 11 Calculator: ``Siete``, ``Más``, ``Ocho``, ``Es igual a``
-               (the display must read 15), then ``Borrar``. The OS-side check is the UI
-               Automation name of the display after every click.
+               (the display must read 15), then the clear control. The clear control is not a
+               fixed name: the Calculator's real accessibility names are read from
+               ``observe_screen`` before the flow and again before the last click, and the first
+               name of ``CLEAR_CONTROLS`` (``Borrar``, ``Borrar todo``, ``Borrar entrada``) that
+               exists as a confirmed element is clicked. With none of them in the initial state
+               the run fails before any input. The OS-side check is the UI Automation name of
+               the display after every click, and it must return to 0 after the clear.
 ``notepad``    E2E-03, Notepad: open the ``Editar`` menu and close it with a second click on
                ``Editar``. No menu item, tab or caption button is clicked and nothing is typed.
+               The menu is "open" or "closed" by its UI Automation ExpandCollapseState, never by
+               screen text. Every run starts by checking that the menu is Collapsed, and a run
+               that fails with the menu left expanded closes it with one more click on ``Editar``
+               through the engine's gate (never a retry loop, and only if it is expanded).
 
 After every delivered action the control under the cursor (where SendInput left it) is read
 through UI Automation: its name, or the bounding rectangle of the window's element with the
@@ -39,7 +48,7 @@ management, not input) and minimized again at the end if it was. The operator's 
 ambiguous label, the live budget exhausted).
 
 Privacy (AGENTS.md rule 7, ADR-0012): nothing is saved but statuses, codes, counts, timings
-and booleans. Screen text stays in memory. ``--mode probe`` prints counts and the attributes
+and booleans (plus Notepad's menu state: Collapsed or Expanded). Screen text stays in memory. ``--mode probe`` prints counts and the attributes
 of the flow's own fixed labels (the test application's and the Calculator's); it prints no
 label of Notepad, whose restored tabs may hold the owner's text.
 """
@@ -306,6 +315,23 @@ foreach ($e in $all) {
 [Console]::Out.Write("$($all.Count)|$inside")
 """
 
+MENU_STATE_PS = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND__)
+$name = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__NAME__'))
+$cond = New-Object System.Windows.Automation.PropertyCondition(
+  [System.Windows.Automation.AutomationElement]::NameProperty, $name)
+$states = @()
+foreach ($e in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) {
+  $pattern = $null
+  if ($e.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$pattern)) {
+    $states += $pattern.Current.ExpandCollapseState.ToString()
+  }
+}
+[Console]::Out.Write(($states -join ","))
+"""
+
 user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
 
 
@@ -351,6 +377,21 @@ def uia_at_cursor() -> list[tuple[str, str, str]]:
     return rows
 
 
+def notepad_menu_state(hwnd) -> str | None:
+    """The ExpandCollapseState of Notepad's `Editar` menu bar item (Collapsed or Expanded),
+    read through UI Automation of the window `hwnd`; None when it is not exactly one item
+    or unreadable. An OS-side read: no input, and it does not depend on the screen's text."""
+    script = (MENU_STATE_PS.replace("__HWND__", str(int(hwnd)))
+              .replace("__NAME__", base64.b64encode(NOTEPAD_MENU.encode("utf-8")).decode("ascii")))
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             check=False, creationflags=CREATE_NO_WINDOW, timeout=60).stdout
+    except subprocess.TimeoutExpired:
+        return None
+    return parse_menu_state(out)
+
+
 def calculator_display() -> str | None:
     """The Calculator display's UI Automation name (e.g. "La pantalla muestra 15"), read
     through .NET UI Automation in a separate PowerShell; only its last number is used."""
@@ -370,12 +411,17 @@ TESTAPP_TITLE = "Ommatix S4 prueba [valor={} estado={} pagina={} texto={}]"
 TESTAPP_MARK = "texto="  # the title's field that mirrors the typed text
 TEXT_FIELD = "Campo de texto"  # the test application's field, by its accessible name
 TYPED_TEXT = "prueba 123"  # disposable; typed into that field only
-CALC_BUTTONS = ("Siete", "Más", "Ocho", "Es igual a", "Borrar")  # Spanish Windows names
+CALC_BUTTONS = ("Siete", "Más", "Ocho", "Es igual a")  # Spanish Windows names
+# The clear controls the flow accepts, in order of preference, by exact accessible name. In
+# Scientific mode after "Es igual a" no "Borrar" existed in the third S4 round (the tree had
+# "Quitar entrada", "Borrar toda la memoria" and "Borrar toda el historial", which are other
+# controls and are never in this list). Whichever of these exists is clicked.
+CLEAR_CONTROLS = ("Borrar", "Borrar todo", "Borrar entrada")
 CARDINALS = ("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve")
 NOTEPAD_MENU = "Editar"
-# Words of the Editar menu's items (Windows 11 Notepad, es-ES); never clicked.
-NOTEPAD_MENU_ITEMS = ("Deshacer", "Cortar", "Copiar", "Pegar", "Eliminar", "Buscar",
-                      "Reemplazar", "Seleccionar", "Fuente")
+# UI Automation ExpandCollapseState of the menu bar item: the OS-side truth of "open" and
+# "closed" (screen text never decides it).
+MENU_OPEN, MENU_CLOSED = "Expanded", "Collapsed"
 # A step whose end state the OCR does not check: only its OS-side check decides.
 NOT_BY_OCR = {"present": (), "absent": ()}
 
@@ -438,41 +484,88 @@ def testapp_flow(focus_click: bool = False) -> dict:
     }
 
 
+def candidates(spec) -> tuple[str, ...]:
+    """The accessible names a step may click: its label, or an ordered tuple of alternatives."""
+    return spec if isinstance(spec, tuple) else (spec,)
+
+
+def pick_control(elements: list[dict], spec) -> str | None:
+    """The label to click for a step: `spec` itself, or the first name of an ordered tuple of
+    alternatives that exists among the confirmed elements, by exact label. Never a name that is
+    not in the tuple. Uniqueness is the caller's check (`Protocol.target` stops on ambiguity)."""
+    confirmed = Counter(e.get("label", "").strip() for e in elements
+                        if e.get("actionability") == "confirmed")
+    for label in candidates(spec):
+        if confirmed.get(label):
+            return label
+    return None
+
+
 def calculator_flow() -> dict:
     """E2E-02, the Windows 11 Calculator: 7 + 8 = 15, then clear. The buttons are selected
     by their UI Automation names, which the engine reports as accessibility labels
-    (ADR-0017). The display is checked after every click through its UI Automation name,
-    not by OCR: Windows OCR does not read the single-glyph keys (S4 report, finding 3)."""
+    (ADR-0017). The clear control is whichever of CLEAR_CONTROLS exists when it is needed:
+    the third S4 round showed that "Borrar" can be absent after "Es igual a" in Scientific
+    mode, so the flow does not depend on one name. The display is checked after every click
+    through its UI Automation name, not by OCR: Windows OCR does not read the single-glyph
+    keys (S4 report, finding 3); after the clear it must read 0."""
     return {
         "exe": "calculatorapp.exe",
-        "initial": {"exact": list(CALC_BUTTONS)},
+        # Every key of the flow and at least one clear control must exist before any input.
+        "initial": {"exact": list(CALC_BUTTONS), "any_of": CLEAR_CONTROLS},
         "initial_display": "0",
-        # (label, OCR check (none), OS-side check: the display's number after the click)
+        # (label or ordered alternatives, OCR check (none), OS-side check: the display's
+        # number after the click)
         "steps": [
             ("Siete", NOT_BY_OCR, "7"),
             ("Más", NOT_BY_OCR, "7"),
             ("Ocho", NOT_BY_OCR, "8"),
             ("Es igual a", NOT_BY_OCR, "15"),
-            ("Borrar", NOT_BY_OCR, "0"),
+            (CLEAR_CONTROLS, NOT_BY_OCR, "0"),
         ],
         "grounding": named_control,
-        "vocabulary": set(CALC_BUTTONS),
+        "vocabulary": {*CALC_BUTTONS, *CLEAR_CONTROLS},
         "vocabulary_re": None,
     }
 
 
 def notepad_flow() -> dict:
     """Opens the Editar menu and closes it with a second click on Editar. `Ver` is not
-    used: on this desktop a second, non-menu `Ver` was visible (S4 report)."""
+    used: on this desktop a second, non-menu `Ver` was visible (S4 report). The menu's state
+    is its UI Automation ExpandCollapseState: Collapsed before, Expanded after the first
+    click, Collapsed after the second (never read from the screen's text)."""
     return {
         "exe": "notepad.exe",
-        "initial": ("menu", "closed"),
-        "steps": [(NOTEPAD_MENU, ("menu", "open"), None),
-                  (NOTEPAD_MENU, ("menu", "closed"), None)],
+        "initial": NOT_BY_OCR,
+        "steps": [(NOTEPAD_MENU, NOT_BY_OCR, MENU_OPEN),
+                  (NOTEPAD_MENU, NOT_BY_OCR, MENU_CLOSED)],
         "grounding": named_control,
         "vocabulary": set(),  # Notepad's labels are never printed (its tabs hold owner text)
         "vocabulary_re": None,
     }
+
+
+def parse_menu_state(output: str) -> str | None:
+    """The ExpandCollapseState a PowerShell read printed: exactly one element with the
+    pattern, in a state the protocol knows. Anything else (none, several, another state) is
+    None: the menu's state is unknown and nothing is assumed."""
+    states = [s.strip() for s in output.strip().split(",") if s.strip()]
+    if len(states) == 1 and states[0] in (MENU_OPEN, MENU_CLOSED):
+        return states[0]
+    return None
+
+
+def menu_start_failure(state: str | None) -> str | None:
+    """Why a Notepad run may not start: the Edit menu must be Collapsed, a real check (a
+    first call that merely records a baseline accepted an open menu in the third round)."""
+    if state == MENU_CLOSED:
+        return None
+    return f"the Edit menu is not closed at the start (state: {state or 'unknown'})"
+
+
+def needs_menu_restore(state: str | None) -> bool:
+    """Only a menu that is expanded is closed again after a failure."""
+    return state == MENU_OPEN
 
 
 FLOWS = {"testapp": testapp_flow, "calculator": calculator_flow, "notepad": notepad_flow}
@@ -503,7 +596,6 @@ class Protocol:
         self.live_sent = 0
         self.results: list[dict] = []
         self.started: set[int] = set()
-        self.menu_base: int | None = None  # Notepad: the item count of the closed menu
         self.current: int | None = None  # the application kept between runs (--restart never)
         self.notepad: dict | None = None
         self.app_hwnd = None
@@ -571,6 +663,11 @@ class Protocol:
             return found[0]
         return None
 
+    def find_target(self, elements: list[dict], spec) -> tuple[str | None, dict | None]:
+        """The label a step clicks now (see pick_control) and its confirmed, unique element."""
+        label = pick_control(elements, spec)
+        return label, (self.target(elements, label) if label is not None else None)
+
     @staticmethod
     def words(elements: list[dict]) -> Counter:
         """The OCR words of every label: a control's label joins the words inside its box,
@@ -580,18 +677,10 @@ class Protocol:
     def ocr_ok(self, elements: list[dict], check) -> bool:
         if check is NOT_BY_OCR:
             return True
-        if isinstance(check, tuple) and check[0] == "menu":
-            # Item words visible now, against the closed menu of the initial state (the
-            # document may contain some of these words too).
-            words = self.words(elements)
-            n = sum(words.get(item, 0) for item in NOTEPAD_MENU_ITEMS)
-            if self.menu_base is None:  # the initial check sets the closed-menu baseline
-                self.menu_base = n
-                return check[1] == "closed"
-            return n >= self.menu_base + 3 if check[1] == "open" else n <= self.menu_base
         if isinstance(check, dict) and "exact" in check:
             labels = self.labels(elements)
-            return all(labels.get(text) for text in check["exact"])
+            return (all(labels.get(text) for text in check["exact"])
+                    and (not check.get("any_of") or any(labels.get(t) for t in check["any_of"])))
         words = self.words(elements)
         return (all(words.get(text) for text in check.get("present", ()))
                 and not any(words.get(text) for text in check.get("absent", ())))
@@ -609,10 +698,10 @@ class Protocol:
                     fixed[label] = [[*key, n] for key, n in sorted(rows.items())]
         # How many elements carry each step's target label, without the label itself: a
         # target must be unique and confirmed before any live action.
-        step_targets = {step[0]: None for step in self.flow["steps"]}
+        step_targets = [candidates(step[0]) for step in self.flow["steps"]]
         step_rows = [[[*key, n] for key, n in sorted(Counter(
             (e["role"], e["actionability"], e["label_source"]) for e in elements
-            if e.get("label", "").strip() == label).items())] for label in step_targets]
+            if e.get("label", "").strip() in names).items())] for names in step_targets]
         log("probe", fixed_labels=fixed, step_targets=step_rows,
             vocabulary_elements=sum(1 for e in elements if e.get("label", "").strip() in vocab),
             elements=len(elements),
@@ -774,21 +863,96 @@ class Protocol:
                 time.sleep(0.5)
             if display != self.flow["initial_display"]:
                 res["failure"] = "initial display differs"
+        if res["failure"] is None and self.args.app == "notepad":
+            # A real check of the closed menu, every run (UI Automation, not the screen).
+            state = self.menu_state(hwnd)
+            res["menu_state_at_start"] = state
+            res["failure"] = menu_start_failure(state)
+        if res["failure"] is None and self.args.app == "calculator":
+            # The Calculator's real names, read before the flow: which clear controls exist
+            # (fixed UI names only; the run fails before any input when none does).
+            res["clear_controls_at_start"] = sorted(
+                {e.get("label", "").strip() for e in elements} & set(CLEAR_CONTROLS))
         if res["failure"] is None and self.args.mode == "run":
             self.steps(res, snap, elements, hwnd, pid)
+            if res["failure"] is not None and self.args.app == "notepad":
+                self.restore_menu(res, hwnd)
         res["total_s"] = round(time.perf_counter() - start, 2)
         if self.args.restart == "each" or res["failure"] is not None:
             self.close(pid)
             self.current = None
         return res
 
+    def menu_state(self, hwnd) -> str | None:
+        return notepad_menu_state(hwnd)
+
+    def soft_foreground_ok(self) -> bool:
+        """Whether the target application is in front and maximized on the primary monitor.
+        Unlike require_foreground it never engages the operator's stop: a cleanup that cannot
+        proceed just does not click."""
+        fg = foreground()
+        return fg["exe"] == self.flow["exe"] and fg["maximized_primary"]
+
+    def restore_click(self, res: dict, target: dict, snap: dict) -> dict:
+        """One live click through the engine's gate and nothing else (no retry)."""
+        self.spend_live()
+        res["restore_actions"] = res.get("restore_actions", 0) + 1
+        args = {"request_id": f"s4r2-{self.args.app}-{res['run']}-restore",
+                "session_id": snap["session_id"], "snapshot_id": snap["snapshot_id"],
+                "geometry_epoch": snap["geometry_epoch"],
+                "target_id": target["target_id"], "expected_revision": target["revision"],
+                "action": "click", "dry_run": False, "expected_effect": "visual_change"}
+        out, _, meta, ms = self.srv.call("execute_action", args)
+        log("menu_restore_action", run=res["run"], status=out.get("status"),
+            input_delivered=out.get("input_delivered"),
+            error=(out.get("error") or {}).get("code"), rtt_ms=round(ms, 1),
+            stages_ms=stage_ms(meta))
+        return out
+
+    def restore_menu(self, res: dict, hwnd) -> bool:
+        """After a failed Notepad run, close an Edit menu that is left expanded by clicking
+        `Editar` again, through the engine's gate only. It acts only if UI Automation reports
+        the menu Expanded, only when Notepad is in front, once, and it never touches the
+        operator's stop. Whether it was closed is read again through UI Automation."""
+        before = self.menu_state(hwnd)
+        restore = {"state_before": before, "clicked": False, "state_after": before}
+        res["menu_restore"] = restore
+        if not needs_menu_restore(before):
+            return False
+        if not self.soft_foreground_ok():
+            log("menu_restore_skipped", run=res["run"], reason="notepad is not in front")
+            return False
+        snap, elements, obs = self.observe()
+        res["observations"].append(obs)
+        _, target = self.find_target(elements, NOTEPAD_MENU)
+        if target is None:
+            log("menu_restore_skipped", run=res["run"], reason="no confirmed Editar target")
+            return False
+        out = self.restore_click(res, target, snap)
+        restore["clicked"] = bool(out.get("input_delivered"))
+        for _ in range(8):
+            restore["state_after"] = self.menu_state(hwnd)
+            if restore["state_after"] == MENU_CLOSED:
+                break
+            time.sleep(0.25)
+        log("menu_restore", run=res["run"], **restore)
+        return restore["state_after"] == MENU_CLOSED
+
+    def read_end_state(self, hwnd) -> str | None:
+        """The OS-side state of the application under test."""
+        if self.args.app == "testapp":
+            return window_title(hwnd)
+        if self.args.app == "notepad":
+            return self.menu_state(hwnd)
+        return calculator_display()
+
     def os_check(self, hwnd, expected: str) -> bool:
         """The end state read by the OS, not by the engine: the test application's window
-        title, or the Calculator display's UI Automation name. Read up to 8 times, since a
-        repaint may lag the action."""
+        title, the Calculator display's UI Automation name or Notepad's menu ExpandCollapse
+        state. Read up to 8 times, since a repaint may lag the action."""
         now = None
         for _ in range(8):
-            now = window_title(hwnd) if self.args.app == "testapp" else calculator_display()
+            now = self.read_end_state(hwnd)
             if now == expected:
                 return True
             time.sleep(0.25)
@@ -808,9 +972,10 @@ class Protocol:
             label, ocr_check, independent, *rest = step
             text = rest[0] if rest else None  # a typing step has its text
             res["steps"] += 1
+            spec = label  # a name, or ordered alternatives (the clear control)
             target = None
             for _ in range(3):
-                target = self.target(elements, label)
+                label, target = self.find_target(elements, spec)
                 if target is not None:
                     break
                 time.sleep(0.3)
@@ -818,7 +983,12 @@ class Protocol:
                 res["observations"].append(obs)
             if target is None:
                 res["failure"] = f"step {res['steps']}: target label not found or not confirmed"
+                if isinstance(spec, tuple):  # which of the fixed alternatives exist at all
+                    res["alternatives_present"] = sorted(
+                        {e.get("label", "").strip() for e in elements} & set(spec))
                 return
+            if isinstance(spec, tuple):
+                res.setdefault("resolved", []).append(label)
             if text is not None and target["role"] != "input":
                 res["failure"] = f"step {res['steps']}: the typing target is not a confirmed input"
                 return
@@ -866,7 +1036,7 @@ class Protocol:
                     time.sleep(0.5)
                     snap, elements, obs = self.observe()
                     res["observations"].append(obs)
-                    target = self.target(elements, label)
+                    label, target = self.find_target(elements, spec)
                     if target is None:
                         res["failure"] = f"step {res['steps']}: target lost after STALE_SNAPSHOT"
                         return
