@@ -30,14 +30,15 @@ pub enum SourceKind {
     /// The simulated desktop, with its own detector, recogniser and (never live)
     /// actuator.
     Sim,
-    /// A directory of PNG frames (`--images DIR`), with the flat-region detector.
+    /// A directory of PNG frames (`--images DIR`), with the `[models]` detector and OCR
+    /// (by default, the flat-region detector and no OCR).
     Images,
-    /// Live capture of the primary monitor through `xcap`, with the flat-region detector
-    /// (build with `--features screen`). Interim; superseded by `dxgi` on Windows.
+    /// Live capture of the primary monitor through `xcap`, with the `[models]` detector and
+    /// OCR (build with `--features screen`). Interim; superseded by `dxgi` on Windows.
     Screen,
     /// Live capture of one monitor (`--output`, default 0) through DXGI Desktop
-    /// Duplication, in physical pixels, with the flat-region detector (Windows; build with
-    /// `--features dxgi`). Frames stay in memory.
+    /// Duplication, in physical pixels, with the `[models]` detector and OCR (Windows; build
+    /// with `--features dxgi`). Frames stay in memory.
     Dxgi,
 }
 
