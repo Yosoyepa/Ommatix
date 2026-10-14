@@ -163,6 +163,17 @@ application, the operator names it), `gradient_tau` (1–255), `max_distance` an
 without the others is refused, and so is the whole file on any invalid line or more than
 `max_entries` prototypes. Without them the startup note says that icon labels stay unknown.
 
+`[models]` is empty by default: no model is loaded, the detector is the flat-region finder
+and there is no OCR. With the `images` or `screen` source it can select a detector
+(`detector_manifest` + `detector_manifest_sha256`, a manifest shaped like
+[`model_manifest.json`](docs/thesis/plantillas/model_manifest.json) whose status is
+`SELECCIONADO`, plus `onnxruntime_path` + `onnxruntime_sha256`; build feature `onnx`) and
+the Windows OCR (`ocr = "winrt"`, `ocr_language`, default `es-ES`; build feature
+`winrt-ocr`). Every file is checked against its SHA-256, and a mismatch, a missing build
+feature or an uninstalled language stops the engine: nothing falls back. The template's
+`detector_path`, `detector_sha256`, `ocr_path` and `ocr_sha256` stay empty, since the
+weights are declared in the manifest. No model has been selected yet (S0).
+
 The MCP server exposes three tools, with the dossier's JSON schemas:
 
 | Tool | Does |
@@ -183,7 +194,7 @@ src/                       Cargo workspace (modular monolith, ADR-0014)
 ├── application/           ommatix-application   SDD ports, the Engine use case, contract types
 ├── adapters/
 │   ├── capture/           ommatix-adapter-capture  FrameCapturer: scripted, PNG frames, screen
-│   ├── vision/            ommatix-adapter-vision   VisionDetector, TextRecognizer (models in S3)
+│   ├── vision/            ommatix-adapter-vision   VisionDetector, TextRecognizer (flat-region, ONNX, Windows OCR)
 │   ├── input/             ommatix-adapter-input    OsActuator: dry run, native input
 │   ├── sim/               ommatix-adapter-sim      simulated and fixture desktops (all four
 │   │                                               pixel/input ports) for deterministic tests

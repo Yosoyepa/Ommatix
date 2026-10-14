@@ -175,6 +175,18 @@ calibra en su corpus (H4); cualquiera de ellas sin las demás se rechaza, y tamb
 entero ante una línea inválida o más de `max_entries` prototipos. Sin ellas, la nota de
 arranque dice que las etiquetas de los íconos quedan desconocidas.
 
+`[models]` está vacío por defecto: no se carga ningún modelo, el detector es el de regiones
+de color plano y no hay OCR. Con la fuente `images` o `screen` puede elegir un detector
+(`detector_manifest` + `detector_manifest_sha256`, un manifiesto con la forma de
+[`model_manifest.json`](docs/thesis/plantillas/model_manifest.json) cuyo estado es
+`SELECCIONADO`, más `onnxruntime_path` + `onnxruntime_sha256`; feature de compilación
+`onnx`) y el OCR de Windows (`ocr = "winrt"`, `ocr_language`, por defecto `es-ES`; feature
+`winrt-ocr`). Cada archivo se comprueba contra su SHA-256, y una discrepancia, una feature
+ausente o un idioma no instalado detienen el motor: no hay alternativa silenciosa. Las claves
+`detector_path`, `detector_sha256`, `ocr_path` y `ocr_sha256` de la plantilla quedan vacías,
+porque los pesos se declaran en el manifiesto. Todavía no se ha seleccionado ningún modelo
+(S0).
+
 El servidor MCP expone tres herramientas, con los schemas JSON del dossier:
 
 | Herramienta | Hace |
@@ -196,7 +208,7 @@ src/                       workspace de Cargo (monolito modular, ADR-0014)
 ├── application/           ommatix-application   puertos del SDD, caso de uso Engine, tipos del contrato
 ├── adapters/
 │   ├── capture/           ommatix-adapter-capture  FrameCapturer: guion, frames PNG, pantalla
-│   ├── vision/            ommatix-adapter-vision   VisionDetector, TextRecognizer (modelos en S3)
+│   ├── vision/            ommatix-adapter-vision   VisionDetector, TextRecognizer (color plano, ONNX, OCR de Windows)
 │   ├── input/             ommatix-adapter-input    OsActuator: dry run, entrada nativa
 │   ├── sim/               ommatix-adapter-sim      escritorios simulado y de fixtures (los cuatro
 │   │                                               puertos de píxeles y entrada) para pruebas deterministas

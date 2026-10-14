@@ -202,7 +202,7 @@ observation (`STALE_SNAPSHOT`), while journal replays still return the stored re
 |---|---|---|---|
 | Change detection, fusion, identity, snapshots | Algorithms 1, 2, 3B; transactional commit | Implemented in `ommatix-domain` and run by the `Engine` | S1–S2 (done) |
 | Icon cache | Algorithm 3A in the observation | Run by the `Engine` on icon candidates of the planned regions with the operator's curated prototypes; off without them; context configured, thresholds not calibrated | S3 (context), S4 (calibration) |
-| Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | Flat-colour region detector (roles `unknown`), no OCR (`NullTextRecognizer`); the simulated desktops report ground truth | S0, S3 |
+| Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | By default, flat-colour region detector (roles `unknown`) and no OCR (`NullTextRecognizer`); the simulated desktops report ground truth. Opt-in adapters exist but no model is selected: a fail-closed ONNX detector driven by a SHA-256-pinned manifest (feature `onnx`) and Windows OCR for one language (feature `winrt-ocr`) | S0, S3 |
 | Agent contract | Ommatix 1.0 over MCP 2026-07-28; 2025-11-25 opt-in | Implemented (CT-01..10); not yet tested against a real client | S0/S3 for the client |
 | Action gate | Freshness, policy, allowlist, focus, stop | Snapshot freshness (also re-checked by a capture before delivery), policy, stop and the allowlist, which denies live input until an actuator attests the foreground application; no focus check | S3 |
 | Effect verification | Focus, value, scroll and visual postconditions | Visual change by re-capture only | S3 |

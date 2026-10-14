@@ -24,6 +24,11 @@ dxgi = ["ommatix-adapter-capture/dxgi"]
 ## Enable Win32 SendInput (`--input sendinput`, Windows only). It only aims at the DXGI
 ## capture, so it implies `dxgi`.
 sendinput = ["dxgi", "ommatix-adapter-input/sendinput"]
+## Enable the ONNX detector (`[models] detector_manifest`). ONNX Runtime is loaded at run
+## time from the library `[models] onnxruntime_path` pins; nothing is downloaded at build.
+onnx = ["ommatix-adapter-vision/onnx"]
+## Enable Windows OCR (`[models] ocr = "winrt"`). Windows only.
+winrt-ocr = ["ommatix-adapter-vision/winrt-ocr"]
 
 [dependencies]
 ommatix-adapter-capture = { workspace = true }

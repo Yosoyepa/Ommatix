@@ -1,6 +1,6 @@
 [package]
 name = "ommatix-adapter-vision"
-description = "Ommatix driven adapters: a deterministic CPU flat-region VisionDetector and the null TextRecognizer."
+description = "Ommatix driven adapters: the flat-region and ONNX VisionDetectors, the null and Windows OCR TextRecognizers."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,9 +8,32 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+## The fail-closed ONNX detector (`OnnxVisionDetector`). ONNX Runtime is loaded at run
+## time from a library the operator pins; nothing is downloaded at build time.
+onnx = ["dep:ort"]
+## Windows OCR (`WinRtTextRecognizer`, `Windows.Media.Ocr`). No effect on other platforms.
+winrt-ocr = ["dep:windows"]
+
 [dependencies]
 ommatix-application = { workspace = true }
 ommatix-domain = { workspace = true }
+ort = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+] }
 
 [lints]
 workspace = true
