@@ -824,3 +824,115 @@ Un piloto de Notepad con `--max-live 2` y el responsable presente debe registrar
 ### Estado
 
 Hallazgo 1: regla especificada e implementada en el cliente, **sin confirmar en vivo**. Hallazgos 2 a 4 y el conflicto de `stop.flag`: sin cambio. E2E-02 y E2E-03 siguen `NO_EJECUTADO`; las matrices no cambian.
+
+## Séptima ronda: piloto aprobado y nueve corridas puntuadas de diez de E2E-03; el cupo cortó la serie y E2E-02 no se ejecutó
+
+**Fecha:** 14 de octubre de 2026. Rama `docs/s4-seventh-round`, desde `main` (`7bca432`, fusión de #15). No cambia ningún código ni el cliente. Se usó el cliente comprometido (`tools/s4/e2e_driver.py`, SHA-256 `60486d87ea06313fd687ea1bd64ef913795cadf6b6007cc4df7764ce3b5c214a`, comprobado justo antes de cada una de las dos invocaciones en vivo), el binario de `main` (`target/release/ommatix.exe`, SHA-256 `11a3d7921cbe1582739a068714435ea380eb1e70fc460fe82b00c0a410aca9da`, el mismo de la sexta ronda: desde entonces `main` no ha cambiado ningún crate de Rust) y la configuración en float16 `s4r7-live.toml` (copia sin cambios de `s4r6-live.toml`, SHA-256 `b6e9e8e8c9cec2324fa218645de1843bce58148c2cefe384f32956f76fe4e74c`). Autorización del responsable del 14 de octubre de 2026: un piloto excluido y diez corridas puntuadas de E2E-03; E2E-02 sólo si el modo Estándar se alcanzaba de forma segura; como máximo 150 solicitudes reales en la ronda; el responsable no usó el equipo.
+
+**Resultado:** el piloto de E2E-03 (excluido de la puntuación) pasó: el descenso por la isla halló «Editar» en los dos clics (`ok`, profundidad 3, `MenuItem`, `AutomationId` `Edit`), no hubo anclajes erróneos y el menú pasó de Colapsado a Expandido y otra vez a Colapsado. La serie puntuada completó nueve de sus diez corridas, todas exitosas, con 0 falsos éxitos y 0 anclajes erróneos. La corrida 10 no se inició: su primera solicitud superó el cupo de la serie (`--max-live 20`), que no reservaba solicitudes para los reintentos tras `STALE_SNAPSHOT`; dos corridas los necesitaron. El cliente creó `stop.flag` antes de enviar esa solicitud. Como el archivo existe, no se ejecutaron `--calc-standard` ni E2E-02. Las matrices no cambian.
+
+### 1. Verificación previa a la entrada en vivo
+
+- `cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia`: ya al día, sin avisos.
+- `cargo fmt --all --check` y `cargo clippy --workspace --all-targets -- -D warnings`: correctos.
+- `cargo test --workspace`: 351 pasadas, 0 fallidas, 1 ignorada.
+- `python -m unittest discover -s tools/s4 -p "test_*.py"`: 113 pruebas correctas.
+- Desde `docs/thesis`: `referencia_ejecutable/run_tests.py`, 48 de 48 correctas; `validar_paquete.py`, 211 comprobaciones y 0 fallidas. Cuatro archivos de `referencia_ejecutable/resultados/` cambiaron sólo en la marca de tiempo, las cadenas de Python y de plataforma, una duración y el fin de línea; se restauraron con `git restore`.
+- Manifiesto float16 `models\manifest.rnf05.json`: SHA-256 `f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47`, comprobado en disco.
+- Cuaderno en 401 (`--round-start 401`), `stop.flag` ausente, sin procesos `ommatix.exe`, `CalculatorApp.exe` ni `ommatix-testapp.exe`.
+- Escritorio: dos ventanas del Bloc de notas, ambas minimizadas (`showCmd` 2). Su colocación se guardó antes del piloto con `notepad_placement.ps1`, un auxiliar fuera del repositorio que sólo lee y restaura posiciones. Dos procesos `notepad.exe` (PID 8960 y 23164). El PID 40380 de la sexta ronda ya no existía al empezar esta ronda; el cliente no inicia ni cierra procesos de Notepad.
+
+### 2. Ejecución en vivo
+
+| Paso | Invocación (resumen) | Solicitudes | Resultado |
+|---|---|---|---|
+| E2E-03, piloto (excluido) | `--app notepad --mode run --runs 1 --max-live 2 --round-start 401` | 2 | Aprobado |
+| E2E-03, serie | `--app notepad --mode run --runs 10 --max-live 20 --round-start 401` | 20 | Nueve corridas puntuadas, nueve exitosas; la corrida 10 no se inició |
+| `--calc-standard` | no se ejecutó | 0 | Bloqueado por `stop.flag` |
+| E2E-02 | no se ejecutó | 0 | Bloqueado por `stop.flag` |
+
+Cuaderno: 401 → 423, es decir, 22 solicitudes reales de 150 en la ronda (2 del piloto, 20 de la serie). Ninguna solicitud se envió después de que el cliente creara `stop.flag`.
+
+### 3. Resultados
+
+#### 3.1 Piloto (excluido de la puntuación)
+
+- Corrida 1: dos clics entregados, ambos `effect_observed` y verificados por el motor. El descenso desde el anfitrión de la isla halló «Editar» (`MenuItem`, `AutomationId` `Edit`, profundidad 3, 11 elementos visitados) en los dos clics; la identidad fue `ok` en los dos, `grounding_wrong` 0 y falsos éxitos 0.
+- Menú «Editar» (UI Automation): Colapsado al empezar, Expandido tras el clic 1 y Colapsado tras el clic 2. Las dos comprobaciones del sistema operativo pasaron (2 de 2).
+- La ventana reutilizada se minimizó al terminar, como hace el cliente con una ventana que estaba minimizada.
+- Inactividad del propietario al empezar: 788,5 s.
+
+#### 3.2 E2E-03, serie puntuada (corridas 1 a 9)
+
+| Corrida | Solicitudes | Entregadas | Rechazadas (`STALE_SNAPSHOT`) | Éxito |
+|---|---|---|---|---|
+| 1 | 2 | 2 | 0 | sí |
+| 2 | 3 | 2 | 1 (paso 2; el reintento se entregó) | sí |
+| 3 a 7 | 2 cada una | 2 cada una | 0 | sí |
+| 8 | 3 | 2 | 1 (paso 2; el reintento se entregó) | sí |
+| 9 | 2 | 2 | 0 | sí |
+| 10 | 0 | 0 | — | no iniciada |
+
+Totales: 9 corridas puntuadas y 9 exitosas. 20 solicitudes reales, 18 entregadas (todas `effect_observed`, verificadas) y 2 rechazadas antes de la entrega (`STALE_SNAPSHOT` en el paso de cierre de las corridas 2 y 8; no entregaron nada, porque el motor revalida la captura antes de cada entrega). `indeterminate`: 0. Restauraciones del menú: 0. Falsos éxitos: 0. `grounding_wrong`: 0. Comprobaciones del sistema operativo: 18 de 18.
+
+Anclaje por identidad: 20 de 20 intentos hallaron «Editar» como único candidato con su `RuntimeId`, incluidos los dos rechazados. Descenso: 18 de 18 `ok`, profundidad 3, `MenuItem`, `AutomationId` `Edit`, con 20 elementos visitados en cada uno; las cotas (500 y 16) no se alcanzaron. Clics anclados: 18 de 18. Menú Colapsado al empezar en las nueve corridas.
+
+Inactividad al empezar: corrida 1, 28,9 s (tras el piloto); corridas 2 a 9, entre 2,6 y 2,8 s, que corresponden a los clics del propio cliente. Ningún dato indica entradas de origen desconocido.
+
+#### 3.3 Corte del cupo y `stop.flag`
+
+- La corrida 10 empezó y su primera solicitud superó el cupo de la serie (20 de 20). El cliente registró `operator_stop_engaged` con el motivo «live action budget exhausted», creó `stop.flag` (18:02:21, hora local, según la fecha de modificación del archivo) y abortó. No se envió ninguna entrada para la corrida 10.
+- **Causa.** El cupo se calculó como dos solicitudes por corrida. Cada intento repetido tras `STALE_SNAPSHOT` también consume una solicitud del cuaderno. Dos corridas necesitaron un reintento, y eso agotó el cupo antes de la décima. Es el hallazgo 1 de la [revisión](../reviews/2026-10-14-s4-seventh-round.md).
+- **Vigilancia.** Un script auxiliar, fuera del repositorio, vigilaba el archivo de resultados y detenía el proceso del cliente sólo ante un evento de seguridad (`grounding_wrong` o `engine_false_success`) o si existía `stop.flag`. La parte de `stop.flag` sobraba, porque el cliente ya se detiene con él. Se disparó justo cuando el cliente creaba el archivo, mientras aún cerraba: el proceso terminó antes de escribir su registro `end` y antes de cerrar el servidor. Comprobado después: ningún `ommatix.exe`, ventanas minimizadas en su colocación y menú Colapsado. Hallazgo 2 de la revisión (de operación; no es un defecto del cliente).
+- **`stop.flag` sigue presente.** Lo creó el cliente, no el agente, y no se ha retirado. Retirarlo es decisión del responsable.
+
+#### 3.4 `--calc-standard` y E2E-02
+
+No se ejecutaron, porque el protocolo ordena detener todo el trabajo en vivo mientras exista `stop.flag`. No hay datos de la transición a Estándar ni de la Calculadora en esta ronda. Los `targets` de E2E-03 sí se registraron; los campos `targets` y `stopped_by` de `--calc-standard` no se han probado en vivo.
+
+### 4. Latencias (`_meta`)
+
+| Medida (ms) | Piloto (2 clics) | Serie: mediana / p95 (18 clics entregados) |
+|---|---|---|
+| `action_total` | 67,5 y 75,8 | 86,0 / 97,3 |
+| `action_verification` | 58,4 y 67,5 | 67,6 / 69,7 |
+| `action_freshness` | 5,8 y 5,9 | 16,2 / 25,8 |
+| `action_delivery` | 2,8 y 1,9 | 2,2 / 5,3 |
+| `action_gate` | 0,5 y 0,5 | 0,2 / 0,5 |
+| rtt del cliente | 67,9 y 76,1 | 86,2 / 97,6 |
+
+Observaciones de la serie (29, mediana / p95): `total` 130,0 / 144,9; `detect` 83,8 / 87,0; `recognize` 44,1 / 56,1; `accessibility` 114,3 / 136,7; `capture` 11,3 / 23,7; `plan` 2,0 / 2,8; `track` 0,7 / 1,2; `fuse` 0,1 / 0,1. Duración de cada corrida (nueve): mediana 8,9 s, p95 11,1 s. RNF-05 no se evalúa con estas corridas de flujo, que no son la medición de S0 §10.
+
+### 5. Hallazgos
+
+| # | Severidad | Hallazgo | Estado y siguiente paso |
+|---|---|---|---|
+| 1 | Mayor, planificación | El cupo de la serie (`--max-live 20` para diez corridas) no reservaba solicitudes para los reintentos tras `STALE_SNAPSHOT`. Dos corridas los usaron y el cupo se agotó antes de la corrida 10 (§3.3). | Abierto, decisión del responsable (§8). Sin cambio de código: el cliente se detuvo como está diseñado, antes de enviar la solicitud 21 de la serie (la 23 de la ronda). |
+| 2 | Menor, operación | El script de vigilancia detuvo el proceso del cliente mientras cerraba (§3.3); su registro `end` y el cierre del servidor no quedaron escritos. | Cerrado para esta ronda: se comprobó el estado del escritorio y ningún proceso quedó vivo. El script no se reutiliza en esta forma: no detiene el proceso por `stop.flag`. Sin cambio en el repositorio. |
+| 3 | Observación | `STALE_SNAPSHOT` en el paso de cierre de las corridas 2 y 8, antes de la entrega; el reintento volvió a anclarse y se entregó. | Sin cambio. Causa no verificada: el registro no muestra qué cambió en la pantalla entre la observación y la acción. |
+| 4 | Observación | El descenso visitó 11 elementos en el piloto y 20 en la serie. | Sin cambio. Causa no verificada. Las cotas no se alcanzaron y el resultado fue el mismo (profundidad 3, `Edit`). |
+| 5 | Documental (preexistente) | `plan_pruebas.csv` describe E2E-02 como «Editor» y E2E-03 como «Explorador»; el protocolo S4 ejecuta la Calculadora y el Bloc de notas bajo esos identificadores. | Sin cambio. Decisión del responsable sobre la correspondencia. |
+
+### 6. Estado en la matriz
+
+Sin cambio. `docs/thesis/matrices/plan_pruebas.csv` no se modifica: E2E-03 tiene nueve de las diez corridas puntuadas que exige cada serie, E2E-02 no se ejecutó, y la matriz describe E2E-02 y E2E-03 como «Editor» y «Explorador», no como la Calculadora y el Bloc de notas (hallazgo 5). Las columnas siguen igual: `NO_EJECUTADO` en la de referencia y `PENDIENTE_PRODUCTO` en la de aceptación. E2E-01 mantiene `EJECUTADO_SUPERVISADO_PARCIAL`.
+
+### 7. Estado final del escritorio y del cuaderno
+
+- **Bloc de notas:** procesos 8960 y 23164, los mismos que al empezar. Las dos ventanas del propietario están minimizadas, con la colocación guardada antes del piloto; la restauración y su verificación coinciden con `notepad_placement_before_r7.json`. El menú «Editar» está Colapsado en las dos (lectura de UI Automation, sólo lectura).
+- **Procesos:** ningún `ommatix.exe`, `CalculatorApp.exe` ni `ommatix-testapp.exe`, y ningún proceso del cliente.
+- **`stop.flag`:** presente (creado por el cliente a las 18:02:21). No se ha retirado.
+- **Cuaderno:** 423 (22 de 150 solicitudes de la ronda).
+- **Capturas y texto de pantalla:** ninguno guardado. Los registros contienen estados, códigos, contadores, tiempos, tipos de control, `AutomationId` y clases de ventana.
+
+### 8. Qué queda y cómo reanudar
+
+1. **Responsable:** decidir si la ronda continúa. Si continúa, retirar `stop.flag` a mano. El agente no lo crea ni lo retira.
+2. **Responsable:** fijar el cupo contando los reintentos. Propuesta, con 128 solicitudes restantes de 150 y `--round-start 401`: la corrida 10 de E2E-03 en su propia invocación (`--runs 1 --first-run 10 --max-live 6`); `--calc-standard` con su cupo de 4; E2E-02, piloto `--max-live 10` y serie `--max-live 75`. Son 95 solicitudes como máximo; el caso típico, sin reintentos, son 59. El cupo de la serie admite 25 reintentos sobre sus 50 clics típicos. El peor caso, con cuatro intentos por clic, supera las 128, así que el corte puede repetirse: el responsable decide si lo acepta.
+3. **Cliente:** sin cambios en esta ronda. Contar los reintentos de forma explícita en el cupo es un cambio de protocolo y de cliente: necesita su prueba y una ronda nueva con cambio de hash.
+4. **Vigilancia:** la siguiente ronda no usa el script de esta forma. Si se vigila el proceso, sólo se informa: el cliente se detiene solo.
+5. **Cuaderno:** 423. Cada ronda usa su propio `--round-start`.
+
+### 9. Ejecución
+
+El cliente se usó sin cambios y sin envoltorios que envíen entrada. Cada invocación en vivo comprobó antes el SHA-256 del cliente. Las únicas entradas fueron las 22 solicitudes de `execute_action` sobre «Editar» en el Bloc de notas (`MenuItem`, `AutomationId` `Edit`); no se escribió nada en el Bloc de notas ni se usó ninguna otra aplicación. Guardar y restaurar la colocación de las ventanas es gestión de ventanas, sin entradas, y las lecturas de UI Automation son de sólo lectura.

@@ -1,5 +1,16 @@
 # Historial documental
 
+## 1.0.26 — 2026-10-14: S4, séptima ronda (rama `docs/s4-seventh-round`): piloto aprobado y nueve de diez corridas puntuadas de E2E-03; el cupo cortó la serie y E2E-02 no se ejecutó
+
+No cambia ningún requisito, algoritmo, contrato, escenario, código de Rust ni del cliente (`tools/s4/e2e_driver.py`, SHA-256 `60486d87…c214a`, comprobado antes de cada invocación en vivo). Se ejecutó en vivo, sobre el Bloc de notas del responsable, el piloto de E2E-03 (excluido) y la serie puntuada: 22 solicitudes reales (cuaderno 401 → 423), todas sobre «Editar». La serie completó nueve corridas de diez: todas exitosas, con 0 falsos éxitos y 0 anclajes erróneos. La décima no se inició: el cupo de la serie (20 solicitudes) no reservaba los reintentos tras `STALE_SNAPSHOT`, y el cliente creó `stop.flag` antes de enviar la siguiente solicitud. Como el archivo sigue presente, no se ejecutaron `--calc-standard` ni E2E-02. El detalle está en la sección «Séptima ronda» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md) y los hallazgos, en la [revisión de la séptima ronda](../reviews/2026-10-14-s4-seventh-round.md).
+
+- **Piloto:** descenso `ok` en los dos clics (profundidad 3, `MenuItem` `Edit`), menú Colapsado → Expandido → Colapsado y dos efectos verificados.
+- **Serie puntuada (9 de 10):** 9 de 9 exitosas; 18 clics entregados, todos `effect_observed`; 2 rechazos antes de la entrega (`STALE_SNAPSHOT` en el paso de cierre de las corridas 2 y 8), con reintento anclado y entregado.
+- **Matrices:** sin cambio. E2E-03 no tiene diez corridas puntuadas, E2E-02 no se ejecutó, y la matriz describe otros casos («Editor», «Explorador»).
+- **Hallazgos** (revisión): cupo sin reservar reintentos (abierto, decisión del responsable); vigilancia que detuvo el cliente durante su cierre (cerrado para esta ronda); dos observaciones sin causa verificada; correspondencia de los casos de la matriz (decisión del responsable).
+- **Escritorio y cuaderno:** cuaderno 423; `stop.flag` presente y sin retirar; sin procesos del cliente; ventanas del propietario minimizadas en su colocación; «Editar» Colapsado.
+- **Pruebas:** sin cambios de código; se repitieron las del 1.0.25 (113 de `tools/s4`, 351 de Rust, 48 del oráculo y 211 comprobaciones del paquete).
+
 ## 1.0.25 — 2026-10-14: S4, anclaje de los clics dentro de una isla XAML (rama `fix/s4-island-grounding`)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust. Cambia el cliente de la aceptación (`tools/s4/e2e_driver.py`, SHA-256 `60486d87…c214a`, antes `6dad0dc3…8e2a77`) y sus pruebas, que usan un motor y una cadena de accesibilidad falsos: no se envió entrada. La regla y su resolución están en la [revisión](../reviews/2026-10-14-s4-fifth-round.md), sección «Seventh round», y el informe, en la sección «Preparación de la séptima ronda» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md).
