@@ -31,19 +31,6 @@ pub const TEXT_ORIGIN_Y: u32 = TEXT_FIELD.y + 8;
 /// Characters that fit in the field; extra input is ignored like a `maxlength`.
 pub const MAX_CHARS: usize = ((TEXT_FIELD.w - 20) / GLYPH_ADVANCE) as usize;
 
-/// Bounds of the text drawn for `chars` typed characters (empty for zero).
-pub const fn text_bounds(chars: u32) -> Rect {
-    if chars == 0 {
-        return Rect::new(TEXT_ORIGIN_X, TEXT_ORIGIN_Y, 0, 0);
-    }
-    Rect::new(
-        TEXT_ORIGIN_X,
-        TEXT_ORIGIN_Y,
-        (chars - 1) * GLYPH_ADVANCE + GLYPH_W,
-        GLYPH_H,
-    )
-}
-
 /// Bounds of the glyphs of characters `[from, to)` of the typed text (`to > from`).
 pub const fn glyph_run(from: u32, to: u32) -> Rect {
     Rect::new(

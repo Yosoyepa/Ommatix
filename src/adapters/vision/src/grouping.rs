@@ -2,9 +2,9 @@
 //! groups glyphs into words.
 //!
 //! Both passes find neighbours through a [`Grid`] built for the pass, with 4 px cells
-//! unless the boxes are sparse. The domain's `SpatialIndex` is sized for elements (64 px
-//! buckets): on a screen of tiny dots each bucket holds hundreds of boxes, and every search
-//! scanned them all.
+//! unless the boxes are sparse. An index sized for elements (64 px buckets) does not fit:
+//! on a screen of tiny dots each bucket holds hundreds of boxes, and every search scans
+//! them all.
 
 use std::cmp::Reverse;
 
