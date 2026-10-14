@@ -7,20 +7,24 @@
 //! that talk about the agent or MCP (BDD-11, BDD-12, BDD-22..27) drive the real engine
 //! over a [`FixtureDesktop`] through the MCP adapter like an agent would: JSON-RPC lines
 //! into [`Connection::handle_message`], every tool result checked against the dossier's
-//! output schema. BDD-29..31 run the same way over a [`LiveDouble`], a test double of
+//! output schema. BDD-28..32 run the same way over a [`LiveDouble`], a test double of
 //! S3's live actuator that records what it is handed and sends nothing to the OS: they
-//! show the engine's side of IT-04, IT-05 and SEC-03, which still need supervised runs
-//! with the real actuator. BDD-28 and BDD-32 wait: the engine checks the foreground
-//! application, not the focused window, and no operator control sets the local stop.
+//! show the engine's side of SEC-05, IT-04, IT-05, SEC-03 and SEC-02, which still need
+//! supervised runs with the real actuator. BDD-32 uses the product's operator policy
+//! ([`ConfigPolicy`] with a stop file in a temporary directory); BDD-28 covers a window
+//! of another application taking the foreground before the engine types; the check of
+//! keyboard focus inside the allowed application belongs to the `SendInput` actuator,
+//! which no test drives.
 
 // cucumber passes captured step parameters by value.
 #![allow(clippy::needless_pass_by_value)]
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use cucumber::{World, given, then, when};
+use ommatix::policy::ConfigPolicy;
 use ommatix_adapter_mcp::{
     Connection, LEGACY_PROTOCOL_VERSION, MODERN_PROTOCOL_VERSION, McpConfig, McpServer, Profile,
 };
@@ -54,7 +58,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-01", "BDD-02", "BDD-03", "BDD-04", "BDD-05", "BDD-06", "BDD-07", "BDD-08", "BDD-09",
     "BDD-10", "BDD-11", "BDD-12", "BDD-13", "BDD-14", "BDD-15", "BDD-16", "BDD-17", "BDD-18",
     "BDD-19", "BDD-20", "BDD-21", "BDD-22", "BDD-23", "BDD-24", "BDD-25", "BDD-26", "BDD-27",
-    "BDD-29", "BDD-30", "BDD-31",
+    "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32",
 ];
 
 #[derive(Debug, Default, World)]
@@ -791,7 +795,11 @@ struct Agent {
     conn: Connection,
     desktop: FixtureDesktop,
     /// The operator's policy store the engine reads.
-    policy: Arc<FixedPolicy>,
+    policy: Arc<dyn PolicyStore>,
+    /// The foreground the [`LiveDouble`] attests, when it is the actuator.
+    foreground: Arc<Mutex<Foreground>>,
+    /// The operator's stop file, in a directory of its own, when the scenario has one.
+    stop_file: Option<PathBuf>,
     next_id: u64,
     /// The last observation page (`structuredContent`).
     page: Option<Value>,
@@ -803,8 +811,17 @@ struct Agent {
     response: Option<Value>,
     /// What each notification sent produced (a reply line, or nothing).
     notification_replies: Vec<Option<String>>,
-    /// A tool result the scenario keeps to compare with later ones.
+    /// A tool result the scenario keeps to compare with later ones, and its arguments.
     recorded: Option<Value>,
+    recorded_args: Option<Value>,
+}
+
+impl Drop for Agent {
+    fn drop(&mut self) {
+        if let Some(dir) = self.stop_file.as_deref().and_then(std::path::Path::parent) {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
 }
 
 impl std::fmt::Debug for Agent {
@@ -853,12 +870,33 @@ fn error_code(response: &Value) -> i64 {
 /// The application the [`LiveDouble`] attests in the foreground.
 const ALLOWED_APP: &str = "notepad.exe";
 
+/// The application in the foreground, as the [`LiveDouble`] attests it.
+#[derive(Debug)]
+struct Foreground {
+    app: String,
+    /// Another application that takes the foreground right after the next attestation.
+    thief: Option<String>,
+    /// Attestations so far.
+    queries: usize,
+}
+
+impl Default for Foreground {
+    fn default() -> Self {
+        Self {
+            app: ALLOWED_APP.to_owned(),
+            thief: None,
+            queries: 0,
+        }
+    }
+}
+
 /// A test double of a live actuator (S3's `SendInput`) for the scenarios about real
-/// delivery: it is live, attests [`ALLOWED_APP`] in the foreground and reports every event
-/// of a click (button down and up) as inserted, but it records what it is handed through
-/// the fixture desktop and sends nothing to the OS. It never changes the screen, so no
-/// action has a visible effect.
-struct LiveDouble(Box<dyn OsActuator>);
+/// delivery: it is live, attests [`ALLOWED_APP`] in the foreground (unless a scenario
+/// hands the foreground to another application) and reports every event of a click
+/// (button down and up) as inserted, but it records what it is handed through the
+/// fixture desktop and sends nothing to the OS. It never changes the screen, so no action
+/// has a visible effect.
+struct LiveDouble(Box<dyn OsActuator>, Arc<Mutex<Foreground>>);
 
 impl OsActuator for LiveDouble {
     fn name(&self) -> &'static str {
@@ -870,7 +908,13 @@ impl OsActuator for LiveDouble {
     }
 
     fn foreground_application(&self) -> Option<String> {
-        Some(ALLOWED_APP.to_owned())
+        let mut foreground = self.1.lock().unwrap_or_else(PoisonError::into_inner);
+        foreground.queries += 1;
+        let attested = foreground.app.clone();
+        if let Some(thief) = foreground.thief.take() {
+            foreground.app = thief;
+        }
+        Some(attested)
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
@@ -897,19 +941,29 @@ fn live_policy() -> LocalPolicy {
 
 impl Agent {
     fn new(scene: FixtureScene, policy: LocalPolicy, config: McpConfig) -> Self {
-        Self::build(scene, policy, config, false)
+        Self::build(scene, Arc::new(FixedPolicy(policy)), config, false)
     }
 
     /// Like [`Agent::new`] with the modern profile, over a [`LiveDouble`] actuator.
     fn live(scene: FixtureScene, policy: LocalPolicy) -> Self {
+        Self::live_with(scene, Arc::new(FixedPolicy(policy)))
+    }
+
+    /// Like [`Agent::live`], with the given policy store.
+    fn live_with(scene: FixtureScene, policy: Arc<dyn PolicyStore>) -> Self {
         Self::build(scene, policy, McpConfig::default(), true)
     }
 
-    fn build(scene: FixtureScene, policy: LocalPolicy, config: McpConfig, live: bool) -> Self {
+    fn build(
+        scene: FixtureScene,
+        policy: Arc<dyn PolicyStore>,
+        config: McpConfig,
+        live: bool,
+    ) -> Self {
         let clock = Arc::new(ManualClock::new());
         let desktop = FixtureDesktop::new(scene, clock.clone());
         let recorder: Box<dyn OsActuator> = Box::new(desktop.actuator());
-        let policy = Arc::new(FixedPolicy(policy));
+        let foreground = Arc::new(Mutex::new(Foreground::default()));
         let engine = ThesisEngine::new(
             EngineConfig::new(SESSION),
             Ports {
@@ -917,7 +971,7 @@ impl Agent {
                 detector: Box::new(desktop.detector()),
                 recognizer: Box::new(desktop.recognizer()),
                 actuator: if live {
-                    Box::new(LiveDouble(recorder))
+                    Box::new(LiveDouble(recorder, foreground.clone()))
                 } else {
                     recorder
                 },
@@ -929,6 +983,8 @@ impl Agent {
             conn: McpServer::new(engine, config).connect(),
             desktop,
             policy,
+            foreground,
+            stop_file: None,
             next_id: 0,
             page: None,
             pages: Vec::new(),
@@ -936,6 +992,7 @@ impl Agent {
             response: None,
             notification_replies: Vec::new(),
             recorded: None,
+            recorded_args: None,
         }
     }
 
@@ -1630,6 +1687,162 @@ fn the_local_policy_is_unchanged(e: &mut Engine) {
     assert_eq!(again["structuredContent"]["error"]["code"], "POLICY_DENIED");
     assert_eq!(agent.policy.current(), LocalPolicy::default());
     assert_eq!(agent.desktop.handed_actions().len(), 0);
+}
+
+/// Another application, not on the operator's allowlist.
+const OTHER_APP: &str = "calc.exe";
+
+impl Agent {
+    /// `execute_action` arguments for live typing of `text` into `element` of the last
+    /// page.
+    fn live_type_args(&self, element: &Value, request_id: &str, text: &str) -> Value {
+        let mut args = self.live_click_args(element, request_id, "none");
+        args["action"] = json!("type");
+        args["text"] = json!(text);
+        args
+    }
+
+    /// The only element of the last page whose role is `role`.
+    fn only(&self, role: &str) -> Value {
+        let matches: Vec<&Value> = self.page()["elements"]
+            .as_array()
+            .expect("elements")
+            .iter()
+            .filter(|e| e["role"] == role)
+            .collect();
+        assert_eq!(matches.len(), 1, "one {role}: {}", self.page());
+        matches[0].clone()
+    }
+
+    fn foreground(&self) -> std::sync::MutexGuard<'_, Foreground> {
+        self.foreground
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+#[given("un campo de texto válido de una ventana permitida")]
+fn a_valid_field_of_an_allowed_window(e: &mut Engine) {
+    let mut scene = FixtureScene::new(400, 160);
+    scene.add_word("Nombre", bx(20.0, 45.0, 90.0, 65.0));
+    scene.add_control(confirmed(Role::Input, bx(110.0, 40.0, 360.0, 70.0)));
+    // The operator allows live input on the application the live double attests.
+    let agent = e.agent.insert(Agent::live(scene, live_policy()));
+    agent.observe(json!({}));
+    let field = agent.only("input");
+    assert_eq!(field["actionability"], "confirmed", "{field}");
+    agent.target = Some(field);
+    assert_eq!(agent.foreground().app, ALLOWED_APP);
+}
+
+#[when("otra ventana obtiene el foco antes de escribir")]
+fn another_window_takes_the_focus_before_typing(e: &mut Engine) {
+    let agent = e.agent();
+    // The window of another application takes the foreground right after the engine's
+    // gate attests the allowed one, before any key could be sent.
+    agent.foreground().thief = Some(OTHER_APP.to_owned());
+    let args = agent.live_type_args(agent.target(), "bdd28-type", "hola");
+    agent.tool_result("execute_action", args);
+}
+
+#[then("se rechaza la entrada sin escribir en la nueva ventana")]
+fn rejected_without_typing_into_the_new_window(e: &mut Engine) {
+    let agent = e.agent();
+    let outcome = agent.last_response()["result"]["structuredContent"].clone();
+    assert_eq!(outcome["status"], "rejected", "{outcome}");
+    assert_eq!(outcome["error"]["code"], "POLICY_DENIED");
+    assert_eq!(outcome["error"]["next_step"], "operator_review");
+    assert!(
+        outcome["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("foreground application changed")),
+        "{outcome}"
+    );
+    assert_eq!(outcome["input_delivered"], false);
+    // Attested at the gate and again right before delivery, where the change was seen.
+    assert_eq!(agent.foreground().queries, 2);
+    assert_eq!(agent.foreground().app, OTHER_APP);
+    assert!(
+        agent.desktop.handed_actions().is_empty(),
+        "no keystroke reached the actuator"
+    );
+    assert_eq!(agent.metric("delivered_actions"), 0);
+    // While the other application keeps the foreground, typing is refused at the gate.
+    let args = agent.live_type_args(agent.target(), "bdd28-again", "hola");
+    let again = agent.tool_result("execute_action", args);
+    assert_eq!(again["structuredContent"]["error"]["code"], "POLICY_DENIED");
+    assert_eq!(agent.desktop.handed_actions().len(), 0);
+}
+
+/// A stop file path in a directory of its own, which the [`Agent`] removes when dropped.
+fn fresh_stop_file() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ommatix-bdd32-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a temporary directory");
+    dir.join("STOP")
+}
+
+#[given("una secuencia de prueba autorizada")]
+fn an_authorised_test_sequence(e: &mut Engine) {
+    // The product's operator policy: live input on the allowed application, and a stop
+    // file that does not exist yet.
+    let stop_file = fresh_stop_file();
+    let policy = ConfigPolicy::new(live_policy()).with_stop_file(&stop_file);
+    let agent = e
+        .agent
+        .insert(Agent::live_with(form_with_title(), Arc::new(policy)));
+    agent.stop_file = Some(stop_file);
+    // First action of the sequence: delivered.
+    agent.observe(json!({}));
+    let button = agent.element("Guardar");
+    let args = agent.live_click_args(&button, "bdd32-first", "none");
+    let first = agent.tool_result("execute_action", args.clone());
+    let outcome = &first["structuredContent"];
+    assert_eq!(outcome["status"], "input_delivered", "{outcome}");
+    assert_eq!(agent.desktop.handed_actions().len(), 1);
+    agent.recorded = Some(first);
+    agent.recorded_args = Some(args);
+    // The sequence goes on: the delivery spent the snapshot, so the agent observes again
+    // and prepares the next action.
+    agent.observe(json!({}));
+    agent.target = Some(agent.element("Guardar"));
+}
+
+#[when("el operador activa la parada local")]
+fn the_operator_engages_the_local_stop(e: &mut Engine) {
+    let agent = e.agent();
+    let stop_file = agent.stop_file.clone().expect("a stop file");
+    std::fs::write(&stop_file, b"").expect("the operator creates the stop file");
+}
+
+#[then("no se envían nuevos eventos y se informa cualquier entrega ya realizada")]
+fn no_new_events_and_past_deliveries_are_reported(e: &mut Engine) {
+    let agent = e.agent();
+    assert!(
+        agent.policy.current().stopped,
+        "the operator's stop is read"
+    );
+    // The next action of the sequence is refused, and nothing reaches the actuator.
+    let args = agent.live_click_args(agent.target(), "bdd32-second", "none");
+    let second = agent.tool_result("execute_action", args);
+    let outcome = &second["structuredContent"];
+    assert_eq!(outcome["status"], "rejected", "{outcome}");
+    assert_eq!(outcome["error"]["code"], "POLICY_DENIED");
+    assert_eq!(outcome["error"]["next_step"], "operator_review");
+    assert_eq!(outcome["error"]["retryable"], false);
+    assert_eq!(outcome["input_delivered"], false);
+    assert_eq!(agent.desktop.handed_actions().len(), 1, "no new events");
+    // The delivery made before the stop is still reported as it happened: no rollback,
+    // no rewrite.
+    let recorded = agent.recorded.clone().expect("the first result");
+    let args = agent.recorded_args.clone().expect("the first arguments");
+    let replay = agent.tool_result("execute_action", args);
+    assert_eq!(replay["structuredContent"], recorded["structuredContent"]);
+    assert_eq!(replay["structuredContent"]["status"], "input_delivered");
+    assert_eq!(replay["structuredContent"]["input_delivered"], true);
+    assert_eq!(agent.metric("delivered_actions"), 1);
+    assert_eq!(agent.metric("rejected_actions"), 1);
+    assert_eq!(agent.desktop.handed_actions().len(), 1);
 }
 
 fn main() {

@@ -2255,6 +2255,7 @@ dependencies = [
  "cucumber",
  "futures",
  "jsonschema",
+ "ommatix",
  "ommatix-adapter-mcp",
  "ommatix-adapter-sim",
  "ommatix-application",

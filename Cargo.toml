@@ -29,6 +29,8 @@ ommatix-adapter-vision = { path = "src/adapters/vision" }
 ommatix-adapter-input = { path = "src/adapters/input" }
 ommatix-adapter-mcp = { path = "src/adapters/mcp" }
 ommatix-adapter-sim = { path = "src/adapters/sim" }
+# The composition root, for the acceptance tests of the operator's policy and stop.
+ommatix = { path = "src/app" }
 
 anyhow = "1"
 enigo = "0.6"
