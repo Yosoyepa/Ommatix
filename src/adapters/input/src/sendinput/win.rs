@@ -28,15 +28,16 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GA_ROOT, GUITHREADINFO, GetAncestor, GetForegroundWindow, GetGUIThreadInfo, GetSystemMetrics,
-    GetWindowThreadProcessId, IsChild, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, WindowFromPoint,
+    FindWindowExW, GA_ROOT, GUITHREADINFO, GetAncestor, GetClassNameW, GetForegroundWindow,
+    GetGUIThreadInfo, GetSystemMetrics, GetWindowThreadProcessId, IsChild, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WindowFromPoint,
 };
-use windows::core::PWSTR;
+use windows::core::{PCWSTR, PWSTR};
 
 use super::{
-    ADAPTER, Event, FocusFacts, MUST_BE_UP, VirtualScreen, batch, exe_name_utf16, first_held,
-    focus_problem, integrity_allows, normalise, split_keys,
+    ADAPTER, Event, FocusFacts, HOSTED_CONTENT_CLASS, MUST_BE_UP, TopLevel, VirtualScreen, batch,
+    exe_name_utf16, first_held, focus_problem, integrity_allows, is_frame_host, normalise,
+    point_application, shown_application, split_keys,
 };
 use crate::aim::frame_pixel;
 
@@ -102,10 +103,79 @@ fn window_process(hwnd: HWND) -> Option<u32> {
     (pid != 0).then_some(pid)
 }
 
-/// The process of the foreground window, if there is one.
-fn foreground_process() -> Option<u32> {
+/// Longest window class name read, in UTF-16 units (class names are at most 256).
+const MAX_CLASS_UNITS: usize = 257;
+
+/// The window class name of `hwnd`; `None` for a stale window.
+fn class_name(hwnd: HWND) -> Option<String> {
+    let mut buffer = [0u16; MAX_CLASS_UNITS];
+    // SAFETY: `hwnd` is passed by value (a stale handle makes the call return 0); the slice
+    // is a local valid for its length of writes, which the binding passes as the maximum.
+    let len = unsafe { GetClassNameW(hwnd, &mut buffer) };
+    let len = usize::try_from(len).ok().filter(|&n| n > 0)?;
+    String::from_utf16(buffer.get(..len)?).ok()
+}
+
+/// The executable name of the process owning `hwnd`, lowercase.
+fn window_exe_name(hwnd: HWND) -> Option<String> {
+    process_exe_name(&open_process(window_process(hwnd)?)?)
+}
+
+/// The hosted content window (`Windows.UI.Core.CoreWindow`) inside a frame host's frame.
+fn hosted_content(frame: HWND) -> Option<HWND> {
+    let class: Vec<u16> = HOSTED_CONTENT_CLASS
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: `frame` is passed by value (a stale handle makes the call fail); `class` is a
+    // NUL-terminated UTF-16 string alive for the whole call and not kept; the window name
+    // is null (any name). Only direct children of `frame` are searched.
+    let found = unsafe { FindWindowExW(Some(frame), None, PCWSTR(class.as_ptr()), PCWSTR::null()) };
+    found.ok().filter(|hwnd| !hwnd.is_invalid())
+}
+
+/// What decides which application the top-level window `top` shows (see
+/// [`shown_application`]), and its hosted content window when it is a frame host.
+fn top_level(top: HWND) -> Option<(TopLevel, Option<HWND>)> {
+    let owner = window_process(top)?;
+    let frame_host = is_frame_host(
+        &class_name(top).unwrap_or_default(),
+        window_exe_name(top).as_deref(),
+    );
+    let content = if frame_host {
+        hosted_content(top)
+    } else {
+        None
+    };
+    let hosted = content.and_then(window_process);
+    Some((
+        TopLevel {
+            owner,
+            frame_host,
+            hosted,
+        },
+        content,
+    ))
+}
+
+/// The application of the foreground window and the window that stands for it (the
+/// hosted content inside a frame host, otherwise the foreground window itself).
+fn foreground_application_window() -> Option<(u32, HWND)> {
     // SAFETY: no arguments; returns a window handle value (null when none is active).
-    window_process(unsafe { GetForegroundWindow() })
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.is_invalid() {
+        return None;
+    }
+    let (top, content) = top_level(foreground)?;
+    let pid = shown_application(top)?;
+    Some((pid, content.unwrap_or(foreground)))
+}
+
+/// The process of the application in the foreground, if there is one. For a hosted
+/// application (the Windows 11 Calculator) it is the hosted process, never
+/// `ApplicationFrameHost.exe`.
+fn foreground_process() -> Option<u32> {
+    foreground_application_window().map(|(pid, _)| pid)
 }
 
 /// The window at virtual-desktop pixel `(x, y)` (the deepest visible child there).
@@ -119,17 +189,16 @@ fn window_at((x, y): (i32, i32)) -> Option<HWND> {
 /// keyboard focus in the foreground thread, its process and whether it is the window at
 /// `desktop` or one of its ancestors.
 fn focus_facts(attested: u32, desktop: (i32, i32)) -> FocusFacts {
-    // SAFETY: no arguments; returns a window handle value (null when none is active).
-    let foreground = unsafe { GetForegroundWindow() };
+    let app = foreground_application_window();
     let mut facts = FocusFacts {
         attested,
-        foreground: window_process(foreground),
+        foreground: app.map(|(pid, _)| pid),
         focus_owner: None,
         focus_holds_target: false,
     };
-    if foreground.is_invalid() {
+    let Some((_, foreground)) = app else {
         return facts;
-    }
+    };
     // SAFETY: `foreground` is passed by value (a stale handle returns 0); no out-pointer.
     let thread = unsafe { GetWindowThreadProcessId(foreground, None) };
     if thread == 0 {
@@ -155,12 +224,21 @@ fn focus_facts(attested: u32, desktop: (i32, i32)) -> FocusFacts {
     facts
 }
 
-/// The process whose top-level window is at virtual-desktop pixel `(x, y)`.
+/// The application whose window is at virtual-desktop pixel `(x, y)`: the process of the
+/// top-level window there or, inside a frame host, of its hosted content, and none on the
+/// frame host's own windows (see [`point_application`]).
 fn process_at(desktop: (i32, i32)) -> Option<u32> {
     let hwnd = window_at(desktop)?;
     // SAFETY: `hwnd` is passed by value; a stale handle yields null, handled below.
     let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
-    window_process(if root.is_invalid() { hwnd } else { root })
+    let root = if root.is_invalid() { hwnd } else { root };
+    let (top, content) = top_level(root)?;
+    let in_content = content.is_some_and(|content| {
+        // SAFETY: two window handle values by value; a stale one makes the call return
+        // false, which refuses the point.
+        content == hwnd || unsafe { IsChild(content, hwnd) }.as_bool()
+    });
+    point_application(top, in_content)
 }
 
 fn open_process(pid: u32) -> Option<OwnedHandle> {
@@ -308,6 +386,12 @@ fn to_input(event: Event) -> INPUT {
 /// - its integrity level must not be above ours (UIPI would drop the input silently while
 ///   `SendInput` still counted it as inserted);
 /// - no modifier key or mouse button may be held down.
+///
+/// A hosted application (the Windows 11 Calculator) is drawn inside a frame owned by
+/// `ApplicationFrameHost.exe`. The actuator attests the hosted content's process
+/// (`CalculatorApp.exe`), never the frame host (allowlisting it would allow every hosted
+/// application), and a point on the frame's own windows (title bar, caption buttons)
+/// belongs to no application and is refused.
 ///
 /// `type` verifies keyboard focus between its focusing click and its keys (SDD §2.9):
 /// after the click, the foreground process must still be the attested one and the window
