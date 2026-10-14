@@ -5,10 +5,16 @@
 //! revision and actionability (the registry's checks) → the action's own needs → dry run
 //! (`simulated`, the default) or, only when the operator's policy allows it, a live
 //! actuator exists and attests an allowlisted foreground application, a freshness check
-//! (the screen is still the committed base), delivery and a report of exactly what is
-//! known: `input_delivered` never claims an effect, and any doubt is `indeterminate`,
-//! never an automatic retry. Any delivery spends the snapshot: the next action needs a
-//! new observation.
+//! (the screen is still the committed base), a last look at the operator's stop and the
+//! foreground application right before the events go out, delivery and a report of
+//! exactly what is known: `input_delivered` never claims an effect, and any doubt is
+//! `indeterminate`, never an automatic retry. Any delivery spends the snapshot: the next
+//! action needs a new observation.
+//!
+//! The operator's stop (chapter 08 §8.2, SEC-02) is read from the policy store at the
+//! gate and again after the freshness capture, immediately before delivery: an action
+//! that meets it is `POLICY_DENIED` and sends nothing. It never undoes what was already
+//! delivered: those results stay recorded as they were reported.
 
 use ommatix_domain::fusion::Role;
 use ommatix_domain::identity::{ActionRef, ActionRejection, ActionStatus, Clearance, Delivery};
@@ -68,6 +74,13 @@ fn policy_denied() -> ToolError {
     ToolError::new(
         ErrorCode::PolicyDenied,
         "live input is not allowed by the local policy or no live actuator is available",
+    )
+}
+
+fn operator_stopped() -> ToolError {
+    ToolError::new(
+        ErrorCode::PolicyDenied,
+        "the operator stopped live input; nothing was delivered",
     )
 }
 
@@ -192,7 +205,10 @@ impl Engine {
         }
 
         let policy = self.ports.policy.current();
-        let allowed = policy.actuation_enabled && !policy.stopped && self.ports.actuator.is_live();
+        if policy.stopped {
+            return Err(operator_stopped());
+        }
+        let allowed = policy.actuation_enabled && self.ports.actuator.is_live();
         if !allowed {
             return Err(policy_denied());
         }
@@ -202,7 +218,10 @@ impl Engine {
             return Err(not_allowlisted("no application is on the local allowlist"));
         }
         let foreground = self.ports.actuator.foreground_application();
-        if !foreground.is_some_and(|app| policy.allowed_applications.contains(&app)) {
+        if !foreground
+            .as_ref()
+            .is_some_and(|app| policy.allowed_applications.contains(app))
+        {
             return Err(not_allowlisted(
                 "foreground application is not on the local allowlist",
             ));
@@ -219,6 +238,7 @@ impl Engine {
             return Err(policy_denied());
         };
         let before = self.fresh_frame()?;
+        self.last_look(foreground.as_deref())?;
         let validated = ValidatedAction {
             target_id,
             kind: request.action.clone(),
@@ -252,6 +272,32 @@ impl Engine {
                 "the screen changed since the observation; nothing was delivered; observe again",
             ))
         }
+    }
+
+    /// The checks that can change while the engine works, repeated immediately before
+    /// delivery (SDD §2.9, chapter 08 §8.2): the operator's stop and consent, and the
+    /// foreground application attested at the gate. A residual window between this look
+    /// and the OS remains (§8.3); the live actuator narrows it with its own checks.
+    fn last_look(&self, foreground: Option<&str>) -> Result<(), ToolError> {
+        let policy = self.ports.policy.current();
+        if policy.stopped {
+            return Err(operator_stopped());
+        }
+        if !policy.actuation_enabled {
+            return Err(policy_denied());
+        }
+        let now = self.ports.actuator.foreground_application();
+        if now.is_none() || now.as_deref() != foreground {
+            return Err(not_allowlisted(
+                "the foreground application changed after it was checked; nothing was delivered",
+            ));
+        }
+        if !now.is_some_and(|app| policy.allowed_applications.contains(&app)) {
+            return Err(not_allowlisted(
+                "foreground application is not on the local allowlist",
+            ));
+        }
+        Ok(())
     }
 
     /// Hands a validated action to the actuator and reports what is known, no more.
