@@ -40,7 +40,10 @@ for, and records its RuntimeId and AutomationId. More than one match, none, or n
 identifiers means no click: the run fails before any input. After the click the element under
 the cursor (where SendInput left it), or its parent, must have the same RuntimeId, or the same
 AutomationId when the RuntimeId is unavailable, even if its name changed (a toggle such as
-``Abrir navegación`` becomes ``Cerrar navegación``). There is no name-only fallback. An
+``Abrir navegación`` becomes ``Cerrar navegación``). There is no name-only fallback. When the
+point query returns a XAML island host (Notepad's menu items are never returned by it), the
+client descends into the host's bounded subtree and grounds on the deepest on-screen element
+under the point (ISLAND_HOST_CLASSES, ``descend``; sixth round, finding 1). An
 ``effect_observed`` whose OS-side or grounding check fails is counted as an engine false
 success; there must be none.
 
@@ -300,6 +303,9 @@ if ($win) { [Console]::Out.Write($win.Current.Name) }
 """
 
 
+# The element at a point and two ancestors, as ``RuntimeId, AutomationId, ControlType,
+# ClassName`` rows. The class name is how the client recognises a XAML island host
+# (ISLAND_HOST_CLASSES); the name of an element is never read.
 UIA_AT_PS = r"""
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
@@ -310,10 +316,83 @@ for ($i = 0; $e -and $i -lt 3; $i++) {
   $rid = ''
   try { $rid = ($e.GetRuntimeId() -join '.') } catch {}
   $type = $e.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
-  $rows += ($rid + "`t" + $e.Current.AutomationId + "`t" + $type)
+  $rows += ($rid + "`t" + $e.Current.AutomationId + "`t" + $type + "`t" + $e.Current.ClassName)
   $e = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($e)
 }
 [Console]::Out.Write(($rows -join "`n"))
+"""
+
+# The ControlView subtree of the XAML island host under a point (S4 sixth round, finding 1):
+# one row per element in depth-first order, ``index, parent, depth, RuntimeId, AutomationId,
+# ControlType, ClassName, IsOffscreen, X, Y, Width, Height``, bounded to __MAXN__ elements below
+# the host and __MAXD__ levels, then ``#end<TAB>1`` when the bound cut the walk and ``#end<TAB>0``
+# when it did not. The host is found again by point and must keep its RuntimeId, else the script
+# prints ``#host_changed``. It reads identifiers, types, classes and rectangles: never a name,
+# a value or a pattern, and it sends nothing.
+UIA_ISLAND_WALK_PS = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
+$ErrorActionPreference = 'Stop'
+$p = New-Object System.Windows.Point([double]__X__, [double]__Y__)
+$island = [System.Windows.Automation.AutomationElement]::FromPoint($p)
+$hostRid = ''
+if ($island) { try { $hostRid = ($island.GetRuntimeId() -join '.') } catch {} }
+if ($hostRid -ne '__HOST_RID__') { [Console]::Out.Write('#host_changed'); exit }
+$walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+$script:rows = New-Object System.Collections.ArrayList
+$script:truncated = 0
+function Add-Row($el, $depth, $parent) {
+  $rid = ''
+  try { $rid = ($el.GetRuntimeId() -join '.') } catch {}
+  $type = $el.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  $r = $el.Current.BoundingRectangle
+  $x = 0; $y = 0; $w = 0; $h = 0
+  if (-not $r.IsEmpty) {
+    $x = [int][Math]::Round($r.X); $y = [int][Math]::Round($r.Y)
+    $w = [int][Math]::Round($r.Width); $h = [int][Math]::Round($r.Height)
+  }
+  $index = $script:rows.Count
+  [void]$script:rows.Add(($index.ToString() + "`t" + $parent + "`t" + $depth + "`t" + $rid + "`t" +
+    $el.Current.AutomationId + "`t" + $type + "`t" + $el.Current.ClassName + "`t" +
+    [int]$el.Current.IsOffscreen + "`t" + $x + "`t" + $y + "`t" + $w + "`t" + $h))
+  return $index
+}
+function Walk-Children($el, $depth, $index) {
+  $child = $walker.GetFirstChild($el)
+  while ($child) {
+    if ($depth -ge __MAXD__ -or ($script:rows.Count - 1) -ge __MAXN__) { $script:truncated = 1; return }
+    $i = Add-Row $child ($depth + 1) $index
+    Walk-Children $child ($depth + 1) $i
+    if ($script:truncated) { return }
+    $child = $walker.GetNextSibling($child)
+  }
+}
+$root = Add-Row $island 0 -1
+Walk-Children $island 0 $root
+[void]$script:rows.Add("#end`t" + $script:truncated)
+[Console]::Out.Write(($script:rows -join "`n"))
+"""
+
+# The centre of the one on-screen element of the window with the exact name and one of the
+# control types, as ``X<TAB>Y``; nothing when it is not exactly one. No name is printed.
+UIA_ELEMENT_CENTRE_PS = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND__)
+$name = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__NAME__'))
+$types = '__TYPES__'.Split(',')
+$cond = New-Object System.Windows.Automation.PropertyCondition(
+  [System.Windows.Automation.AutomationElement]::NameProperty, $name)
+$found = @()
+foreach ($c in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) {
+  $type = $c.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  if (($types -contains $type) -and -not $c.Current.IsOffscreen) { $found += $c }
+}
+if ($found.Count -eq 1) {
+  $r = $found[0].Current.BoundingRectangle
+  [Console]::Out.Write([string][int][Math]::Round($r.X + $r.Width / 2) + "`t" +
+    [string][int][Math]::Round($r.Y + $r.Height / 2))
+}
 """
 
 # The elements of a window with an exact name and one of the given control types. Names are
@@ -466,19 +545,58 @@ def read_calc_mode(hwnd) -> str:
     return "unknown" if parsed is None else calc_mode(*parsed)
 
 
-def uia_at_cursor() -> list[dict]:
-    """The UI Automation element under the mouse cursor and its two ancestors, as identity
-    rows (RuntimeId, AutomationId, ControlType; never the name). SendInput leaves the cursor
-    on the click point, so this tells, independently of the engine, which control the click
-    reached."""
-    pt = wintypes.POINT()
-    user32.GetCursorPos(ctypes.byref(pt))
-    script = UIA_AT_PS.replace("__X__", str(int(pt.x))).replace("__Y__", str(int(pt.y)))
+def uia_chain_at(x: int, y: int) -> list[dict]:
+    """The UI Automation element at a point and its two ancestors, as rows (RuntimeId,
+    AutomationId, ControlType, ClassName; never the name). SendInput leaves the cursor on the
+    click point, so this tells, independently of the engine, which control the click reached
+    (see ground_chain for the elements inside a XAML island)."""
+    script = UIA_AT_PS.replace("__X__", str(int(x))).replace("__Y__", str(int(y)))
     out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
                          capture_output=True, text=True, encoding="utf-8", errors="replace",
                          check=False,
                          creationflags=CREATE_NO_WINDOW, timeout=30).stdout
-    return parse_identity_rows(out)
+    return parse_point_rows(out)
+
+
+def island_walk_script(x: int, y: int, host_runtime_id: str) -> str:
+    return (UIA_ISLAND_WALK_PS.replace("__X__", str(int(x))).replace("__Y__", str(int(y)))
+            .replace("__HOST_RID__", host_runtime_id)
+            .replace("__MAXN__", str(DESCENT_MAX_ELEMENTS))
+            .replace("__MAXD__", str(DESCENT_MAX_DEPTH)))
+
+
+def uia_island_walk(x: int, y: int, host_runtime_id: str) -> tuple[list[dict], bool] | None:
+    """The bounded ControlView subtree of the island host at a point (see UIA_ISLAND_WALK_PS):
+    its rows and whether the bound cut the walk, or None when it could not be read. An OS-side
+    read: no input, and no name."""
+    if not re.fullmatch(r"[0-9.\-]*", host_runtime_id):  # only ever interpolated as digits
+        return None
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              island_walk_script(x, y, host_runtime_id)],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             check=False, creationflags=CREATE_NO_WINDOW, timeout=60).stdout
+    except subprocess.TimeoutExpired:
+        return None
+    return parse_island_walk(out)
+
+
+def uia_element_centre(hwnd, label: str, control_types: tuple[str, ...]) -> tuple[int, int] | None:
+    """The centre of the one on-screen element of `hwnd` named `label` with one of the control
+    types, or None when it is not exactly one or unreadable. The name is never printed."""
+    script = (UIA_ELEMENT_CENTRE_PS.replace("__HWND__", str(int(hwnd)))
+              .replace("__NAME__", base64.b64encode(label.encode("utf-8")).decode("ascii"))
+              .replace("__TYPES__", ",".join(control_types)))
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             check=False, creationflags=CREATE_NO_WINDOW, timeout=60).stdout
+    except subprocess.TimeoutExpired:
+        return None
+    parts = out.strip().split("\t")
+    if len(parts) != 2 or not all(re.fullmatch(r"-?\d+", part) for part in parts):
+        return None
+    return int(parts[0]), int(parts[1])
 
 
 def notepad_menu_state(hwnd) -> str | None:
@@ -659,6 +777,139 @@ def identity_hit(expected: dict, chain: list[dict]) -> bool:
         elif expected["automation_id"] and expected["automation_id"] == row["automation_id"]:
             return True
     return False
+
+
+# ---- XAML islands (S4 sixth round, finding 1; docs/reviews/2026-10-14-s4-fifth-round.md) ----
+#
+# In Notepad the point query (``AutomationElement.FromPoint``) never returns the menu item: it
+# returns the XAML island host (a Pane of class ``Microsoft.UI.Content.DesktopChildSiteBridge``),
+# the window and the desktop, so "the element under the cursor or its parent" cannot confirm it.
+# The rule: when the element the point query returns is an island host (a closed list), the
+# client descends into the host's ControlView subtree, bounded, and takes the DEEPEST on-screen
+# element whose BoundingRectangle contains the point. Two or more elements at that deepest level
+# (elements at one level are never nested in each other) are ambiguous; a walk that reached the
+# bound, an unreadable walk and a host that changed confirm nothing. The chain is that element
+# followed by its ancestors up to the host, and identity_hit applies to it unchanged. Any other
+# class of element: the point query's chain, exactly as before.
+ISLAND_HOST_CLASSES = ("Microsoft.UI.Content.DesktopChildSiteBridge",)
+DESCENT_MAX_ELEMENTS = 500  # elements visited below the host
+DESCENT_MAX_DEPTH = 16  # levels below the host
+NO_DESCENT = {"descended": False}
+
+
+def parse_point_rows(output: str) -> list[dict]:
+    """Rows of ``RuntimeId<TAB>AutomationId<TAB>ControlType<TAB>ClassName`` as printed by
+    UIA_AT_PS; a row of another shape is dropped."""
+    rows = []
+    for line in output.splitlines():
+        parts = line.rstrip("\r").split("\t")
+        if len(parts) != 4:
+            continue
+        rows.append({"runtime_id": parts[0].strip(), "automation_id": parts[1].strip(),
+                     "control_type": parts[2].strip().removeprefix("ControlType."),
+                     "class_name": parts[3].strip(), "offscreen": False})
+    return rows
+
+
+def parse_island_walk(output: str) -> tuple[list[dict], bool] | None:
+    """The rows and the truncation flag printed by UIA_ISLAND_WALK_PS, or None when the output
+    is not a complete, well-formed walk (no ``#end`` line, a row of another shape, a parent that
+    does not precede its child, a depth that does not follow its parent's)."""
+    rows: list[dict] = []
+    truncated = None
+    for line in output.splitlines():
+        parts = line.rstrip("\r").split("\t")
+        if truncated is not None:
+            return None  # nothing follows the end line
+        if parts[0] == "#end":
+            if len(parts) != 2 or parts[1] not in ("0", "1"):
+                return None
+            truncated = parts[1] == "1"
+            continue
+        if len(parts) != 12:
+            return None
+        try:
+            index, parent, depth, x, y, w, h = (int(parts[i]) for i in (0, 1, 2, 8, 9, 10, 11))
+        except ValueError:
+            return None
+        if index != len(rows) or (index == 0) != (parent == -1) or parent >= index:
+            return None
+        if depth != (0 if index == 0 else rows[parent]["depth"] + 1):
+            return None
+        rows.append({"index": index, "parent": parent, "depth": depth,
+                     "runtime_id": parts[3].strip(), "automation_id": parts[4].strip(),
+                     "control_type": parts[5].strip().removeprefix("ControlType."),
+                     "class_name": parts[6].strip(), "offscreen": parts[7].strip() == "1",
+                     "rect": (x, y, w, h)})
+    if truncated is None or not rows:
+        return None
+    return rows, truncated
+
+
+def is_island_host(row: dict | None) -> bool:
+    """Whether a point query's element is a XAML island host (a closed, explicit class list)."""
+    return bool(row) and row.get("class_name", "") in ISLAND_HOST_CLASSES
+
+
+def rect_contains(rect: tuple[int, int, int, int], point: tuple[int, int]) -> bool:
+    x, y, w, h = rect
+    return w > 0 and h > 0 and x <= point[0] < x + w and y <= point[1] < y + h
+
+
+def descend(point: tuple[int, int], host: dict, read_walk) -> tuple[list[dict], dict]:
+    """The island rule. `read_walk(x, y, host_runtime_id)` returns the bounded walk of the host
+    (rows, truncated) or None. Returns (chain, record): the chain is the deepest on-screen
+    element that contains `point` followed by its ancestors up to the host, or empty when nothing
+    can be confirmed; the record says how it ended, with counts and identifiers only, no names."""
+    record = {"descended": True, "status": "unreadable", "depth": None, "visited": 0,
+              "truncated": False, "ambiguous": False,
+              "max_elements": DESCENT_MAX_ELEMENTS, "max_depth": DESCENT_MAX_DEPTH}
+    host_rid = host.get("runtime_id", "")
+    try:
+        walk = read_walk(point[0], point[1], host_rid) if host_rid else None
+    except (OSError, subprocess.SubprocessError):
+        walk = None
+    if walk is None:
+        return [], record
+    rows, truncated = walk
+    if not rows or rows[0]["runtime_id"] != host_rid:
+        record["status"] = "host_changed"
+        return [], record
+    below = rows[1:]
+    record["visited"] = len(below)
+    record["truncated"] = (bool(truncated) or len(below) > DESCENT_MAX_ELEMENTS
+                           or any(r["depth"] > DESCENT_MAX_DEPTH for r in below))
+    if record["truncated"]:
+        record["status"] = "truncated"
+        return [], record
+    hits = [r for r in below if not r["offscreen"] and rect_contains(r["rect"], point)]
+    if not hits:
+        record["status"] = "not_found"
+        return [], record
+    deepest = max(r["depth"] for r in hits)
+    top = [r for r in hits if r["depth"] == deepest]
+    if len(top) > 1:
+        record.update(status="ambiguous", ambiguous=True)
+        return [], record
+    chain, row = [], top[0]
+    while True:
+        chain.append({key: row[key] for key in
+                      ("runtime_id", "automation_id", "control_type", "class_name", "offscreen")})
+        if row["index"] == 0:
+            break
+        row = rows[row["parent"]]
+    record.update(status="ok", depth=deepest, control_type=top[0]["control_type"],
+                  automation_id=top[0]["automation_id"])
+    return chain, record
+
+
+def ground_chain(point: tuple[int, int], read_chain, read_walk) -> tuple[list[dict], dict]:
+    """The chain that grounds a click at `point` and the record of the descent: the point
+    query's chain as read, unless its first element is an island host (see descend)."""
+    chain = read_chain(point[0], point[1])
+    if not chain or not is_island_host(chain[0]):
+        return chain, dict(NO_DESCENT)
+    return descend(point, chain[0], read_walk)
 
 
 def nfc_fold(text: str) -> str:
@@ -1170,8 +1421,34 @@ class Protocol:
     def identify(self, hwnd, label: str, control_types: tuple[str, ...]) -> list[dict] | None:
         return uia_identify(hwnd, label, control_types)
 
+    # The descent record of the latest cursor_chain (or diag_at_element) read: None before any.
+    last_descent: dict | None = None
+
+    def cursor_point(self) -> tuple[int, int]:
+        return cursor()
+
+    def point_chain(self, x: int, y: int) -> list[dict]:
+        return uia_chain_at(x, y)
+
+    def island_walk(self, x: int, y: int, host_runtime_id: str):
+        return uia_island_walk(x, y, host_runtime_id)
+
+    def element_centre(self, hwnd, label: str, control_types: tuple[str, ...]):
+        return uia_element_centre(hwnd, label, control_types)
+
     def cursor_chain(self) -> list[dict]:
-        return uia_at_cursor()
+        """The chain that grounds the click just delivered: the control under the cursor (where
+        SendInput left it) and its ancestors; inside a XAML island, the deepest on-screen
+        element under the cursor and its ancestors up to the host (ground_chain). How the
+        descent ended is left in `last_descent`."""
+        self.last_descent = None
+        chain, self.last_descent = ground_chain(self.cursor_point(), self.point_chain,
+                                                self.island_walk)
+        return chain
+
+    @staticmethod
+    def descent_record(descent: dict | None) -> dict:
+        return dict(descent) if descent else dict(NO_DESCENT)
 
     def calc_mode(self, hwnd) -> str:
         return read_calc_mode(hwnd)
@@ -1210,7 +1487,14 @@ class Protocol:
         return found
 
     def diag_at_element(self, hwnd, label: str, control_types: tuple[str, ...]):
-        return uia_diag_at_element(hwnd, label, control_types)
+        """The diagnostic chain under the target's centre. When it starts at an island host the
+        descent is read too and left in `last_descent`; it decides nothing."""
+        rows = uia_diag_at_element(hwnd, label, control_types)
+        if rows and is_island_host(rows[0]):
+            centre = self.element_centre(hwnd, label, control_types)
+            if centre is not None:
+                _, self.last_descent = descend(centre, rows[0], self.island_walk)
+        return rows
 
     def diag_at_cursor(self):
         return uia_diag_at_cursor()
@@ -1397,6 +1681,8 @@ class Protocol:
             # recorded and counted as in steps(); nothing more is sent and nothing is retried.
             grounded = identity_hit(ident, self.cursor_chain())
             restore["grounded"] = grounded
+            if self.last_descent and self.last_descent["descended"]:
+                restore["descent"] = dict(self.last_descent)
             if not grounded:
                 res["grounding_wrong"] = res.get("grounding_wrong", 0) + 1
                 if out.get("status") == "effect_observed":
@@ -1484,9 +1770,11 @@ class Protocol:
                 if self.args.app == "notepad":
                     # Read-only (finding 1): what is under the target point before the click.
                     types = ROLE_CONTROL_TYPES[target["role"]]
+                    self.last_descent = None
                     diagnostic = {"step": res["steps"], "before": self.read_diag(
                         lambda: self.diag_at_element(fg["hwnd"], label, types),
                         ident["runtime_id"])}
+                    diagnostic["before_descent"] = self.descent_record(self.last_descent)
                 self.spend_live()
                 res["actions_requested"] += 1
                 kind = "click" if text is None else "type"
@@ -1544,8 +1832,11 @@ class Protocol:
             # the click, by identity (RuntimeId, or AutomationId), whatever its name is now.
             if out.get("input_delivered"):
                 chain = self.cursor_chain()
+                descent = self.last_descent
                 hit = identity_hit(ident, chain)
-                if not chain:
+                if descent and descent["descended"]:
+                    res.setdefault("descent", []).append({"step": res["steps"], **descent})
+                elif not chain:
                     res["grounding_chain_empty"] = res.get("grounding_chain_empty", 0) + 1
                 res.setdefault("grounding", []).append(hit)
                 if not hit:
@@ -1555,6 +1846,7 @@ class Protocol:
                         chain=[(row["automation_id"], row["control_type"]) for row in chain])
                 if diagnostic is not None:  # read-only: it decides nothing and is not scored
                     diagnostic["after"] = self.read_diag(self.diag_at_cursor, ident["runtime_id"])
+                    diagnostic["after_descent"] = self.descent_record(descent)
                     # How long after the engine's reply the chain was read: a menu may still be
                     # animating, so the reader of the record needs the delay.
                     diagnostic["after_ms"] = round((time.monotonic() - clicked_at) * 1000)

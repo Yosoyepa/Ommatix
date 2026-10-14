@@ -8,6 +8,7 @@ python -m unittest discover -s tools/s4 -p "test_*.py"
 import importlib.util
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -998,6 +999,409 @@ class MenuDiagnosticTest(QuietTest):
         self.assertTrue(all("runtime_id" not in r for r in recorded))
         self.assertEqual(len(driver.diag_record(rows * 4, "5.1")), 5, "an element + 4 ancestors")
         self.assertFalse(driver.diag_record(rows, "")[0]["same_runtime_id"])
+
+
+# ---- S4 sixth-round finding 1: grounding a point check inside a XAML island ---------------------
+
+HOST_RID = "7.1"
+ISLAND_CLASS = "Microsoft.UI.Content.DesktopChildSiteBridge"
+POINT = (100, 25)
+
+
+def walk_row(index, parent, depth, rid, aid, ctype, rect, offscreen=False, cls="", name="Editar"):
+    """One row of the island walk as the reader returns it. `name` is never part of a real row:
+    it is here so that a record that copied a row whole would leak it into the tests."""
+    return {"index": index, "parent": parent, "depth": depth, "runtime_id": rid,
+            "automation_id": aid, "control_type": ctype, "class_name": cls,
+            "offscreen": offscreen, "rect": rect, "name": name}
+
+
+def island_tree(edit_rid="5.1", extra=()):
+    """The Notepad island: host > group > menu bar > {Edit, File}. Only `Edit` contains POINT."""
+    rows = [walk_row(0, -1, 0, HOST_RID, "", "Pane", (0, 0, 400, 300), cls=ISLAND_CLASS),
+            walk_row(1, 0, 1, "7.2", "RootGrid", "Group", (0, 0, 400, 300)),
+            walk_row(2, 1, 2, "7.3", "MenuBar", "MenuBar", (0, 0, 300, 40)),
+            walk_row(3, 2, 3, edit_rid, "Edit", "MenuItem", (80, 10, 40, 30)),
+            walk_row(4, 2, 3, "7.5", "File", "MenuItem", (10, 10, 60, 30))]
+    return rows + list(extra)
+
+
+def host_point_chain():
+    """What the point query returns inside Notepad: the island host, the window, the desktop."""
+    def row(rid, ctype, cls):
+        return {"runtime_id": rid, "automation_id": "", "control_type": ctype,
+                "class_name": cls, "offscreen": False}
+    return [row(HOST_RID, "Pane", ISLAND_CLASS), row("2.9", "Window", "Notepad"),
+            row("2.1", "Pane", "#32769")]
+
+
+PLAIN_CHAIN = [{"runtime_id": "5.1", "automation_id": "Edit", "control_type": "MenuItem",
+                "class_name": "MenuBarItem", "offscreen": False},
+               {"runtime_id": "5.0", "automation_id": "MenuBar", "control_type": "MenuBar",
+                "class_name": "MenuBar", "offscreen": False}]
+
+
+class IslandReads:
+    """UI Automation reads of a fake island: the point query and the walk. The point is the cursor."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.point_rows = host_point_chain()
+        self.walk_rows = island_tree()
+        self.walk_truncated = False
+        self.walk_readable = True
+        self.walk_calls = []
+
+    def cursor_point(self):
+        return POINT
+
+    def point_chain(self, x, y):
+        return self.point_rows
+
+    def island_walk(self, x, y, host_rid):
+        self.walk_calls.append((x, y, host_rid))
+        if not self.walk_readable:
+            return None
+        return self.walk_rows, self.walk_truncated
+
+
+def no_real_uia(case):
+    """The island tests never read the real desktop: a stray call to a reader fails the test."""
+    for name in ("uia_at_cursor", "uia_chain_at", "uia_island_walk"):
+        patcher = mock.patch.object(driver, name, create=True,
+                                    side_effect=AssertionError(f"real UI Automation: {name}"))
+        patcher.start()
+        case.addCleanup(patcher.stop)
+
+
+class IslandRestore(IslandReads, FakeNotepad):
+    cursor_chain = driver.Protocol.cursor_chain  # the real grounding, over the fake reads
+
+
+class IslandRun(IslandReads, FakeNotepadRun):
+    cursor_chain = driver.Protocol.cursor_chain
+    diag_at_element = driver.Protocol.diag_at_element
+
+    def element_centre(self, hwnd, label, control_types):
+        return POINT
+
+
+def timeout_error():
+    return subprocess.TimeoutExpired("powershell", 60)
+
+
+class DescentRuleTest(unittest.TestCase):
+    """The rule, as pure functions: descend only into a closed list of island hosts, take the
+    deepest on-screen element that contains the point, and confirm nothing when it is ambiguous,
+    the walk was cut or the host changed."""
+
+    def descend(self, rows, truncated=False, point=POINT):
+        host = host_point_chain()[0]
+        return driver.descend(point, host, lambda x, y, rid: (rows, truncated))
+
+    def test_the_deepest_element_under_the_point_is_the_result_with_its_ancestors_to_the_host(self):
+        chain, record = self.descend(island_tree())
+        self.assertEqual([r["automation_id"] for r in chain], ["Edit", "MenuBar", "RootGrid", ""])
+        self.assertEqual(chain[-1]["runtime_id"], HOST_RID, "the chain ends at the host")
+        self.assertEqual((record["descended"], record["status"], record["depth"]),
+                         (True, "ok", 3))
+        self.assertEqual((record["visited"], record["truncated"], record["ambiguous"]),
+                         (4, False, False))
+
+    def test_a_deeper_element_wins_over_a_shallower_one(self):
+        glyph = walk_row(5, 3, 4, "7.9", "Glyph", "Text", (95, 15, 10, 20))  # inside Edit
+        chain, record = self.descend(island_tree(extra=[glyph]))
+        self.assertEqual(chain[0]["automation_id"], "Glyph")
+        self.assertEqual(chain[1]["automation_id"], "Edit", "its parent, which identity_hit reads")
+        self.assertEqual(record["depth"], 4)
+
+    def test_two_elements_at_the_deepest_level_are_ambiguous_and_confirm_nothing(self):
+        twin = walk_row(5, 2, 3, "7.8", "Twin", "MenuItem", (90, 5, 40, 30))
+        chain, record = self.descend(island_tree(extra=[twin]))
+        self.assertEqual(chain, [])
+        self.assertEqual((record["status"], record["ambiguous"]), ("ambiguous", True))
+
+    def test_a_cut_walk_confirms_nothing_even_when_the_item_was_seen(self):
+        chain, record = self.descend(island_tree(), truncated=True)
+        self.assertEqual(chain, [])
+        self.assertEqual((record["status"], record["truncated"]), ("truncated", True))
+
+    def test_the_bounds_are_explicit_and_enforced_on_the_rows_too(self):
+        self.assertEqual((driver.DESCENT_MAX_ELEMENTS, driver.DESCENT_MAX_DEPTH), (500, 16))
+        crowd = [walk_row(5 + i, 2, 3, f"8.{i}", "", "Text", (0, 0, 1, 1))
+                 for i in range(driver.DESCENT_MAX_ELEMENTS)]  # 4 + 500 rows below the host
+        chain, record = self.descend(island_tree(extra=crowd), truncated=False)
+        self.assertEqual((chain, record["status"]), ([], "truncated"))
+        deep = walk_row(5, 3, driver.DESCENT_MAX_DEPTH + 1, "8.1", "", "Text", (90, 15, 10, 10))
+        chain, record = self.descend(island_tree(extra=[deep]))
+        self.assertEqual((chain, record["status"]), ([], "truncated"))
+
+    def test_nothing_under_the_point_is_not_found(self):
+        chain, record = self.descend(island_tree(), point=(900, 900))
+        self.assertEqual((chain, record["status"]), ([], "not_found"))
+        self.assertEqual(record["visited"], 4)
+
+    def test_an_off_screen_element_or_an_empty_rectangle_is_never_the_result(self):
+        for edit in (dict(offscreen=True), dict(rect=(80, 10, 0, 0))):
+            rows = island_tree()
+            rows[3] = dict(rows[3], **edit)
+            chain, record = self.descend(rows)
+            self.assertEqual(chain[0]["automation_id"], "MenuBar", "the next deepest, not Edit")
+            self.assertEqual(record["depth"], 2)
+
+    def test_an_unreadable_walk_or_another_host_confirms_nothing(self):
+        host = host_point_chain()[0]
+        chain, record = driver.descend(POINT, host, lambda x, y, rid: None)
+        self.assertEqual((chain, record["status"]), ([], "unreadable"))
+        other = island_tree()
+        other[0] = dict(other[0], runtime_id="9.9")
+        self.assertEqual(self.descend(other)[1]["status"], "host_changed")
+
+        def boom(x, y, rid):
+            raise timeout_error()
+
+        chain, record = driver.descend(POINT, host, boom)
+        self.assertEqual((chain, record["status"]), ([], "unreadable"))
+
+    def test_only_the_closed_list_of_hosts_is_descended(self):
+        self.assertEqual(driver.ISLAND_HOST_CLASSES, (ISLAND_CLASS,))
+        self.assertTrue(driver.is_island_host({"class_name": ISLAND_CLASS}))
+        for cls in ("Notepad", "", ISLAND_CLASS + "2", ISLAND_CLASS.lower()):
+            self.assertFalse(driver.is_island_host({"class_name": cls}), cls)
+        self.assertFalse(driver.is_island_host({}), "a row with no class")
+
+    def test_a_chain_outside_an_island_is_returned_as_read_without_a_walk(self):
+        calls = []
+        chain, record = driver.ground_chain(POINT, lambda x, y: PLAIN_CHAIN,
+                                            lambda *a: calls.append(a))
+        self.assertIs(chain, PLAIN_CHAIN)
+        self.assertEqual((record, calls), ({"descended": False}, []))
+        chain, record = driver.ground_chain(POINT, lambda x, y: [], lambda *a: calls.append(a))
+        self.assertEqual((chain, record, calls), ([], {"descended": False}, []))
+
+    def test_the_result_is_identified_by_the_same_rule_as_before(self):
+        chain, _ = self.descend(island_tree())
+        edit = {"runtime_id": "5.1", "automation_id": "Edit", "control_type": "MenuItem"}
+        self.assertTrue(driver.identity_hit(edit, chain))
+        self.assertFalse(driver.identity_hit(dict(edit, runtime_id="5.2"), chain),
+                         "same AutomationId, another RuntimeId")
+        # AutomationId decides only when a RuntimeId is missing
+        self.assertTrue(driver.identity_hit(dict(edit, runtime_id=""), chain))
+        self.assertFalse(driver.identity_hit(dict(edit, runtime_id=""), []))
+
+
+class WalkParsingTest(unittest.TestCase):
+    def line(self, *fields):
+        return "\t".join(str(f) for f in fields)
+
+    def test_a_complete_walk_is_parsed_with_its_truncation_flag(self):
+        host = self.line(0, -1, 0, "7.1", "", "Pane", ISLAND_CLASS, 0, 0, 0, 400, 300)
+        out = "\n".join([host,
+                         self.line(1, 0, 1, "7.2", "Edit", "MenuItem", "", 1, 80, 10, 40, 30),
+                         "#end\t0"])
+        rows, truncated = driver.parse_island_walk(out)
+        self.assertEqual((len(rows), truncated), (2, False))
+        self.assertEqual(rows[1], {"index": 1, "parent": 0, "depth": 1, "runtime_id": "7.2",
+                                   "automation_id": "Edit", "control_type": "MenuItem",
+                                   "class_name": "", "offscreen": True, "rect": (80, 10, 40, 30)})
+        self.assertTrue(driver.parse_island_walk(host + "\n#end\t1")[1])
+
+    def test_an_incomplete_or_malformed_walk_is_unreadable(self):
+        host = self.line(0, -1, 0, "7.1", "", "Pane", ISLAND_CLASS, 0, 0, 0, 4, 3)
+        orphan = self.line(1, 5, 1, "7.2", "", "Text", "", 0, 0, 0, 1, 1)
+        not_a_number = self.line(1, 0, 1, "7.2", "", "Text", "", 0, "x", 0, 1, 1)
+        for bad in ("", "#host_changed", host, host + "\ngarbage\n#end\t0",
+                    host + "\n" + orphan + "\n#end\t0",
+                    host + "\n" + not_a_number + "\n#end\t0", host + "\n#end\t2"):
+            self.assertIsNone(driver.parse_island_walk(bad), bad)
+
+    def test_point_rows_carry_the_class_name(self):
+        rows = driver.parse_point_rows(f"7.1\t\tControlType.Pane\t{ISLAND_CLASS}\nbroken\n")
+        self.assertEqual(rows, [{"runtime_id": "7.1", "automation_id": "", "control_type": "Pane",
+                                 "class_name": ISLAND_CLASS, "offscreen": False}])
+
+    def test_the_scripts_only_read_identifiers_types_classes_and_rectangles(self):
+        walk = driver.island_walk_script(1, 2, "7.1")
+        for script in (driver.UIA_AT_PS, walk, driver.UIA_ELEMENT_CENTRE_PS):
+            for forbidden in ("Current.Name", "ValuePattern", "TextPattern", "InvokePattern",
+                              "SetFocus", "SendKeys", "Click"):
+                self.assertNotIn(forbidden, script)
+        self.assertIn(str(driver.DESCENT_MAX_ELEMENTS), walk)
+        self.assertIn(str(driver.DESCENT_MAX_DEPTH), walk)
+        self.assertNotIn("__", walk, "every placeholder is filled")
+
+
+class IslandGroundingTest(QuietTest):
+    """Sixth round, finding 1: inside Notepad the point query returns the island host, never the
+    menu item. The client descends into the host and grounds the click on what it finds."""
+
+    def setUp(self):
+        super().setUp()
+        no_real_uia(self)
+
+    def run_flow(self, diag=None, **setup):
+        """One Notepad run over the fake island; `diag` is what the point query at the target's
+        centre returns (nothing by default: the diagnostic then records no chain)."""
+        desk = IslandRun(self.tmp, ids_change=False)
+        for key, value in setup.items():
+            setattr(desk, key, value)
+        res = driver.new_result("E2E-03", 1)
+        snap, elements, _ = desk.observe()
+        with mock.patch.object(driver, "uia_diag_at_element", return_value=diag):
+            desk.steps(res, snap, elements, 77, 4242)
+        return desk, res
+
+    # (a) the descent finds `Editar` with the expected RuntimeId
+    def test_a_point_query_that_returns_the_island_is_grounded_on_the_item_found_inside(self):
+        desk, res = self.run_flow()
+        self.assertEqual(res["grounding"], [True, True])
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (0, 0))
+        self.assertTrue(res["success"])
+        self.assertIsNone(res["failure"])
+        self.assertEqual(desk.clicks, ["Editar", "Editar"])
+        self.assertEqual(len(desk.walk_calls), 2, "one walk per click, none before it")
+        self.assertEqual(desk.walk_calls[0], (100, 25, HOST_RID))
+        self.assertEqual([(d["step"], d["status"], d["depth"]) for d in res["descent"]],
+                         [(1, "ok", 3), (2, "ok", 3)])
+
+    # (b) the descent finds another control: not grounded, and nothing is retried
+    def test_a_descent_that_finds_another_control_is_not_grounded_and_not_retried(self):
+        other = island_tree(edit_rid="9.9")
+        other[3] = dict(other[3], automation_id="Other", control_type="Button")
+        desk, res = self.run_flow(walk_rows=other)
+        self.assertEqual(desk.clicks, ["Editar"], "one click, no second step, no retry")
+        self.assertEqual(res["grounding"], [False])
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
+        self.assertIn("not the element", res["failure"])
+        self.assertEqual(len(desk.walk_calls), 1)
+
+    # (c) two elements that contain the point and are not nested: ambiguous
+    def test_an_ambiguous_descent_is_not_grounded_even_if_one_candidate_is_the_item(self):
+        twin = walk_row(5, 2, 3, "7.8", "Twin", "MenuItem", (90, 5, 40, 30))
+        desk, res = self.run_flow(walk_rows=island_tree(extra=[twin]))
+        self.assertEqual(desk.clicks, ["Editar"])
+        self.assertEqual(res["grounding"], [False])
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
+        self.assertEqual((res["descent"][0]["status"], res["descent"][0]["ambiguous"]),
+                         ("ambiguous", True))
+        self.assertNotIn("grounding_chain_empty", res, "that counter is for an empty point query")
+
+    # (d) the bound is reached
+    def test_a_truncated_descent_is_not_grounded_even_if_the_item_was_seen(self):
+        desk, res = self.run_flow(walk_truncated=True)
+        self.assertEqual(desk.clicks, ["Editar"])
+        self.assertEqual(res["grounding"], [False])
+        self.assertEqual((res["descent"][0]["status"], res["descent"][0]["truncated"]),
+                         ("truncated", True))
+
+    def test_an_unreadable_walk_is_a_grounding_failure(self):
+        desk, res = self.run_flow(walk_readable=False)
+        self.assertEqual((desk.clicks, res["grounding"]), (["Editar"], [False]))
+        self.assertEqual(res["descent"][0]["status"], "unreadable")
+
+    # (e) a chain outside an island behaves exactly as before
+    def test_a_chain_that_is_not_an_island_is_grounded_as_before_and_never_walked(self):
+        desk, res = self.run_flow(point_rows=PLAIN_CHAIN)
+        self.assertEqual(res["grounding"], [True, True])
+        self.assertEqual(desk.walk_calls, [])
+        self.assertNotIn("descent", res)
+
+    def test_a_chain_that_is_not_an_island_and_is_another_element_fails_as_before(self):
+        other = [{"runtime_id": "9.9", "automation_id": "Other", "control_type": "Button",
+                  "class_name": "Button", "offscreen": False}]
+        desk, res = self.run_flow(point_rows=other)
+        self.assertEqual((res["grounding"], desk.walk_calls), ([False], []))
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
+
+    def test_the_island_host_alone_never_confirms_an_item(self):
+        # The old failure, kept as a regression: the host with nothing under it grounds nothing.
+        _, res = self.run_flow(walk_rows=[island_tree()[0]])
+        self.assertEqual(res["grounding"], [False])
+
+    # (f) no names anywhere in the records
+    def test_the_records_hold_no_names(self):
+        twin = walk_row(5, 2, 3, "7.8", "Twin", "MenuItem", (90, 5, 40, 30))
+        for setup in ({}, {"walk_truncated": True}, {"walk_rows": island_tree(extra=[twin])}):
+            _, res = self.run_flow(**setup)
+            text = json.dumps({k: res[k] for k in ("descent", "menu_diagnostic", "identity",
+                                                   "grounding")}, ensure_ascii=False)
+            self.assertNotIn("Editar", text)
+            for key in ("name", "rect"):
+                self.assertNotIn(f'"{key}"', text, "rows are not copied into the record")
+
+    def test_the_diagnostic_records_whether_the_descent_happened_and_how_it_ended(self):
+        island_rows = [dict(r, expand_state="") for r in host_point_chain()]
+        desk, res = self.run_flow(diag=island_rows)
+        first = res["menu_diagnostic"][0]
+        expected = {"descended": True, "status": "ok", "depth": 3, "visited": 4,
+                    "truncated": False, "ambiguous": False, "control_type": "MenuItem",
+                    "automation_id": "Edit", "max_elements": 500, "max_depth": 16}
+        self.assertEqual(first["before_descent"], expected)
+        self.assertEqual(first["after_descent"], expected)
+        self.assertEqual(len(desk.walk_calls), 4, "before and after, for each of the two clicks")
+
+    def test_the_diagnostic_of_a_chain_without_an_island_says_there_was_no_descent(self):
+        _, res = self.run_flow(diag=[dict(r, expand_state="") for r in PLAIN_CHAIN],
+                               point_rows=PLAIN_CHAIN)
+        for record in res["menu_diagnostic"]:
+            self.assertEqual((record["before_descent"], record["after_descent"]),
+                             ({"descended": False}, {"descended": False}))
+
+    def test_a_diagnostic_that_cannot_be_read_does_not_change_the_run(self):
+        _, res = self.run_flow(diag=None)
+        self.assertTrue(res["success"])
+
+
+class IslandRestoreTest(QuietTest):
+    """The closing click is grounded by the same rule."""
+
+    def setUp(self):
+        super().setUp()
+        no_real_uia(self)
+
+    def restore(self, **setup):
+        proto = IslandRestore(["Expanded"])
+        for key, value in setup.items():
+            setattr(proto, key, value)
+        res = {"run": 1, "observations": []}
+        closed = proto.restore_menu(res, 1)
+        return proto, closed, res, res["menu_restore"]
+
+    def test_a_restore_click_is_grounded_on_the_item_found_inside_the_island(self):
+        proto, closed, res, record = self.restore()
+        self.assertTrue(closed)
+        self.assertIs(record["grounded"], True)
+        self.assertEqual(record["descent"]["status"], "ok")
+        self.assertEqual((res.get("grounding_wrong", 0), res.get("engine_false_success", 0)),
+                         (0, 0))
+        self.assertEqual(proto.walk_calls, [(100, 25, HOST_RID)])
+
+    def test_a_restore_click_whose_descent_finds_another_control_is_reported_not_retried(self):
+        other = island_tree()
+        other[3] = dict(other[3], runtime_id="9.9", automation_id="Other")
+        proto, _, res, record = self.restore(walk_rows=other)
+        self.assertEqual(proto.clicks, ["Editar"], "one click, nothing more")
+        self.assertIs(record["grounded"], False)
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
+
+    def test_an_ambiguous_or_truncated_descent_does_not_ground_the_restore_click(self):
+        twin = walk_row(5, 2, 3, "7.8", "Twin", "MenuItem", (90, 5, 40, 30))
+        for setup, status in (({"walk_rows": island_tree(extra=[twin])}, "ambiguous"),
+                              ({"walk_truncated": True}, "truncated")):
+            proto, _, _, record = self.restore(**setup)
+            self.assertEqual(proto.clicks, ["Editar"], status)
+            self.assertIs(record["grounded"], False, status)
+            self.assertEqual(record["descent"]["status"], status)
+
+    def test_a_restore_without_an_island_has_no_descent_record(self):
+        proto, _, _, record = self.restore(point_rows=PLAIN_CHAIN)
+        self.assertIs(record["grounded"], True)
+        self.assertNotIn("descent", record)
+        self.assertEqual(proto.walk_calls, [])
+
+    def test_the_record_holds_no_names(self):
+        _, _, _, record = self.restore()
+        self.assertNotIn("Editar", json.dumps(record, ensure_ascii=False))
 
 
 if __name__ == "__main__":
