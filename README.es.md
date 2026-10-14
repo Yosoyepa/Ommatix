@@ -136,6 +136,7 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   Bloc de notas no se ejecutó, a la espera de la decisión del responsable.
   Una quinta ronda ([CHANGELOG 1.0.21](docs/thesis/CHANGELOG.md)) no puntuó corridas. Su cambio de la Calculadora a modo Estándar se detuvo antes del segundo clic, así que E2E-02 no se ejecutó, y el piloto del Bloc de notas tuvo un clic en «Editar» sin anclaje confirmado tras el clic, así que la serie puntuada de E2E-03 no se ejecutó.
   Después se corrigió el cliente sin ejecutar nada en vivo ([CHANGELOG 1.0.23](docs/thesis/CHANGELOG.md)): el clic que cierra el menú se ancla por identidad, un paso registra por qué no halló objetivo y el paso del menú del Bloc de notas registra un diagnóstico de sólo lectura. El responsable decidió que las corridas de S4 usen desde ahora el manifiesto del detector en float16 y que no se cambie la enumeración de ventanas de ADR-0017 para llegar a la meta de dos regiones de RNF-05, así que RNF-05 sigue sin cumplirse por unos 3 ms.
+Una séptima ronda ([CHANGELOG 1.0.26](docs/thesis/CHANGELOG.md)) pasó el piloto del Bloc de notas, en el que el descenso por la isla ancló los dos clics de «Editar», y puntuó nueve de las diez corridas del Bloc de notas, todas exitosas y sin falsos éxitos. La décima no se envió: el cupo de la serie (20 solicitudes) no reservaba solicitudes para los reintentos tras una captura obsoleta (`STALE_SNAPSHOT`), que dos corridas usaron. Después el cliente creó el archivo de parada del operador, que el responsable no ha retirado, así que los pasos de la Calculadora no se ejecutaron.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
@@ -177,7 +178,7 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   benchmarks, soak e informe de aceptación. Se ejecutó un protocolo reducido sólo con clics
   (20 corridas puntuadas en dos aplicaciones; E2E-01 y PERF-02 en parte; con UI Automation y
   `type` en dos fases, la aplicación de prueba pasó 10 de 10 corridas de escritura en dos rondas, y la
-  Calculadora y el Bloc de notas no se completaron)
+  Calculadora y el Bloc de notas no se completaron; en la séptima ronda, nueve de diez corridas puntuadas del Bloc de notas pasaron y la décima no se envió por falta de cupo)
 
 ## Inicio rápido
 
