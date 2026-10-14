@@ -55,6 +55,8 @@ struct World {
     foreground: Option<String>,
     /// Captures and deliveries, in order.
     events: Vec<&'static str>,
+    /// 9x8 greyscale grids painted over a box at 2x2 pixels per cell (icons).
+    textures: Vec<(BBox, Vec<u8>)>,
 }
 
 impl Default for World {
@@ -77,6 +79,7 @@ impl Default for World {
             reactions: 0,
             foreground: Some(APP.into()),
             events: Vec::new(),
+            textures: Vec::new(),
         }
     }
 }
@@ -112,6 +115,16 @@ fn render(world: &World) -> BgraFrame {
     }
     if world.reactions > 0 {
         paint(&bx(600.0, 300.0, 610.0, 310.0), [255, world.reactions, 0]);
+    }
+    for (b, grid) in &world.textures {
+        let (x0, y0) = (b.x0() as usize, b.y0() as usize);
+        for y in y0..y0 + 16 {
+            for x in x0..x0 + 18 {
+                let v = grid[(y - y0) / 2 * 9 + (x - x0) / 2];
+                let i = y * stride + 4 * x;
+                px[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+            }
+        }
     }
     BgraFrame::new(W, H, stride, world.epoch, px).unwrap()
 }
@@ -311,11 +324,15 @@ fn form() -> World {
 }
 
 fn rig(world: World) -> Rig {
+    rig_with(world, EngineConfig::new(SESSION))
+}
+
+fn rig_with(world: World, config: EngineConfig) -> Rig {
     let world = Arc::new(Mutex::new(world));
     let clock = Arc::new(ManualClock::new());
     let policy = Arc::new(Policy::default());
     let engine = Engine::new(
-        EngineConfig::new(SESSION),
+        config,
         Ports {
             capturer: Box::new(Capturer(world.clone(), clock.clone())),
             detector: Box::new(Detector(world.clone())),
@@ -1357,4 +1374,260 @@ fn identical_runs_produce_identical_pages() {
         (a, b)
     };
     assert_eq!(run(), run());
+}
+
+// ---- Algorithm 3A in the observation ----
+
+mod icons {
+    use ommatix_domain::appearance::{
+        CachePolicy, DESCRIPTOR_VERSION, GRID_LEN, IconCache, Prototype, PrototypeSource,
+        gradient_descriptor,
+    };
+    use ommatix_domain::fusion::FusedControl;
+
+    use super::*;
+    use crate::contract::ElementView;
+    use crate::engine::icons::{IconLabel, Scope, grey_grid, resolve};
+
+    const TAU: u8 = 3;
+    const ICON: (f64, f64) = (200.0, 150.0);
+
+    /// A pseudo-random 9×8 grid with almost every gradient valid, different per seed.
+    fn grid(seed: u32) -> Vec<u8> {
+        let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
+        (0..GRID_LEN)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect()
+    }
+
+    fn icon_box() -> BBox {
+        bx(ICON.0, ICON.1, ICON.0 + 18.0, ICON.1 + 16.0)
+    }
+
+    /// The form plus a text-less icon button painted with `texture` (flat without one).
+    fn icon_world(texture: Option<Vec<u8>>, actionability: Actionability) -> World {
+        let mut world = form();
+        world.controls.push(Control {
+            bbox: icon_box(),
+            role: Role::IconButton,
+            affordance: Affordance {
+                actionability,
+                ..confirmed()
+            },
+        });
+        world.textures = texture.map(|t| (icon_box(), t)).into_iter().collect();
+        world
+    }
+
+    fn prototype(label: &str, context: &str, gray: &[u8]) -> Prototype {
+        Prototype {
+            label: label.into(),
+            context: context.into(),
+            descriptor_version: DESCRIPTOR_VERSION,
+            descriptor: gradient_descriptor(gray, TAU).unwrap(),
+            source: PrototypeSource::Curated,
+        }
+    }
+
+    fn config(context: &str, prototypes: Vec<Prototype>) -> EngineConfig {
+        let mut cache = IconCache::new();
+        for p in prototypes {
+            cache.insert(p);
+        }
+        EngineConfig {
+            icons: Some(IconResolverConfig {
+                cache,
+                policy: CachePolicy::new(0.1, 0.1).unwrap(),
+                tau: TAU,
+                context: context.into(),
+            }),
+            ..EngineConfig::new(SESSION)
+        }
+    }
+
+    fn icon_element(page: &ObservePage) -> &ElementView {
+        page.elements
+            .iter()
+            .find(|e| e.role == Role::IconButton)
+            .expect("the icon button is published")
+    }
+
+    fn label_of(page: &ObservePage) -> (&str, LabelSource) {
+        let e = icon_element(page);
+        (e.label.as_str(), e.label_source)
+    }
+
+    #[test]
+    fn the_crop_is_resampled_to_the_descriptor_grid() {
+        let world = icon_world(Some(grid(1)), Actionability::Confirmed);
+        let frame = render(&world);
+        assert_eq!(grey_grid(&frame, &icon_box()).unwrap().to_vec(), grid(1));
+        // Colour goes through the BT.601 luma: pure red, green and blue.
+        let mut px = vec![0u8; 4 * 3];
+        px[2] = 255;
+        px[5] = 255;
+        px[8] = 255;
+        let frame = BgraFrame::new(3, 1, 12, 1, px).unwrap();
+        let g = grey_grid(&frame, &bx(0.0, 0.0, 3.0, 1.0)).unwrap();
+        assert_eq!((g[0], g[3], g[6]), (76, 150, 29));
+    }
+
+    #[test]
+    fn a_curated_icon_in_the_configured_context_is_labelled_curated_icon() {
+        let mut r = rig_with(
+            icon_world(Some(grid(1)), Actionability::Confirmed),
+            config(APP, vec![prototype("Settings", APP, &grid(1))]),
+        );
+        let page = r.observe();
+        assert_eq!(label_of(&page), ("Settings", LabelSource::CuratedIcon));
+        // The OCR labels of the form are untouched.
+        let save = page.elements.iter().find(|e| e.label == "Save").unwrap();
+        assert_eq!(save.label_source, LabelSource::Ocr);
+    }
+
+    #[test]
+    fn the_same_icon_in_another_context_stays_unknown() {
+        let mut r = rig_with(
+            icon_world(Some(grid(1)), Actionability::Confirmed),
+            config("another-app", vec![prototype("Settings", APP, &grid(1))]),
+        );
+        assert_eq!(label_of(&r.observe()), ("", LabelSource::Unknown));
+    }
+
+    #[test]
+    fn a_flat_icon_stays_unknown() {
+        let mut r = rig_with(
+            icon_world(None, Actionability::Confirmed),
+            config(APP, vec![prototype("Settings", APP, &grid(1))]),
+        );
+        assert_eq!(label_of(&r.observe()), ("", LabelSource::Unknown));
+    }
+
+    #[test]
+    fn an_icon_far_from_every_prototype_stays_unknown() {
+        let mut r = rig_with(
+            icon_world(Some(grid(5)), Actionability::Confirmed),
+            config(APP, vec![prototype("Settings", APP, &grid(1))]),
+        );
+        assert_eq!(label_of(&r.observe()), ("", LabelSource::Unknown));
+    }
+
+    #[test]
+    fn two_indistinguishable_prototypes_leave_the_icon_unknown() {
+        let mut r = rig_with(
+            icon_world(Some(grid(1)), Actionability::Confirmed),
+            config(
+                APP,
+                vec![
+                    prototype("Settings", APP, &grid(1)),
+                    prototype("Delete", APP, &grid(1)),
+                ],
+            ),
+        );
+        assert_eq!(label_of(&r.observe()), ("", LabelSource::Unknown));
+    }
+
+    #[test]
+    fn without_a_resolver_icons_stay_unknown() {
+        let mut r = rig(icon_world(Some(grid(1)), Actionability::Confirmed));
+        assert_eq!(label_of(&r.observe()), ("", LabelSource::Unknown));
+    }
+
+    #[test]
+    fn an_icon_label_never_makes_an_element_actionable() {
+        let mut r = rig_with(
+            icon_world(Some(grid(1)), Actionability::Unknown),
+            config(APP, vec![prototype("Settings", APP, &grid(1))]),
+        );
+        let page = r.observe();
+        let e = icon_element(&page);
+        assert_eq!(e.label_source, LabelSource::CuratedIcon);
+        assert_eq!(e.actionability, Actionability::Unknown);
+        let result =
+            r.engine
+                .execute_action(&Rig::action(&page, "Settings", "r-icon", ActionKind::Click));
+        assert_eq!(error_code(&result), Some(ErrorCode::NotActionable));
+    }
+
+    #[test]
+    fn an_icon_changed_inside_a_planned_region_is_resolved_again() {
+        let mut r = rig_with(
+            icon_world(Some(grid(1)), Actionability::Confirmed),
+            config(APP, vec![prototype("Settings", APP, &grid(1))]),
+        );
+        let first = r.observe();
+        let settings = icon_element(&first).target_id.to_string();
+        // A change elsewhere keeps the label and the element.
+        r.world().controls[2].bbox = bx(502.0, 250.0, 582.0, 280.0);
+        let page = r.observe();
+        assert_eq!(label_of(&page), ("Settings", LabelSource::CuratedIcon));
+        assert_eq!(icon_element(&page).target_id.to_string(), settings);
+        // The icon itself turns into another appearance: its region is planned, the old
+        // label is dropped and nothing is guessed.
+        r.world().textures[0].1 = grid(5);
+        let page = r.observe();
+        assert_eq!(label_of(&page), ("", LabelSource::Unknown));
+    }
+
+    #[test]
+    fn controls_outside_the_planned_regions_keep_their_previous_icon_label() {
+        // The frame shows a flat crop, which resolves to unknown: outside the planned
+        // regions the previous label is kept without looking at the pixels again.
+        let world = icon_world(None, Actionability::Confirmed);
+        let frame = render(&world);
+        let control = FusedControl {
+            control: world.controls[3].clone(),
+            inner_words: Vec::new(),
+            text_kind: None,
+            label: None,
+        };
+        let previous = vec![IconLabel {
+            bbox: icon_box(),
+            role: Role::IconButton,
+            label: "Settings".into(),
+        }];
+        let config = config(APP, vec![prototype("Settings", APP, &grid(1))]);
+        let resolver = config.icons.as_ref();
+        let controls = std::slice::from_ref(&control);
+        let elsewhere = [bx(0.0, 0.0, 50.0, 50.0)];
+        let around = [icon_box()];
+        for (scope, kept) in [
+            (Scope::Regions(&[]), true),
+            (Scope::Regions(&elsewhere), true),
+            (Scope::Regions(&around), false),
+            (Scope::All, false),
+        ] {
+            let labels = resolve(controls, &frame, scope, &previous, resolver);
+            assert_eq!(labels == previous, kept, "{scope:?}");
+            assert!(kept || labels.is_empty(), "{scope:?}");
+        }
+    }
+
+    #[test]
+    fn controls_with_text_or_an_external_label_are_not_icon_candidates() {
+        // Prototypes curated from the Save button's and the input's own crops are never
+        // consulted: one has its caption, the other takes the "Name" label.
+        let world = form();
+        let frame = render(&world);
+        let crop = |i: usize| grey_grid(&frame, &world.controls[i].bbox).unwrap();
+        let mut r = rig_with(
+            form(),
+            config(
+                APP,
+                vec![
+                    prototype("Field", APP, &crop(0)),
+                    prototype("Button", APP, &crop(1)),
+                ],
+            ),
+        );
+        let page = r.observe();
+        assert!(
+            page.elements
+                .iter()
+                .all(|e| e.label_source != LabelSource::CuratedIcon)
+        );
+    }
 }

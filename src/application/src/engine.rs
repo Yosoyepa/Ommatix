@@ -1,16 +1,18 @@
 //! The thesis use case: one transactional observation (`observe_screen`), one validated
 //! action (`execute_action`) and the engine counters (`get_engine_metrics`), over the SDD
-//! ports. Joins Algorithm 1 (region plan), Algorithm 2 (fusion), Algorithm 3B (identity
-//! registry) and the snapshot store.
+//! ports. Joins Algorithm 1 (region plan), Algorithm 2 (fusion), Algorithm 3A (appearance
+//! cache), Algorithm 3B (identity registry) and the snapshot store.
 //!
 //! - [`observe`]: capture → region plan → detect/recognise only the planned regions → fuse
-//!   → track → stage and commit. A failed stage publishes nothing.
+//!   → resolve icons → track → stage and commit. A failed stage publishes nothing.
+//! - [`icons`]: Algorithm 3A on icon-like controls of the planned regions.
 //! - [`view`]: the agent's view of the published snapshot (query filter, value redaction,
 //!   pagination with a cursor bound to the snapshot).
 //! - [`act`]: the action gate of SDD §2.9 and the honest delivery report.
 //! - [`journal`]: `request_id` deduplication without storing typed text.
 
 mod act;
+mod icons;
 mod journal;
 mod observe;
 mod view;
@@ -31,6 +33,7 @@ use crate::contract::{
 };
 use crate::ports::{Clock, FrameCapturer, OsActuator, PolicyStore, TextRecognizer, VisionDetector};
 
+pub use icons::IconResolverConfig;
 pub use journal::JOURNAL_CAPACITY;
 
 use journal::Journal;
@@ -45,6 +48,9 @@ pub struct EngineConfig {
     pub plan: PlanParams,
     pub fusion: FusionParams,
     pub association: AssociationPolicy,
+    /// Algorithm 3A. `None` (the default): no icon is resolved and icon labels stay
+    /// unknown.
+    pub icons: Option<IconResolverConfig>,
 }
 
 impl EngineConfig {
@@ -54,6 +60,7 @@ impl EngineConfig {
             plan: PlanParams::default(),
             fusion: FusionParams::default(),
             association: AssociationPolicy::default(),
+            icons: None,
         }
     }
 }

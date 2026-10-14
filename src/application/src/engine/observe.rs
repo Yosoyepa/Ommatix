@@ -15,6 +15,7 @@ use ommatix_domain::fusion::{
 use ommatix_domain::identity::{Observation, Registry, TargetId};
 use ommatix_domain::incremental::{BgraFrame, Evidence, RegionPlan, Work, plan_regions};
 
+use super::icons::{self, IconLabel, Scope};
 use super::{Engine, EngineConfig};
 use crate::PortError;
 use crate::contract::{ErrorCode, LabelSource, StageTimings, ToolError};
@@ -124,6 +125,9 @@ pub(super) struct Published {
     pub evidence: EvidenceSet,
     /// Control ↔ external label pairs, re-processed together by the next plan.
     pub relations: Vec<(BBox, BBox)>,
+    /// Curated icon labels (Algorithm 3A), kept for the controls the next plan leaves
+    /// untouched.
+    pub icons: Vec<IconLabel>,
     pub frame_seq: u64,
     pub captured_at: Duration,
     /// Sorted by target ID.
@@ -147,10 +151,14 @@ struct Candidate {
     text_node: bool,
 }
 
-fn control_candidate(fc: &FusedControl) -> Candidate {
+/// `icon` is the curated label Algorithm 3A found for this control, if any; it only
+/// replaces the label, never the affordance.
+fn control_candidate(fc: &FusedControl, icon: Option<&str>) -> Candidate {
     let role = fc.control.role;
     let inner = fc.inner_text();
-    let (label, label_source) = if role.takes_external_label() {
+    let (label, label_source) = if let Some(icon) = icon {
+        (icon.to_owned(), LabelSource::CuratedIcon)
+    } else if role.takes_external_label() {
         match &fc.label {
             Some(LabelChoice::Label(word)) => (word.text.clone(), LabelSource::Ocr),
             _ => (String::new(), LabelSource::Unknown),
@@ -223,19 +231,36 @@ fn stored_elements(registry: &Registry, candidates: Vec<Candidate>) -> Vec<Store
 struct Tracked {
     registry: Registry,
     relations: Vec<(BBox, BBox)>,
+    icons: Vec<IconLabel>,
     elements: Vec<StoredElement>,
     /// When fusion ended and tracking began.
     fused_at: Duration,
 }
 
-/// Fuses `evidence` and associates it with the tracks of `previous`.
+/// Fuses `evidence`, labels the curated icons of the controls the `planned` work re-analyses (from
+/// `frame`) and associates everything with the tracks of `previous`.
 fn fuse_and_track(
     evidence: &EvidenceSet,
-    previous: &Registry,
-    geometry_epoch: u64,
+    frame: &BgraFrame,
+    planned: &Work,
+    previous: Option<&Published>,
     config: &EngineConfig,
     clock: &dyn Clock,
 ) -> Option<Tracked> {
+    let fresh;
+    let (base, kept_icons) = if let Some(p) = previous {
+        (&p.registry, &p.icons[..])
+    } else {
+        fresh = Registry::new(config.session_id.clone(), frame.geometry_epoch());
+        (&fresh, &[][..])
+    };
+    // Icons are resolved again where the detector looked again, and everywhere when there
+    // is no base to keep labels from.
+    let scope = match (planned, previous) {
+        (Work::Nothing, Some(_)) => Scope::Regions(&[]),
+        (Work::Regions(rs), Some(_)) => Scope::Regions(rs),
+        _ => Scope::All,
+    };
     let fusion = fuse(&evidence.controls, &evidence.words, config.fusion).ok()?;
     let relations = fusion
         .controls
@@ -245,21 +270,35 @@ fn fuse_and_track(
             _ => None,
         })
         .collect();
+    let icons = icons::resolve(
+        &fusion.controls,
+        frame,
+        scope,
+        kept_icons,
+        config.icons.as_ref(),
+    );
+    let icon_of = |fc: &FusedControl| {
+        icons
+            .iter()
+            .find(|i| i.bbox == fc.control.bbox && i.role == fc.control.role)
+            .map(|i| i.label.as_str())
+    };
     let candidates: Vec<Candidate> = fusion
         .controls
         .iter()
-        .map(control_candidate)
+        .map(|fc| control_candidate(fc, icon_of(fc)))
         .chain(fusion.text_nodes.iter().map(text_node_candidate))
         .collect();
     let fused_at = clock.now();
     let observations: Vec<Observation> = candidates.iter().map(|c| c.observation.clone()).collect();
-    let (registry, _changes) = previous
-        .observe(geometry_epoch, &observations, config.association)
+    let (registry, _changes) = base
+        .observe(frame.geometry_epoch(), &observations, config.association)
         .ok()?;
     let elements = stored_elements(&registry, candidates);
     Some(Tracked {
         registry,
         relations,
+        icons,
         elements,
         fused_at,
     })
@@ -324,17 +363,11 @@ impl Engine {
             _ => fresh,
         }
         .normalised(&frame.bounds());
-        let fresh_registry;
-        let registry = if let Some(p) = previous {
-            &p.registry
-        } else {
-            fresh_registry = Registry::new(self.config.session_id.clone(), frame.geometry_epoch());
-            &fresh_registry
-        };
         let tracked = fuse_and_track(
             &evidence,
-            registry,
-            frame.geometry_epoch(),
+            &frame,
+            &plan.work,
+            previous,
             &self.config,
             clock.as_ref(),
         );
@@ -360,6 +393,7 @@ impl Engine {
                 registry: tracked.registry,
                 evidence,
                 relations: tracked.relations,
+                icons: tracked.icons,
                 frame_seq: captured.frame_seq,
                 captured_at: captured.captured_at,
                 elements: tracked.elements,
