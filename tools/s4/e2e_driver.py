@@ -372,10 +372,11 @@ def value_check(v: int) -> dict:
 
 def testapp_flow(focus_click: bool = False) -> dict:
     t = testapp_title
-    # Focus first (--focus-click, a revision after the round-2 pilot, not yet run): a click
-    # on the field whose end state is the title unchanged. A type that arrives in the frame of
-    # its own focusing click is dropped by the field (egui handles text before it grants
-    # focus; S4 report, second round).
+    # --focus-click is superseded by ADR-0018 and stays off: the engine now confirms keyboard
+    # focus on the field between the focusing click and the keys, so no extra click is
+    # needed. It is kept only so old command lines still parse. (A type that arrived in the
+    # frame of its own focusing click was dropped by the field: egui handles text before it
+    # grants focus; S4 report, second round.)
     focus = [(TEXT_FIELD, NOT_BY_OCR, t(0, "off", 1))] if focus_click else []
     return {
         "exe": "ommatix-testapp.exe",
@@ -789,11 +790,12 @@ class Protocol:
                 self.spend_live()
                 res["actions_requested"] += 1
                 kind = "click" if text is None else "type"
-                # A click's effect is a visual change. Typing asks for value_updated: the engine
-                # verifies only visual changes (chapter 07 §7.5), so it reports indeterminate
-                # for a typing, and the OS-side check decides. visual_change would accept the
-                # focusing click alone (pilot, S4 report §4.6).
-                effect = "visual_change" if text is None else "value_updated"
+                # Both ask for a visual change. Since ADR-0018 the engine measures a typing's
+                # change against a frame captured after its focusing click and before its keys,
+                # so the click's own redraw is not counted (it was in the pilot, S4 report
+                # §4.6). The OS-side check (the window title) still decides; the engine's
+                # effect_observed is only evidence that something changed after the keys.
+                effect = "visual_change"
                 args = {"request_id": f"s4r2-{self.args.app}-{res['run']}-{res['steps']}-{attempt + 1}",
                         "session_id": snap["session_id"], "snapshot_id": snap["snapshot_id"],
                         "geometry_epoch": snap["geometry_epoch"],
@@ -928,8 +930,9 @@ def main() -> int:
     p.add_argument("--settle", type=float, default=1.5,
                    help="seconds to wait after a newly started window reaches the foreground")
     p.add_argument("--focus-click", action="store_true",
-                   help="testapp: click the field once before typing (revision after the second "
-                        "round's pilot; not yet executed)")
+                   help="SUPERSEDED by ADR-0018 (the engine confirms keyboard focus before "
+                        "typing); off by default and not to be used. testapp: click the field "
+                        "once before typing")
     p.add_argument("--debug-grounding", action="store_true",
                    help="log the AutomationId and ControlType under the cursor and whether each name matches (never names)")
     p.add_argument("--restart", choices=["each", "never"], default="each",
@@ -955,6 +958,8 @@ def main() -> int:
             "--config", str(args.config), "--session-id", args.session_id]
     if live:
         argv += ["--input", "sendinput"]
+    if args.focus_click:
+        log("warning", reason="--focus-click is superseded by ADR-0018 and should not be used")
     flow = testapp_flow(args.focus_click) if args.app == "testapp" else FLOWS[args.app]()
     log("start", app=args.app, mode=args.mode, runs=args.runs, live_input=live,
         focus_click=args.focus_click,
