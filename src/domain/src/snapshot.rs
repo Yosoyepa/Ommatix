@@ -206,7 +206,7 @@ mod tests {
         assert!(!store.actions_allowed());
 
         store.commit(store.stage(g, vec!["e2"])).unwrap();
-        assert!(store.pending_dirty().is_empty());
+        assert_eq!(store.pending_dirty().len(), 0);
         assert!(store.actions_allowed());
     }
 

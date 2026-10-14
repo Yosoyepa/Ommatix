@@ -235,7 +235,7 @@ mod tests {
         assert_eq!(found[0].affordance.actionability, Actionability::Unknown);
         let all = detector.detect(&frame, &[frame.bounds()]).unwrap();
         assert_eq!(all.len(), 2);
-        assert!(detector.detect(&frame, &[]).unwrap().is_empty());
+        assert_eq!(detector.detect(&frame, &[]).unwrap().len(), 0);
     }
 
     #[test]

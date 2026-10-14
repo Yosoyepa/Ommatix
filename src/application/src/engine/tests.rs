@@ -687,7 +687,7 @@ fn a_frame_with_epoch_zero_is_not_published() {
     let err = fresh.observe_with(&ObserveRequest::default()).unwrap_err();
     assert_eq!(err.code, ErrorCode::UnsupportedGeometry);
     assert_eq!(fresh.engine.engine_metrics().observations, 0);
-    assert!(fresh.world().detect_calls.is_empty());
+    assert_eq!(fresh.world().detect_calls.len(), 0);
 
     let mut r = rig(form());
     let page = r.observe();
@@ -914,7 +914,7 @@ fn ut_42_dry_run_never_delivers() {
         r.engine.execute_action(&typed).status,
         ActionStatus::Simulated
     );
-    assert!(r.world().delivered.is_empty());
+    assert_eq!(r.world().delivered.len(), 0);
     let m = r.engine.engine_metrics();
     assert_eq!((m.delivered_actions, m.rejected_actions), (0, 0));
 }
@@ -952,7 +952,7 @@ fn ut_43_live_input_is_denied_without_policy_and_live_actuator() {
             (ErrorCode::PolicyDenied, false, NextStep::OperatorReview)
         );
     }
-    assert!(r.world().delivered.is_empty());
+    assert_eq!(r.world().delivered.len(), 0);
     assert_eq!(r.engine.engine_metrics().rejected_actions, 3);
 }
 
@@ -1124,7 +1124,7 @@ fn live_input_is_denied_when_no_application_is_allowlisted() {
         .engine
         .execute_action(&live_click(&page, "r1", ExpectedEffect::None));
     assert_policy_denied(&result, "no application is on the local allowlist");
-    assert!(r.world().delivered.is_empty());
+    assert_eq!(r.world().delivered.len(), 0);
 }
 
 #[test]
@@ -1151,7 +1151,7 @@ fn live_input_is_denied_when_the_foreground_application_is_unknown() {
         &result,
         "foreground application is not on the local allowlist",
     );
-    assert!(r.world().delivered.is_empty());
+    assert_eq!(r.world().delivered.len(), 0);
     // On the list: delivered.
     r.world().foreground = Some(APP.into());
     let result = r

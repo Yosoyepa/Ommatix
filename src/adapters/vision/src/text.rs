@@ -27,6 +27,6 @@ mod tests {
         let frame = BgraFrame::new(1, 1, 4, 1, vec![0; 4]).unwrap();
         let mut ocr = NullTextRecognizer;
         assert_eq!(ocr.name(), "none");
-        assert!(ocr.recognize(&frame, &[frame.bounds()]).unwrap().is_empty());
+        assert_eq!(ocr.recognize(&frame, &[frame.bounds()]).unwrap().len(), 0);
     }
 }

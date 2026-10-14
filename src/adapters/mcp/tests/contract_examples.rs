@@ -75,7 +75,7 @@ fn validation_cases_are_accepted_or_rejected_by_the_dto_layer_as_declared() {
                 assert!(valid, "{example_path} must be rejected by the DTO layer");
                 if let Some(produced) = produced {
                     assert_eq!(produced, example, "{example_path} round-trips unchanged");
-                    assert!(violations(schema, &produced).is_empty());
+                    assert_eq!(violations(schema, &produced).len(), 0);
                 }
             }
             Err(reason) => assert!(

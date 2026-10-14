@@ -610,13 +610,13 @@ mod tests {
     #[test]
     fn ut_05_alpha_and_padding_are_ignored_but_real_pixels_are_not() {
         let f = blank(65, 65, 0, 1);
-        assert!(diff(Some(&f), &changed(&f, 1, 1, 3)).tiles.is_empty());
+        assert_eq!(diff(Some(&f), &changed(&f, 1, 1, 3)).tiles.len(), 0);
 
         let padded = blank(65, 65, 8, 1);
         let mut buf = padded.pixels().to_vec();
         buf[4 * 65] = 1; // first padding byte of row 0
         let g = BgraFrame::new(65, 65, padded.row_stride(), 1, buf).unwrap();
-        assert!(diff(Some(&padded), &g).tiles.is_empty());
+        assert_eq!(diff(Some(&padded), &g).tiles.len(), 0);
 
         let padded = blank(65, 65, 12, 1);
         assert_eq!(

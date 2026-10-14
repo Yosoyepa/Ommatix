@@ -1025,7 +1025,7 @@ fn rejected_as_not_actionable(e: &mut Engine) {
     assert_eq!(outcome["error"]["code"], "NOT_ACTIONABLE", "{outcome}");
     assert_eq!(outcome["input_delivered"], false);
     assert_eq!(outcome["verified"], false);
-    assert!(agent.desktop.handed_actions().is_empty());
+    assert_eq!(agent.desktop.handed_actions().len(), 0);
     // The same snapshot's confirmed button is clickable: only the affordance differs.
     let button = agent.element("Guardar");
     let args = agent.click_args(&button, "bdd11-click-button");
@@ -1249,7 +1249,7 @@ fn rejected_by_the_id_contract(e: &mut Engine) {
     let response = agent.last_response().clone();
     assert_eq!(error_code(&response), INVALID_PARAMS, "{response}");
     assert!(response.get("result").is_none());
-    assert!(agent.desktop.handed_actions().is_empty());
+    assert_eq!(agent.desktop.handed_actions().len(), 0);
     let metrics = agent.tool_result("get_engine_metrics", json!({}));
     assert_eq!(metrics["structuredContent"]["rejected_actions"], 0);
     // The same request by ID alone is valid (and the rejected one was not recorded).
@@ -1371,7 +1371,7 @@ fn simulated_without_delivery(e: &mut Engine) {
         refused["structuredContent"]["error"]["code"],
         "POLICY_DENIED"
     );
-    assert!(agent.desktop.handed_actions().is_empty());
+    assert_eq!(agent.desktop.handed_actions().len(), 0);
     let metrics = agent.tool_result("get_engine_metrics", json!({}));
     assert_eq!(metrics["structuredContent"]["delivered_actions"], 0);
 }

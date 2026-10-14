@@ -349,7 +349,7 @@ mod tests {
         let desktop = SimulatedDesktop::new();
         let actuator = desktop.actuator();
         assert!(!actuator.is_live());
-        assert!(desktop.handed_actions().is_empty());
+        assert_eq!(desktop.handed_actions().len(), 0);
     }
 
     #[test]
