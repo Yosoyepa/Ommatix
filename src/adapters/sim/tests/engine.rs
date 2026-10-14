@@ -27,6 +27,7 @@ fn engine(desktop: &SimulatedDesktop, clock: Arc<ManualClock>) -> Engine {
             capturer: Box::new(desktop.capturer()),
             detector: Box::new(desktop.detector()),
             recognizer: Box::new(desktop.recognizer()),
+            accessibility: Box::new(ommatix_application::NoAccessibility),
             actuator: Box::new(desktop.actuator()),
             policy: Arc::new(DenyAll),
             clock,

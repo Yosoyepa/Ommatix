@@ -36,6 +36,10 @@ detector_path = ""
 detector_sha256 = ""
 ocr_path = ""
 ocr_sha256 = ""
+# Evidencia de accesibilidad (ADR-0017): "none" (por defecto) o "uia" (árbol de UI Automation
+# de la aplicación en primer plano, sólo Windows, sólo con --source dxgi o screen). Se fusiona
+# con la visión y nunca la sustituye; nunca se lee el valor de un campo.
+accessibility = "none"
 
 [cache]
 max_entries = 4096

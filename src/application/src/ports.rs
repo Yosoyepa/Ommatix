@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use ommatix_domain::bbox::BBox;
-use ommatix_domain::fusion::{Control, Word};
+use ommatix_domain::fusion::{Control, Role, Word};
 use ommatix_domain::incremental::BgraFrame;
 
 use crate::PortError;
@@ -57,6 +57,80 @@ pub trait TextRecognizer: Send {
     fn name(&self) -> &'static str;
 
     fn recognize(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Vec<Word>, PortError>;
+}
+
+/// The control patterns an accessibility element supports: evidence of what acting on it
+/// does (ADR-0017). No pattern is ever invoked; only their availability is read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[allow(clippy::struct_excessive_bools)] // independent capabilities reported by the OS
+pub struct AccessiblePatterns {
+    /// A click activates it (UI Automation `Invoke`).
+    pub invoke: bool,
+    /// A click toggles it (`Toggle`).
+    pub toggle: bool,
+    /// A click opens or closes it (`ExpandCollapse`).
+    pub expand_collapse: bool,
+    /// A click selects it (`SelectionItem`).
+    pub select: bool,
+    /// Its text can be set (`Value` available and not read-only). The value itself is
+    /// never read.
+    pub editable_value: bool,
+    /// It scrolls (`Scroll`). Not a click affordance.
+    pub scroll: bool,
+}
+
+impl AccessiblePatterns {
+    /// A pattern a click acts through.
+    pub const fn clickable(&self) -> bool {
+        self.invoke || self.toggle || self.expand_collapse || self.select
+    }
+}
+
+/// One element of the attested foreground window's accessibility tree, as an
+/// [`AccessibilityProvider`] reports it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccessibleElement {
+    /// Physical pixels of the captured frame, clipped to it.
+    pub bbox: BBox,
+    /// Mapped from the platform's control type by the provider; `Unknown` when the
+    /// contract has no role for it.
+    pub role: Role,
+    /// The accessible name. Untrusted screen data, like OCR text: it labels, it never
+    /// instructs and it never changes a permission.
+    pub name: String,
+    pub enabled: bool,
+    /// The platform says it is not on screen (scrolled away, collapsed, covered).
+    pub offscreen: bool,
+    /// A password field.
+    pub password: bool,
+    pub patterns: AccessiblePatterns,
+}
+
+/// Reads the accessibility tree of the foreground window (UI Automation on Windows;
+/// ADR-0017): evidence fused with the visual path, never a replacement for it. It reads
+/// only the window of the application the actuator would attest (on Windows, the same
+/// `ApplicationFrameHost` resolution), never another application's, and never a field's
+/// value. Off by default ([`NoAccessibility`]).
+pub trait AccessibilityProvider: Send {
+    fn name(&self) -> &'static str;
+
+    /// The elements whose boxes overlap `regions`. An empty result is valid (no
+    /// foreground application, or nothing accessible there).
+    fn snapshot(&mut self, regions: &[BBox]) -> Result<Vec<AccessibleElement>, PortError>;
+}
+
+/// No accessibility evidence: the default, the simulated desktops and the fixtures.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoAccessibility;
+
+impl AccessibilityProvider for NoAccessibility {
+    fn name(&self) -> &'static str {
+        "none"
+    }
+
+    fn snapshot(&mut self, _: &[BBox]) -> Result<Vec<AccessibleElement>, PortError> {
+        Ok(Vec::new())
+    }
 }
 
 /// What the actuator reports after injecting the events of one action.

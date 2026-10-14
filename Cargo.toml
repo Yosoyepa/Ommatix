@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "src/domain",
     "src/application",
+    "src/adapters/accessibility",
     "src/adapters/capture",
     "src/adapters/vision",
     "src/adapters/input",
@@ -24,6 +25,7 @@ publish = false
 [workspace.dependencies]
 ommatix-domain = { path = "src/domain" }
 ommatix-application = { path = "src/application" }
+ommatix-adapter-accessibility = { path = "src/adapters/accessibility" }
 ommatix-adapter-capture = { path = "src/adapters/capture" }
 ommatix-adapter-vision = { path = "src/adapters/vision" }
 ommatix-adapter-input = { path = "src/adapters/input" }
@@ -49,6 +51,10 @@ sha2 = "0.11"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
 toml = "1"
+# Pinned exactly: a safe UI Automation client on the same `windows` as the adapters
+# (ADR-0017). Its default features are the only set that builds (0.25.1 does not compile
+# without `input`); the adapter's clippy.toml forbids every input, focus and pattern call.
+uiautomation = "=0.25.1"
 unicode-normalization = "0.1"
 # Pinned exactly: the Windows adapters call its unsafe COM/Win32 bindings (ADR-0016).
 windows = "=0.62.2"

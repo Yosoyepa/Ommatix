@@ -826,6 +826,7 @@ pub fn timings_meta(t: &StageTimings) -> Value {
         "plan_us": us(t.plan),
         "detect_us": us(t.detect),
         "recognize_us": us(t.recognize),
+        "accessibility_us": us(t.accessibility),
         "fuse_us": us(t.fuse),
         "track_us": us(t.track),
         "total_us": us(t.total),

@@ -132,6 +132,18 @@ pub enum OcrKind {
     Winrt,
 }
 
+/// The accessibility evidence (`[models] accessibility`, ADR-0017).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessibilityKind {
+    /// No accessibility evidence: only the visual path.
+    #[default]
+    None,
+    /// The foreground application's UI Automation tree (Windows), fused with the visual
+    /// path. Only with a live source (`dxgi` or `screen`).
+    Uia,
+}
+
 /// The ONNX Runtime execution provider of the detector (`[models]
 /// detector_execution_provider`). The model manifest must list it as validated.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -173,6 +185,8 @@ pub struct ModelsSection {
     pub ocr: OcrKind,
     /// BCP-47 tag of the OCR language; never replaced by another language.
     pub ocr_language: String,
+    /// Accessibility evidence fused with the detector and the OCR (ADR-0017).
+    pub accessibility: AccessibilityKind,
     /// Template keys: the weights are declared in the manifest, so these stay empty.
     pub detector_path: String,
     pub detector_sha256: String,
@@ -193,6 +207,7 @@ impl Default for ModelsSection {
             detector_threads: 0,
             ocr: OcrKind::None,
             ocr_language: "es-ES".to_owned(),
+            accessibility: AccessibilityKind::None,
             detector_path: String::new(),
             detector_sha256: String::new(),
             ocr_path: String::new(),
@@ -768,6 +783,17 @@ mod tests {
     }
 
     const DIGEST: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[test]
+    fn accessibility_is_off_unless_the_operator_chooses_uia() {
+        assert_eq!(
+            Config::default().models.accessibility,
+            AccessibilityKind::None
+        );
+        let config = Config::parse("[models]\naccessibility = \"uia\"\n").unwrap();
+        assert_eq!(config.models.accessibility, AccessibilityKind::Uia);
+        assert!(Config::parse("[models]\naccessibility = \"ax\"\n").is_err());
+    }
 
     #[test]
     fn models_default_to_none_and_are_pinned_when_configured() {

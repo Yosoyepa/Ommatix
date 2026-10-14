@@ -31,8 +31,9 @@ use ommatix_adapter_mcp::{
 use ommatix_adapter_sim::{FixtureDesktop, FixtureScene, confirmed};
 use ommatix_application::contract::{ActionKind, ValidatedAction};
 use ommatix_application::{
-    Clock, DeliveryReceipt, Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock,
-    OsActuator, PolicyStore, PortError, Ports, VerifyParams,
+    AccessibilityProvider, AccessibleElement, AccessiblePatterns, Clock, DeliveryReceipt,
+    Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock, NoAccessibility, OsActuator,
+    PolicyStore, PortError, Ports, VerifyParams,
 };
 use ommatix_domain::appearance::{
     CachePolicy, DESCRIPTOR_VERSION, GRID_LEN, GradientDescriptor, IconCache, IconMatch, Prototype,
@@ -58,7 +59,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-01", "BDD-02", "BDD-03", "BDD-04", "BDD-05", "BDD-06", "BDD-07", "BDD-08", "BDD-09",
     "BDD-10", "BDD-11", "BDD-12", "BDD-13", "BDD-14", "BDD-15", "BDD-16", "BDD-17", "BDD-18",
     "BDD-19", "BDD-20", "BDD-21", "BDD-22", "BDD-23", "BDD-24", "BDD-25", "BDD-26", "BDD-27",
-    "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32",
+    "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33",
 ];
 
 #[derive(Debug, Default, World)]
@@ -932,6 +933,25 @@ impl OsActuator for LiveDouble {
     }
 }
 
+/// A test double of the UI Automation provider (S4+, ADR-0017): the fixed tree of a window,
+/// filtered by the planned regions like the real one. It reads nothing from the OS.
+struct TreeDouble(Vec<AccessibleElement>);
+
+impl AccessibilityProvider for TreeDouble {
+    fn name(&self) -> &'static str {
+        "tree-double"
+    }
+
+    fn snapshot(&mut self, regions: &[BBox]) -> Result<Vec<AccessibleElement>, PortError> {
+        Ok(self
+            .0
+            .iter()
+            .filter(|e| regions.iter().any(|r| r.overlaps(&e.bbox)))
+            .cloned()
+            .collect())
+    }
+}
+
 /// The operator's consent to live input on [`ALLOWED_APP`].
 fn live_policy() -> LocalPolicy {
     LocalPolicy {
@@ -943,7 +963,7 @@ fn live_policy() -> LocalPolicy {
 
 impl Agent {
     fn new(scene: FixtureScene, policy: LocalPolicy, config: McpConfig) -> Self {
-        Self::build(scene, Arc::new(FixedPolicy(policy)), config, false)
+        Self::build(scene, Arc::new(FixedPolicy(policy)), config, false, None)
     }
 
     /// Like [`Agent::new`] with the modern profile, over a [`LiveDouble`] actuator.
@@ -953,7 +973,17 @@ impl Agent {
 
     /// Like [`Agent::live`], with the given policy store.
     fn live_with(scene: FixtureScene, policy: Arc<dyn PolicyStore>) -> Self {
-        Self::build(scene, policy, McpConfig::default(), true)
+        Self::build(scene, policy, McpConfig::default(), true, None)
+    }
+
+    /// A live agent whose window exposes `tree` to the accessibility provider (ADR-0017).
+    fn live_accessible(
+        scene: FixtureScene,
+        policy: LocalPolicy,
+        tree: Vec<AccessibleElement>,
+    ) -> Self {
+        let policy = Arc::new(FixedPolicy(policy));
+        Self::build(scene, policy, McpConfig::default(), true, Some(tree))
     }
 
     fn build(
@@ -961,17 +991,23 @@ impl Agent {
         policy: Arc<dyn PolicyStore>,
         config: McpConfig,
         live: bool,
+        tree: Option<Vec<AccessibleElement>>,
     ) -> Self {
         let clock = Arc::new(ManualClock::new());
         let desktop = FixtureDesktop::new(scene, clock.clone());
         let recorder: Box<dyn OsActuator> = Box::new(desktop.actuator());
         let foreground = Arc::new(Mutex::new(Foreground::default()));
+        let accessibility: Box<dyn AccessibilityProvider> = match tree {
+            Some(elements) => Box::new(TreeDouble(elements)),
+            None => Box::new(NoAccessibility),
+        };
         let engine = ThesisEngine::new(
             EngineConfig::new(SESSION),
             Ports {
                 capturer: Box::new(desktop.capturer()),
                 detector: Box::new(desktop.detector()),
                 recognizer: Box::new(desktop.recognizer()),
+                accessibility,
                 actuator: if live {
                     Box::new(LiveDouble(recorder, foreground.clone()))
                 } else {
@@ -1856,6 +1892,109 @@ fn no_new_events_and_past_deliveries_are_reported(e: &mut Engine) {
     assert_eq!(replay["structuredContent"]["input_delivered"], true);
     assert_eq!(agent.metric("delivered_actions"), 1);
     assert_eq!(agent.metric("rejected_actions"), 1);
+    assert_eq!(agent.desktop.handed_actions().len(), 1);
+}
+
+// ---- 02_fusion.feature, accessibility evidence (ADR-0017) ----
+
+/// A window like the Calculator: its single-class detector boxes a "Función" caption over
+/// the square button, and the window exposes the button and the result field.
+fn calculator_tree() -> Vec<AccessibleElement> {
+    let element = |bbox, role, name: &str, patterns| AccessibleElement {
+        bbox,
+        role,
+        name: name.to_owned(),
+        enabled: true,
+        offscreen: false,
+        password: false,
+        patterns,
+    };
+    vec![
+        element(
+            bx(200.0, 100.0, 240.0, 130.0),
+            Role::Button,
+            "Cuadrado",
+            AccessiblePatterns {
+                invoke: true,
+                ..AccessiblePatterns::default()
+            },
+        ),
+        element(
+            bx(20.0, 20.0, 380.0, 60.0),
+            Role::Input,
+            "Resultado",
+            AccessiblePatterns {
+                editable_value: true,
+                ..AccessiblePatterns::default()
+            },
+        ),
+    ]
+}
+
+#[given("un detector de una sola clase y una ventana que expone sus controles por accesibilidad")]
+fn single_class_detector_and_an_accessible_window(e: &mut Engine) {
+    let mut scene = FixtureScene::new(400, 200);
+    // Every detector box has role unknown; this one is centred on the square button.
+    scene.add_control(confirmed(Role::Unknown, bx(150.0, 80.0, 290.0, 150.0)));
+    scene.add_word("Función", bx(160.0, 85.0, 280.0, 98.0));
+    let agent = e.agent.insert(Agent::live_accessible(
+        scene,
+        live_policy(),
+        calculator_tree(),
+    ));
+    let page = agent.observe(json!({}));
+    // The accessibility stage is timed in `_meta` (run-dependent), never in the content.
+    let result = &agent.last_response()["result"];
+    assert!(
+        result["_meta"]["io.ommatix/timings"]["accessibility_us"].is_u64(),
+        "{result}"
+    );
+    assert!(!page.to_string().contains("accessibility_us"));
+}
+
+#[when("el agente observa y hace clic en el control accesible por su ID")]
+fn agent_clicks_the_accessible_control(e: &mut Engine) {
+    let agent = e.agent();
+    let square = agent.element("Cuadrado");
+    let args = agent.live_click_args(&square, "bdd33-click", "none");
+    agent.target = Some(square);
+    agent.tool_result("execute_action", args);
+}
+
+#[then("el rol y la etiqueta vienen de accesibilidad y el clic cae en su rectángulo")]
+fn role_and_label_come_from_accessibility(e: &mut Engine) {
+    let agent = e.agent();
+    let square = agent.target().clone();
+    assert_eq!(square["role"], "button");
+    assert_eq!(square["label_source"], "accessibility");
+    assert_eq!(square["actionability"], "confirmed");
+    // The field is an input only because the window says its text can be set.
+    let field = agent.element("Resultado");
+    assert_eq!(field["role"], "input");
+    assert_eq!(field["label_source"], "accessibility");
+    assert_eq!(field["actionability"], "confirmed");
+    // The detector's box over the button keeps what the visual path knows, but its click
+    // would land on the button: it is no longer confirmed, so no click can be aimed at it.
+    let caption = agent.element("Función");
+    assert_eq!(caption["label_source"], "ocr");
+    assert_ne!(caption["actionability"], "confirmed");
+    // The click was delivered at the centre of the accessible rectangle.
+    let outcome = agent.last_response()["result"]["structuredContent"].clone();
+    assert_eq!(outcome["status"], "input_delivered", "{outcome}");
+    let handed = agent.desktop.handed_actions();
+    assert_eq!(handed.len(), 1);
+    assert_eq!(handed[0].point(), (220.0, 115.0));
+    // The delivery spent the snapshot; on the next one the caption is refused instead of
+    // clicked, and nothing more is delivered.
+    agent.observe(json!({}));
+    let caption = agent.element("Función");
+    let args = agent.live_click_args(&caption, "bdd33-caption", "none");
+    let refused = agent.tool_result("execute_action", args);
+    assert_eq!(refused["structuredContent"]["status"], "rejected");
+    assert_eq!(
+        refused["structuredContent"]["error"]["code"],
+        "NOT_ACTIONABLE"
+    );
     assert_eq!(agent.desktop.handed_actions().len(), 1);
 }
 

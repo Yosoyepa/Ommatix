@@ -1,0 +1,24 @@
+# ADR-0017: this adapter reads the accessibility tree and nothing else. `uiautomation`
+# 0.25.1 only builds with its default `input` and `control` features, so every call that could send input, move
+# focus or act through a control pattern is forbidden here (clippy::disallowed_methods and
+# clippy::disallowed_types are denied by `-D warnings`).
+disallowed-methods = [
+    { path = "uiautomation::core::UIElement::click", reason = "ADR-0017: the provider never sends input" },
+    { path = "uiautomation::core::UIElement::double_click", reason = "ADR-0017: the provider never sends input" },
+    { path = "uiautomation::core::UIElement::right_click", reason = "ADR-0017: the provider never sends input" },
+    { path = "uiautomation::core::UIElement::hold_click", reason = "ADR-0017: the provider never sends input" },
+    { path = "uiautomation::core::UIElement::drag_to", reason = "ADR-0017: the provider never sends input" },
+    { path = "uiautomation::core::UIElement::send_keys", reason = "ADR-0017: the provider never sends input" },
+    { path = "uiautomation::core::UIElement::hold_send_keys", reason = "ADR-0017: the provider never sends input" },
+    { path = "uiautomation::core::UIElement::send_text", reason = "ADR-0017: the provider never sends input" },
+    { path = "uiautomation::core::UIElement::set_focus", reason = "ADR-0017: the provider never moves focus" },
+    { path = "uiautomation::core::UIElement::try_focus", reason = "ADR-0017: the provider never moves focus" },
+    { path = "uiautomation::core::UIElement::show_context_menu", reason = "ADR-0017: the provider never acts" },
+    { path = "uiautomation::core::UIElement::get_pattern", reason = "ADR-0017: patterns act (and Value reads values); only their availability is read" },
+    { path = "uiautomation::core::UIElement::get_cached_pattern", reason = "ADR-0017: patterns act (and Value reads values); only their availability is read" },
+    { path = "uiautomation::core::UICacheRequest::add_pattern", reason = "ADR-0017: only pattern availability is cached, never a pattern" },
+]
+disallowed-types = [
+    { path = "uiautomation::inputs::Keyboard", reason = "ADR-0017: the provider never sends input" },
+    { path = "uiautomation::inputs::Mouse", reason = "ADR-0017: the provider never sends input" },
+]

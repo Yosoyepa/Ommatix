@@ -15,7 +15,9 @@ use crate::contract::{
     ActionKind, ErrorCode, ExpectedEffect, LabelSource, NextStep, ObservedEffect, ScrollDirection,
     ValidatedAction, Zone,
 };
-use crate::ports::{CapturedFrame, DeliveryReceipt, LocalPolicy};
+use crate::ports::{
+    AccessibleElement, AccessiblePatterns, CapturedFrame, DeliveryReceipt, LocalPolicy,
+};
 use crate::{ManualClock, PortError};
 
 const W: u32 = 640;
@@ -66,6 +68,10 @@ struct World {
     events: Vec<&'static str>,
     /// 9x8 greyscale grids painted over a box at 2x2 pixels per cell (icons).
     textures: Vec<(BBox, Vec<u8>)>,
+    /// The accessibility tree of the foreground window (ADR-0017).
+    accessible: Vec<AccessibleElement>,
+    access_calls: Vec<Vec<BBox>>,
+    fail_access: bool,
 }
 
 impl Default for World {
@@ -92,6 +98,9 @@ impl Default for World {
             foreground_script: VecDeque::new(),
             events: Vec::new(),
             textures: Vec::new(),
+            accessible: Vec::new(),
+            access_calls: Vec::new(),
+            fail_access: false,
         }
     }
 }
@@ -208,6 +217,29 @@ impl TextRecognizer for Recognizer {
         Ok(w.words
             .iter()
             .filter(|t| regions.iter().any(|r| r.overlaps(&t.bbox)))
+            .cloned()
+            .collect())
+    }
+}
+
+/// The accessibility provider double: returns the elements overlapping the regions, like
+/// the detector double, and records each call.
+struct Access(Shared);
+
+impl AccessibilityProvider for Access {
+    fn name(&self) -> &'static str {
+        "test-accessibility"
+    }
+
+    fn snapshot(&mut self, regions: &[BBox]) -> Result<Vec<AccessibleElement>, PortError> {
+        let mut w = lock(&self.0);
+        w.access_calls.push(regions.to_vec());
+        if w.fail_access {
+            return Err(PortError::new("test-accessibility", "tree unavailable"));
+        }
+        Ok(w.accessible
+            .iter()
+            .filter(|e| regions.iter().any(|r| r.overlaps(&e.bbox)))
             .cloned()
             .collect())
     }
@@ -384,6 +416,7 @@ fn rig_with(world: World, config: EngineConfig) -> Rig {
             capturer: Box::new(Capturer(world.clone(), clock.clone())),
             detector: Box::new(Detector(world.clone())),
             recognizer: Box::new(Recognizer(world.clone())),
+            accessibility: Box::new(Access(world.clone())),
             actuator: Box::new(Actuator(world.clone())),
             policy: policy.clone(),
             clock: clock.clone(),
@@ -1980,3 +2013,7 @@ mod icons {
         );
     }
 }
+
+// ---- accessibility evidence (ADR-0017) ----
+
+mod accessibility;

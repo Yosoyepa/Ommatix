@@ -2,19 +2,27 @@
 //!
 //! The candidate snapshot is built aside from the published one and committed in one
 //! step. Every stage after the capture takes the region plan as input: only the planned
-//! regions reach the detector and the recogniser, and evidence outside them is kept. A
-//! failed stage publishes nothing, keeps the planned tiles pending and blocks actions.
+//! regions reach the detector, the recogniser and the accessibility provider, and
+//! evidence outside them is kept. A failed stage publishes nothing, keeps the planned
+//! tiles pending and blocks actions.
+//!
+//! Accessibility evidence (ADR-0017) is reconciled with the detector's boxes before the
+//! text is fused: an element absorbs the detector boxes that are the same control, its
+//! role and name win (`label_source: accessibility`), and OCR words still go to the most
+//! specific control by IoC.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{
-    Affordance, Control, FusedControl, LabelChoice, Role, TextKind, Word, fuse,
+    AccessibleControl, Affordance, Control, FusedControl, LabelChoice, Role, TextKind, Word, fuse,
+    reconcile_accessibility,
 };
 use ommatix_domain::identity::{Observation, Registry, TargetId};
 use ommatix_domain::incremental::{BgraFrame, Evidence, RegionPlan, Work, plan_regions};
 
+use super::accessibility::accessible_control;
 use super::icons::{self, IconLabel, Scope};
 use super::{Engine, EngineConfig};
 use crate::PortError;
@@ -26,6 +34,8 @@ use crate::ports::Clock;
 pub(super) struct EvidenceSet {
     pub controls: Vec<Control>,
     pub words: Vec<Word>,
+    /// Accessibility elements on screen (ADR-0017).
+    pub accessible: Vec<AccessibleControl>,
 }
 
 impl EvidenceSet {
@@ -35,6 +45,7 @@ impl EvidenceSet {
             .iter()
             .map(|c| c.bbox)
             .chain(self.words.iter().map(|w| w.bbox))
+            .chain(self.accessible.iter().map(|a| a.control.bbox))
             .collect()
     }
 
@@ -54,9 +65,16 @@ impl EvidenceSet {
                 .filter(|w| outside(&w.bbox))
                 .cloned()
                 .collect(),
+            accessible: self
+                .accessible
+                .iter()
+                .filter(|a| outside(&a.control.bbox))
+                .cloned()
+                .collect(),
         };
         next.controls.extend(fresh.controls);
         next.words.extend(fresh.words);
+        next.accessible.extend(fresh.accessible);
         next
     }
 
@@ -98,6 +116,29 @@ impl EvidenceSet {
                 .then_with(|| a.text.cmp(&b.text))
         });
         self.words.dedup();
+        self.accessible = self
+            .accessible
+            .into_iter()
+            .filter_map(|a| {
+                let bbox = a.control.bbox.clip(bounds)?;
+                Some(AccessibleControl {
+                    control: Control { bbox, ..a.control },
+                    ..a
+                })
+            })
+            .collect();
+        self.accessible.sort_by(|a, b| {
+            let (x, y) = (&a.control, &b.control);
+            x.bbox
+                .cmp_corners(&y.bbox)
+                .then(x.role.cmp(&y.role))
+                .then_with(|| a.label.cmp(&b.label))
+                .then(x.affordance.actionability.cmp(&y.affordance.actionability))
+                .then(x.affordance.enabled.cmp(&y.affordance.enabled))
+                .then(x.affordance.visible.cmp(&y.affordance.visible))
+                .then(a.sensitive.cmp(&b.sensitive))
+        });
+        self.accessible.dedup();
         self
     }
 }
@@ -151,12 +192,27 @@ struct Candidate {
     text_node: bool,
 }
 
-/// `icon` is the curated label Algorithm 3A found for this control, if any; it only
-/// replaces the label, never the affordance.
-fn control_candidate(fc: &FusedControl, icon: Option<&str>) -> Candidate {
+/// `access` is the accessibility element this control comes from, if any: its name wins
+/// over every other label, and a password field publishes no OCR text at all. `icon` is
+/// the curated label Algorithm 3A found for this control, if any; it only replaces the
+/// visual label, never the affordance.
+fn control_candidate(
+    fc: &FusedControl,
+    access: Option<&AccessibleControl>,
+    icon: Option<&str>,
+) -> Candidate {
     let role = fc.control.role;
-    let inner = fc.inner_text();
-    let (label, label_source) = if let Some(icon) = icon {
+    let sensitive = access.is_some_and(|a| a.sensitive);
+    let inner = if sensitive {
+        String::new()
+    } else {
+        fc.inner_text()
+    };
+    let (label, label_source) = if let Some(a) = access.filter(|a| !a.label.is_empty()) {
+        (a.label.clone(), LabelSource::Accessibility)
+    } else if sensitive {
+        (String::new(), LabelSource::Unknown)
+    } else if let Some(icon) = icon {
         (icon.to_owned(), LabelSource::CuratedIcon)
     } else if role.takes_external_label() {
         match &fc.label {
@@ -178,8 +234,7 @@ fn control_candidate(fc: &FusedControl, icon: Option<&str>) -> Candidate {
         },
         label,
         label_source,
-        value: role
-            .holds_value()
+        value: (role.holds_value() && !sensitive)
             .then(|| (inner, fc.text_kind.unwrap_or(TextKind::Unknown))),
         text_node: false,
     }
@@ -261,7 +316,10 @@ fn fuse_and_track(
         (Work::Regions(rs), Some(_)) => Scope::Regions(rs),
         _ => Scope::All,
     };
-    let fusion = fuse(&evidence.controls, &evidence.words, config.fusion).ok()?;
+    let reconciled =
+        reconcile_accessibility(&evidence.controls, &evidence.accessible, config.fusion).ok()?;
+    let fusion = fuse(&reconciled.controls, &evidence.words, config.fusion).ok()?;
+    let access_of = |i: usize| reconciled.origins[i].and_then(|k| evidence.accessible.get(k));
     let relations = fusion
         .controls
         .iter()
@@ -286,7 +344,8 @@ fn fuse_and_track(
     let candidates: Vec<Candidate> = fusion
         .controls
         .iter()
-        .map(|fc| control_candidate(fc, icon_of(fc)))
+        .enumerate()
+        .map(|(i, fc)| control_candidate(fc, access_of(i), icon_of(fc)))
         .chain(fusion.text_nodes.iter().map(text_node_candidate))
         .collect();
     let fused_at = clock.now();
@@ -302,6 +361,13 @@ fn fuse_and_track(
         elements,
         fused_at,
     })
+}
+
+/// Fresh evidence of the planned regions and when detection and recognition ended.
+struct Inferred {
+    evidence: EvidenceSet,
+    t_detect: Duration,
+    t_recognize: Duration,
 }
 
 fn inference_failed() -> ToolError {
@@ -350,11 +416,16 @@ impl Engine {
             Work::Regions(rs) => rs.clone(),
             Work::FullRefresh(_) => vec![frame.bounds()],
         };
-        let Ok((fresh, t_detect)) = self.infer(&frame, &regions) else {
+        let Ok(Inferred {
+            evidence: fresh,
+            t_detect,
+            t_recognize,
+        }) = self.infer(&frame, &regions)
+        else {
             self.store.record_failure(&plan.dirty);
             return Err(inference_failed());
         };
-        let t_recognize = clock.now();
+        let t_access = clock.now();
 
         let previous = self.store.published();
         let evidence = match (&plan.work, previous) {
@@ -383,7 +454,8 @@ impl Engine {
             plan: span(t_capture, t_plan),
             detect: span(t_plan, t_detect),
             recognize: span(t_detect, t_recognize),
-            fuse: span(t_recognize, tracked.fused_at),
+            accessibility: span(t_recognize, t_access),
+            fuse: span(t_access, tracked.fused_at),
             track: span(tracked.fused_at, t_track),
             total: span(t0, t_track),
         };
@@ -432,19 +504,38 @@ impl Engine {
         })
     }
 
-    /// Detects and recognises inside `regions` only; no region, no inference. Returns the
-    /// evidence and the instant detection ended.
-    fn infer(
-        &mut self,
-        frame: &BgraFrame,
-        regions: &[BBox],
-    ) -> Result<(EvidenceSet, Duration), PortError> {
+    /// Detects, recognises and reads the accessibility tree inside `regions` only; no
+    /// region, no inference. Accessibility elements outside the regions or off screen are
+    /// dropped, whatever the provider returned.
+    fn infer(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Inferred, PortError> {
         if regions.is_empty() {
-            return Ok((EvidenceSet::default(), self.ports.clock.now()));
+            let now = self.ports.clock.now();
+            return Ok(Inferred {
+                evidence: EvidenceSet::default(),
+                t_detect: now,
+                t_recognize: now,
+            });
         }
         let controls = self.ports.detector.detect(frame, regions)?;
         let t_detect = self.ports.clock.now();
         let words = self.ports.recognizer.recognize(frame, regions)?;
-        Ok((EvidenceSet { controls, words }, t_detect))
+        let t_recognize = self.ports.clock.now();
+        let accessible = self
+            .ports
+            .accessibility
+            .snapshot(regions)?
+            .iter()
+            .filter(|e| regions.iter().any(|r| r.overlaps(&e.bbox)))
+            .filter_map(accessible_control)
+            .collect();
+        Ok(Inferred {
+            evidence: EvidenceSet {
+                controls,
+                words,
+                accessible,
+            },
+            t_detect,
+            t_recognize,
+        })
     }
 }

@@ -38,3 +38,9 @@ Característica: Fusión espacial sin accionabilidad inventada
     Dado texto interno cuya naturaleza no está confirmada
     Cuando se publica el campo
     Entonces text_kind permanece unknown y no se inventa un valor
+
+  @BDD-33 @RF-07 @UT-44
+  Escenario: BDD-33 Evidencia de accesibilidad
+    Dado un detector de una sola clase y una ventana que expone sus controles por accesibilidad
+    Cuando el agente observa y hace clic en el control accesible por su ID
+    Entonces el rol y la etiqueta vienen de accesibilidad y el clic cae en su rectángulo

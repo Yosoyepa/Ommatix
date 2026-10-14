@@ -136,11 +136,12 @@ fn ms(d: Duration) -> String {
 /// One stderr line of per-stage timings, in milliseconds.
 fn timings_line(n: u8, t: &StageTimings) -> String {
     format!(
-        "timings {n} (ms): capture {} plan {} detect {} recognize {} fuse {} track {} total {}",
+        "timings {n} (ms): capture {} plan {} detect {} recognize {} accessibility {} fuse {} track {} total {}",
         ms(t.capture),
         ms(t.plan),
         ms(t.detect),
         ms(t.recognize),
+        ms(t.accessibility),
         ms(t.fuse),
         ms(t.track),
         ms(t.total),
@@ -245,6 +246,7 @@ mod tests {
             plan: Duration::from_micros(250),
             detect: Duration::from_millis(900),
             recognize: Duration::from_millis(40),
+            accessibility: Duration::from_millis(12),
             fuse: Duration::from_micros(10),
             track: Duration::from_micros(20),
             total: Duration::from_micros(941_780),
@@ -252,7 +254,7 @@ mod tests {
         assert_eq!(
             timings_line(2, &t),
             "timings 2 (ms): capture 1.500 plan 0.250 detect 900.000 recognize 40.000 \
-             fuse 0.010 track 0.020 total 941.780"
+             accessibility 12.000 fuse 0.010 track 0.020 total 941.780"
         );
     }
 

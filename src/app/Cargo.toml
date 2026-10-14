@@ -32,8 +32,12 @@ onnx = ["ommatix-adapter-vision/onnx"]
 directml = ["onnx", "ommatix-adapter-vision/directml"]
 ## Enable Windows OCR (`[models] ocr = "winrt"`). Windows only.
 winrt-ocr = ["ommatix-adapter-vision/winrt-ocr"]
+## Enable UI Automation evidence (`[models] accessibility = "uia"`, ADR-0017). Windows
+## only; used with a live source (`--source dxgi` or `screen`).
+uia = ["ommatix-adapter-accessibility/uia"]
 
 [dependencies]
+ommatix-adapter-accessibility = { workspace = true }
 ommatix-adapter-capture = { workspace = true }
 ommatix-adapter-input = { workspace = true }
 ommatix-adapter-mcp = { workspace = true }

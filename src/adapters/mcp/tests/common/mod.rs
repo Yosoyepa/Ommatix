@@ -221,6 +221,7 @@ pub fn engine_with(scene: Scene, policy: LocalPolicy) -> Engine {
         }),
         detector: Box::new(Detector(scene.clone())),
         recognizer: Box::new(Recognizer(scene)),
+        accessibility: Box::new(ommatix_application::NoAccessibility),
         actuator: Box::new(NullActuator::default()),
         policy: Arc::new(FixedPolicy(policy)),
         clock,

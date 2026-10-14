@@ -3,14 +3,16 @@
 //! ports. Joins Algorithm 1 (region plan), Algorithm 2 (fusion), Algorithm 3A (appearance
 //! cache), Algorithm 3B (identity registry) and the snapshot store.
 //!
-//! - [`observe`]: capture → region plan → detect/recognise only the planned regions → fuse
-//!   → resolve icons → track → stage and commit. A failed stage publishes nothing.
+//! - [`observe`]: capture → region plan → detect/recognise/read the accessibility tree only
+//!   in the planned regions → reconcile and fuse → resolve icons → track → stage and
+//!   commit. A failed stage publishes nothing.
 //! - [`icons`]: Algorithm 3A on icon-like controls of the planned regions.
 //! - [`view`]: the agent's view of the published snapshot (query filter, value redaction,
 //!   pagination with a cursor bound to the snapshot).
 //! - [`act`]: the action gate of SDD §2.9 and the honest delivery report.
 //! - [`journal`]: `request_id` deduplication without storing typed text.
 
+mod accessibility;
 mod act;
 mod icons;
 mod journal;
@@ -32,7 +34,10 @@ use crate::contract::{
     ActionRequest, ActionResult, EngineMetrics, EngineMode, ObservePage, ObserveRequest,
     StageTimings, TimingsSource, ToolError,
 };
-use crate::ports::{Clock, FrameCapturer, OsActuator, PolicyStore, TextRecognizer, VisionDetector};
+use crate::ports::{
+    AccessibilityProvider, Clock, FrameCapturer, OsActuator, PolicyStore, TextRecognizer,
+    VisionDetector,
+};
 
 pub use icons::IconResolverConfig;
 pub use journal::JOURNAL_CAPACITY;
@@ -105,6 +110,9 @@ pub struct Ports {
     pub capturer: Box<dyn FrameCapturer>,
     pub detector: Box<dyn VisionDetector>,
     pub recognizer: Box<dyn TextRecognizer>,
+    /// Accessibility evidence (ADR-0017); [`NoAccessibility`](crate::NoAccessibility) when
+    /// off.
+    pub accessibility: Box<dyn AccessibilityProvider>,
     pub actuator: Box<dyn OsActuator>,
     pub policy: Arc<dyn PolicyStore>,
     pub clock: Arc<dyn Clock>,
@@ -146,8 +154,9 @@ impl Engine {
         &self.config.session_id
     }
 
-    /// Captures, plans, detects and recognises only the planned regions, fuses, tracks and
-    /// commits a new snapshot; or, with a cursor, pages the snapshot the cursor names.
+    /// Captures, plans, detects, recognises and reads accessibility evidence only in the
+    /// planned regions, fuses, tracks and commits a new snapshot; or, with a cursor, pages the
+    /// snapshot the cursor names.
     pub fn observe_screen(&mut self, request: &ObserveRequest) -> Result<ObservePage, ToolError> {
         view::check_request(request)?;
         if let Some(cursor) = &request.cursor {

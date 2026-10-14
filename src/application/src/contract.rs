@@ -233,6 +233,8 @@ pub struct StageTimings {
     pub plan: Duration,
     pub detect: Duration,
     pub recognize: Duration,
+    /// Reading the accessibility tree (zero when it is off or nothing was planned).
+    pub accessibility: Duration,
     pub fuse: Duration,
     pub track: Duration,
     pub total: Duration,
