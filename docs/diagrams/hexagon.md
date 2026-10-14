@@ -5,20 +5,20 @@
 
 ```mermaid
 flowchart TB
-    subgraph app["ommatix (src/app) — composition root"]
+    subgraph app["ommatix (src/app) — composition root · SystemClock"]
       direction TB
       subgraph driving["Driving adapters"]
         mcp["ommatix-adapter-mcp<br/>MCP stdio server"]
       end
       subgraph core["Core"]
-        appl["ommatix-application<br/>PerceptionEngine · ActuationService<br/>ports: FrameSource, ElementDetector,<br/>InputController, ScreenModel"]
-        dom["ommatix-domain<br/>Frame · GridSpec · Scene · SpatialIndex · Action"]
+        appl["ommatix-application<br/>PerceptionEngine · Observer · ActuationService · AgentSession<br/>ports: FrameSource, ElementDetector,<br/>InputController, Clock"]
+        dom["ommatix-domain<br/>Frame · ChangeTracker · Scene · SpatialIndex<br/>Action · DisplayMapping"]
       end
       subgraph driven["Driven adapters"]
         cap["ommatix-adapter-capture<br/>Scripted · ImageSequence · Screen(xcap)"]
-        vis["ommatix-adapter-vision<br/>ContrastBlobDetector"]
+        vis["ommatix-adapter-vision<br/>FlatRegionDetector"]
         inp["ommatix-adapter-input<br/>DryRunInput · NativeInput(enigo)"]
-        sim["ommatix-adapter-sim<br/>SimulatedDesktop"]
+        sim["ommatix-adapter-sim<br/>SimulatedDesktop (themes)"]
       end
     end
     mcp --> appl

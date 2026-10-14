@@ -1,6 +1,6 @@
 # 0004. MCP over stdio as the agent interface
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by [0012](0012-settled-actions-and-wire-contract.md)
 - **Date:** 2026-10-14
 
 ## Context

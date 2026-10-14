@@ -7,6 +7,8 @@
 | Grid signature | Firma de cuadrícula | Per-cell hashes of one frame. / Hashes por celda de un frame. |
 | Dirty cell | Celda sucia | Cell whose hash changed since the previous frame. / Celda cuyo hash cambió respecto al frame anterior. |
 | Dirty region | Región sucia | Bounding box of 4-connected dirty cells, expanded to whole elements. / Caja envolvente de celdas sucias conectadas, expandida a elementos completos. |
+| Container | Contenedor | Element that strictly encloses a change (a window around a button); not re-analysed for it. / Elemento que encierra estrictamente un cambio (una ventana alrededor de un botón); no se re-analiza por él. |
+| Flat region | Región plana | Connected pixels whose neighbours differ by at most the tolerance; the detector's unit. / Píxeles conectados cuyos vecinos difieren como mucho la tolerancia; la unidad del detector. |
 | Detection | Detección | Raw detector output (bounds + kind), no identity yet. / Salida cruda del detector, aún sin identidad. |
 | Element | Elemento | Detection with a stable id living in the scene. / Detección con id estable dentro de la escena. |
 | Scene | Escena | Current set of elements plus their spatial index. / Conjunto actual de elementos y su índice espacial. |
@@ -14,3 +16,5 @@
 | Port | Puerto | Trait the application needs the outside world to implement. / Trait que la aplicación exige al mundo exterior. |
 | Adapter (driving / driven) | Adaptador (conductor / conducido) | Code that calls the core (MCP) / that the core calls (capture, vision). / Código que invoca al núcleo / que el núcleo invoca. |
 | Tick | Tick | One capture → diff → detect → update cycle. / Un ciclo captura → diff → detección → actualización. |
+| Settled | Estabilizada | Screen with no changed cell for a few consecutive frames after an action. / Pantalla sin celdas cambiadas durante varios frames seguidos tras una acción. |
+| Display mapping | Mapeo de pantalla | Conversion from frame pixels to OS input coordinates (HiDPI scale, monitor origin). / Conversión de píxeles del frame a coordenadas de entrada del sistema (escala HiDPI, origen del monitor). |

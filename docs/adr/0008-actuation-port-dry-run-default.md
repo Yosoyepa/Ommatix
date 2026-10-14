@@ -1,6 +1,6 @@
 # 0008. Actuation through an InputController port, dry-run by default
 
-- **Status:** Accepted
+- **Status:** Accepted, amended by [0012](0012-settled-actions-and-wire-contract.md)
 - **Date:** 2026-10-14
 
 ## Context
@@ -16,7 +16,7 @@ trip if every action has to be followed by a separate `perceive` call.
 2. A dedicated use case, `ActuationService`, validates every request **before** it reaches
    the port: a frame must have been perceived, click targets must lie on the last frame,
    element ids must exist in the scene, and text length is capped. It reads the scene
-   through the read-only `ScreenModel` port, not through the perception engine itself
+   through the read-only `ScreenModel` trait, not through the perception engine itself
    (dependency inversion, interface segregation).
 3. Agents should click **by element id** (`click {element_id}`); raw coordinates are allowed.
 4. Each MCP action tool perceives right after acting (`observe`, default `true`) and returns
