@@ -33,10 +33,21 @@ accesibilidad (ADR-0017)"):
                that fails with the menu left expanded closes it with one more click on ``Editar``
                through the engine's gate (never a retry loop, and only if it is expanded).
 
-After every delivered action the control under the cursor (where SendInput left it) is read
-through UI Automation: its name, or the bounding rectangle of the window's element with the
-label, must match the target ("grounding"). An ``effect_observed`` whose OS-side or grounding
-check fails is counted as an engine false success; there must be none.
+Grounding is by identity, never by name (S4 fourth round, finding 4). Before each click, UI
+Automation finds, on the OS side, the one element of the foreground window of the target
+application with the requested exact name and the control type that the engine's role stands
+for, and records its RuntimeId and AutomationId. More than one match, none, or none of the two
+identifiers means no click: the run fails before any input. After the click the element under
+the cursor (where SendInput left it), or its parent, must have the same RuntimeId, or the same
+AutomationId when the RuntimeId is unavailable, even if its name changed (a toggle such as
+``Abrir navegación`` becomes ``Cerrar navegación``). There is no name-only fallback. An
+``effect_observed`` whose OS-side or grounding check fails is counted as an engine false
+success; there must be none.
+
+``--calc-standard`` is a separate invocation, run once before the E2E-02 series: it switches
+the Calculator to Standard mode with two gated clicks (the navigation toggle, then
+``Estándar``), each with identity grounding, verifies the mode through UI Automation and
+closes the Calculator it started.
 
 Live input goes only through the engine's gate; this script never injects input itself.
 It types only into the test application's field. It starts the test application and the
@@ -79,10 +90,13 @@ _spec.loader.exec_module(s3)  # the S3 transport: Server, META, TIMINGS_KEY, Abo
 
 Abort = s3.Abort
 PAGE_LIMIT = 50
-# The owner's ceiling for the whole protocol. Round 1 used 124 live requests (S4 report,
-# section 4.5) and its ledger was not kept with the runs, so the ledger starts at 124 and the
-# cap counts both rounds.
+# The owner's ceiling for the live requests of one round (at most 400). The ledger only
+# accumulates across rounds; the round's share is ``ledger - round_start`` (``--round-start``),
+# reported as ledger_start..ledger_end.
 LIVE_CAP = 400
+# The step that switches the Calculator to Standard mode sends two clicks; the rest is room for
+# one retry after STALE_SNAPSHOT (nothing delivered).
+CALC_STANDARD_MAX_LIVE = 4
 CREATE_NO_WINDOW = 0x08000000
 
 # ---- read-only Windows queries ------------------------------------------------------------
@@ -291,28 +305,58 @@ UIA_AT_PS = r"""
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
 $p = New-Object System.Windows.Point([double]__X__, [double]__Y__)
 $e = [System.Windows.Automation.AutomationElement]::FromPoint($p)
-$names = @()
+$rows = @()
 for ($i = 0; $e -and $i -lt 3; $i++) {
-  $names += ($e.Current.AutomationId + "|" + $e.Current.Name + "|" + $e.Current.ControlType.ProgrammaticName)
+  $rid = ''
+  try { $rid = ($e.GetRuntimeId() -join '.') } catch {}
+  $type = $e.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  $rows += ($rid + "`t" + $e.Current.AutomationId + "`t" + $type)
   $e = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($e)
 }
-[Console]::Out.Write(($names -join "`n"))
+[Console]::Out.Write(($rows -join "`n"))
 """
 
-UIA_NAMED_PS = r"""
+# The elements of a window with an exact name and one of the given control types. Names are
+# never printed: only the identifiers, the control type and whether the element is off screen.
+UIA_IDENTITY_PS = r"""
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND__)
 $name = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__NAME__'))
+$types = '__TYPES__'.Split(',')
 $cond = New-Object System.Windows.Automation.PropertyCondition(
   [System.Windows.Automation.AutomationElement]::NameProperty, $name)
-$all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
-$inside = 0
-foreach ($e in $all) {
-  $r = $e.Current.BoundingRectangle
-  if (-not $r.IsEmpty -and __X__ -ge $r.Left -and __X__ -lt $r.Right -and __Y__ -ge $r.Top -and __Y__ -lt $r.Bottom) { $inside++ }
+$rows = @()
+foreach ($e in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) {
+  $type = $e.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  if ($types -notcontains $type) { continue }
+  $rid = ''
+  try { $rid = ($e.GetRuntimeId() -join '.') } catch {}
+  $rows += ($rid + "`t" + $e.Current.AutomationId + "`t" + $type + "`t" + [int]$e.Current.IsOffscreen)
 }
-[Console]::Out.Write("$($all.Count)|$inside")
+[Console]::Out.Write(($rows -join "`n"))
+"""
+
+# The Calculator's mode, read through UI Automation: the header's name (AutomationId
+# "Header") and how many of the Scientific-only controls are on screen.
+CALC_MODE_PS = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND__)
+$header = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+  (New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'Header')))
+$sci = 0
+foreach ($b in '__SCIENTIFIC__'.Split(',')) {
+  $name = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b))
+  $cond = New-Object System.Windows.Automation.PropertyCondition(
+    [System.Windows.Automation.AutomationElement]::NameProperty, $name)
+  foreach ($e in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) {
+    if (-not $e.Current.IsOffscreen) { $sci++ }
+  }
+}
+if ($header) { [Console]::Out.Write("1`t" + $header.Current.Name + "`t" + $sci) }
+else { [Console]::Out.Write("0`t`t" + $sci) }
 """
 
 MENU_STATE_PS = r"""
@@ -341,27 +385,42 @@ def cursor() -> tuple[int, int]:
     return int(pt.x), int(pt.y)
 
 
-def uia_named_contains_cursor(hwnd, name: str) -> tuple[int, int]:
-    """How many UI Automation elements of window `hwnd` are named `name`, and how many of
-    them contain the cursor (where SendInput left it)."""
-    x, y = cursor()
-    script = (UIA_NAMED_PS.replace("__HWND__", str(int(hwnd))).replace("__X__", str(x))
-              .replace("__Y__", str(y))
-              .replace("__NAME__", base64.b64encode(name.encode("utf-8")).decode("ascii")))
-    out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
-                         capture_output=True, text=True, encoding="utf-8", errors="replace",
-                         check=False, creationflags=CREATE_NO_WINDOW, timeout=60).stdout.strip()
+def uia_identify(hwnd, label: str, control_types: tuple[str, ...]) -> list[dict] | None:
+    """The elements of window `hwnd` named exactly `label` whose UI Automation control type is
+    one of `control_types`, as identity rows (see parse_identity_rows); None when the read
+    failed. An OS-side read: no input, and the name is never printed."""
+    script = (UIA_IDENTITY_PS.replace("__HWND__", str(int(hwnd)))
+              .replace("__NAME__", base64.b64encode(label.encode("utf-8")).decode("ascii"))
+              .replace("__TYPES__", ",".join(control_types)))
     try:
-        count, inside = out.split("|")
-        return int(count), int(inside)
-    except ValueError:
-        return 0, 0
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             check=False, creationflags=CREATE_NO_WINDOW, timeout=60).stdout
+    except subprocess.TimeoutExpired:
+        return None
+    return parse_identity_rows(out)
 
 
-def uia_at_cursor() -> list[tuple[str, str, str]]:
-    """The UI Automation element under the mouse cursor and its two ancestors, as
-    (AutomationId, Name, ControlType). SendInput leaves the cursor on the click point, so
-    this tells, independently of the engine, which control the click reached."""
+def read_calc_mode(hwnd) -> str:
+    """The Calculator's mode through UI Automation (see calc_mode): standard, other, unknown."""
+    script = (CALC_MODE_PS.replace("__HWND__", str(int(hwnd)))
+              .replace("__SCIENTIFIC__", ",".join(
+                  base64.b64encode(n.encode("utf-8")).decode("ascii") for n in SCIENTIFIC_ONLY)))
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             check=False, creationflags=CREATE_NO_WINDOW, timeout=60).stdout
+    except subprocess.TimeoutExpired:
+        return "unknown"
+    parsed = parse_calc_mode(out)
+    return "unknown" if parsed is None else calc_mode(*parsed)
+
+
+def uia_at_cursor() -> list[dict]:
+    """The UI Automation element under the mouse cursor and its two ancestors, as identity
+    rows (RuntimeId, AutomationId, ControlType; never the name). SendInput leaves the cursor
+    on the click point, so this tells, independently of the engine, which control the click
+    reached."""
     pt = wintypes.POINT()
     user32.GetCursorPos(ctypes.byref(pt))
     script = UIA_AT_PS.replace("__X__", str(int(pt.x))).replace("__Y__", str(int(pt.y)))
@@ -369,12 +428,7 @@ def uia_at_cursor() -> list[tuple[str, str, str]]:
                          capture_output=True, text=True, encoding="utf-8", errors="replace",
                          check=False,
                          creationflags=CREATE_NO_WINDOW, timeout=30).stdout
-    rows = []
-    for line in out.splitlines():
-        parts = line.split("|")
-        if len(parts) == 3:
-            rows.append((parts[0], parts[1], parts[2].removeprefix("ControlType.")))
-    return rows
+    return parse_identity_rows(out)
 
 
 def notepad_menu_state(hwnd) -> str | None:
@@ -417,6 +471,13 @@ CALC_BUTTONS = ("Siete", "Más", "Ocho", "Es igual a")  # Spanish Windows names
 # "Quitar entrada", "Borrar toda la memoria" and "Borrar toda el historial", which are other
 # controls and are never in this list). Whichever of these exists is clicked.
 CLEAR_CONTROLS = ("Borrar", "Borrar todo", "Borrar entrada")
+# The navigation toggle in its closed state and the Standard entry of the pane, by exact label
+# (Spanish Windows names). Scientific-only controls (present only in that mode) and the header
+# texts that stand for Standard mode.
+CALC_NAV_LABEL = "Abrir navegación"
+CALC_STANDARD_LABEL = "Estándar"
+SCIENTIFIC_ONLY = ("Alternar grados", "Notación científica")
+STANDARD_HEADERS = ("estándar", "calculadora estándar")
 CARDINALS = ("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve")
 NOTEPAD_MENU = "Editar"
 # UI Automation ExpandCollapseState of the menu bar item: the OS-side truth of "open" and
@@ -425,25 +486,91 @@ MENU_OPEN, MENU_CLOSED = "Expanded", "Collapsed"
 # A step whose end state the OCR does not check: only its OS-side check decides.
 NOT_BY_OCR = {"present": (), "absent": ()}
 
-CONTAINERS = {"Pane", "Window", "Group", "Custom", "Document"}
-
-
 def testapp_title(value: int, state: str, page: int, text: str = "") -> str:
     return TESTAPP_TITLE.format(value, state, page, text)
 
 
-def named_control(label: str, chain: list[tuple[str, str, str]]) -> bool | None:
-    """Whether the control under the cursor (or its parent) is named `label`. None when UI
-    Automation only reached unnamed containers (XAML islands stop there): the caller then
-    falls back to the bounding rectangle of the element named `label`."""
-    def same(name: str) -> bool:
-        return unicodedata.normalize("NFC", name) == unicodedata.normalize("NFC", label)
+# The UI Automation control types that each contract role stands for: the inverse of the
+# accessibility adapter's `role_of` (src/adapters/accessibility/src/lib.rs). A role the table
+# does not know (`text_node`, `icon_button`) has no UI Automation control and is never clicked.
+ROLE_CONTROL_TYPES = {
+    "button": ("Button", "SplitButton"),
+    "input": ("Edit", "Document"),
+    "checkbox": ("CheckBox",),
+    "dropdown": ("ComboBox",),
+    "unknown": ("Edit", "Document", "RadioButton", "MenuItem", "TabItem", "ListItem",
+                "TreeItem", "DataItem", "Hyperlink", "HeaderItem"),
+}
 
-    if any(same(name) for _, name, _ in chain[:2]):
-        return True
-    if not chain or all(ctype in CONTAINERS for _, _, ctype in chain[:2]):
-        return None
+
+def parse_identity_rows(output: str) -> list[dict]:
+    """Rows of ``RuntimeId<TAB>AutomationId<TAB>ControlType[<TAB>IsOffscreen]`` as printed by
+    the UI Automation scripts. A row that does not have that shape is dropped."""
+    rows = []
+    for line in output.splitlines():
+        parts = line.rstrip("\r").split("\t")
+        if len(parts) not in (3, 4):
+            continue
+        rows.append({"runtime_id": parts[0].strip(), "automation_id": parts[1].strip(),
+                     "control_type": parts[2].strip().removeprefix("ControlType."),
+                     "offscreen": len(parts) == 4 and parts[3].strip() == "1"})
+    return rows
+
+
+def identity_decision(rows: list[dict] | None) -> tuple[str, dict | None]:
+    """Whether a click may go ahead, from the on-screen elements that match the target's name
+    and control type: ``ok`` only for exactly one that has a RuntimeId or an AutomationId.
+    ``unreadable``, ``not_found``, ``ambiguous`` and ``unidentifiable`` mean no click. An
+    off-screen element cannot receive the engine's click, so it is not a candidate."""
+    if rows is None:
+        return "unreadable", None
+    candidates = [r for r in rows if not r["offscreen"]]
+    if not candidates:
+        return "not_found", None
+    if len(candidates) > 1:
+        return "ambiguous", None
+    found = candidates[0]
+    if not found["runtime_id"] and not found["automation_id"]:
+        return "unidentifiable", None
+    return "ok", found
+
+
+def identity_hit(expected: dict, chain: list[dict]) -> bool:
+    """Whether the control under the cursor (or its parent) is the element found before the
+    click: the same RuntimeId, or the same AutomationId when the RuntimeId is unavailable on
+    either side. The name is never compared, so a toggle that renames itself still matches.
+    An unreadable chain does not confirm anything."""
+    for row in chain[:2]:
+        if expected["runtime_id"] and row["runtime_id"]:
+            if expected["runtime_id"] == row["runtime_id"]:
+                return True
+        elif expected["automation_id"] and expected["automation_id"] == row["automation_id"]:
+            return True
     return False
+
+
+def nfc_fold(text: str) -> str:
+    return unicodedata.normalize("NFC", text).casefold()
+
+
+def parse_calc_mode(output: str) -> tuple[str | None, int] | None:
+    """(header name or None when there is no header, Scientific-only controls on screen) from
+    the CALC_MODE_PS read; None when the output is not of that shape."""
+    parts = output.strip("\r\n").split("\t")
+    if len(parts) != 3 or parts[0] not in ("0", "1") or not parts[2].strip().isdigit():
+        return None
+    return (parts[1] if parts[0] == "1" else None), int(parts[2])
+
+
+def calc_mode(header: str | None, scientific_controls: int) -> str:
+    """The Calculator's mode from the two UI Automation signals: ``standard`` only when the
+    header says so and no Scientific-only control is on screen; ``other`` when the header names
+    another mode; ``unknown`` when the header is missing or the signals disagree."""
+    if not header or not header.strip():
+        return "unknown"
+    if nfc_fold(header.strip()) in STANDARD_HEADERS:
+        return "standard" if scientific_controls == 0 else "unknown"
+    return "other"
 
 
 def value_check(v: int) -> dict:
@@ -476,7 +603,6 @@ def testapp_flow(focus_click: bool = False) -> dict:
             *focus,
             (TEXT_FIELD, NOT_BY_OCR, t(0, "off", 1, TYPED_TEXT), TYPED_TEXT),
         ],
-        "grounding": named_control,
         "vocabulary": {"Contador", "Interruptor", "Paginador", "Sumar", "Restar", "Reiniciar",
                        "Activar", "Siguiente", "Anterior", "Valor:", "Estado:", "página",
                        "apagado", "encendido", "Primera", "Segunda", "Texto", TEXT_FIELD,
@@ -523,7 +649,6 @@ def calculator_flow() -> dict:
             ("Es igual a", NOT_BY_OCR, "15"),
             (CLEAR_CONTROLS, NOT_BY_OCR, "0"),
         ],
-        "grounding": named_control,
         "vocabulary": {*CALC_BUTTONS, *CLEAR_CONTROLS},
         "vocabulary_re": None,
     }
@@ -539,7 +664,6 @@ def notepad_flow() -> dict:
         "initial": NOT_BY_OCR,
         "steps": [(NOTEPAD_MENU, NOT_BY_OCR, MENU_OPEN),
                   (NOTEPAD_MENU, NOT_BY_OCR, MENU_CLOSED)],
-        "grounding": named_control,
         "vocabulary": set(),  # Notepad's labels are never printed (its tabs hold owner text)
         "vocabulary_re": None,
     }
@@ -579,11 +703,57 @@ def log(event: str, **fields) -> None:
                      ensure_ascii=False), flush=True)
 
 
+ACTION_TIMINGS_KEY = "io.ommatix/action_timings"
+
+
 def stage_ms(meta: dict) -> dict:
-    """The per-stage timings of a response's `_meta` (io.ommatix/timings), in milliseconds.
-    Includes `accessibility` when the stage ran (ADR-0017)."""
-    return {k.removesuffix("_us"): round(v / 1000, 3)
-            for k, v in meta.get(s3.TIMINGS_KEY, {}).items()}
+    """The per-stage timings of a response's `_meta`, in milliseconds. `observe_screen`'s
+    (io.ommatix/timings, including `accessibility` when the stage ran, ADR-0017) keep their
+    names; `execute_action`'s (io.ommatix/action_timings: gate, freshness, delivery, focus,
+    verification, total) are recorded as `action_*`."""
+    stages = {k.removesuffix("_us"): round(v / 1000, 3)
+              for k, v in meta.get(s3.TIMINGS_KEY, {}).items()}
+    for key, value in meta.get(ACTION_TIMINGS_KEY, {}).items():
+        stages["action_" + key.removesuffix("_us")] = round(value / 1000, 3)
+    return stages
+
+
+def new_result(e2e: str, run: int) -> dict:
+    """A run's record, with every counter that `Protocol.steps` increments initialised."""
+    return {"e2e": e2e, "run": run, "success": False, "steps": 0,
+            "actions_requested": 0, "delivered": 0, "typed_delivered": 0,
+            "effect_observed": 0, "indeterminate": 0, "rejected": 0, "stale_retries": 0,
+            "ocr_checks_failed": 0, "independent_checks": 0, "independent_failed": 0,
+            "engine_false_success": 0, "grounding_wrong": 0, "observations": [], "actions": [],
+            "failure": None}
+
+
+def single_click_flow(label: str) -> dict:
+    """A Calculator flow of one click on `label` with no end-state check: the steps of
+    --calc-standard, each grounded by identity before and after its click."""
+    return {"exe": "calculatorapp.exe", "initial": NOT_BY_OCR,
+            "steps": [(label, NOT_BY_OCR, None)], "vocabulary": set(), "vocabulary_re": None}
+
+
+def read_ledger(path: Path) -> int:
+    """The live request count the ledger file holds (0 when there is no file)."""
+    try:
+        return int(path.read_text(encoding="utf-8").strip() or 0)
+    except FileNotFoundError:
+        return 0
+
+
+def round_problem(live: bool, round_start: int | None, ledger_now: int) -> str | None:
+    """Why a round may not start: run mode needs the ledger's value at the round's start, and
+    that value must lie within the ledger and leave room under the round's cap."""
+    if round_start is None:
+        return ("run mode needs --round-start (the ledger's value at the round's start)"
+                if live else None)
+    if not 0 <= round_start <= ledger_now:
+        return "--round-start is outside the ledger (0 to its current value)"
+    if ledger_now - round_start >= LIVE_CAP:
+        return "the round's live request cap is already spent"
+    return None
 
 
 class Protocol:
@@ -593,6 +763,7 @@ class Protocol:
         self.stop_file = stop_file
         self.flow = flow
         self.ledger = ledger
+        self.round_start = args.round_start  # the ledger's value when the round began
         self.live_sent = 0
         self.results: list[dict] = []
         self.started: set[int] = set()
@@ -609,14 +780,16 @@ class Protocol:
         raise Abort(reason)
 
     def ledger_total(self) -> int:
-        try:
-            return int(self.ledger.read_text(encoding="utf-8").strip() or 0)
-        except FileNotFoundError:
-            return 0
+        return read_ledger(self.ledger)
+
+    def round_live(self) -> int:
+        """The live requests of the current round: the ledger only accumulates, the cap counts
+        what was spent since the round began."""
+        return self.ledger_total() - self.round_start
 
     def spend_live(self) -> None:
         total = self.ledger_total()
-        if self.live_sent >= self.args.max_live or total >= LIVE_CAP:
+        if self.live_sent >= self.args.max_live or total - self.round_start >= LIVE_CAP:
             self.engage_stop("live action budget exhausted")
         self.ledger.write_text(str(total + 1), encoding="utf-8")
         self.live_sent += 1
@@ -790,11 +963,7 @@ class Protocol:
 
     # -- one run
     def run_once(self, n: int) -> dict:
-        res = {"e2e": E2E_ID[self.args.app], "run": n, "success": False, "steps": 0,
-               "actions_requested": 0, "delivered": 0, "typed_delivered": 0,
-               "effect_observed": 0, "indeterminate": 0, "rejected": 0, "stale_retries": 0,
-               "ocr_checks_failed": 0, "independent_checks": 0, "independent_failed": 0,
-               "engine_false_success": 0, "observations": [], "actions": [], "failure": None}
+        res = new_result(E2E_ID[self.args.app], n)
         start = time.perf_counter()
         res["user_idle_s_at_start"] = idle_seconds()
         reuse = self.args.restart == "never" and self.current is not None
@@ -886,12 +1055,115 @@ class Protocol:
     def menu_state(self, hwnd) -> str | None:
         return notepad_menu_state(hwnd)
 
+    def identify(self, hwnd, label: str, control_types: tuple[str, ...]) -> list[dict] | None:
+        return uia_identify(hwnd, label, control_types)
+
+    def cursor_chain(self) -> list[dict]:
+        return uia_at_cursor()
+
+    def calc_mode(self, hwnd) -> str:
+        return read_calc_mode(hwnd)
+
+    def current_hwnd(self):
+        return foreground()["hwnd"]
+
+    def identify_before(self, res: dict, fg: dict, label: str, target: dict) -> dict | None:
+        """The identity of the element a click is about to reach (see identity_decision), found
+        through UI Automation in the foreground window of the target application. Records its
+        RuntimeId, AutomationId and control type. Returns None, with the run failed, when the
+        click must not be sent."""
+        control_types = ROLE_CONTROL_TYPES.get(target.get("role", ""))
+        rows = self.identify(fg["hwnd"], label, control_types) if control_types else None
+        status, found = identity_decision(rows)
+        if not control_types:
+            status = "no_control_type"  # a role with no UI Automation control is never clicked
+        record = {"step": res["steps"], "status": status,
+                  "candidates": sum(1 for r in rows or [] if not r["offscreen"]),
+                  "offscreen_ignored": sum(1 for r in rows or [] if r["offscreen"])}
+        if found is not None:
+            record.update(runtime_id=found["runtime_id"], automation_id=found["automation_id"],
+                          control_type=found["control_type"])
+        res.setdefault("identity", []).append(record)
+        if found is None:
+            res["failure"] = f"step {res['steps']}: no click, the element's identity is {status}"
+            return None
+        return found
+
     def soft_foreground_ok(self) -> bool:
         """Whether the target application is in front and maximized on the primary monitor.
         Unlike require_foreground it never engages the operator's stop: a cleanup that cannot
         proceed just does not click."""
         fg = foreground()
         return fg["exe"] == self.flow["exe"] and fg["maximized_primary"]
+
+    def calc_standard(self) -> dict:
+        """Switches the Calculator to Standard mode (--calc-standard), once, before the E2E-02
+        series. Two clicks through the engine's gate, each with identity grounding: the
+        navigation toggle, selected by its exact label, and then ``Estándar``, selected after
+        a new observation. The mode is read through UI Automation before (no click when it
+        is Standard already, or cannot be read) and after. Nothing else is clicked: a pane
+        that does not open, an ``Estándar`` that is not unique and confirmed, an identity
+        that is not exactly one or a click that is not grounded ends the step. Only the
+        Calculator this step started is closed."""
+        res = new_result("MODE", 0)
+        summary = {"step": "calc_standard", "round_start": self.round_start,
+                   "ledger_start": self.ledger_total(), "mode_before": None, "nav_label": None,
+                   "clicks": [], "mode_after": None, "switched": False, "failure": None}
+        pid = None
+        try:
+            pid = self.launch()
+            ok, _ = self.wait_foreground(pid)
+            if not ok:
+                raise Abort("the Calculator did not reach the foreground maximized")
+            hwnd = self.current_hwnd()
+            self.app_hwnd = hwnd
+            time.sleep(self.args.settle)
+            summary["mode_before"] = self.calc_mode(hwnd)
+            if summary["mode_before"] == "standard":
+                summary["switched"] = True  # nothing to do, and nothing clicked
+                return summary
+            if summary["mode_before"] != "other":
+                raise Abort("the Calculator's mode cannot be read through UI Automation: no click")
+            snap, elements, obs = self.observe()
+            res["observations"].append(obs)
+            for label in (CALC_NAV_LABEL, CALC_STANDARD_LABEL):
+                if label == CALC_STANDARD_LABEL:  # the pane is open now: look again, then click
+                    snap, elements, obs = self.observe()
+                    res["observations"].append(obs)
+                else:
+                    summary["nav_label"] = label
+                self.flow = single_click_flow(label)
+                before = res["actions_requested"]
+                self.steps(res, snap, elements, hwnd, pid)
+                summary["clicks"].append({
+                    "label_is": "navigation" if label == CALC_NAV_LABEL else "standard",
+                    "requested": res["actions_requested"] - before,
+                    "status": (res["actions"] or [{}])[-1].get("status"),
+                    "input_delivered": (res["actions"] or [{}])[-1].get("input_delivered"),
+                    "grounded": (res.get("grounding") or [None])[-1]})
+                if res["failure"] is not None or res["grounding_wrong"]:
+                    raise Abort(f"calc-standard stops, no further click: {res['failure']}")
+            for _ in range(8):
+                summary["mode_after"] = self.calc_mode(hwnd)
+                if summary["mode_after"] == "standard":
+                    break
+                time.sleep(0.5)
+            summary["switched"] = summary["mode_after"] == "standard"
+            if not summary["switched"]:
+                summary["failure"] = "the Calculator is not in Standard mode after the clicks"
+        except Abort as error:
+            summary["failure"] = str(error)
+        finally:
+            if summary["clicks"]:
+                time.sleep(self.args.settle)  # let the Calculator save its mode before it closes
+            self.close(pid)  # only a process this step started
+            summary["identity"] = res.get("identity", [])
+            summary["live_requests"] = res["actions_requested"]
+            summary["ledger_end"] = self.ledger_total()
+            log("calc_standard", **summary)
+            with open(self.args.results, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
+        return summary
 
     def restore_click(self, res: dict, target: dict, snap: dict) -> dict:
         """One live click through the engine's gate and nothing else (no retry)."""
@@ -993,8 +1265,14 @@ class Protocol:
                 res["failure"] = f"step {res['steps']}: the typing target is not a confirmed input"
                 return
             out = None
+            ident = None
             for attempt in range(4):  # again only after STALE_SNAPSHOT (nothing delivered)
-                self.require_foreground()
+                fg = self.require_foreground()
+                # The element to click, found by UI Automation before any input and before the
+                # live request is spent: not exactly one match means no click at all.
+                ident = self.identify_before(res, fg, label, target)
+                if ident is None:
+                    return
                 self.spend_live()
                 res["actions_requested"] += 1
                 kind = "click" if text is None else "type"
@@ -1047,20 +1325,19 @@ class Protocol:
                 if err == "POLICY_DENIED":
                     self.engage_stop("POLICY_DENIED during the protocol")
                 return
-            # Independent grounding: which control is under the cursor (UI Automation).
-            if out.get("input_delivered") and self.flow.get("grounding"):
-                chain = uia_at_cursor()
-                hit = self.flow["grounding"](label, chain)
-                if hit is None:
-                    count, inside = uia_named_contains_cursor(self.app_hwnd, label)
-                    hit = None if count == 0 else inside > 0
-                    res.setdefault("grounding_by_rect", []).append([count, inside])
+            # Independent grounding: the control under the cursor is the element found before
+            # the click, by identity (RuntimeId, or AutomationId), whatever its name is now.
+            if out.get("input_delivered"):
+                chain = self.cursor_chain()
+                hit = identity_hit(ident, chain)
+                if not chain:
+                    res["grounding_chain_empty"] = res.get("grounding_chain_empty", 0) + 1
                 res.setdefault("grounding", []).append(hit)
-                if hit is False:
-                    res["grounding_wrong"] = res.get("grounding_wrong", 0) + 1
+                if not hit:
+                    res["grounding_wrong"] += 1
                 if self.args.debug_grounding:
                     log("grounding_chain", step=res["steps"], hit=hit,
-                        chain=[(aid, ctype, name == label) for aid, name, ctype in chain])
+                        chain=[(row["automation_id"], row["control_type"]) for row in chain])
             # Re-observe (the next step needs fresh targets) and check the visible text.
             passed = False
             for _ in range(4):
@@ -1090,6 +1367,11 @@ class Protocol:
                 vocab = self.flow["vocabulary"]
                 log("ocr_check_failed", run=res["run"], step=res["steps"],
                     matched=sum(1 for k in self.words(elements) if k in vocab))
+            if grounded is False:
+                # The click may have reached another control: no further input in this run.
+                res["failure"] = (f"step {res['steps']}: the control under the cursor is not the "
+                                  "element found before the click")
+                return
             if not passed or not indep_ok:
                 if not passed:
                     res["ocr_checks_failed"] += 1
@@ -1102,7 +1384,9 @@ class Protocol:
         failures = 0
         for n in range(self.args.first_run, self.args.first_run + self.args.runs):
             m0 = self.metrics()
+            ledger_start = self.ledger_total()
             res = self.run_once(n)
+            res["ledger_start"], res["ledger_end"] = ledger_start, self.ledger_total()
             m1 = self.metrics()
             res["engine_delivered_delta"] = m1["delivered_actions"] - m0["delivered_actions"]
             res["engine_rejected_delta"] = m1["rejected_actions"] - m0["rejected_actions"]
@@ -1128,7 +1412,14 @@ def main() -> int:
     p.add_argument("--first-run", type=int, default=1, help="number of the first run")
     p.add_argument("--max-live", type=int, default=0)
     p.add_argument("--ledger", type=Path, required=True,
-                   help="file holding the protocol's live request count (cap 400)")
+                   help="file holding the live request count; it only accumulates")
+    p.add_argument("--round-start", type=int, default=None,
+                   help="the ledger's value when the round began (required in run mode): the "
+                        "round may spend at most LIVE_CAP (400) requests beyond it")
+    p.add_argument("--calc-standard", action="store_true",
+                   help="switch the Calculator to Standard mode (two gated clicks with identity "
+                        "grounding, verified through UI Automation) and exit; run once before "
+                        "the E2E-02 series (--app calculator, run mode)")
     p.add_argument("--results", type=Path, required=True, help="JSONL file to append runs to")
     p.add_argument("--testapp-exe", default=str(HERE / "testapp" / "target" / "release" / "ommatix-testapp.exe"))
     p.add_argument("--session-id", default="s4r2")
@@ -1159,6 +1450,18 @@ def main() -> int:
         log("abort", reason="the stop file exists before the run")
         return 2
     live = args.mode == "run"
+    if args.calc_standard and (args.app != "calculator" or not live):
+        log("abort", reason="--calc-standard needs --app calculator and run mode")
+        return 2
+    if args.calc_standard:
+        args.max_live = min(args.max_live, CALC_STANDARD_MAX_LIVE)
+    ledger_now = read_ledger(args.ledger)
+    problem = round_problem(live, args.round_start, ledger_now)
+    if problem:
+        log("abort", reason=problem)
+        return 2
+    if args.round_start is None:
+        args.round_start = ledger_now
     if live and not config.get("safety", {}).get("actuation_enabled"):
         log("abort", reason="run mode needs the live configuration")
         return 2
@@ -1171,14 +1474,18 @@ def main() -> int:
     flow = testapp_flow(args.focus_click) if args.app == "testapp" else FLOWS[args.app]()
     log("start", app=args.app, mode=args.mode, runs=args.runs, live_input=live,
         focus_click=args.focus_click,
-        config_sha256=hashlib.sha256(raw).hexdigest(), max_live=args.max_live)
+        config_sha256=hashlib.sha256(raw).hexdigest(), max_live=args.max_live,
+        round_start=args.round_start, ledger_start=ledger_now, round_cap=LIVE_CAP)
     srv = s3.Server(argv)
     proto = Protocol(args, srv, stop_file, flow, args.ledger)
     code = 0
     try:
         m = proto.metrics()
         log("metrics", mode=m.get("mode"), models_loaded=m.get("models_loaded"))
-        proto.run()
+        if args.calc_standard:
+            code = 0 if proto.calc_standard()["switched"] else 1
+        else:
+            proto.run()
     except Abort as e:
         log("abort", reason=str(e))
         code = 1
@@ -1195,7 +1502,9 @@ def main() -> int:
                 log("stderr", line=line[:300])
         ok = sum(r["success"] for r in proto.results)
         log("end", server_exit=exit_code, runs=len(proto.results), successes=ok,
-            live_requests=proto.live_sent, ledger_total=proto.ledger_total())
+            live_requests=proto.live_sent, ledger_start=ledger_now,
+            ledger_end=proto.ledger_total(), round_start=args.round_start,
+            round_live_requests=proto.round_live(), ledger_total=proto.ledger_total())
     return code
 
 
