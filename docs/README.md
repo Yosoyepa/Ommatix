@@ -7,6 +7,7 @@
 | Decision records / Decisiones (ADR) | [adr/](adr/README.md) | resumen y texto original en cada ADR |
 | Diagrams / Diagramas | [diagrams/](diagrams/README.md) | fuentes en [thesis/diagramas/](thesis/diagramas/README.md) |
 | Glossary / Glosario | [glossary.md](glossary.md) | [glossary.md](glossary.md) |
+| Status and handoff / Estado y relevo | — | [handoff.md](handoff.md) |
 | Reviews / Revisiones | [reviews/](reviews/2026-10-14-mvp-review.md) | resumen en cada revisión |
 
 The dossier in `thesis/` is the project's specification; the other documents summarise it in

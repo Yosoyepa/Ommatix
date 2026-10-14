@@ -88,7 +88,8 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   `ommatix-domain`; pruebas del oráculo portadas a Rust. Se conectan al pipeline en
   ejecución en S2–S3
 - [ ] **S2, identidad, caché y contrato:** registro temporal con tombstones, caché de íconos,
-  contrato MCP con `rmcp`, dry run honesto (UT-27..43, CT)
+  contrato MCP con `rmcp`, dry run honesto (UT-27..43, CT). Hecho: el caché de íconos y el
+  registro de identidad en `ommatix-domain` (UT-27..43); pendiente: el contrato MCP
 - [ ] **S3, adaptadores reales y bucle de acción en Windows 11:** DXGI, ONNX Runtime,
   `SendInput`, política, parada y verificación del efecto; se retiran los adaptadores de
   macOS y X11 del arranque

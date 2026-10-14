@@ -88,6 +88,12 @@ impl BBox {
         self.intersection_area(child) / child.area()
     }
 
+    /// Intersection over union.
+    pub fn iou(&self, other: &Self) -> f64 {
+        let inter = self.intersection_area(other);
+        inter / (self.area() + other.area() - inter)
+    }
+
     /// Smallest box containing both.
     pub fn union(&self, other: &Self) -> Self {
         Self {

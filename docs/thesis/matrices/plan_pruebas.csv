@@ -25,23 +25,23 @@ UT-23,Asociación ambigua,Empates retornan ausencia de label.,OR-28,IMPLEMENTADO
 UT-24,Texto huérfano,No actuar sobre texto sin evidencia positiva.,OR-41,IMPLEMENTADO_EN_RUST_S1
 UT-25,Value/placeholder,Conservar unknown sin inferir valor confirmado.,PENDIENTE,IMPLEMENTADO_EN_RUST_S1
 UT-26,Ocultos/deshabilitados,No dar permiso a elementos tapados o disabled.,OR-45..OR-46,IMPLEMENTADO_EN_RUST_S1
-UT-27,dHash defectuoso,Reproducir contraejemplo con distancia 32.,OR-29,PENDIENTE_EN_RUNTIME_RUST
-UT-28,Inversión ideal,Descriptor enmascarado conserva match.,OR-30,PENDIENTE_EN_RUNTIME_RUST
-UT-29,Soporte vacío,Rechazar crops planos/soporte insuficiente.,OR-31..OR-33,PENDIENTE_EN_RUNTIME_RUST
-UT-30,Formato del descriptor,Validar shape y rango uint8.,OR-32,PENDIENTE_EN_RUNTIME_RUST
-UT-31,Caché contextual,Contexto/versión y margen; no autoconfirmar desconocidos.,PENDIENTE,PENDIENTE_EN_RUNTIME_RUST
-UT-32,Frontera de celda,Mostrar que FNV cuantizado cambia a un píxel.,OR-34,PENDIENTE_EN_RUNTIME_RUST
-UT-33,Colisiones,Mostrar semilla duplicada y probabilidad en espacio reducido.,OR-35..OR-36,PENDIENTE_EN_RUNTIME_RUST
-UT-34,Registro independiente de coordenadas,Actualizar bbox sin crear ID nuevo cuando la asociación se conoce.,OR-37,PENDIENTE_EN_RUNTIME_RUST
-UT-35,Sin reutilización,No reciclar ID tras retirada.,OR-38,PENDIENTE_EN_RUNTIME_RUST
-UT-36,Matching uno-a-uno,No asociar dos candidatos a un track; abstenerse si ambiguo.,PENDIENTE,PENDIENTE_EN_RUNTIME_RUST
-UT-37,Virtualización,Retirar identidad al cambiar contenido discriminante de fila.,PENDIENTE,PENDIENTE_EN_RUNTIME_RUST
-UT-38,Snapshot obsoleto,Rechazar aunque siga existiendo el ID.,OR-39,PENDIENTE_EN_RUNTIME_RUST
-UT-39,Revisión obsoleta,Rechazar elemento modificado.,OR-40,PENDIENTE_EN_RUNTIME_RUST
-UT-40,Sesión distinta,Rechazar referencias de otra sesión.,OR-42,PENDIENTE_EN_RUNTIME_RUST
-UT-41,Target ausente,Rechazar ID retirado/no existente.,OR-47,PENDIENTE_EN_RUNTIME_RUST
-UT-42,Simulación honesta,Nunca reportar input entregado desde un mock.,OR-43,PENDIENTE_EN_RUNTIME_RUST
-UT-43,Sin actuador,Rechazar modo real si no existe adaptador.,OR-44,PENDIENTE_EN_RUNTIME_RUST
+UT-27,dHash defectuoso,Reproducir contraejemplo con distancia 32.,OR-29,IMPLEMENTADO_EN_RUST_S2
+UT-28,Inversión ideal,Descriptor enmascarado conserva match.,OR-30,IMPLEMENTADO_EN_RUST_S2
+UT-29,Soporte vacío,Rechazar crops planos/soporte insuficiente.,OR-31..OR-33,IMPLEMENTADO_EN_RUST_S2
+UT-30,Formato del descriptor,Validar shape y rango uint8.,OR-32,IMPLEMENTADO_EN_RUST_S2
+UT-31,Caché contextual,Contexto/versión y margen; no autoconfirmar desconocidos.,PENDIENTE,IMPLEMENTADO_EN_RUST_S2
+UT-32,Frontera de celda,Mostrar que FNV cuantizado cambia a un píxel.,OR-34,IMPLEMENTADO_EN_RUST_S2
+UT-33,Colisiones,Mostrar semilla duplicada y probabilidad en espacio reducido.,OR-35..OR-36,IMPLEMENTADO_EN_RUST_S2
+UT-34,Registro independiente de coordenadas,Actualizar bbox sin crear ID nuevo cuando la asociación se conoce.,OR-37,IMPLEMENTADO_EN_RUST_S2
+UT-35,Sin reutilización,No reciclar ID tras retirada.,OR-38,IMPLEMENTADO_EN_RUST_S2
+UT-36,Matching uno-a-uno,No asociar dos candidatos a un track; abstenerse si ambiguo.,PENDIENTE,IMPLEMENTADO_EN_RUST_S2
+UT-37,Virtualización,Retirar identidad al cambiar contenido discriminante de fila.,PENDIENTE,IMPLEMENTADO_EN_RUST_S2
+UT-38,Snapshot obsoleto,Rechazar aunque siga existiendo el ID.,OR-39,IMPLEMENTADO_EN_RUST_S2
+UT-39,Revisión obsoleta,Rechazar elemento modificado.,OR-40,IMPLEMENTADO_EN_RUST_S2
+UT-40,Sesión distinta,Rechazar referencias de otra sesión.,OR-42,IMPLEMENTADO_EN_RUST_S2
+UT-41,Target ausente,Rechazar ID retirado/no existente.,OR-47,IMPLEMENTADO_EN_RUST_S2
+UT-42,Simulación honesta,Nunca reportar input entregado desde un mock.,OR-43,IMPLEMENTADO_EN_RUST_S2
+UT-43,Sin actuador,Rechazar modo real si no existe adaptador.,OR-44,IMPLEMENTADO_EN_RUST_S2
 IT-01,Captura DXGI,Frames reales/stride/rotación/pérdida de acceso,NO_EJECUTADO,PENDIENTE_PRODUCTO
 IT-02,Modelos,Detector/OCR reales y deshacer letterbox,NO_EJECUTADO,PENDIENTE_PRODUCTO
 IT-03,Actuador,Conteo SendInput y permisos/foco,NO_EJECUTADO,PENDIENTE_PRODUCTO

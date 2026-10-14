@@ -82,7 +82,8 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
   text ownership, staging and commit (UT-01..26, BDD-01..10) in `ommatix-domain`; oracle
   tests ported to Rust. Wired into the running pipeline in S2–S3
 - [ ] **S2, identity, cache and contract:** temporal registry with tombstones, icon cache,
-  MCP contract through `rmcp`, honest dry run (UT-27..43, CT)
+  MCP contract through `rmcp`, honest dry run (UT-27..43, CT). Done so far: the icon cache
+  and the identity registry in `ommatix-domain` (UT-27..43); pending: the MCP contract
 - [ ] **S3, real adapters and action loop on Windows 11:** DXGI, ONNX Runtime, `SendInput`,
   policy, stop and effect verification; the bootstrap's macOS and X11 adapters are retired
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
