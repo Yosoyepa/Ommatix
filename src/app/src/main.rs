@@ -79,6 +79,7 @@ fn run_demo(args: &DemoArgs) -> Result<()> {
         wired.sim.as_ref(),
         &wired.summary,
         args.observations,
+        args.timings,
     );
     Ok(())
 }

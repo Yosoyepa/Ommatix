@@ -17,6 +17,14 @@ flamegraph*.svg
 *.raw
 *.rgba
 
+# --- Model weights & runtimes (operator's, outside the repository: AGENTS.md rule 7) ---
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.dll
+*.zip
+
 # --- Logs & local environment ---
 *.log
 # Evidence of the thesis checks is versioned (docs/thesis/README.md)

@@ -1,0 +1,28 @@
+# S0 spike: operator configuration for the OmniParser icon_detect_v3 detector (ONNX, CPU)
+# and Windows OCR (es-ES). See docs/thesis/S0_RESULTADOS.md.
+#
+# Copy this file to %LOCALAPPDATA%\Ommatix\ommatix.s0.toml. Relative paths resolve against
+# the configuration file, so that directory must hold:
+#   models\manifest.json                                    (docs/thesis/plantillas/model_manifest.s0.json)
+#   models\omniparser-icon-detect-v3\icon_detect_v3.onnx    (tools/s0/export_omniparser_v3.py)
+#   runtime\onnxruntime-1.28.0\lib\onnxruntime.dll          (onnxruntime-win-x64-1.28.0.zip)
+# Nothing here is in the repository: no weights, no runtime, no captures. Every file is
+# pinned by SHA-256 and refused on mismatch. Run it from this repository's root:
+#   cargo run --release -p ommatix --features dxgi,onnx,winrt-ocr -- demo --source dxgi ^
+#     --config %LOCALAPPDATA%\Ommatix\ommatix.s0.toml --session-id s0 --observations 20 --timings
+# Input stays dry run: [safety] keeps the template's deny-everything defaults.
+
+[engine]
+mode = "dry_run"
+
+[safety]
+actuation_enabled = false
+allowed_applications = []
+
+[models]
+detector_manifest = "models/manifest.json"
+detector_manifest_sha256 = "8e1c7ad6ffbab6ba543b34774accd67f434a4ac71342afc12f36f7031b7014f1"
+onnxruntime_path = "runtime/onnxruntime-1.28.0/lib/onnxruntime.dll"
+onnxruntime_sha256 = "18370c375f07357fa5874344a9d9ac17e6b6fe1eb18b1dd209d79483b4470257"
+ocr = "winrt"
+ocr_language = "es-ES"

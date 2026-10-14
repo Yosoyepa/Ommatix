@@ -1,0 +1,21 @@
+{
+  "status": "MEDIDO_S0",
+  "os_build": "Windows 11 Pro 26H2, build 26300.9550",
+  "cpu_model": "AMD Ryzen 7 5700X 8-Core Processor",
+  "ram_gib": 32,
+  "gpu_model": "AMD Radeon RX 6700 XT",
+  "vram_gib": 12,
+  "driver": "AMD 32.0.21045.5002",
+  "power_plan": "Alto rendimiento",
+  "resolution": [
+    1920,
+    1080
+  ],
+  "dpi_percent": [
+    100
+  ],
+  "runtime_commit": "feat/s0-omniparser-v3 sobre eee5c85 (rustc 1.99.0, release)",
+  "onnx_runtime": "1.28.0 (da9b5e364c465de65c49d91e696cd6485270757f)",
+  "execution_provider": "CPUExecutionProvider, 1 hilo intra-op",
+  "mcp_profile": "2026-07-28"
+}
