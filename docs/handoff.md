@@ -24,8 +24,9 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | S4, protocolo de aceptación reducido (rama `feat/s4-reduced-e2e`): 20 corridas E2E puntuadas sólo con clics, con `tools/s4/e2e_driver.py` y la aplicación de prueba `tools/s4/testapp` (`eframe`/`egui`, crate independiente). Aplicación de prueba, 9 de 10; Bloc de notas (menú `Editar`), 10 de 10; Calculadora no puntuada. 0 falsos éxitos según el título y el anclaje por UI Automation. El actuador `SendInput` atestigua la aplicación hospedada en vez de `ApplicationFrameHost.exe`. E2E-01 y PERF-02 en parte. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) (CHANGELOG 1.0.13) y revisión en [`reviews/2026-10-14-s4-reduced-acceptance.md`](reviews/2026-10-14-s4-reduced-acceptance.md) | Abierto |
 | — | Evidencia de UI Automation (rama `feat/uia-evidence`, ADR-0017): puerto `AccessibilityProvider`, adaptador `ommatix-adapter-accessibility` (feature `uia`, crate seguro `uiautomation`, sin `unsafe` propio), `[models] accessibility = "none" \| "uia"`. Se fusiona con la visión sin sustituirla: rol, nombre (`label_source: accessibility`) y caja del elemento ganan; las cajas visuales que son el mismo control se absorben; una caja centrada sobre otro control accesible pierde la confirmación (hallazgo 2 de S4); `type` permitido sobre una entrada confirmada por accesibilidad. Etapa `accessibility` en `_meta`. UT-44 y BDD-33 (CHANGELOG 1.0.14) | Abierto |
 | — | S4, segunda ronda con accesibilidad (rama `feat/uia-evidence`, #11): sondeos sin entrada que confirman por nombre de UI Automation los controles de la aplicación de prueba (`Campo de texto` como `input`), las teclas de la Calculadora y `Editar`; 36 entregas reales, 36 de 36 sobre el control pedido; la escritura de E2E-01 pierde el texto en 3 de 4 intentos (`type` verifica el foco a nivel de ventana: hallazgo abierto); serie puntuada 0 de 3; E2E-02 y E2E-03 no ejecutadas; el archivo de parada queda creado para decisión del responsable. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Segunda ronda con accesibilidad» (CHANGELOG 1.0.15) y revisión en [`reviews/2026-10-14-s4-uia-acceptance.md`](reviews/2026-10-14-s4-uia-acceptance.md) | Abierto |
+| — | S4, tercera ronda (rama `feat/uia-evidence`, #11): `type` en dos fases (ADR-0018) en vivo. E2E-01, 10 de 10 corridas puntuadas, con la escritura verificada por el título y 0 teclas perdidas; E2E-02, 0 de 3 (no hay «Borrar» tras «=» en la Calculadora); E2E-03 no puntuada (dos pilotos sin menú fiable). El cliente activa la ventana principal con `AttachThreadInput` (`AppActivate` no llevó la aplicación al primer plano). Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Tercera ronda» (CHANGELOG 1.0.17) y revisión en [`reviews/2026-10-14-s4-third-round.md`](reviews/2026-10-14-s4-third-round.md) | Abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.15)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.17)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
@@ -35,6 +36,12 @@ con clics. No son las 450 del protocolo (EV-02), y RF-18, RNF-03 y RNF-05 siguen
 La segunda ronda (1.0.15) confirma por nombre de accesibilidad los controles de E2E-01 y E2E-02
 en sondeos sin entrada, pero la escritura de E2E-01 falló en sus corridas puntuadas (0 de 3), la
 serie se detuvo con el archivo de parada creado y E2E-02 y E2E-03 no se han ejecutado en vivo.
+La tercera ronda (1.0.17) ejecuta `type` en dos fases en vivo: E2E-01 pasa 10 de 10 corridas
+puntuadas con la escritura verificada por el título, sin teclas perdidas. E2E-02 no puede cumplir
+su paso final tal como está especificado (no hay un botón «Borrar» tras «Es igual a» en la
+Calculadora), así que su serie se detuvo tras tres fallos, y E2E-03 no se puntúa tras dos
+pilotos que no produjeron de forma fiable el menú «Editar». El archivo de parada lo creó el
+cliente y lo retira el responsable.
 
 ## Cómo está el código
 
@@ -198,9 +205,12 @@ serie se detuvo con el archivo de parada creado y E2E-02 y E2E-03 no se han ejec
      dobles. Falta medir su coste en la máquina de referencia (etapa `accessibility` de
      `_meta`; el recorrido está acotado a 2 000 elementos, profundidad 32 y 250 ms, valores
      `[P]` por calibrar), y decidir si se mantiene el IoU 0,5 de la fusión. La segunda ronda
-     (1.0.15) deja abiertos dos puntos: que `type` verifique el foco del campo (ADR nueva; hoy
-     pierde teclas en 3 de 4 intentos) y reanudar la serie de E2E-01, la Calculadora y el Bloc de
-     notas, sólo cuando el responsable retire `stop.flag`. La lectura manual del árbol de la aplicación de prueba es la prueba `#[ignore]`
+     (1.0.15) dejó abierto que `type` verificara el foco del campo: ADR-0018 lo resuelve en
+     código, probado con dobles y, en la tercera ronda (1.0.17), en vivo sobre la aplicación de
+     prueba (10 de 10 corridas, sin teclas perdidas). Quedan abiertos: la lectura parcial de
+     accesibilidad en el motor, el paso «Borrar» de la Calculadora (decisión del responsable), el
+     menú del Bloc de notas y el origen de los eventos de entrada sin acción. Reanudar sólo
+     cuando el responsable retire `stop.flag`. La lectura manual del árbol de la aplicación de prueba es la prueba `#[ignore]`
      `reads_the_tree_of_the_s4_test_application` del adaptador (arranca
      `tools/s4/testapp`, lee sólo ese proceso, imprime recuentos por rol y cierra el proceso
      que lanzó; no envía entrada).

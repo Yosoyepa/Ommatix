@@ -108,9 +108,15 @@ unless the agent and a local policy both allow them. More in the
   by accessibility name in dry-run probes, with 36 real deliveries, all on the requested
   control. Its scored typing runs failed: `type` dropped the keys that arrived in the frame
   of its focusing click, because its focus check was window-level. ADR-0018 fixes that in
-  code (two-phase `type`, tested on doubles; a supervised live run is still owner-only). The
-  series stopped at its three-failure rule, so the Calculator and Notepad flows did not run
-  live.
+  code (two-phase `type`, tested on doubles). The second round's scored series stopped at its
+  three-failure rule, so the Calculator and Notepad flows did not run live. A third round
+  ([CHANGELOG 1.0.17](docs/thesis/CHANGELOG.md)) ran `type` live in its two phases: the test
+  application passed 10 of 10 scored runs, with the typed text confirmed by the window title in
+  every run and no false success or lost key. The Calculator's scored flow stopped at 0 of 3,
+  because its final "Borrar" key is not exposed after "=" in scientific mode; the Notepad pilots
+  did not show the Edit menu reliably and were not scored. Two findings remain open: a partial
+  accessibility read is not re-read on incremental observations, and the client's Notepad menu
+  step is neither verified nor cleaned up after a failure.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML,
@@ -145,8 +151,9 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
   remaining supervised runs
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
   and the acceptance report. A reduced, click-only protocol ran (20 scored runs in two
-  applications; E2E-01 and PERF-02 in part; the second round with UI Automation stopped at
-  its typing runs)
+  applications; E2E-01 and PERF-02 in part; with UI Automation and two-phase `type`, the test
+  application passed 10 of 10 typing runs, and the Calculator and Notepad flows did not
+  complete)
 
 ## Quick start
 

@@ -118,9 +118,17 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   entregas reales, todas sobre el control pedido. Sus corridas puntuadas de escritura
   fallaron: `type` perdía las teclas que llegaban en el fotograma de su clic de enfoque,
   porque la comprobación de foco era a nivel de ventana. La ADR-0018 lo corrige en código
-  (`type` en dos fases, probado con dobles; una corrida viva supervisada sigue siendo del
-  responsable). La serie se detuvo por la regla de tres fallos seguidos, así que los flujos
-  de la Calculadora y del Bloc de notas no se ejecutaron en vivo.
+  (`type` en dos fases, probado con dobles). La serie puntuada de la segunda ronda se detuvo
+  por la regla de tres fallos seguidos, así que los flujos de la Calculadora y del Bloc de
+  notas no se ejecutaron en vivo. Una tercera ronda ([CHANGELOG 1.0.17](docs/thesis/CHANGELOG.md))
+  ejecutó `type` en dos fases en vivo: la aplicación de prueba pasó 10 de 10 corridas
+  puntuadas, con el texto confirmado por el título de la ventana en todas, sin falsos éxitos
+  ni teclas perdidas. El flujo puntuado de la Calculadora se detuvo en 0 de 3, porque su tecla
+  final «Borrar» no aparece tras «=» en su modo científico; los pilotos del Bloc de notas no
+  mostraron el menú «Editar» de forma fiable y no se puntuaron. Quedan dos hallazgos abiertos:
+  una lectura parcial de accesibilidad que no se vuelve a leer en observaciones incrementales,
+  y el paso del menú del Bloc de notas en el cliente, que no se verifica ni se limpia tras un
+  fallo.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
@@ -157,8 +165,9 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   corridas supervisadas
 - [ ] **S4, aceptación:** 450 corridas de extremo a extremo en aplicaciones controladas,
   benchmarks, soak e informe de aceptación. Se ejecutó un protocolo reducido sólo con clics
-  (20 corridas puntuadas en dos aplicaciones; E2E-01 y PERF-02 en parte; la segunda ronda con
-  accesibilidad se detuvo en sus corridas de escritura)
+  (20 corridas puntuadas en dos aplicaciones; E2E-01 y PERF-02 en parte; con UI Automation y
+  `type` en dos fases, la aplicación de prueba pasó 10 de 10 corridas de escritura, y la
+  Calculadora y el Bloc de notas no se completaron)
 
 ## Inicio rápido
 
