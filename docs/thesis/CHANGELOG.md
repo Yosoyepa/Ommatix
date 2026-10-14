@@ -1,5 +1,17 @@
 # Historial documental
 
+## 1.0.27 — 2026-10-14: S4, séptima ronda (continuación; rama `docs/s4-seventh-round-continuation`): corrida 10 de E2E-03 aprobada y serie completa de diez; `--calc-standard` no alcanzó el modo Estándar y E2E-02 no se ejecutó
+
+No cambia ningún requisito, algoritmo, contrato, escenario, código de Rust ni del cliente (`tools/s4/e2e_driver.py`, SHA-256 `60486d87…c214a`, comprobado antes de cada invocación en vivo). Se ejecutaron en vivo la corrida 10 de E2E-03 sobre el Bloc de notas del responsable (2 solicitudes reales, aprobada) y `--calc-standard` sobre la Calculadora (1 solicitud, sin modo Estándar). El cuaderno pasó de 423 a 426; la ronda lleva 25 de 150 solicitudes. El detalle está en la sección «Séptima ronda (continuación)» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), y los hallazgos, en la [revisión de la séptima ronda](../reviews/2026-10-14-s4-seventh-round.md).
+
+- **E2E-03, serie completa:** diez corridas puntuadas de diez, todas exitosas; 22 solicitudes reales (20 entregadas, todas `effect_observed` y verificadas, y 2 rechazadas antes de la entrega por `STALE_SNAPSHOT`); 0 falsos éxitos, 0 anclajes erróneos y 0 `indeterminate`.
+- **`--calc-standard`:** el clic sobre «Abrir navegación» se entregó y quedó anclado; «Estándar» no apareció en UI Automation en unos 1,5 s, y el paso se detuvo sin segundo clic. Causa no verificada.
+- **E2E-02:** no se ejecutó (ni piloto ni serie), según la regla de la autorización.
+- **Hallazgos** (revisión): modo Estándar no alcanzado (abierto, decisión del responsable); unos 165 s de espera de primer plano sin registro en el resumen (abierto); una línea del registro no UTF-8 (abierto, sin efecto en las puntuaciones).
+- **Matrices:** sin cambio. E2E-02 y E2E-03 siguen con los identificadores del plan de pruebas (decisión del responsable).
+- **Escritorio y cuaderno:** cuaderno 426; `stop.flag` ausente y nunca creado en esta continuación; sin procesos del cliente; ventanas del propietario minimizadas en su colocación.
+- **Pruebas:** sin cambios de código; se repitieron las del 1.0.26 (113 de `tools/s4`, 351 de Rust, 48 del oráculo y 211 comprobaciones del paquete).
+
 ## 1.0.26 — 2026-10-14: S4, séptima ronda (rama `docs/s4-seventh-round`): piloto aprobado y nueve de diez corridas puntuadas de E2E-03; el cupo cortó la serie y E2E-02 no se ejecutó
 
 No cambia ningún requisito, algoritmo, contrato, escenario, código de Rust ni del cliente (`tools/s4/e2e_driver.py`, SHA-256 `60486d87…c214a`, comprobado antes de cada invocación en vivo). Se ejecutó en vivo, sobre el Bloc de notas del responsable, el piloto de E2E-03 (excluido) y la serie puntuada: 22 solicitudes reales (cuaderno 401 → 423), todas sobre «Editar». La serie completó nueve corridas de diez: todas exitosas, con 0 falsos éxitos y 0 anclajes erróneos. La décima no se inició: el cupo de la serie (20 solicitudes) no reservaba los reintentos tras `STALE_SNAPSHOT`, y el cliente creó `stop.flag` antes de enviar la siguiente solicitud. Como el archivo sigue presente, no se ejecutaron `--calc-standard` ni E2E-02. El detalle está en la sección «Séptima ronda» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md) y los hallazgos, en la [revisión de la séptima ronda](../reviews/2026-10-14-s4-seventh-round.md).

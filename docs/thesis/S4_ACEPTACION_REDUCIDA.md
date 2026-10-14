@@ -936,3 +936,119 @@ Sin cambio. `docs/thesis/matrices/plan_pruebas.csv` no se modifica: E2E-03 tiene
 ### 9. Ejecución
 
 El cliente se usó sin cambios y sin envoltorios que envíen entrada. Cada invocación en vivo comprobó antes el SHA-256 del cliente. Las únicas entradas fueron las 22 solicitudes de `execute_action` sobre «Editar» en el Bloc de notas (`MenuItem`, `AutomationId` `Edit`); no se escribió nada en el Bloc de notas ni se usó ninguna otra aplicación. Guardar y restaurar la colocación de las ventanas es gestión de ventanas, sin entradas, y las lecturas de UI Automation son de sólo lectura.
+
+## Séptima ronda (continuación): corrida 10 de E2E-03 y `--calc-standard`; E2E-02 no se ejecutó
+
+**Fecha:** 14 de octubre de 2026. Rama `docs/s4-seventh-round-continuation`, desde `main` (`885cda7`, fusión de #16). No cambia ningún código: ni el cliente ni las crates de Rust. Se usaron el cliente comprometido (`tools/s4/e2e_driver.py`, SHA-256 `60486d87…c214a`, comprobado antes de cada invocación en vivo), el binario de `main` (`target/release/ommatix.exe`, SHA-256 `11a3d792…aca9da`, el mismo de la séptima ronda) y la configuración `s4r7-live.toml` (SHA-256 `b6e9e8e8…e74c`, sin cambios). Autorización del responsable del 14 de octubre de 2026: la corrida 10 de E2E-03 en su propia invocación (`--runs 1 --first-run 10 --max-live 6`); `--calc-standard` una sola vez, con un máximo de 4 solicitudes; E2E-02 sólo si el modo Estándar se alcanzaba de forma segura (un piloto con `--max-live 10` y una serie con `--max-live 75`); como máximo 150 solicitudes en la ronda, con `--round-start 401`; el responsable no usó el equipo.
+
+**Resultado:** la corrida 10 de E2E-03 pasó. La serie puntuada de E2E-03 queda completa: diez corridas puntuadas, todas exitosas, con 0 falsos éxitos y 0 anclajes erróneos. `--calc-standard` **no alcanzó el modo Estándar**: el clic sobre «Abrir navegación» se entregó y quedó anclado por identidad, pero «Estándar» no apareció en UI Automation y el paso se detuvo sin segundo clic. Por eso E2E-02 no se ejecutó, ni piloto ni serie. No queda ningún proceso del cliente, `stop.flag` no existe y el cuaderno está en 426 (25 de 150 solicitudes de la ronda).
+
+### 1. Verificación previa a la entrada en vivo
+
+Antes de la entrada en vivo se repitieron las comprobaciones de la séptima ronda sobre `885cda7`, sin cambios de código:
+
+- `cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia`: ya al día; el binario conserva el SHA-256 `11a3d792…aca9da`.
+- `cargo fmt --all --check` y `cargo clippy --workspace --all-targets -- -D warnings`: correctos.
+- `cargo test --workspace`: 351 pasadas, 0 fallidas, 1 ignorada.
+- `python -m unittest discover -s tools/s4 -p "test_*.py"`: 113 pruebas correctas.
+- Desde `docs/thesis`: `referencia_ejecutable/run_tests.py`, 48 de 48 correctas; `validar_paquete.py`, 211 comprobaciones y 0 fallidas. Cuatro archivos de `referencia_ejecutable/resultados/` cambiaron sólo en la marca de tiempo, las cadenas de Python y de plataforma, una duración y el fin de línea; se restauraron con `git restore`.
+- `stop.flag`: lo creó el cliente en la primera parte de la ronda. El responsable autorizó retirarlo para esta ronda y se retiró antes de la corrida 10; la copia queda como `stop.flag.r7-removed-by-coordinator-with-owner-authorization`. El archivo no existía al empezar esta continuación.
+- Antes de cada invocación en vivo se comprobaron por SHA-256 el cliente, la configuración, el binario y el manifiesto float16 (`AppData\Local\Ommatix\models\manifest.rnf05.json`, `f8b04be9…fe47`), y además el cuaderno (423 al empezar), la ausencia de `stop.flag` y la de procesos `ommatix.exe`, `CalculatorApp.exe` y `ommatix-testapp.exe`.
+- Escritorio: dos ventanas del Bloc de notas (procesos 8960 y 23164), ambas minimizadas (`showCmd` 2). Su colocación se guardó antes de la corrida con `notepad_placement.ps1`, un auxiliar fuera del repositorio que sólo lee y restaura posiciones, y coincidió con el estado guardado en la séptima ronda.
+
+### 2. Ejecución en vivo
+
+| Paso | Invocación (resumen) | Solicitudes | Resultado |
+|---|---|---|---|
+| E2E-03, corrida 10 | `--app notepad --mode run --runs 1 --first-run 10 --max-live 6 --round-start 401` | 2 | Aprobada |
+| `--calc-standard` | `--app calculator --mode run --calc-standard --max-live 4 --round-start 401` | 1 | No alcanzó Estándar; detenido en el paso «Estándar», sin segundo clic |
+| E2E-02, piloto y serie | no se ejecutaron | 0 | Sin modo Estándar (regla de la autorización) |
+
+Cuaderno: 423 → 426, es decir, 3 solicitudes reales (2 de la corrida 10 y 1 de `--calc-standard`). La ronda lleva 25 de 150. El cliente no creó `stop.flag` en esta continuación.
+
+### 3. Resultados
+
+#### 3.1 E2E-03, corrida 10 (aprobada)
+
+- Dos clics entregados, ambos `effect_observed` y verificados por el motor. Identidad `ok` en los dos; descenso por la isla `ok` en los dos (profundidad 3, `MenuItem`, `AutomationId` `Edit`, 20 elementos visitados en cada uno). `grounding_wrong` 0, falsos éxitos 0, rechazos 0 y reintentos 0.
+- Menú «Editar» (UI Automation, comprobación del sistema operativo): Colapsado al empezar; las dos comprobaciones pasaron (2 de 2), con el menú Expandido tras el primer clic y Colapsado tras el segundo. No hizo falta ningún clic de restauración.
+- Inactividad del propietario al empezar: 295,6 s. Duración de la corrida: 9,2 s.
+- La ventana usada se minimizó al terminar, como hace el cliente con una ventana que estaba minimizada, y la colocación coincide con la guardada.
+
+#### 3.2 E2E-03, serie puntuada completa (corridas 1 a 10)
+
+| Corrida | Solicitudes | Entregadas | Rechazadas (`STALE_SNAPSHOT`) | Éxito |
+|---|---|---|---|---|
+| 1 | 2 | 2 | 0 | sí |
+| 2 | 3 | 2 | 1 (paso 2; el reintento se entregó) | sí |
+| 3 a 7 | 2 cada una | 2 cada una | 0 | sí |
+| 8 | 3 | 2 | 1 (paso 2; el reintento se entregó) | sí |
+| 9 | 2 | 2 | 0 | sí |
+| 10 | 2 | 2 | 0 | sí |
+
+Totales: 10 corridas puntuadas y 10 exitosas. 22 solicitudes reales (20 de las corridas 1 a 9 y 2 de la corrida 10), 20 entregadas (todas `effect_observed` y verificadas) y 2 rechazadas antes de la entrega (`STALE_SNAPSHOT` en las corridas 2 y 8; el motor revalida la captura antes de cada entrega). `indeterminate`: 0. Restauraciones del menú: 0. Falsos éxitos: 0. `grounding_wrong`: 0. Comprobaciones del sistema operativo: 20 de 20. Identidad: 22 de 22 intentos hallaron «Editar» como único candidato con su `RuntimeId`. Descenso: 20 de 20 `ok`, profundidad 3, `MenuItem`, `AutomationId` `Edit`. Clics anclados: 20 de 20. Menú Colapsado al empezar en las diez corridas.
+
+#### 3.3 Latencias (`_meta`)
+
+| Medida (ms) | Corrida 10 (2 clics): mediana / p95 | Serie completa (20 clics entregados): mediana / p95 |
+|---|---|---|
+| `action_total` | 85,8 / 87,1 | 86,0 / 95,0 |
+| `action_verification` | 62,8 / 67,5 | 67,5 / 69,0 |
+| `action_freshness` | 20,6 / 26,2 | 16,2 / 25,8 |
+| `action_delivery` | 2,2 / 2,6 | 2,2 / 4,7 |
+| `action_gate` | 0,3 / 0,3 | 0,2 / 0,4 |
+| rtt del cliente | 86,1 / 87,4 | 86,2 / 95,2 |
+
+Observaciones (corrida 10: 3 observaciones; serie: 32; mediana / p95): `total` 141,6 / 148,8 y 130,2 / 148,2; `detect` 84,7 / 85,8 y 83,9 / 87,0; `recognize` 47,5 / 48,2 y 44,3 / 56,1; `accessibility` 122,4 / 141,8 y 115,7 / 140,0; `capture` 5,9 / 18,4 y 10,9 / 23,7; `plan` 2,0 / 2,0 y 2,0 / 2,8; `track` 0,7 / 0,7 y 0,7 / 1,2; `fuse` 0,1 / 0,1 y 0,1 / 0,1. Duración de las diez corridas: mediana 8,9 s, p95 11,1 s. La lectura de diagnóstico posterior al clic de «Editar» tardó 1,14 s y 1,19 s en la corrida 10; no es una latencia de acción ni forma parte de las puntuadas. RNF-05 no se evalúa con estas corridas de flujo, que no son la medición de S0 §10.
+
+#### 3.4 `--calc-standard`: no alcanzó el modo Estándar
+
+Lo que registró el paso, en orden:
+
+- Modo al empezar: `other`, es decir, no Estándar.
+- Clic 1, «Abrir navegación» (la etiqueta exacta del conmutador): un candidato, `TogglePaneButton` (tipo `Button`), con la identidad confirmada antes del clic. Entregado, `effect_observed`, y anclado tras el clic.
+- Paso 2, «Estándar»: el paso volvió a observar y buscó la etiqueta hasta tres veces, con 0,3 s de espera entre búsquedas (unos 1,5 s en total). En ninguna búsqueda hubo un candidato con ese nombre, ni en la observación del motor ni en UI Automation (0 en pantalla y 0 fuera de pantalla): `stopped_by` `zero_candidates`. El paso se detuvo sin segundo clic, y el modo no se volvió a leer (`mode_after` nulo).
+- El paso cerró la Calculadora que había lanzado. Duración total: 170 s. Unos 165 s transcurrieron antes del primer clic, mientras `wait_foreground` esperaba a que la Calculadora llegara al primer plano maximizada: la ventana se traía al frente cada 2 s, sin enviar entrada. El resumen del paso no registra esa espera; el registro de las corridas sí (`foreground_wait_s`).
+
+Causa no verificada. El registro no dice si el panel de navegación se abrió tras el clic. Hay dos explicaciones que no se distinguen: (a) el clic no abrió el panel, y el motor informó un cambio visual genérico (`effect_observed`), que no comprueba el modo; (b) el panel se abrió después de la ventana de búsqueda del cliente, de unos 1,5 s. El efecto del clic no se comprobó por el lado del sistema operativo, porque el paso se detuvo antes de leer el modo: no cuenta como falso éxito, porque ninguna comprobación lo refuta, y tampoco queda confirmado.
+
+#### 3.5 E2E-02, Calculadora: no ejecutada
+
+La autorización sólo permite el piloto y la serie si el modo Estándar se alcanza de forma segura. No se alcanzó, así que no hubo piloto ni serie. `--calc-standard` se ejecutó una vez, como se autorizó, y no se repitió.
+
+### 4. Hallazgos
+
+| # | Severidad | Hallazgo | Estado y siguiente paso |
+|---|---|---|---|
+| 1 | Mayor, Calculadora | `--calc-standard` no halló «Estándar» en la observación del motor ni en UI Automation en unos 1,5 s después del clic de navegación, y el paso se detuvo sin segundo clic (§3.4). El registro no distingue si el panel no se abrió o tardó más. | Abierto. Decisión del responsable: cómo llegar al modo Estándar. El cliente no lee el estado del panel tras el clic; cambiarlo exige una versión nueva del cliente, con su prueba, en una ronda aparte. |
+| 2 | Menor, operación | Unos 165 s entre el arranque de la Calculadora y su primer clic; el resumen de `--calc-standard` no registra la espera de primer plano (§3.4). El primer clic se envió sólo con la Calculadora en primer plano, maximizada y anclada. | Abierto. Causa no verificada; hipótesis: el bloqueo de primer plano de Windows, que la espera intenta sortear. |
+| 3 | Menor, registro del cliente | La línea `calc_standard` del registro contiene un byte no UTF-8 (`ó`, 0xF3): la salida se escribe en la página de códigos de la consola cuando se redirige a un archivo. Los JSONL de resultados son UTF-8 y no se ven afectados. | Abierto, sin efecto en las puntuaciones. Corrección: escribir la salida como UTF-8, con su prueba, en una versión nueva del cliente. |
+| 4 | Observación | La lectura de diagnóstico posterior al clic de «Editar» tardó 1,14 s y 1,19 s en la corrida 10 (no puntuada). | Sin cambio. |
+| 5 | Observación (de la primera parte) | Los rechazos `STALE_SNAPSHOT` de las corridas 2 y 8 siguen sin causa verificada. | Sin cambio. |
+| 6 | Documental (preexistente) | `plan_pruebas.csv` describe E2E-02 como «Editor» y E2E-03 como «Explorador»; el protocolo ejecuta la Calculadora y el Bloc de notas bajo esos identificadores. | Sin cambio. Decisión del responsable (S4R-02 y S4R-03, en un cambio documental aparte). |
+
+El hallazgo 1 de la primera parte (cupo sin reservar reintentos) queda resuelto para E2E-03: la corrida 10 se ejecutó en su propia invocación, con su propio cupo, y la serie completó diez de diez. Sigue abierto para E2E-02, donde el cupo debe contar los reintentos (decisión del responsable).
+
+### 5. Estado en la matriz
+
+Sin cambio. `docs/thesis/matrices/plan_pruebas.csv` no se modifica. E2E-03 tiene diez corridas puntuadas de diez, todas exitosas, pero la matriz describe E2E-03 como «Explorador», y el responsable decidió que el protocolo reducido tenga sus propios identificadores (S4R-03) en un cambio documental aparte. E2E-02 no se ejecutó. E2E-01 mantiene `EJECUTADO_SUPERVISADO_PARCIAL`.
+
+### 6. Estado final del escritorio, del cuaderno y de `stop.flag`
+
+- **Bloc de notas:** procesos 8960 y 23164, los mismos que al empezar. Las dos ventanas del propietario están minimizadas, con la colocación guardada antes de la corrida 10; la verificación, después de la corrida y después de `--calc-standard`, coincide con el estado guardado.
+- **Procesos:** ningún `ommatix.exe`, `CalculatorApp.exe` ni `ommatix-testapp.exe`. El paso `--calc-standard` cerró la Calculadora que lanzó.
+- **`stop.flag`:** ausente. El cliente no lo creó en esta continuación, y el agente no lo creó ni lo retiró.
+- **Cuaderno:** 426 (25 de 150 solicitudes de la ronda; 125 disponibles).
+- **Capturas y texto de pantalla:** ninguno guardado. Los registros contienen estados, códigos, contadores, tiempos, tipos de control, `AutomationId`, identificadores de elemento y las etiquetas fijas del protocolo («Abrir navegación», «Estándar», «Editar»).
+
+### 7. Qué queda y cómo reanudar
+
+1. **Responsable:** decidir cómo llegar al modo Estándar. Cambiar de modo a mano queda fuera del protocolo. Las dos vías son una observación de sólo lectura con el responsable presente, que registre el panel tras el clic (hallazgo 1), o una versión del cliente que lea el estado del panel y espere más, con su prueba de regresión y un hash nuevo, en una ronda aparte.
+2. **Responsable:** E2E-02 sigue bloqueado hasta que `--calc-standard` alcance Estándar. La autorización de «una vez» no permite repetir el paso en esta ronda.
+3. **Responsable:** el cupo de E2E-02 debe contar los reintentos. Propuesta, sin ejecutar: la serie en invocaciones de una corrida cada una, con `--max-live` igual a lo que quede del cupo de la serie, para que una parada de seguridad impida la corrida siguiente sin interrumpir ningún proceso; y contar a mano las tres corridas fallidas seguidas, porque la regla de `stop.flag` del cliente sólo cuenta dentro de una invocación.
+4. **Cliente (ronda aparte, con cambio de hash):** hallazgo 1 (estado del panel y espera), hallazgo 2 (espera de primer plano en el resumen) y hallazgo 3 (codificación), cada uno con su prueba que falle sin el cambio (AGENTS.md, regla 10).
+5. **Cuaderno:** 426. Cada ronda usa su propio `--round-start`.
+
+### 8. Ejecución
+
+Dos invocaciones en vivo (la corrida 10 y `--calc-standard`), con 3 solicitudes reales en total. Las únicas entradas fueron dos clics sobre «Editar» en el Bloc de notas (`MenuItem`, `AutomationId` `Edit`) y un clic sobre «Abrir navegación» en la Calculadora (`Button`, `AutomationId` `TogglePaneButton`). No se escribió nada, no se pulsó ninguna pestaña ni botón de ventana, y no se tocó ningún otro elemento. Mover y restaurar la ventana del propietario es gestión de ventanas, sin entradas, y las lecturas de UI Automation son de sólo lectura.

@@ -43,3 +43,36 @@ After the documentation edits, the two thesis checks were run again on this bran
 - `--calc-standard` and E2E-02: not run, because `stop.flag` existed.
 - E2E-03 run 10: not started. Its first request was refused by the guard before it was sent.
 - No client change, no matrix change and no regression test: no client defect was shown.
+
+## Continuation: run 10, `--calc-standard`, and E2E-02 not run
+
+Branch `docs/s4-seventh-round-continuation`, from `main` at `885cda7`. The continuation ran the tenth Notepad run and the Calculator's Standard-mode step under the owner's authorization. The Notepad run passed, which completes the scored E2E-03 series: ten of ten scored runs, all successful, with no false success. `--calc-standard` did not reach Standard mode, so E2E-02 did not run. Evidence: the S4 section "Séptima ronda (continuación)" and CHANGELOG 1.0.27.
+
+### Findings and resolution (continuation)
+
+| # | Severity | Finding | Resolution | Regression test |
+|---|---|---|---|---|
+| C1 | Major, Calculator (open; owner decision) | `--calc-standard` found no element named «Estándar» (in the engine's observation or in UI Automation) for about 1.5 s after the navigation click, and stopped without a second click. The record does not show whether the navigation pane opened, because the mode is not read when the step stops early | No code change in this round: the client stays pinned for the live part. Reading the pane state after the click and waiting longer would change the client; that needs a test that fails without the change and a new round with a new hash | None yet |
+| C2 | Minor, operation (open) | About 165 s passed between the Calculator's launch and its first click, while `wait_foreground` waited for the window to be foreground and maximized. The calc-standard summary does not record this wait; the run records do (`foreground_wait_s`). Cause not verified; hypothesis: the Windows foreground lock | No change. The click was sent only with the Calculator foreground, maximized and grounded by identity | None |
+| C3 | Minor, client logging (open) | The `calc_standard` line of the driver's log holds one non-UTF-8 byte (`ó`, 0xF3): stdout is written in the console code page when redirected to a file. The JSONL results are UTF-8 and unaffected | No change; no effect on scoring. A fix writes the log as UTF-8 and needs its own test | None |
+| C4 | Observation | The post-click diagnostic read of Notepad's Edit step took 1.14 s and 1.19 s in run 10 (not scored) | No change | None |
+
+The first finding of this round (budget sizing with retries) is resolved for E2E-03: run 10 ran in its own invocation with its own cap. It stays open for E2E-02, where the cap must count the retries (owner decision).
+
+### Verification (continuation)
+
+Before the live part, on `docs/s4-seventh-round-continuation` at `885cda7`, with no code change: `cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia` (already up to date; binary SHA-256 `11a3d792…aca9da`), `cargo fmt --all --check` and `cargo clippy --workspace --all-targets -- -D warnings` (OK), `cargo test --workspace` (351 passed, 0 failed, 1 ignored), `python -m unittest discover -s tools/s4 -p "test_*.py"` (113 passed), `referencia_ejecutable/run_tests.py` (48 of 48) and `validar_paquete.py` (211 checks, 0 failed). Four result files changed only in timestamps, platform and Python strings, a duration and line endings, and were restored with `git restore`. After the documentation edits, the two thesis checks ran again (see the pull request).
+
+### Live part (continuation)
+
+- Ledger 423 → 426: three real requests (two in run 10, one in `--calc-standard`). The round has used 25 of 150.
+- Run 10 passed: both clicks were grounded by identity and by the island descent (depth 3, `MenuItem` `Edit`), both OS-side menu checks passed (2 of 2), with no false success and no grounding mismatch.
+- `--calc-standard` stopped at step 2 with `zero_candidates`. No second click was sent. The Calculator it had started was closed by the step.
+- `stop.flag`: created by the client in the first part and removed for this round under the owner's authorization (the copy is kept as `stop.flag.r7-removed-by-coordinator-with-owner-authorization`). Never created in this continuation; absent at the end.
+- No Ommatix, Calculator or test-application process left running. Both Notepad windows were restored and verified against the placement saved before run 10.
+- No screen captures or screen text were saved.
+
+### Not in this continuation
+
+- E2E-02 (pilot and series): not run, because Standard mode was not reached.
+- No client change, no matrix change and no regression test. The three new findings are recorded with their decisions; none has a fix in this round.
