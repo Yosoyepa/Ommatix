@@ -1,5 +1,27 @@
 # Historial documental
 
+## 1.0.4 — 2026-10-14: S2b, contrato MCP
+
+No cambia ningún requisito, algoritmo, contrato ni escenario. Cambia el estado de las matrices y la implementación que las respalda:
+
+- CT-01 a CT-10 pasan a `IMPLEMENTADO_EN_RUST_S2` en `matrices/plan_pruebas.csv`. Están en `src/adapters/mcp/tests/` (`ct_observation.rs` para CT-01..04 y `ct_protocol.rs` para CT-05..10) y recorren el motor real con puertos deterministas. `contract_examples.rs` comprueba además los 17 casos de `contratos/validacion_casos.json`: los 9 ejemplos válidos se aceptan y los 8 inválidos se rechazan, igual que con los schemas.
+- BDD-11 a BDD-21 pasan a `EJECUTADO_SOBRE_NUCLEO_S2` y BDD-22 a BDD-27 a `EJECUTADO_SOBRE_CONTRATO_S2` en `matrices/gherkin_trazabilidad.csv`. Se ejecutan desde `features/` con `src/acceptance/tests/thesis.rs`: BDD-13..21 sobre el núcleo del dominio; BDD-11, BDD-12 y BDD-22..27 a través del motor y del adaptador MCP, sobre el escritorio simulado o de fixtures. BDD-28 a BDD-32 siguen pendientes: necesitan foco, verificación real, idempotencia ante caídas, política de contenido y parada del operador (S3).
+- UT-14 y UT-38..UT-43 tienen además pruebas a nivel del motor (`ut_14_…`, `ut_38_…`…`ut_43_…` en `ommatix-application`); su estado en la matriz no cambia.
+- Los requisitos RF/RNF y los riesgos no cambian de estado: su aceptación exige captura, modelos, actuador y un cliente MCP reales.
+- Los puertos de la aplicación toman los nombres del SDD (§2.4): `FrameCapturer`, `VisionDetector`, `TextRecognizer`, `OsActuator`, `Clock` y `PolicyStore`. El caso de uso `Engine` reúne `observe_screen` (plan de regiones, detector y OCR sólo en las regiones planificadas, fusión, registro y staging/commit), `execute_action` (diario de deduplicación por `request_id` con hash FNV-1a, sin guardar el texto tecleado; comprobación estricta de snapshot, epoch, sesión y revisión; dry run por defecto) y `get_engine_metrics`.
+- Se retira el prototipo del arranque como pipeline en ejecución: sus puertos (`FrameSource`, `ElementDetector`, `InputController`), sus casos de uso, sus siete herramientas MCP con coordenadas y sus features de `src/acceptance/features/`. `serve` y `demo` ejecutan el motor nuevo con una configuración con la forma de `plantillas/configuracion_mvp.toml`.
+- [ADR-0015](../adr/0015-mcp-transport-on-rmcp-wire-types.md), propuesta: el adaptador usa los tipos de wire de `rmcp` 3.5.1 con un bucle de mensajes propio y acotado, porque el bucle de servicio de `rmcp` no limita el tamaño de los mensajes, cierra la conexión ante notificaciones tempranas, deja mezclar reglas legacy y modernas en una conexión y descarta en silencio la entrada no analizable. La conformidad con un cliente real sigue pendiente (§7.1).
+- El perfil 2026-07-28 se sirve siempre; el legacy 2025-11-25 sólo si se habilita (`[mcp] legacy_enabled` o la opción de línea de órdenes). Una conexión queda fijada en un perfil. Mensajes de hasta 64 KiB en entrada y salida.
+
+Decisiones conocidas de esta implementación:
+
+- Los argumentos que violan el schema de entrada de una herramienta son error JSON-RPC `-32602`, no un resultado de herramienta con `isError`. Los errores del dominio sí son resultados con `isError: true`, `code`, `retryable` y `next_step`. Los tiempos por etapa van en `_meta` del resultado, bajo `io.ommatix/timings`.
+- `server/discover` fija el perfil moderno en la conexión, como cualquier petición con metadatos 2026-07-28.
+- `allowed_applications` no se aplica antes de S3: sin evidencia de la ventana en primer plano no se puede comprobar. La actuación real sigue deshabilitada por defecto y exige política local y actuador real.
+- OR-44 espera "actuación real no implementada"; el motor responde `POLICY_DENIED` sin entregar nada cuando no hay política o actuador real. El efecto es el mismo (no se envía entrada); cambia el código.
+- Sólo el efecto `visual_change` se verifica, con una nueva captura comparada con la base confirmada. Los demás efectos esperados se informan como `indeterminate` tras una entrega.
+- El caché de íconos (algoritmo 3A) todavía no participa en `observe_screen`: ningún detector disponible produce íconos sin texto. Se conecta con los modelos de S3.
+
 ## 1.0.3 — 2026-10-14: S2a, caché de apariencia e identidad
 
 No cambia ningún requisito, algoritmo, contrato ni escenario. Cambia el estado de las matrices:

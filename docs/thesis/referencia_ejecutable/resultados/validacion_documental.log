@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 14
+PASS adrs_encontradas 15
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -91,6 +91,7 @@ PASS referencias:0011-modular-monolith-and-adaptive-incrementality.md []
 PASS referencias:0012-data-minimisation-and-evidence-traceability.md []
 PASS referencias:0013-bilingual-documentation.md []
 PASS referencias:0014-hexagonal-crate-layout.md []
+PASS referencias:0015-mcp-transport-on-rmcp-wire-types.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 

@@ -1,7 +1,7 @@
 {
-  "timestamp_utc": "2026-10-14T06:19:11.561345+00:00",
-  "python": "3.13.16",
-  "jsonschema_version": "4.26.0",
+  "timestamp_utc": "2026-10-14T07:32:24.124582+00:00",
+  "python": "3.12.2",
+  "jsonschema_version": "4.25.1",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
   "counts": {
     "schemas": 7,
@@ -14,9 +14,9 @@
     "requirements": 28,
     "planned_tests": 76,
     "references": 24,
-    "adrs": 14
+    "adrs": 15
   },
-  "checks_run": 197,
+  "checks_run": 198,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -348,7 +348,7 @@
     {
       "check": "adrs_encontradas",
       "passed": true,
-      "detail": "14"
+      "detail": "15"
     },
     {
       "check": "referencias:00_AUDITORIA_TECNICA.md",
@@ -482,6 +482,11 @@
     },
     {
       "check": "referencias:0014-hexagonal-crate-layout.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0015-mcp-transport-on-rmcp-wire-types.md",
       "passed": true,
       "detail": "[]"
     },
