@@ -1,5 +1,18 @@
 # Historial documental
 
+## 1.0.17 — 2026-10-14: S4, tercera ronda con `type` en dos fases (ADR-0018)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código de las crates de Rust. Documenta la tercera ronda del protocolo reducido, con `type` en dos fases y la evidencia de UI Automation activada. El informe está en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), sección «Tercera ronda: type en dos fases (ADR-0018)», y la revisión en [`../reviews/2026-10-14-s4-third-round.md`](../reviews/2026-10-14-s4-third-round.md).
+
+- **Autorización:** la del responsable del proyecto del 14 de octubre de 2026 (repetir E2E-01, E2E-02 y E2E-03 con las tres aplicaciones, sin uso del equipo durante la ejecución).
+- **E2E-01 (aplicación de prueba, con escritura):** 10 de 10 corridas puntuadas. 90 entregas verificadas por el SO, 10 escrituras de `prueba 123` verificadas por el título, 0 teclas perdidas y 0 falsos éxitos.
+- **E2E-02 (Calculadora):** 0 de 3. En el modo Científica no existe un botón «Borrar» tras «Es igual a» (la UI Automation no lo expone), así que el paso final no se cumple tal como está especificado. La regla de tres fallos seguidos detuvo la serie. Decisión pendiente del responsable.
+- **E2E-03 (Bloc de notas):** no puntuada. Dos pilotos no produjeron de forma fiable el menú «Editar» que el flujo verifica, y el operador detuvo la serie. Causa no establecida.
+- **Cliente:** `tools/s4/e2e_driver.py` activa la ventana principal con `AttachThreadInput` y `SetForegroundWindow`. `AppActivate` no llevó la aplicación de prueba al primer plano (164 solicitudes en 333 s). Pruebas en `tools/s4/test_e2e_driver.py`, que fallan con el cliente anterior.
+- **Matrices:** `matrices/plan_pruebas.csv` sin cambio de estado: cada estado ya refleja la ejecución supervisada parcial. RF-18, RNF-03 y RNF-05 sin cambio. RNF-05 sigue sin cumplirse (p95 de `total`: 437 ms en E2E-01 y 483 ms en E2E-02).
+- **Hallazgos abiertos:** (2) lectura de accesibilidad parcial sin relectura en observaciones incrementales, que exige una decisión de diseño del motor; (3) la Calculadora no expone «Borrar» tras «=»; (4) el menú del Bloc de notas no es fiable; (5) eventos de entrada sin origen identificado.
+- **Cuaderno de solicitudes:** de 160 a 291 de 400.
+
 ## 1.0.16 — 2026-10-14: `type` en dos fases con confirmación de foco por elemento (ADR-0018)
 
 Cambia el flujo de ejecución de `type` (SDD §2.9) y la nota de §7.4 del capítulo 07, sin cambiar ningún schema, requisito ni algoritmo. Corrige en código los hallazgos 1 y 2 de [`../reviews/2026-10-14-s4-uia-acceptance.md`](../reviews/2026-10-14-s4-uia-acceptance.md) (segunda ronda de S4, [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md)).

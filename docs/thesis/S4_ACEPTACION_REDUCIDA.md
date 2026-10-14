@@ -248,3 +248,135 @@ python tools\s4\e2e_driver.py --exe target\release\ommatix.exe --config <local>.
 ```
 
 La configuración local es la de §1 de esta ronda. Nunca se guarda en el repositorio.
+
+## Tercera ronda: type en dos fases (ADR-0018)
+
+**Fecha:** 14 de octubre de 2026. **Autorización:** el responsable autorizó el mismo día repetir el protocolo reducido completo (aplicación de prueba, Calculadora y Bloc de notas) con `type` en dos fases y la evidencia de UI Automation activada, con parada local por `stop_file`, sin capturas guardadas y sin uso del equipo durante la ejecución. **Resultado en una línea:** E2E-01 pasó 10 de 10 corridas puntuadas, con la escritura verificada por el título en las 10, 0 falsos éxitos y 0 teclas perdidas. E2E-02 no puede completar su flujo tal como está especificado: en el modo Científica de la Calculadora no existe un botón «Borrar» tras «Es igual a»; 0 de 3, y la serie se detuvo por la regla de tres fallos seguidos. E2E-03 no se puntuó: dos pilotos no produjeron de forma fiable el menú «Editar» que el flujo verifica. Esta ronda no cierra RF-18, RNF-03 ni RNF-05, ni ninguna casilla DoD (capítulo 06 §6.7).
+
+Todas las cifras son **mediciones [V]**. No se guardó ningún frame ni texto de pantalla (ADR-0012); los registros contienen estados, códigos, recuentos, tiempos y booleanos. En la consola sólo se imprimieron los nombres fijos de los botones de la Calculadora y su número en pantalla (en los sondeos y en el diagnóstico de §4.2), y del Bloc de notas sólo recuentos de las palabras fijas de su menú.
+
+### 1. Cambios frente a la segunda ronda
+
+| Aspecto | Segunda ronda | Tercera ronda |
+|---|---|---|
+| Binario | `dxgi,sendinput,directml,winrt-ocr,uia`, SHA-256 `72915ba1…e67c` | mismas características, `rustc 1.99.0`, desde `45cbade`. `ommatix.exe` SHA-256 `97a03896…98ec72` |
+| `type` | `value_updated` tras el piloto | `visual_change`, medido tras el clic de enfoque y antes de las teclas, con confirmación de foco por UI Automation (ADR-0018) |
+| Activación de la ventana (cliente) | `WScript.Shell.AppActivate` | ventana principal con `AttachThreadInput` y `SetForegroundWindow` (§3) |
+| Cliente | `tools/s4/e2e_driver.py`, SHA-256 `451668e4…10b4d2` | mismo cliente con la activación corregida, SHA-256 `8aa80988…c353b9` en las corridas puntuadas. Después de ellas sólo se corrigieron un comentario y una docstring, sin cambio de código: la versión confirmada tiene SHA-256 `0d0fe263…87736e`. El piloto 1 de E2E-01 usó la versión anterior, `56353c46…4d53a7` |
+| Aplicación de prueba | SHA-256 `09ccf30d…c9bf` | igual |
+| Configuración | `ecc7c5f7…2eac5` | igual (copia de `s4r2-live.toml`, con `[models] accessibility = "uia"`) |
+| Cuaderno de solicitudes | 160 de 400 | 160 → 291 de 400 (131 solicitudes en esta ronda) |
+
+### 2. Sondeos, pilotos y orden de las series
+
+- **Sondeos sin entrada** (`--mode probe`, `input=dry-run`): la aplicación de prueba expone sus seis botones y `Campo de texto` como `input` confirmado por accesibilidad. La Calculadora expone `Siete`, `Más`, `Ocho`, `Es igual a` y `Borrar`, una vez cada una, confirmadas, con la pantalla en `0`.
+- **Piloto 1 de E2E-01** (excluido): 9 de 9 pasos entregados y verificados, la escritura incluida. Se hizo con la versión anterior del cliente y con el primer plano preparado a mano (§3), así que queda excluido por partida doble.
+- **Piloto 2 de E2E-01** (excluido): 8 clics entregados y verificados. En el paso 9, `Campo de texto` no estaba confirmado en las observaciones de búsqueda, así que no se envió ninguna tecla y la corrida falló (§4.5).
+- **Piloto de E2E-02** (excluido): 4 clics entregados y verificados (pantalla 7, 7, 8 y 15). En el paso 5, «Borrar» no se encontró confirmado (§4.2).
+- **Pilotos 1 y 2 de E2E-03** (excluidos): ver §4.3.
+- **Orden real de las series:** E2E-01 (pilotos y serie puntuada), E2E-02 (piloto, diagnóstico y serie puntuada) y E2E-03 (dos pilotos, sin serie puntuada). Se puntuó E2E-02 después de los pilotos de E2E-03 para que la parada que cerró la ronda no impidiera el Bloc de notas. El orden del protocolo era E2E-01, E2E-02 y E2E-03.
+
+### 3. Incidencias de preparación y del cliente
+
+- **Primer plano.** En el piloto 1 de E2E-01, `AppActivate` no llevó la aplicación de prueba al primer plano: 164 solicitudes en 333,6 s, con el escritorio delante. Un `SetForegroundWindow` directo sobre la ventana visible devolvió falso. Con `AttachThreadInput` sobre el hilo del primer plano, seguido de `SetForegroundWindow` y de la desconexión, devolvió verdadero al primer intento, sin enviar ninguna entrada. La causa dentro de `AppActivate` no se ha establecido: la enumeración de ventanas de la aplicación lista también una ventana auxiliar (`Winit Thread Event Target`) que no es la principal. El cliente activa ahora la ventana principal (`pick_main_window`: la mayor ventana visible que no es auxiliar) con `bring_to_front`. Prueba de regresión: `tools/s4/test_e2e_driver.py`, tres pruebas de selección que fallan con la versión anterior (`AttributeError`). Con la versión corregida, en las 13 corridas puntuadas y en los sondeos hubo 1 solicitud de activación y el primer plano llegó en 0,88–1,10 s. Es gestión de ventanas: ningún clic, tecla ni movimiento de ratón.
+- **Medición de `AppActivate`.** Para descartar que la activación inyectara entrada, se midió el temporizador de inactividad (`GetLastInputInfo`) alrededor de una llamada a `AppActivate` sobre una aplicación de prueba propia. Sin llamada, el temporizador no se reinició (59,03 → 59,55 s). La llamada devolvió verdadero en 0,01 s y el temporizador no cambió (61,56 s antes y después). Sólo se midió el caso de éxito.
+- **Bloc de notas.** Antes de la primera corrida se guardó la posición de sus dos ventanas (`GetWindowPlacement`, sin títulos). Tras cada tramo en que se usaron, se restauró esa posición y se comprobó que coincide. Las dos ventanas siguen minimizadas y en la misma posición que al empezar.
+- **Archivo de parada.** Se retiró una vez, al inicio, como autorizó el responsable. Lo creó el cliente al tercer fallo de E2E-02, según el protocolo, y sigue creado. No se retira en esta ronda.
+- **Eventos de entrada sin acción.** El temporizador de inactividad se reinició varias veces sin que el cliente enviara nada: 0,3 s antes del primer arranque en vivo y 13,5 s tras una pausa de 20 s sin llamadas de entrada. Su origen no se ha identificado. El envío de `SendInput` del motor sólo se llama desde la entrega de acciones (`src/adapters/input/src/sendinput/win.rs`), y el cliente no envía entrada fuera de ellas. El cliente registra `user_idle_s_at_start` en cada corrida.
+
+### 4. Resultados
+
+#### 4.1 E2E-01, aplicación de prueba (10 corridas puntuadas, reinicio entre corridas)
+
+Flujo: `Sumar` ×3, `Reiniciar`, `Activar` ×2, `Siguiente` y `Anterior` (8 clics) y, después, `type` de `prueba 123` en `Campo de texto` con `expected_effect: visual_change`. Verificación por el título de la ventana (SO) tras cada paso y por el anclaje de UI Automation.
+
+| Medida | Valor |
+|---|---|
+| Corridas con éxito | **10 de 10** (IC 95 % de Wilson: 0,72–1,00) |
+| Pasos / solicitudes reales / entregas | 90 / 90 / 90 (80 clics y 10 escrituras) |
+| `effect_observed` / `indeterminate` / rechazos | 90 / 0 / 0 |
+| Comprobación por título (SO) | 80 de 80 clics; 10 de 10 escrituras (`texto=prueba 123`) |
+| Teclas perdidas | **0** |
+| Anclaje UIA (el control bajo el cursor es el pedido) | 90 de 90 |
+| Falsos éxitos | **0** |
+| Duración por corrida con éxito | mediana 10,2 s, p95 10,5 s |
+
+#### 4.2 E2E-02, Calculadora (3 corridas puntuadas; serie detenida)
+
+Flujo: `Siete`, `Más`, `Ocho` y `Es igual a`, con la pantalla comprobada por UIA tras cada clic (7, 7, 8 y 15), y después `Borrar`.
+
+| Medida | Valor |
+|---|---|
+| Corridas con éxito | **0 de 3** (IC 95 % de Wilson: 0,00–0,56) |
+| Solicitudes / entregas | 13 / 12. Una `STALE_SNAPSHOT` (nada entregado, repetida con éxito) |
+| `effect_observed` / `indeterminate` | 12 / 0 |
+| Pantalla comprobada por UIA tras cada clic | 12 de 12 |
+| Anclaje UIA | 12 de 12 |
+| Falsos éxitos | **0** |
+| Fallo | paso 5, «Borrar» no encontrado confirmado, en las tres corridas |
+
+**Diagnóstico** (excluido; cuatro clics, el mismo flujo): tras «Es igual a» la Calculadora está en el modo Científica (con «Alternar grados», «Notación científica», etc.), y su árbol de UI Automation expone 49 botones. Ninguno se llama «Borrar». Sí aparecen «Quitar entrada» (CE), «Borrar toda la memoria» y «Borrar toda el historial», que son otros controles. El botón «Borrar» estaba, confirmado, en el estado inicial, y en tres observaciones sucesivas tras «=» no aparece. La causa no está establecida (un cambio de la interfaz tras el resultado). En cualquier caso, el paso tal como está especificado no puede cumplirse. **Decisión para el responsable:** otra tecla final (por ejemplo «Quitar entrada», que sí aparece), otro modo (estándar) u otro orden de los pasos.
+
+#### 4.3 E2E-03, Bloc de notas (sin puntuar)
+
+Flujo: `Editar` abre el menú y `Editar` lo cierra. No hay escritura.
+
+- **Piloto 1.** El clic sobre `Editar` se entregó, y el cursor quedó dentro del rectángulo de `Editar` (anclaje confirmado). El motor informó `effect_observed`, pero en las cuatro observaciones siguientes no aparecieron palabras de los elementos del menú. La corrida falló en el paso 1 y no se envió el segundo clic.
+- **Piloto 2.** El mismo clic se entregó y el motor informó `indeterminate` (`INDETERMINATE_EFFECT`): no hubo cambio visual en la ventana de verificación de 500 ms. La corrida falló en el paso 1 y no se reintentó.
+- **Estado del menú.** Tras el piloto 1, la lectura de UI Automation (sólo lectura) marcó `Editar` como expandido en la ventana minimizada. Tras restaurarla y observar sin entrada, el menú no aparecía en pantalla. El indicador parece obsoleto; no está establecido.
+- **Por qué no se puntuó.** El cliente no comprueba que el menú esté cerrado al empezar (la primera comprobación acepta cualquier estado y fija la referencia), y no cierra un menú que quede abierto tras un fallo. Cada corrida fallida cambia el estado de la ventana del responsable sin que el cliente pueda restaurarlo. La causa del resultado del clic no se ha establecido. Se detuvo la serie por decisión del operador tras el piloto 2, antes de llegar a la regla de tres fallos. La causa es específica de esta serie, así que se continuó con E2E-02 (§2).
+
+#### 4.4 Totales y seguridad
+
+- **Solicitudes `dry_run: false`: 131** (de 160 a 291). Entregadas: **129**, de ellas 118 clics y 11 escrituras. Rechazadas sin entrega: 2 `STALE_SNAPSHOT`, ambas repetidas con éxito. `POLICY_DENIED`: 0.
+- **Efecto:** 128 `effect_observed` y 1 `indeterminate` (clic de E2E-03, piloto 2).
+- **Escrituras:** 11 entregadas, las 11 verificadas por el título del SO. **Teclas perdidas: 0.** Ninguna escritura fuera de `Campo de texto`.
+- **Falsos éxitos: 0** en todas las corridas, puntuadas y pilotos.
+- Ningún `scroll`, clic en pestañas, botón de ventana ni elemento de menú distinto de `Editar` en el Bloc de notas.
+- **Parada:** la creó el cliente al tercer fallo de E2E-02 y sigue creada. No se ha retirado.
+
+#### 4.5 Piloto 2 de E2E-01: el campo no se confirmó en las observaciones de búsqueda
+
+Tras los pasos 7 y 8 del flujo, la lectura de accesibilidad tardó 226 ms y 489 ms (la mediana de la serie puntuada es 71 ms) y devolvió 80 elementos, frente a 82–85 en las observaciones anteriores. Las observaciones 10 a 12, de búsqueda de `Campo de texto`, fueron incrementales: no se planificó ninguna región, la lectura de accesibilidad no se repitió (0 ms) y el campo conservó el estado de la observación 9. Causa probable, no verificada: el recorrido de UI Automation, acotado a 250 ms (ADR-0017), devolvió un árbol parcial en esas observaciones, y el estado de accesibilidad de una observación incremental es el de la última lectura completa. El efecto fue el comportamiento seguro: no se envió ninguna tecla. No se corrige aquí, porque cambia la fusión del motor (hallazgo 2).
+
+#### 4.6 Latencias (`_meta` y cliente)
+
+Mediana / p95 (máximo), en milisegundos, de las observaciones de las corridas puntuadas.
+
+| Etapa de `observe_screen` | E2E-01 (n = 100) | E2E-02 (n = 25) |
+|---|---|---|
+| `total` | 321,3 / 437,1 (543,1) | 298,2 / 483,1 (490,1) |
+| `accessibility` (con regiones) | 71,0 / 88,9 (111,5) (n = 100) | 109,1 / 142,1 (150,3) (n = 16) |
+| `detect` (con regiones) | 224,0 / 333,9 (443,6) | 222,5 / 337,4 (338,7) |
+| `recognize` | 11,2 / 16,5 (44,0) | 13,8 / 32,2 (57,7) |
+| `capture` | 3,9 / 5,1 (10,0) | 13,0 / 23,2 (24,6) |
+| `plan` | 2,2 / 3,0 (3,3) | 2,3 / 3,1 (3,2) |
+| `track` | 0,5 / 0,8 (1,0) | 2,2 / 3,3 (4,3) |
+| `fuse` | 0,1 / 0,1 (0,1) | 0,1 / 0,2 (0,3) |
+
+- Ida y vuelta de `execute_action` entregada, en el cliente: clic de E2E-01, mediana 82,2 y p95 92,6 (n = 80); clic de E2E-02, 78,2 y 84,2 (n = 12); escritura de E2E-01, 109,0 y 120,5 (n = 10).
+- `execute_action` no trae etapas en `_meta` (0 de 103 respuestas), así que la medida de acciones es sólo la ida y vuelta del cliente.
+- RNF-05 (incremental, p95 ≤ 150 ms) **no se cumple**: el p95 de `total` es 437 ms en E2E-01 y 483 ms en E2E-02.
+
+#### 4.7 Hallazgos
+
+Detalle, resolución y prueba de regresión en [`reviews/2026-10-14-s4-third-round.md`](../reviews/2026-10-14-s4-third-round.md).
+
+1. **Corregido: activación de la ventana del cliente** (§3). Prueba: `tools/s4/test_e2e_driver.py`.
+2. **Abierto, motor:** lectura de accesibilidad parcial sin relectura en observaciones incrementales (§4.5).
+3. **Abierto, especificación:** «Borrar» no se expone tras «Es igual a» en la Calculadora, modo Científica (§4.2).
+4. **Abierto, cliente y motor:** un clic en «Editar» no produce un menú observable de forma fiable, y el cliente no verifica ni cierra el estado del menú (§4.3).
+5. **Abierto, entorno:** eventos de entrada sin origen identificado (§3).
+6. **Abierto, de rondas anteriores:** `execute_action` no devuelve etapas de `_meta`, y el recibo de `SendInput` no llega al agente.
+
+### 5. Estado en la matriz
+
+`matrices/plan_pruebas.csv` no cambia. Ninguna fila necesita un estado nuevo, porque los actuales ya reflejan la ejecución supervisada parcial: E2E-01 sigue `EJECUTADO_SUPERVISADO_PARCIAL`, ahora con escritura de un valor de prueba y confirmación observable (10 de 10); sigue siendo parcial (una tarea, un DPI, un tema). E2E-02 y E2E-03 de la matriz (editor con escritura y guardado; explorador de archivos) no se han ejecutado. PERF-02, IT-03 e IT-04 siguen parciales. RF-18, RNF-03 y RNF-05 no cambian: RNF-05 no se cumple.
+
+### 6. Qué queda y cómo reanudar
+
+- **Decisión del responsable sobre el flujo de E2E-02** (§4.2). El cuaderno está en 291 de 400.
+- **Decisión de diseño sobre la lectura de accesibilidad parcial** (hallazgo 2), antes de repetir corridas en aplicaciones con árboles grandes.
+- **Revisar E2E-03 con el responsable presente:** el estado del menú «Editar» del Bloc de notas, y una comprobación real del estado inicial y una limpieza tras un fallo.
+- **Identificar el origen de los eventos de entrada** sin acción (§3) y confirmar que nadie usa el equipo durante las corridas.
+- **Para reanudar:** el responsable retira `stop.flag`; después, un sondeo sin entrada, un piloto y la serie puntuada.
