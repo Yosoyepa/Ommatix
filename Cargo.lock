@@ -2163,6 +2163,9 @@ dependencies = [
  "ommatix-adapter-vision",
  "ommatix-application",
  "ommatix-domain",
+ "serde",
+ "tokio",
+ "toml",
 ]
 
 [[package]]
