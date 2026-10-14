@@ -33,7 +33,11 @@ Scenarios (see docs/thesis/S3_CORRIDAS_SUPERVISADAS.md):
           close it with a second click), ``it05`` (repeat the closing request_id; a
           conflicting reuse), ``sec02`` (stop file engaged before a live click),
           ``sec05`` (another application brought to the foreground between observation
-          and action).
+          and action), ``it04`` (open the menu with a live click whose verification
+          window is too short to see the redraw: run it with a configuration whose
+          ``[engine] verify_timeout_ms`` is 0, expect ``indeterminate``, check that
+          ``delivered_actions`` grows by exactly one, replay the request_id, then close
+          the menu with a click in a fresh observation).
 
 Example (from the repository root, PowerShell)::
 
@@ -410,6 +414,8 @@ class Run:
             log("delta", tag="it05", delivered=m1["delivered_actions"] - m0["delivered_actions"],
                 rejected=m1["rejected_actions"] - m0["rejected_actions"])
             self.observe("it05.after")
+        if "it04" in steps:
+            self.it04()
         if "sec02" in steps:
             if self.stop_file is None:
                 raise Abort("sec02 needs [safety] stop_file")
@@ -428,6 +434,31 @@ class Run:
         if "sec05" in steps:
             self.sec05()
         self.metrics("end")
+
+    def it04(self) -> None:
+        m0 = self.metrics("it04.before")
+        opened = self.live_click("s3-it04-open", "it04.open", "visual_change")
+        open_args = dict(self.last_args)
+        m1 = self.metrics("it04.after_open")
+        log("delta", tag="it04.open", delivered=m1["delivered_actions"] - m0["delivered_actions"],
+            rejected=m1["rejected_actions"] - m0["rejected_actions"])
+        if not opened.get("input_delivered"):
+            return
+        # The replay is a dry_run:false request; the engine must return the stored result
+        # without delivering anything.
+        self.require_foreground("notepad.exe")
+        self.live_sent += 1
+        self.send_action(open_args, tag="it04.replay")
+        m2 = self.metrics("it04.after_replay")
+        log("delta", tag="it04.replay", delivered=m2["delivered_actions"] - m1["delivered_actions"],
+            rejected=m2["rejected_actions"] - m1["rejected_actions"])
+        time.sleep(1.0)
+        self.live_click("s3-it04-close", "it04.close", "visual_change")
+        time.sleep(1.0)
+        self.observe("it04.after")
+        m3 = self.metrics("it04.after")
+        log("delta", tag="it04", delivered=m3["delivered_actions"] - m0["delivered_actions"],
+            rejected=m3["rejected_actions"] - m0["rejected_actions"])
 
     def sec05(self) -> None:
         if process_running("CalculatorApp.exe"):

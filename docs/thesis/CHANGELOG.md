@@ -1,5 +1,16 @@
 # Historial documental
 
+## 1.0.12 — 2026-10-14: S3, segunda corrida supervisada
+
+No cambia ningún requisito, algoritmo, contrato ni escenario. Cambia el estado de una prueba. El informe está en [`S3_CORRIDAS_SUPERVISADAS.md`](S3_CORRIDAS_SUPERVISADAS.md) §8.
+
+- **Corrida:** con la misma autorización y las mismas reglas que 1.0.9, con el detector en DirectML (1.0.11) y el código de 1.0.10. Se enviaron 5 solicitudes `dry_run: false` (de 8 permitidas): 4 clics llegaron al SO, todos sobre el menú `Archivo` del Bloc de notas en primer plano y maximizado, y hubo 1 repetición de `request_id` sin entrega. Ningún rechazo, ninguna escritura, ningún desplazamiento. No se guardó ningún frame ni ninguna etiqueta.
+- **Plazo de verificación confirmado en vivo:** con `verify_timeout_ms = 500` y `verify_poll_ms = 50`, 2 de 2 clics (abrir y cerrar el menú) dieron `effect_observed`, `verified: true` e `input_delivered: true` (en 1.0.9, 0 de 4). La verificación inmediata todavía no ve el menú; la siguiente, 50 ms después, sí.
+- **Primer frame DXGI confirmado en vivo:** la primera observación de 2 de 2 sesiones `serve` ya ve el Bloc de notas (94 y 96 elementos; en 1.0.9 era un frame en blanco en 6 de 6), y la prueba manual de un frame pasa con 1 rectángulo sucio.
+- **IT-04** pasa a `EJECUTADO_SUPERVISADO_PARCIAL` en `matrices/plan_pruebas.csv`. Con `verify_timeout_ms = 0` en la configuración del operador, un clic real entregado es `indeterminate` (`INDETERMINATE_EFFECT`, `retryable: false`, `reconcile_effect`) sin reintento: `delivered_actions` sube exactamente 1 y repetir el `request_id` devuelve el resultado guardado sin capturar ni entregar nada. Es parcial porque sólo hay postcondición de cambio visual y porque el plazo se forzó por configuración, no con una acción sin efecto. IT-01 e IT-03 siguen en `EJECUTADO_SUPERVISADO_PARCIAL` (sin pérdida de acceso ni salida rotada; recibo de `SendInput` no visible). Los requisitos RF/RNF, los escenarios y las casillas DoD no cambian.
+- **Latencias [V] con DirectML** (mediana, `_meta`): primera observación 304 ms (calentamiento), observación tras un clic con una inferencia 138 ms (n = 4), sin regiones 18 ms (n = 4); `execute_action` 75–83 ms con `effect_observed`.
+- **Herramientas:** `tools/s3/mcp_driver.py` añade el paso `it04`.
+
 ## 1.0.11 — 2026-10-14: S0, proveedor de ejecución e hilos del detector
 
 No cambia ningún requisito, algoritmo, contrato ni escenario, ni el estado de las matrices. Las mediciones están en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §9.

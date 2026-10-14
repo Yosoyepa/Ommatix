@@ -73,7 +73,7 @@ En B, tras una observación nueva (`s5`): el cliente creó el archivo de parada,
 
 ### 3.7 IT-04 e IT-07
 
-- **IT-04** (postcondición y plazo sin reintento): no se ejecutó como caso propio; provocar sin riesgo un clic que no cambie nada no era trivial. Los cuatro `indeterminate` de §3.3 son evidencia relacionada (sin reintento automático), pero de un efecto que sí ocurrió.
+- **IT-04** (postcondición y plazo sin reintento): no se ejecutó como caso propio; provocar sin riesgo un clic que no cambie nada no era trivial. Los cuatro `indeterminate` de §3.3 son evidencia relacionada (sin reintento automático), pero de un efecto que sí ocurrió. Se ejecutó en la segunda corrida (§8.3).
 - **IT-07** (DPI 125/150 %, cambio de epoch, fuera de perfil): no se ejecutó; la máquina se usó sólo a 100 % y con un monitor capturado.
 
 ### 3.8 Latencias (CPU, 1 hilo intra-op)
@@ -113,7 +113,7 @@ Solicitudes `dry_run: false`: **8 de 10** permitidas (A: 1; B: 2; C: 5). Clics e
 5. **Abierto: el agente no ve el recibo de `SendInput`.** Los recuentos `submitted`/`inserted` no salen del motor; IT-03 pide contarlos.
 6. **Limitaciones del entorno.** Un monitor capturado (salida 0) y DPI 100 % (IT-07 sin ejecutar); unos 7,2 s por inferencia, así que cada observación tras un cambio es lenta; el Bloc de notas restaura pestañas; el objetivo es un elemento `confirmed` de rol `unknown`, porque el detector de S0 tiene una sola clase y su affordance viene de su ficha (S0 §4); Windows no da el primer plano a ventanas lanzadas en segundo plano, lo que impidió SEC-05.
 
-**Pendientes.** Repetir IT-03 sobre `Archivo` con el código corregido para comprobar que un clic entregado pasa a `effect_observed` dentro del plazo y que la primera observación de una sesión `dxgi` ya ve el Bloc de notas; ejecutar IT-04 (un clic sin efecto que agote el plazo); el recibo de `SendInput` (hallazgo 5); SEC-05 con un cambio real de primer plano; IT-07.
+**Pendientes** (la segunda corrida, §8, resolvió los tres primeros: IT-03 con `effect_observed`, el primer frame con imagen e IT-04). Repetir IT-03 sobre `Archivo` con el código corregido para comprobar que un clic entregado pasa a `effect_observed` dentro del plazo y que la primera observación de una sesión `dxgi` ya ve el Bloc de notas; ejecutar IT-04 (un clic sin efecto que agote el plazo); el recibo de `SendInput` (hallazgo 5); SEC-05 con un cambio real de primer plano; IT-07.
 
 ## 7. Cómo repetirlo
 
@@ -125,3 +125,73 @@ python tools\s3\mcp_driver.py --exe target\release\ommatix.exe --config <con_act
 ```
 
 El cliente termina, crea el archivo de parada y no envía nada si el Bloc de notas no está en primer plano y maximizado o si la etiqueta del menú no es única. Su salida puede incluir rutas locales (el archivo de parada) y nunca texto de la pantalla.
+
+## 8. Segunda corrida (correcciones 1.0.10, DirectML)
+
+**Fecha:** 14 de octubre de 2026, con la misma autorización, máquina, monitor y reglas que §1: sólo clics sobre una etiqueta de menú única y `confirmed`; ningún `type` ni `scroll`; el Bloc de notas en primer plano y maximizado en la salida 0, comprobado por el cliente antes de cada acción. Máximo de esta corrida: 8 solicitudes `dry_run: false`. Objetivo: comprobar en vivo las dos correcciones de 1.0.10 (plazo de verificación y primer frame DXGI) y ejecutar IT-04. No se guardó ningún frame ni ninguna etiqueta.
+
+| Campo | Valor |
+|---|---|
+| Binario | `cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr`, `rustc 1.99.0` |
+| Código | Rama `feat/s3-supervised-runs` en `7ba14d3` (incluye 1.0.10 y 1.0.11), con el paso `it04` añadido a `tools/s3/mcp_driver.py` (commit de esta entrada); el motor no cambió |
+| Detector | `icon_detect_v3` en DirectML (ONNX Runtime 1.24.4, `Microsoft.AI.DirectML` 1.15.4), como en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §9; OCR `winrt` es-ES |
+| Configuración A (IT-01, IT-03) | `actuation_enabled = true`, `allowed_applications = ["notepad.exe"]`, `include_values = false`, `stop_file` en el directorio temporal de la sesión, `[models]` de `tools/s0/ommatix.s0.directml.toml` con rutas absolutas, `[engine] verify_timeout_ms = 500` y `verify_poll_ms = 50` (los valores por defecto). SHA-256 `026daa46f996c5da62d64846f1625d489c542a84c0b1bd0b5ce3a08a651d94ae` |
+| Configuración B (IT-04) | Idéntica salvo `verify_timeout_ms = 0` (una sola comprobación inmediata). SHA-256 `9a963f3f0d37fe4e33de52c5e134b93583902e1ddb68f27f707bead9c3e9a32d` |
+
+**Preparación.** El Bloc de notas ya estaba en primer plano y maximizado en la salida 0 (una de las ventanas vacías de la primera corrida). No hizo falta pedir la activación, no se lanzó ni se cerró ninguna ventana, y las tres etiquetas de menú fueron únicas en todas las observaciones. El archivo de parada no existía antes de ninguna sesión y no se activó.
+
+### 8.1 IT-01: primer frame
+
+- Prueba manual de un frame (`cargo test --release -p ommatix-adapter-capture --features dxgi -- --ignored`, sin guardar píxeles): pasa, con la comprobación de 1.0.10 de que el primer frame no es uniforme. 1920×1080, stride 7680 B, epoch 1, `DisplayMapping` con origen (0, 0) y tamaños iguales; 1 frame adquirido con 1 rectángulo sucio (en la primera corrida, 0) y ninguna pérdida de acceso.
+- **La primera observación de cada sesión `serve` ya ve el Bloc de notas: 2 de 2 sesiones** (en la primera corrida, 0 de 6). Sesión A: 94 elementos, 15 etiquetas OCR y las tres etiquetas de menú; sesión B: 96 y 15. La segunda observación de cada sesión no tuvo regiones planificadas y dio los mismos recuentos: el primer frame ya era la pantalla y no hizo falta una observación de más.
+- `geometry_epoch` 1 en las 10 observaciones; `frame_seq` crece de uno en uno por captura (§8.2 y §8.3 cuentan las capturas de cada acción).
+
+### 8.2 IT-03: `effect_observed` dentro del plazo (configuración A, sesión `s3-run2-a`)
+
+| `request_id` | Estado | `input_delivered` | `verified` / `observed_effect` | Ida y vuelta | `delivered_actions` | Evidencia posterior |
+|---|---|---|---|---|---|---|
+| `s3-it03-open-1` | `effect_observed` | true | true / `visual_change` | 74,9 ms | 0 → 1 | 94 elementos/15 OCR → 116/33: menú abierto |
+| `s3-it03-close-1` | `effect_observed` | true | true / `visual_change` | 83,0 ms | 1 → 2 | 116/33 → 93/15: menú cerrado |
+
+- **El hallazgo 3 queda confirmado en vivo: 2 de 2 clics con `effect_observed`** (en la primera corrida, 0 de 4). Cada acción entregada consumió tres capturas (`frame_seq` 3 → 7 y 7 → 11): la de vigencia, la verificación inmediata, que todavía no ve el menú, y una segunda tras esperar `verify_poll_ms` (50 ms), que sí lo ve. El Bloc de notas redibuja, pues, en menos de unos 50 ms, y la ventana de 500 ms sobra en este equipo.
+- Ninguna `STALE_SNAPSHOT`: con DirectML la observación previa sin regiones cuesta unos 14 ms, y la pantalla no cambió antes de la captura de vigencia.
+
+### 8.3 IT-04: plazo agotado sin reintento (configuración B, sesión `s3-run2-b`)
+
+Dentro de las reglas no hay un clic sin efecto visual que pueda provocarse sin riesgo: el único clic permitido abre o cierra un menú, y las dos cosas cambian la pantalla. Por eso el operador acortó el plazo a 0 ms en su configuración: el motor hace entonces una sola comprobación inmediata, que llega antes del redibujado (primera corrida y §8.2). El caso comprueba el lado del motor: plazo agotado, informe honesto y ningún reintento.
+
+| `request_id` | Estado | `input_delivered` | Error | Ida y vuelta | `delivered_actions` | Evidencia posterior |
+|---|---|---|---|---|---|---|
+| `s3-it04-open-1` | `indeterminate`, `verified: false`, `observed_effect: unknown` | true | `INDETERMINATE_EFFECT`, "input was delivered but no visual change was observed within the verification window; do not retry", `retryable: false`, `next_step: reconcile_effect` | 19,5 ms | 0 → **1** | 96/15 → 122/35: el menú se abrió después del plazo |
+| `s3-it04-open-1` (repetición exacta) | el mismo resultado guardado | true | el mismo | 0,1 ms | 1 → **1** | Sin capturas: tras el frame 5, la observación siguiente es el frame 6 |
+| `s3-it04-close-1` | `indeterminate`, mismo error | true | el mismo | 25,6 ms | 1 → 2 | 122/35 → 93/15: menú cerrado |
+
+- El clic se entregó una sola vez: `delivered_actions` subió exactamente 1 y la entrega consumió dos capturas (`frame_seq` 3 → 5: vigencia y una verificación). El efecto ocurrió después del plazo, y el motor lo informó como incierto sin reintentar.
+- La repetición del `request_id` devolvió el resultado guardado sin capturar ni entregar nada. `rejected_actions` siguió en 0 durante toda la sesión.
+- El menú se cerró con un clic en una observación nueva, también `indeterminate` por el mismo plazo de 0 ms.
+
+### 8.4 Latencias con DirectML
+
+Tiempos por etapa del `_meta` (`io.ommatix/timings`) de las dos sesiones, en milisegundos; mediana (mín.–máx.). Las observaciones de una sesión no son independientes.
+
+| Caso | n | capture | plan | detect | recognize | track | total |
+|---|---|---|---|---|---|---|---|
+| Primera observación (calentamiento de DirectML) | 2 | 7,8 | 0,05 | 262,2 | 34,0 | 0,09 | 304,2 (303,3–305,1) |
+| Tras un clic, con una inferencia (menú abierto o cerrado) | 4 | 4,9 | 2,4 | 114,7 | 8,3 | 1,7 | 137,7 (127,5–143,3) |
+| Sin regiones planificadas | 4 | 14,4 | 2,4 | 0 | 0 | 1,3 | 18,3 (13,6–27,2) |
+
+Ida y vuelta de `execute_action` medida en el cliente: 75–83 ms con `effect_observed` (tres capturas y una espera de 50 ms), 19,5–25,6 ms con `indeterminate` y plazo 0, y 0,1 ms en la repetición. Cada paso con menú tarda ahora unos 0,2 s, frente a unos 8 s en CPU con un hilo (§3.8).
+
+### 8.5 Recuento, estado y hallazgos
+
+- Solicitudes `dry_run: false`: **5 de 8** permitidas (A: 2; B: 3). Clics entregados al SO: **4**, todos sobre `Archivo` en la ventana maximizada del Bloc de notas en primer plano. Repeticiones sin entrega: 1. Ningún rechazo, ninguna escritura, ningún desplazamiento y ningún clic en otro elemento. Estado final: menú cerrado, como al principio.
+- **Matriz:** IT-04 pasa a `EJECUTADO_SUPERVISADO_PARCIAL`: con el actuador real, el plazo se agota, el resultado es `indeterminate` sin reintento y la repetición devuelve el resultado guardado. Es parcial porque sólo se comprueba la postcondición de cambio visual (las de foco, valor y desplazamiento no están implementadas) y porque el plazo se forzó con `verify_timeout_ms = 0`, no con una acción sin efecto. IT-01 e IT-03 siguen en `EJECUTADO_SUPERVISADO_PARCIAL`. IT-01 confirma el primer frame, pero sigue sin pérdida de acceso ni salida rotada. IT-03 confirma `effect_observed`, pero el recibo de `SendInput` sigue sin ser visible (hallazgo 5), y la integridad, los modificadores, el punto fuera de la ventana y el foco de `type` siguen sin ejercerse. Los requisitos RF/RNF, los escenarios y las casillas DoD no cambian.
+- **Hallazgos:** ningún defecto nuevo. Los hallazgos 3 y 4 de §6 quedan confirmados en vivo; el 5 sigue abierto.
+- **Pendientes:** el recibo de `SendInput`; SEC-05 con un cambio real de primer plano; IT-07; un clic sin efecto genuino para IT-04, cuando haya una aplicación de prueba controlada que lo permita.
+
+Para repetirlo (la configuración B es la A con `verify_timeout_ms = 0`):
+
+```text
+python tools\s3\mcp_driver.py --exe target\release\ommatix.exe --config <A>.toml --scenario live --steps it03 --max-live 4 --observations 2
+python tools\s3\mcp_driver.py --exe target\release\ommatix.exe --config <B>.toml --scenario live --steps it04 --max-live 5 --observations 2
+```

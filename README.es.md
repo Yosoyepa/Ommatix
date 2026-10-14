@@ -92,18 +92,19 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   parada del operador, la comprobación de vigencia y la política rechazaron el resto sin
   enviar nada. SEC-01 queda ejecutada; IT-01, IT-03, IT-05, SEC-02 y SEC-05, en parte. Un
   resultado `indeterminate` dice ahora si el actuador entregó la entrada. Desde entonces se
-  corrigieron dos hallazgos que esperan una nueva corrida supervisada: la comprobación del
-  efecto espera ahora el redibujado dentro de un plazo acotado (`[engine]
-  verify_timeout_ms`, 500 ms, con capturas cada `verify_poll_ms`, 50 ms; nunca reenvía la
-  entrada), y el capturador DXGI ya no devuelve un primer frame en blanco.
+  corrigieron dos hallazgos, y una segunda corrida supervisada (con el detector en DirectML)
+  confirmó los dos en vivo: la comprobación del efecto espera el redibujado dentro de un
+  plazo acotado (`[engine] verify_timeout_ms`, 500 ms, con capturas cada `verify_poll_ms`,
+  50 ms; nunca reenvía la entrada), así que 2 de 2 clics entregados dieron `effect_observed`,
+  y el primer frame DXGI de cada sesión ya muestra el escritorio. IT-04 se ejecutó en parte:
+  con un plazo de 0 ms, un clic entregado es `indeterminate` y nunca se reintenta.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
   DirectML, donde se cumplen las metas iniciales de RNF-05 para el refresco completo y para
   una región, pero no para dos o más), así que por defecto el detector es el buscador de regiones de color
   plano del arranque (roles `unknown`) y no hay OCR; no se ha probado un cliente MCP de
-  terceros; el plazo de verificación y la corrección del primer frame DXGI aún no se han
-  vuelto a ejecutar en vivo; IT-02 sólo se ejecutó en parte (S0); e IT-04, IT-06, IT-07, SEC-03,
+  terceros; IT-02 sólo se ejecutó en parte (S0); e IT-06, IT-07, SEC-03,
   SEC-04 y SEC-06 no se han ejecutado de forma supervisada. La
   entrada real sigue **apagada** salvo que el operador la habilite (abajo). La
   [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo que
@@ -129,8 +130,7 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   macOS y X11 del arranque. Primera parte hecha: los adaptadores DXGI, `SendInput`, ONNX y
   OCR de Windows tras features de compilación, el archivo de parada del operador y la
   comprobación del foco antes de escribir; primeras corridas supervisadas con entrada real
-  sobre `notepad.exe`; falta: un detector para el producto, volver a ejecutar en vivo el
-  plazo de verificación, comprobar efectos más allá del cambio visual, un cliente MCP de terceros y el resto de
+  sobre `notepad.exe`; falta: un detector para el producto, comprobar efectos más allá del cambio visual, un cliente MCP de terceros y el resto de
   corridas supervisadas
 - [ ] **S4, aceptación:** 450 corridas de extremo a extremo en aplicaciones controladas,
   benchmarks, soak e informe de aceptación

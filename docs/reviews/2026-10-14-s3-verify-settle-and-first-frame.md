@@ -23,6 +23,15 @@ real input.
 - No real input was sent for this change; the manual DXGI test only reads one frame into
   memory and never saves pixels.
 
+## Live confirmation (second supervised run)
+
+Both fixes were confirmed live on `feat/s3-supervised-runs` at `7ba14d3` with the DirectML
+detector ([`S3_CORRIDAS_SUPERVISADAS.md`](../thesis/S3_CORRIDAS_SUPERVISADAS.md) §8,
+CHANGELOG 1.0.12), with no code change: 2 of 2 delivered clicks on Notepad's File menu were
+`effect_observed` (the immediate check missed the redraw, the one 50 ms later saw it), and
+the first observation of 2 of 2 `serve` sessions already showed Notepad. With
+`verify_timeout_ms = 0` a delivered click was `indeterminate` and was never retried (IT-04).
+
 ## Verification
 
 `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo clippy -p

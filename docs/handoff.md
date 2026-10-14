@@ -19,13 +19,14 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | Spike S0 (rama `feat/s0-omniparser-v3`): detector OmniParser `icon_detect_v3` (MIT) exportado a ONNX con `tools/s0/export_omniparser_v3.py`, manifiesto `SELECCIONADO` (`docs/thesis/plantillas/model_manifest.s0.json`), ONNX Runtime 1.28.0 en CPU, OCR de Windows es-ES; corridas supervisadas sobre `notepad.exe` sin entrada; letterbox sin ampliación; `demo --timings`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) | Abierto (#8) |
 | — | S3, corridas supervisadas (rama `feat/s3-supervised-runs`, apilada sobre #8): captura y entrada reales sobre `notepad.exe` con `tools/s3/mcp_driver.py`; SEC-01 ejecutada, IT-01/03/05 y SEC-02/05 en parte; `indeterminate` informa la entrega del actuador; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) y revisión en [`reviews/2026-10-14-s3-supervised-runs.md`](reviews/2026-10-14-s3-supervised-runs.md) | Abierto (#9) |
 | — | S3, plazo de verificación y primer frame DXGI (rama `fix/s3-verify-settle`, apilada sobre #9): la verificación del cambio visual vuelve a capturar dentro de `[engine] verify_timeout_ms`/`verify_poll_ms` sin reenviar la entrada; el capturador DXGI ya no entrega un primer frame en blanco; `CHANGELOG.md` 1.0.10 y revisión en [`reviews/2026-10-14-s3-verify-settle-and-first-frame.md`](reviews/2026-10-14-s3-verify-settle-and-first-frame.md) | Abierto |
+| — | S3, segunda corrida supervisada (rama `feat/s3-supervised-runs`, #9, con DirectML): plazo de verificación (`effect_observed` 2 de 2) y primer frame DXGI (2 de 2 sesiones) confirmados en vivo; IT-04 ejecutada en parte con `verify_timeout_ms = 0`; paso `it04` en `tools/s3/mcp_driver.py`; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) §8 (CHANGELOG 1.0.12) | Abierto (#9) |
 | — | S0, proveedor e hilos del detector (rama `perf/s0-detector-ep`, apilada sobre `feat/s3-supervised-runs`): `[models] detector_execution_provider = "cpu" \| "directml"` (feature `directml`, `DirectML.dll` fijada, sin vuelta a la CPU) y `detector_threads`; manifiesto S0 con `"cpu,directml"`; DirectML equivalente a la CPU; agrupar regiones se midió y se descartó porque cambia las detecciones; `tools/s0/synthetic_frames.py` y el ejemplo `s0_probe`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §9 (CHANGELOG 1.0.11) | Sin PR |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.11)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.12)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
-S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9) ejecutan SEC-01 y,
-en parte, IT-01, IT-03, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ejecutado.
+S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
+en parte, IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ejecutado.
 
 ## Cómo está el código
 
@@ -142,11 +143,11 @@ en parte, IT-01, IT-03, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ej
   archivo se ejecutó en vivo, pero la comprobación del foco antes de escribir y el cambio de
   primer plano sólo se han probado sobre dobles; sólo se verifica el efecto
   `visual_change`; en vivo una única captura justo después de entregar nunca vio el cambio
-  (4 de 4 `indeterminate`), y el plazo de verificación que lo corrige (1.0.10) aún no se ha
-  ejecutado en vivo; el recibo de `SendInput` no es visible; el único detector seleccionado (spike S0, `icon_detect_v3`) tiene una sola clase, así que los roles
+  (4 de 4 `indeterminate`), y con el plazo de verificación de 1.0.10 la segunda corrida vio
+  el cambio en 2 de 2 clics (`effect_observed`, 1.0.12); el recibo de `SendInput` no es visible; el único detector seleccionado (spike S0, `icon_detect_v3`) tiene una sola clase, así que los roles
   siguen `unknown`, una inferencia cuesta unos 7,5 s en CPU y su precisión no está medida; el
-  primer frame DXGI en blanco (`thesis/S0_RESULTADOS.md` §7) está corregido (1.0.10) y sólo
-  se ha comprobado con la prueba manual de un frame; no hay OCR por defecto; OR-44 espera "actuación no implementada" y el
+  primer frame DXGI en blanco (`thesis/S0_RESULTADOS.md` §7) está corregido (1.0.10) y
+  confirmado en vivo (2 de 2 sesiones, 1.0.12); no hay OCR por defecto; OR-44 espera "actuación no implementada" y el
   motor responde `POLICY_DENIED` sin entregar nada; el contexto del caché de íconos lo fija
   el operador y sus umbrales no están calibrados; no se ha probado un cliente MCP real
   (capítulo 07 §7.1).
@@ -179,10 +180,9 @@ en parte, IT-01, IT-03, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ej
 3. **Corridas supervisadas en el hardware de referencia**, con el operador presente y una
    aplicación de prueba en `allowed_applications`. S0 ejecutó en parte IT-01 e IT-02 sin
    entrada; S3 (`thesis/S3_CORRIDAS_SUPERVISADAS.md`, cliente `tools/s3/mcp_driver.py`)
-   ejecutó SEC-01 y en parte IT-01, IT-03, IT-05, SEC-02 y SEC-05; ninguna prueba automática
-   sustituye a las que faltan. El primer frame DXGI en blanco y el plazo de la verificación
-   visual ya están corregidos (1.0.10): la próxima corrida debe comprobarlos (IT-03 con
-   `effect_observed`, IT-04 agotando el plazo). Antes de ella: abrir el Bloc de notas en una
+   ejecutó SEC-01 y en parte IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05; ninguna prueba
+   automática sustituye a las que faltan. La segunda corrida (1.0.12) confirmó en vivo el
+   plazo de la verificación visual y el primer frame DXGI. Antes de la próxima: abrir el Bloc de notas en una
    sesión limpia (restaura pestañas) y traer al primer plano a mano la ventana de prueba (Windows no
    se lo da a un proceso lanzado en segundo plano; por eso SEC-05 no pudo cambiar el primer
    plano):

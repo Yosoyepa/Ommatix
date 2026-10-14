@@ -84,18 +84,19 @@ unless the agent and a local policy both allow them. More in the
   operator's stop, the freshness check and the policy refused the rest without sending
   anything. SEC-01 is executed; IT-01, IT-03, IT-05, SEC-02 and SEC-05 in part. An
   `indeterminate` result now says whether the actuator delivered the input. Two findings
-  are fixed since and await a new supervised run: the effect check now waits a bounded
-  settle window for the redraw (`[engine] verify_timeout_ms`, 500 ms, polling every
-  `verify_poll_ms`, 50 ms; never resending input), and the DXGI capturer no longer returns
-  a blank first frame.
+  were fixed since and a second supervised run (with the DirectML detector) confirmed both
+  live: the effect check waits a bounded settle window for the redraw (`[engine]
+  verify_timeout_ms`, 500 ms, polling every `verify_poll_ms`, 50 ms; never resending
+  input), so 2 of 2 delivered clicks were `effect_observed`, and the first DXGI frame of
+  every session shows the desktop. IT-04 ran in part: with a 0 ms window a delivered click
+  is `indeterminate` and is never retried.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML,
   where the initial RNF-05 targets are met for a full refresh and a one-region update but
   not for two or more regions), so by default the detector is the bootstrap's flat-colour region finder (roles
-  `unknown`) and there is no OCR; no third-party MCP client has been tested; the
-  verification window and the DXGI first-frame fix have not been re-run live yet; IT-02 ran only
-  in part (S0); and IT-04, IT-06, IT-07, SEC-03, SEC-04 and SEC-06 have not been run under
+  `unknown`) and there is no OCR; no third-party MCP client has been tested; IT-02 ran only
+  in part (S0); and IT-06, IT-07, SEC-03, SEC-04 and SEC-06 have not been run under
   supervision. Live input stays **off** unless the
   operator enables it (below). The [overview](docs/architecture/overview.md#where-the-code-is-today) lists what
   remains.
@@ -119,8 +120,7 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
   policy, stop and effect verification; the bootstrap's macOS and X11 adapters are retired.
   First part done: the DXGI, `SendInput`, ONNX and Windows OCR adapters behind build
   features, the operator's stop file and the focus check before typing; first supervised
-  runs with real input on `notepad.exe`; pending: a product detector, a live re-run of
-  the verification window, effect checks beyond the visual change, a third-party MCP client and the
+  runs with real input on `notepad.exe`; pending: a product detector, effect checks beyond the visual change, a third-party MCP client and the
   remaining supervised runs
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
   and the acceptance report
