@@ -102,6 +102,10 @@ pub struct SafetySection {
     pub allow_destructive: bool,
     pub allow_screenshots_to_client: bool,
     pub include_values: bool,
+    /// The operator's stop (chapter 08 §8.2): while a file exists at this path, no new
+    /// input is sent. Relative to the configuration file. Empty: no stop file, and the
+    /// only local stop is ending the process.
+    pub stop_file: String,
 }
 
 /// The OCR engine (`[models] ocr`).
@@ -431,6 +435,10 @@ impl Config {
              characters",
         );
         check(
+            s.stop_file.is_empty() || !s.stop_file.trim().is_empty(),
+            "[safety] stop_file must be a path, or empty for none",
+        );
+        check(
             !s.allow_destructive,
             "[safety] allow_destructive = true cannot be honoured: this build does not \
              classify destructive actions",
@@ -463,6 +471,13 @@ impl Config {
             Some(dir) if path.is_relative() => dir.join(path),
             _ => path.to_path_buf(),
         }
+    }
+
+    /// The operator's stop file, resolved like every path in this file; `None` when
+    /// `[safety] stop_file` is empty.
+    pub fn stop_file(&self) -> Option<PathBuf> {
+        let path = &self.safety.stop_file;
+        (!path.is_empty()).then(|| self.resolve_path(path))
     }
 
     /// Algorithm 3A's settings, reading the prototypes file; `None` when the resolver is
@@ -586,6 +601,7 @@ mod tests {
             ("[mcp]\nmax_message_bytes = 100000\n", "max_message_bytes"),
             ("[mcp]\nmax_message_bytes = 10\n", "max_message_bytes"),
             ("[safety]\nallow_destructive = true\n", "allow_destructive"),
+            ("[safety]\nstop_file = \"  \"\n", "stop_file"),
             (
                 "[safety]\nallow_screenshots_to_client = true\n",
                 "screenshots",
@@ -635,6 +651,17 @@ mod tests {
         let policy = config.local_policy();
         assert!(policy.actuation_enabled && policy.include_values && !policy.stopped);
         assert_eq!(policy.allowed_applications, vec!["notepad.exe".to_owned()]);
+    }
+
+    #[test]
+    fn the_stop_file_is_optional_and_relative_to_the_configuration() {
+        assert_eq!(Config::default().stop_file(), None);
+        let mut config = Config::parse("[safety]\nstop_file = \"STOP\"\n").unwrap();
+        assert_eq!(config.stop_file(), Some(PathBuf::from("STOP")));
+        config.base_dir = Some(PathBuf::from("operator"));
+        assert_eq!(config.stop_file(), Some(Path::new("operator").join("STOP")));
+        // It never shows in the policy itself: the stop is read when the engine acts.
+        assert!(!config.local_policy().stopped);
     }
 
     const DIGEST: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";

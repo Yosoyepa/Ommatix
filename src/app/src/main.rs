@@ -8,7 +8,6 @@ mod cli;
 mod clock;
 mod config;
 mod demo;
-mod policy;
 mod prototypes;
 mod wiring;
 
@@ -59,6 +58,9 @@ fn serve(args: &RunArgs) -> Result<()> {
         },
     );
     report_notes(&wired.notes);
+    if let Some(indicator) = &wired.active_control {
+        eprintln!("ommatix: {indicator}");
+    }
     let server = McpServer::new(wired.engine, mcp);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()

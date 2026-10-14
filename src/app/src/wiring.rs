@@ -19,6 +19,10 @@
 //! the engine only delivers an action the agent explicitly asks for with `dry_run: false`,
 //! after its own gate, which checks the foreground application against `[safety]
 //! allowed_applications`: only `sendinput` can attest it, so `native` never acts live.
+//!
+//! The operator's stop (`[safety] stop_file`) is read on every action, at the gate and
+//! right before delivery; while live input is possible, [`Wired::active_control`] is the
+//! indicator `serve` prints on stderr (chapter 08 §8.2).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -37,8 +41,9 @@ use ommatix_application::{
 
 use crate::cli::{InputKind, RunArgs, SourceKind, ThemeKind};
 use crate::clock::SystemClock;
+use ommatix::policy::ConfigPolicy;
+
 use crate::config::{Config, EngineMode, OcrKind};
-use crate::policy::ConfigPolicy;
 
 /// The four driven adapters chosen for a source.
 type Adapters = (
@@ -57,6 +62,9 @@ pub struct Wired {
     pub summary: String,
     /// Configured values the engine does not enforce, for stderr.
     pub notes: Vec<String>,
+    /// The active-control indicator, for stderr: `Some` while the operator's policy lets
+    /// a live actuator act.
+    pub active_control: Option<String>,
 }
 
 /// The session identifier: `--session-id`, or one derived from the start time and the
@@ -209,6 +217,35 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
                 .to_owned(),
         );
     }
+    notes.extend(input_notes(config, input, live));
+    let active_control = (live && config.safety.actuation_enabled).then(|| active_control(config));
+
+    let mut engine_config = EngineConfig::new(session_id);
+    engine_config.plan = config.plan_params();
+    engine_config.icons = icons;
+    let engine = Engine::new(
+        engine_config,
+        Ports {
+            capturer,
+            detector,
+            recognizer,
+            actuator,
+            policy: Arc::new(operator_policy(config)),
+            clock,
+        },
+    );
+    Ok(Wired {
+        engine,
+        sim,
+        summary,
+        notes,
+        active_control,
+    })
+}
+
+/// What the operator should know about live input, for stderr.
+fn input_notes(config: &Config, input: InputKind, live: bool) -> Vec<String> {
+    let mut notes = Vec::new();
     if live && input == InputKind::Native {
         notes.push(
             "--input native cannot attest the foreground application, so the engine refuses \
@@ -223,27 +260,37 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
                 .to_owned(),
         );
     }
+    if live && config.safety.actuation_enabled && config.stop_file().is_none() {
+        notes.push(
+            "[safety] stop_file is not set: the only local stop is ending the process \
+             (Ctrl+C)"
+                .to_owned(),
+        );
+    }
+    notes
+}
 
-    let mut engine_config = EngineConfig::new(session_id);
-    engine_config.plan = config.plan_params();
-    engine_config.icons = icons;
-    let engine = Engine::new(
-        engine_config,
-        Ports {
-            capturer,
-            detector,
-            recognizer,
-            actuator,
-            policy: Arc::new(ConfigPolicy::new(config.local_policy())),
-            clock,
-        },
-    );
-    Ok(Wired {
-        engine,
-        sim,
-        summary,
-        notes,
-    })
+/// The operator's policy and stop file, reporting the stop on stderr.
+fn operator_policy(config: &Config) -> ConfigPolicy {
+    let policy = ConfigPolicy::new(config.local_policy()).with_stderr_notices();
+    match config.stop_file() {
+        Some(path) => policy.with_stop_file(path),
+        None => policy,
+    }
+}
+
+/// The active-control indicator (chapter 08 §8.2): what may receive live input and how
+/// the operator stops it.
+fn active_control(config: &Config) -> String {
+    let stop = match config.stop_file() {
+        Some(path) => format!("create {} or press Ctrl+C", path.display()),
+        None => "press Ctrl+C".to_owned(),
+    };
+    format!(
+        "ACTIVE CONTROL: live input is enabled for {}; the agent acts only with dry_run: \
+         false; to stop, {stop}",
+        config.safety.allowed_applications.join(", ")
+    )
 }
 
 /// What Algorithm 3A will do, for stderr.
@@ -577,6 +624,21 @@ mod tests {
     fn dry_run_with_actuation_enabled_says_it_has_no_effect() {
         let wired = build(&args("serve"), &actuation_enabled()).unwrap();
         assert!(wired.notes.iter().any(|n| n.contains("has no effect")));
+    }
+
+    #[test]
+    fn the_active_control_indicator_names_the_applications_and_the_stop() {
+        let mut config = allowlisted("\"notepad.exe\", \"calc.exe\"");
+        assert_eq!(
+            active_control(&config),
+            "ACTIVE CONTROL: live input is enabled for notepad.exe, calc.exe; the agent acts \
+             only with dry_run: false; to stop, press Ctrl+C"
+        );
+        config.safety.stop_file = "STOP".to_owned();
+        assert!(active_control(&config).ends_with("to stop, create STOP or press Ctrl+C"));
+        // Never shown while no live actuator exists, whatever the policy says.
+        let wired = build(&args("serve"), &config).unwrap();
+        assert_eq!(wired.active_control, None);
     }
 
     #[test]
