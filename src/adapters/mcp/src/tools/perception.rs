@@ -3,13 +3,10 @@ use ommatix_domain::{Point, Rect};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::{ToolResult, parse};
 use crate::dto::{ReportDto, elements};
 
-/// Outcome of a tool call: `Ok` payloads become `structuredContent`, `Err` messages are
-/// reported with `isError: true` so the agent can self-correct (MCP tool-error semantics).
-pub type ToolResult = Result<Value, String>;
-
-pub fn definitions() -> Value {
+pub fn definitions() -> Vec<Value> {
     let point = json!({
         "type": "object",
         "properties": {
@@ -31,36 +28,36 @@ pub fn definitions() -> Value {
         "additionalProperties": false
     });
     let none = json!({ "type": "object", "properties": {}, "additionalProperties": false });
-    json!([
-        {
+    vec![
+        json!({
             "name": "perceive",
             "title": "Perceive screen",
             "description": "Capture one frame, re-analyse only the regions that changed and return what was added, updated or removed. Call this after every action you perform.",
             "inputSchema": none,
             "annotations": { "readOnlyHint": true, "idempotentHint": false }
-        },
-        {
+        }),
+        json!({
             "name": "list_elements",
             "title": "List elements",
             "description": "Return every element currently on screen in reading order, with bounds and a click target (center).",
             "inputSchema": none,
             "annotations": { "readOnlyHint": true, "idempotentHint": true }
-        },
-        {
+        }),
+        json!({
             "name": "element_at",
             "title": "Element at point",
             "description": "Return the elements under a screen coordinate, most specific (smallest) first.",
             "inputSchema": point,
             "annotations": { "readOnlyHint": true, "idempotentHint": true }
-        },
-        {
+        }),
+        json!({
             "name": "elements_in_rect",
             "title": "Elements in rectangle",
             "description": "Return the elements intersecting a screen rectangle, in reading order.",
             "inputSchema": rect,
             "annotations": { "readOnlyHint": true, "idempotentHint": true }
-        }
-    ])
+        }),
+    ]
 }
 
 #[derive(Deserialize)]
@@ -79,14 +76,19 @@ struct RectArgs {
     h: u32,
 }
 
-/// Dispatches a tool by name. `None` means the tool does not exist.
-pub fn call(engine: &mut PerceptionEngine, name: &str, args: Value) -> Option<ToolResult> {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoArgs {}
+
+pub fn call(engine: &mut PerceptionEngine, name: &str, args: &Value) -> Option<ToolResult> {
     let result = match name {
-        "perceive" => perceive(engine),
-        "list_elements" => Ok(json!({
-            "frame_no": engine.frame_no(),
-            "elements": elements(&engine.elements()),
-        })),
+        "perceive" => parse::<NoArgs>(args).and_then(|_| perceive(engine)),
+        "list_elements" => parse::<NoArgs>(args).map(|_| {
+            json!({
+                "frame_no": engine.frame_no(),
+                "elements": elements(&engine.elements()),
+            })
+        }),
         "element_at" => parse::<PointArgs>(args).map(|a| {
             json!({
                 "frame_no": engine.frame_no(),
@@ -107,7 +109,8 @@ pub fn call(engine: &mut PerceptionEngine, name: &str, args: Value) -> Option<To
     Some(result)
 }
 
-fn perceive(engine: &mut PerceptionEngine) -> ToolResult {
+/// Runs one perception tick and serialises the report. Shared with action tools.
+pub fn perceive(engine: &mut PerceptionEngine) -> ToolResult {
     match engine.tick() {
         Ok(Some(report)) => {
             serde_json::to_value(ReportDto::from(&report)).map_err(|e| e.to_string())
@@ -118,9 +121,4 @@ fn perceive(engine: &mut PerceptionEngine) -> ToolResult {
         )),
         Err(e) => Err(e.to_string()),
     }
-}
-
-fn parse<T: for<'de> Deserialize<'de>>(args: Value) -> Result<T, String> {
-    let args = if args.is_null() { json!({}) } else { args };
-    serde_json::from_value(args).map_err(|e| format!("invalid arguments: {e}"))
 }

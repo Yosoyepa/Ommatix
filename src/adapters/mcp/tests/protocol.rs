@@ -2,9 +2,10 @@
 //! contrast detector: the same wiring the binary uses, minus stdio.
 
 use ommatix_adapter_capture::{ScriptedSource, demo_script};
+use ommatix_adapter_input::DryRunInput;
 use ommatix_adapter_mcp::{McpServer, PROTOCOL_VERSION};
 use ommatix_adapter_vision::ContrastBlobDetector;
-use ommatix_application::{PerceptionConfig, PerceptionEngine};
+use ommatix_application::{ActuationPolicy, ActuationService, PerceptionConfig, PerceptionEngine};
 use serde_json::{Value, json};
 
 fn server() -> McpServer {
@@ -14,7 +15,9 @@ fn server() -> McpServer {
         PerceptionConfig::default(),
     )
     .unwrap();
-    McpServer::new(engine)
+    let actuation =
+        ActuationService::new(Box::new(DryRunInput::default()), ActuationPolicy::default());
+    McpServer::new(engine, actuation)
 }
 
 fn rpc(server: &mut McpServer, id: u64, method: &str, params: &Value) -> Value {
@@ -63,7 +66,10 @@ fn handshake_and_tool_listing() {
             "perceive",
             "list_elements",
             "element_at",
-            "elements_in_rect"
+            "elements_in_rect",
+            "click",
+            "type_text",
+            "press_key"
         ]
     );
 }

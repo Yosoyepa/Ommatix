@@ -1,10 +1,10 @@
 use std::time::Instant;
 
-use ommatix_domain::Element;
+use ommatix_domain::{Element, ElementId};
 use ommatix_domain::{GridSignature, GridSpec, Point, Rect, Scene, SceneDelta, merge_dirty_cells};
 use serde::Serialize;
 
-use crate::{AppError, ElementDetector, FrameSource};
+use crate::{AppError, ElementDetector, FrameSource, ScreenModel};
 
 /// Tunables of the perception pipeline.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -61,6 +61,7 @@ pub struct PerceptionEngine {
     previous: Option<GridSignature>,
     scene: Scene,
     frame_no: u64,
+    screen: Option<Rect>,
 }
 
 impl std::fmt::Debug for PerceptionEngine {
@@ -88,6 +89,7 @@ impl PerceptionEngine {
             previous: None,
             scene: Scene::new(config.index_bucket_size, config.identity_iou),
             frame_no: 0,
+            screen: None,
             config,
         })
     }
@@ -159,7 +161,17 @@ impl PerceptionEngine {
             },
         };
         self.previous = Some(signature);
+        self.screen = Some(frame.bounds());
         Ok(Some(report))
+    }
+
+    /// Bounds of the last processed frame, `None` before the first tick.
+    pub fn screen_bounds(&self) -> Option<Rect> {
+        self.screen
+    }
+
+    pub fn element(&self, id: ElementId) -> Option<Element> {
+        self.scene.get(id).copied()
     }
 
     /// All known elements in reading order.
@@ -180,6 +192,16 @@ impl PerceptionEngine {
 
 fn micros(a: Instant, b: Instant) -> u64 {
     u64::try_from(b.duration_since(a).as_micros()).unwrap_or(u64::MAX)
+}
+
+impl ScreenModel for PerceptionEngine {
+    fn screen_bounds(&self) -> Option<Rect> {
+        PerceptionEngine::screen_bounds(self)
+    }
+
+    fn element(&self, id: ElementId) -> Option<Element> {
+        PerceptionEngine::element(self, id)
+    }
 }
 
 #[cfg(test)]

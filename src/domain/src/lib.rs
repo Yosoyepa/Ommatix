@@ -12,6 +12,7 @@
 //! 4. Detections inside those regions update the [`Scene`], whose elements are served
 //!    through a [`SpatialIndex`].
 
+mod action;
 mod element;
 mod error;
 mod frame;
@@ -21,6 +22,7 @@ mod region;
 mod scene;
 mod spatial_index;
 
+pub use action::{Action, Key, MouseButton};
 pub use element::{Detection, Element, ElementId, ElementKind};
 pub use error::DomainError;
 pub use frame::Frame;

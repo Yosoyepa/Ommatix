@@ -5,7 +5,8 @@
 //! JSON-RPC 2.0 over stdio. The agent reasons; Ommatix perceives and answers with
 //! exact pixel coordinates (see ADR-0004).
 //!
-//! Tools: `perceive`, `list_elements`, `element_at`, `elements_in_rect`.
+//! Perception tools: `perceive`, `list_elements`, `element_at`, `elements_in_rect`.
+//! Actuation tools: `click`, `type_text`, `press_key` (each can observe the result).
 
 mod dto;
 mod server;

@@ -5,15 +5,18 @@ members = [
     "src/application",
     "src/adapters/capture",
     "src/adapters/vision",
+    "src/adapters/input",
     "src/adapters/mcp",
+    "src/adapters/sim",
     "src/app",
+    "src/acceptance",
 ]
 default-members = ["src/app"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "UNLICENSED"
 repository = "https://github.com/Yosoyepa/Ommatix"
 publish = false
@@ -23,9 +26,14 @@ ommatix-domain = { path = "src/domain" }
 ommatix-application = { path = "src/application" }
 ommatix-adapter-capture = { path = "src/adapters/capture" }
 ommatix-adapter-vision = { path = "src/adapters/vision" }
+ommatix-adapter-input = { path = "src/adapters/input" }
 ommatix-adapter-mcp = { path = "src/adapters/mcp" }
+ommatix-adapter-sim = { path = "src/adapters/sim" }
 
 anyhow = "1"
+enigo = "0.6"
+cucumber = "0.23"
+futures = "0.3"
 clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }

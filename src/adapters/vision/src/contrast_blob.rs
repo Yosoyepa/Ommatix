@@ -85,8 +85,8 @@ impl ElementDetector for ContrastBlobDetector {
 fn dominant_colour(frame: &Frame, region: Rect) -> [u8; 4] {
     let mut counts: BTreeMap<[u8; 4], u32> = BTreeMap::new();
     for y in region.y..region.bottom() {
-        for px in frame.row_slice(region.x, y, region.w).chunks_exact(4) {
-            *counts.entry([px[0], px[1], px[2], px[3]]).or_default() += 1;
+        for px in frame.row_slice(region.x, y, region.w).as_chunks::<4>().0 {
+            *counts.entry(*px).or_default() += 1;
         }
     }
     // BTreeMap iterates in colour order, so `max_by_key` keeps the last max:

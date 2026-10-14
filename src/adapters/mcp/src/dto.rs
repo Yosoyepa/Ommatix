@@ -65,3 +65,29 @@ impl From<&PerceptionReport> for ReportDto {
         }
     }
 }
+
+/// Parses the wire form of an element id (`"e12"`).
+pub fn parse_element_id(s: &str) -> Result<ommatix_domain::ElementId, String> {
+    s.strip_prefix('e')
+        .and_then(|n| n.parse::<u64>().ok())
+        .map(ommatix_domain::ElementId)
+        .ok_or_else(|| format!("invalid element id '{s}', expected e.g. \"e4\""))
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReceiptDto {
+    pub action: ommatix_domain::Action,
+    pub element_id: Option<String>,
+    /// `false` when the input controller is a dry-run or a simulator.
+    pub live: bool,
+}
+
+impl From<&ommatix_application::ActionReceipt> for ReceiptDto {
+    fn from(r: &ommatix_application::ActionReceipt) -> Self {
+        Self {
+            action: r.action.clone(),
+            element_id: r.element.map(|id| id.to_string()),
+            live: r.live,
+        }
+    }
+}

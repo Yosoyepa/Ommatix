@@ -1,118 +1,38 @@
-//! Composition root: the only place that knows every concrete adapter. It parses the
-//! CLI, wires driven adapters (capture, vision) into the application core and hands the
-//! engine to a driving adapter (MCP server or demo printer).
+//! `ommatix` binary: parse the CLI, wire the services, run a driving adapter.
+
+mod cli;
+mod wiring;
 
 use std::io::{self, BufWriter};
-use std::path::PathBuf;
 
-use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
-use ommatix_adapter_capture::{ScriptedSource, demo_script};
+use anyhow::Result;
+use clap::Parser;
 use ommatix_adapter_mcp::McpServer;
-use ommatix_adapter_vision::{ContrastBlobConfig, ContrastBlobDetector};
-use ommatix_application::{FrameSource, PerceptionConfig, PerceptionEngine};
+use ommatix_application::PerceptionEngine;
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "ommatix",
-    version,
-    about = "Spatial indexing and incremental perception for GUI agents"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Run the MCP server on stdio (point your agent's MCP client at this command).
-    Serve(EngineArgs),
-    /// Run the perception pipeline over a source and print one line per frame.
-    Demo(EngineArgs),
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum SourceKind {
-    /// Built-in synthetic desktop session (deterministic).
-    Demo,
-    /// A directory of PNG frames (`--images`).
-    Images,
-    /// Live capture of the primary monitor (build with `--features screen`).
-    Screen,
-}
-
-#[derive(Debug, clap::Args)]
-struct EngineArgs {
-    #[arg(long, value_enum, default_value_t = SourceKind::Demo)]
-    source: SourceKind,
-    /// Directory with PNG frames, used with `--source images`.
-    #[arg(long)]
-    images: Option<PathBuf>,
-    /// Replay the demo script forever instead of stopping after the last frame.
-    #[arg(long = "loop")]
-    looping: bool,
-    /// Grid cell edge in pixels.
-    #[arg(long, default_value_t = PerceptionConfig::default().cell_size)]
-    cell_size: u32,
-    /// Max per-channel colour distance treated as background by the detector.
-    #[arg(long, default_value_t = ContrastBlobConfig::default().tolerance)]
-    tolerance: u8,
-}
+use crate::cli::{Cli, Command};
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
-    match cli.command {
+    match Cli::parse().command {
         Command::Serve(args) => {
-            let engine = build_engine(&args)?;
+            let services = wiring::build(&args)?;
             eprintln!(
-                "ommatix: MCP server on stdio (source={}, detector={})",
-                engine.source_name(),
-                engine.detector_name()
+                "ommatix: MCP server on stdio (source={}, detector={}, input={})",
+                services.perception.source_name(),
+                services.perception.detector_name(),
+                services.actuation.input_name(),
             );
             let stdin = io::stdin().lock();
             let stdout = BufWriter::new(io::stdout().lock());
-            McpServer::new(engine).serve(stdin, stdout)?;
+            McpServer::new(services.perception, services.actuation).serve(stdin, stdout)?;
         }
-        Command::Demo(args) => run_demo(build_engine(&args)?)?,
+        Command::Demo(args) => run_demo(wiring::build(&args)?.perception)?,
     }
     Ok(())
 }
 
-fn build_engine(args: &EngineArgs) -> Result<PerceptionEngine> {
-    let source: Box<dyn FrameSource> = match args.source {
-        SourceKind::Demo => {
-            let s = ScriptedSource::new(demo_script());
-            Box::new(if args.looping { s.looping() } else { s })
-        }
-        SourceKind::Images => {
-            let dir = args
-                .images
-                .as_ref()
-                .context("--source images requires --images <DIR>")?;
-            Box::new(ommatix_adapter_capture::ImageSequenceSource::from_dir(dir)?)
-        }
-        SourceKind::Screen => screen_source()?,
-    };
-    let detector = ContrastBlobDetector::new(ContrastBlobConfig {
-        tolerance: args.tolerance,
-        ..ContrastBlobConfig::default()
-    });
-    let config = PerceptionConfig {
-        cell_size: args.cell_size,
-        ..PerceptionConfig::default()
-    };
-    Ok(PerceptionEngine::new(source, Box::new(detector), config)?)
-}
-
-#[cfg(feature = "screen")]
-fn screen_source() -> Result<Box<dyn FrameSource>> {
-    Ok(Box::new(ommatix_adapter_capture::ScreenSource::primary()?))
-}
-
-#[cfg(not(feature = "screen"))]
-fn screen_source() -> Result<Box<dyn FrameSource>> {
-    anyhow::bail!("this build has no screen capture; rebuild with `cargo build --features screen`")
-}
+/// Frames printed by `demo` when the source never ends (`--loop`, `sim`, `screen`).
+const DEMO_MAX_FRAMES: u64 = 20;
 
 fn run_demo(mut engine: PerceptionEngine) -> Result<()> {
     println!(
@@ -133,7 +53,7 @@ fn run_demo(mut engine: PerceptionEngine) -> Result<()> {
             r.element_count,
             r.timings.total_us,
         );
-        if engine.frame_no() > 10_000 {
+        if engine.frame_no() >= DEMO_MAX_FRAMES {
             break;
         }
     }

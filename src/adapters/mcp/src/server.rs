@@ -1,6 +1,6 @@
 use std::io::{BufRead, Write};
 
-use ommatix_application::PerceptionEngine;
+use ommatix_application::{ActuationService, PerceptionEngine};
 use serde_json::{Value, json};
 
 use crate::tools;
@@ -19,16 +19,21 @@ const INVALID_PARAMS: i64 = -32602;
 /// one response per line on `output`. Diagnostics must go to stderr, never stdout.
 #[derive(Debug)]
 pub struct McpServer {
-    engine: PerceptionEngine,
+    perception: PerceptionEngine,
+    actuation: ActuationService,
 }
 
 impl McpServer {
-    pub fn new(engine: PerceptionEngine) -> Self {
-        Self { engine }
+    /// Both services are injected; the server only translates JSON-RPC to calls on them.
+    pub fn new(perception: PerceptionEngine, actuation: ActuationService) -> Self {
+        Self {
+            perception,
+            actuation,
+        }
     }
 
-    pub fn engine(&self) -> &PerceptionEngine {
-        &self.engine
+    pub fn perception(&self) -> &PerceptionEngine {
+        &self.perception
     }
 
     /// Serves until `input` reaches EOF.
@@ -98,9 +103,13 @@ impl McpServer {
                 "Ommatix gives you deterministic screen perception. Call `perceive` after each \
                  action to refresh the scene (only changed regions are re-analysed), then use \
                  `element_at`, `elements_in_rect` or `list_elements` to get exact pixel \
-                 coordinates. Source: {}, detector: {}.",
-                self.engine.source_name(),
-                self.engine.detector_name()
+                 coordinates. Act with `click` (prefer element ids), `type_text` and \
+                 `press_key`; each returns what changed on screen. Source: {}, detector: {}, \
+                 input: {} ({}).",
+                self.perception.source_name(),
+                self.perception.detector_name(),
+                self.actuation.input_name(),
+                if self.actuation.is_live() { "live" } else { "not live: actions do not reach the OS" }
             )
         })
     }
@@ -112,7 +121,11 @@ impl McpServer {
             .ok_or((INVALID_PARAMS, "missing tool name".to_string()))?
             .to_owned();
         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
-        let outcome = tools::call(&mut self.engine, &name, args)
+        let mut services = tools::Services {
+            perception: &mut self.perception,
+            actuation: &mut self.actuation,
+        };
+        let outcome = tools::call(&mut services, &name, &args)
             .ok_or_else(|| (INVALID_PARAMS, format!("unknown tool: {name}")))?;
         Ok(match outcome {
             Ok(structured) => json!({
