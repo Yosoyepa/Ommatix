@@ -134,6 +134,7 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   de borrado tras «=», y su cambio a modo estándar no se completó de forma segura: su primer clic de
   navegación no quedó confirmado sobre el control pedido, así que la serie se abandonó. La serie del
   Bloc de notas no se ejecutó, a la espera de la decisión del responsable.
+  Una quinta ronda ([CHANGELOG 1.0.21](docs/thesis/CHANGELOG.md)) no puntuó corridas. Su cambio de la Calculadora a modo Estándar se detuvo antes del segundo clic, así que E2E-02 no se ejecutó, y el piloto del Bloc de notas tuvo un clic en «Editar» sin anclaje confirmado tras el clic, así que la serie puntuada de E2E-03 no se ejecutó.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
