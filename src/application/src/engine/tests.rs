@@ -20,6 +20,7 @@ use crate::{ManualClock, PortError};
 const W: u32 = 640;
 const H: u32 = 320;
 const SESSION: &str = "test-session";
+const APP: &str = "test-app";
 
 fn bx(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
     BBox::new(x0, y0, x1, y1).unwrap()
@@ -50,6 +51,10 @@ struct World {
     /// Paints a mark after each delivery, as a UI reacting to input would.
     react_to_input: bool,
     reactions: u8,
+    /// What the actuator attests as the foreground application.
+    foreground: Option<String>,
+    /// Captures and deliveries, in order.
+    events: Vec<&'static str>,
 }
 
 impl Default for World {
@@ -70,6 +75,8 @@ impl Default for World {
             delivered: Vec::new(),
             react_to_input: false,
             reactions: 0,
+            foreground: Some(APP.into()),
+            events: Vec::new(),
         }
     }
 }
@@ -122,6 +129,7 @@ impl FrameCapturer for Capturer {
             return Err(PortError::new("test-capturer", "gone"));
         }
         w.seq += 1;
+        w.events.push("capture");
         Ok(CapturedFrame {
             frame: render(&w),
             frame_seq: w.seq,
@@ -183,8 +191,13 @@ impl OsActuator for Actuator {
         lock(&self.0).live
     }
 
+    fn foreground_application(&self) -> Option<String> {
+        lock(&self.0).foreground.clone()
+    }
+
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
         let mut w = lock(&self.0);
+        w.events.push("deliver");
         w.delivered.push(action.clone());
         if w.react_to_input {
             w.reactions = w.reactions.wrapping_add(1);
@@ -323,6 +336,7 @@ fn rig(world: World) -> Rig {
 fn live_policy() -> LocalPolicy {
     LocalPolicy {
         actuation_enabled: true,
+        allowed_applications: vec![APP.into()],
         ..LocalPolicy::default()
     }
 }
@@ -540,6 +554,34 @@ fn pagination_is_stable_within_a_snapshot_and_rejected_after_a_new_one() {
 }
 
 #[test]
+fn a_policy_change_between_pages_invalidates_the_cursor() {
+    let mut r = rig(form());
+    r.set_policy(LocalPolicy {
+        include_values: true,
+        ..LocalPolicy::default()
+    });
+    let asked = ObserveRequest {
+        limit: 2,
+        include_values: true,
+        ..ObserveRequest::default()
+    };
+    let first = r.observe_with(&asked).unwrap();
+    let next = ObserveRequest {
+        cursor: first.next_cursor.clone(),
+        ..asked.clone()
+    };
+    assert!(r.observe_with(&next).is_ok(), "same effective view");
+
+    // The operator withdraws values: the view the cursor paged no longer exists.
+    r.set_policy(LocalPolicy::default());
+    let err = r.observe_with(&next).unwrap_err();
+    assert_eq!(
+        (err.code, err.next_step),
+        (ErrorCode::StaleSnapshot, NextStep::ObserveAgain)
+    );
+}
+
+#[test]
 fn only_planned_regions_reach_the_detector() {
     let mut r = rig(form());
     r.observe();
@@ -590,10 +632,59 @@ fn a_capture_failure_is_retryable_and_publishes_nothing() {
         (ErrorCode::CaptureUnavailable, true, NextStep::ObserveAgain)
     );
     assert_eq!(r.engine.engine_metrics().observations, 1);
+    // The screen may have changed unseen: the old snapshot is no evidence to act on.
     let click = Rig::action(&page, "Save", "r1", ActionKind::Click);
+    let result = r.engine.execute_action(&click);
+    assert_eq!(result.status, ActionStatus::Rejected);
+    assert_eq!(error_code(&result), Some(ErrorCode::StaleSnapshot));
+
+    r.world().fail_capture = false;
+    let page = r.observe();
+    let click = Rig::action(&page, "Save", "r2", ActionKind::Click);
     assert_eq!(
         r.engine.execute_action(&click).status,
         ActionStatus::Simulated
+    );
+}
+
+#[test]
+fn an_unplannable_frame_blocks_actions() {
+    let mut r = rig(form());
+    let page = r.observe();
+    r.engine.config.plan.tile_size = 0;
+    let err = r.observe_with(&ObserveRequest::default()).unwrap_err();
+    assert_eq!(
+        (err.code, err.retryable, err.next_step),
+        (ErrorCode::UnsupportedGeometry, false, NextStep::Stop)
+    );
+    assert_eq!(r.engine.engine_metrics().observations, 1);
+    let click = Rig::action(&page, "Save", "r1", ActionKind::Click);
+    let result = r.engine.execute_action(&click);
+    assert_eq!(error_code(&result), Some(ErrorCode::StaleSnapshot));
+}
+
+#[test]
+fn a_frame_with_epoch_zero_is_not_published() {
+    // Not even as the first observation.
+    let mut fresh = rig(World { epoch: 0, ..form() });
+    let err = fresh.observe_with(&ObserveRequest::default()).unwrap_err();
+    assert_eq!(err.code, ErrorCode::UnsupportedGeometry);
+    assert_eq!(fresh.engine.engine_metrics().observations, 0);
+    assert!(fresh.world().detect_calls.is_empty());
+
+    let mut r = rig(form());
+    let page = r.observe();
+    r.world().epoch = 0;
+    let err = r.observe_with(&ObserveRequest::default()).unwrap_err();
+    assert_eq!(
+        (err.code, err.retryable, err.next_step),
+        (ErrorCode::UnsupportedGeometry, false, NextStep::Stop)
+    );
+    assert_eq!(r.engine.engine_metrics().observations, 1);
+    let click = Rig::action(&page, "Save", "r1", ActionKind::Click);
+    assert_eq!(
+        error_code(&r.engine.execute_action(&click)),
+        Some(ErrorCode::StaleSnapshot)
     );
 }
 
@@ -943,22 +1034,17 @@ fn unverifiable_or_partial_delivery_is_indeterminate_and_never_retried() {
     let mut r = rig(form());
     r.world().live = true;
     r.set_policy(live_policy());
-    let page = r.observe();
-    let live = |id: &str, effect| ActionRequest {
-        dry_run: false,
-        expected_effect: effect,
-        ..Rig::action(&page, "Save", id, ActionKind::Click)
+    // Every delivery spends its snapshot, so each attempt observes first.
+    let live = |r: &mut Rig, id: &str, effect| {
+        let page = r.observe();
+        r.engine.execute_action(&live_click(&page, id, effect))
     };
 
     // No visual change although one was expected.
-    let result = r
-        .engine
-        .execute_action(&live("r1", ExpectedEffect::VisualChange));
+    let result = live(&mut r, "r1", ExpectedEffect::VisualChange);
     assert_eq!(result.status, ActionStatus::Indeterminate);
     // An effect this engine cannot check yet.
-    let result = r
-        .engine
-        .execute_action(&live("r2", ExpectedEffect::FocusChanged));
+    let result = live(&mut r, "r2", ExpectedEffect::FocusChanged);
     assert_eq!(result.status, ActionStatus::Indeterminate);
     let error = result.error.unwrap();
     assert_eq!(
@@ -976,17 +1062,177 @@ fn unverifiable_or_partial_delivery_is_indeterminate_and_never_retried() {
         submitted: 2,
         inserted: 1,
     });
-    let result = r.engine.execute_action(&live("r3", ExpectedEffect::None));
+    let result = live(&mut r, "r3", ExpectedEffect::None);
     assert_eq!(result.status, ActionStatus::Indeterminate);
     assert!(!result.input_delivered());
     // The actuator failed outright.
     r.world().receipt = Err(());
-    let result = r.engine.execute_action(&live("r4", ExpectedEffect::None));
+    let result = live(&mut r, "r4", ExpectedEffect::None);
     assert_eq!(result.status, ActionStatus::Indeterminate);
 
     assert_eq!(r.world().delivered.len(), 4, "one attempt each, no retries");
     let m = r.engine.engine_metrics();
     assert_eq!((m.delivered_actions, m.rejected_actions), (0, 0));
+}
+
+/// A live click on the Save button of `page`, expecting `effect`.
+fn live_click(page: &ObservePage, request_id: &str, effect: ExpectedEffect) -> ActionRequest {
+    ActionRequest {
+        dry_run: false,
+        expected_effect: effect,
+        ..Rig::action(page, "Save", request_id, ActionKind::Click)
+    }
+}
+
+fn assert_policy_denied(result: &ActionResult, message: &str) {
+    assert_eq!(result.status, ActionStatus::Rejected);
+    let error = result.error.as_ref().unwrap();
+    assert_eq!(
+        (error.code, error.retryable, error.next_step),
+        (ErrorCode::PolicyDenied, false, NextStep::OperatorReview)
+    );
+    assert_eq!(error.message, message);
+}
+
+#[test]
+fn live_input_is_denied_when_no_application_is_allowlisted() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(LocalPolicy {
+        allowed_applications: Vec::new(),
+        ..live_policy()
+    });
+    let page = r.observe();
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::None));
+    assert_policy_denied(&result, "no application is on the local allowlist");
+    assert!(r.world().delivered.is_empty());
+}
+
+#[test]
+fn live_input_is_denied_when_the_foreground_application_is_unknown() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    // The actuator cannot attest the foreground application.
+    r.world().foreground = None;
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::None));
+    assert_policy_denied(
+        &result,
+        "foreground application is not on the local allowlist",
+    );
+    // It can, but the application is not on the list.
+    r.world().foreground = Some("other-app".into());
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r2", ExpectedEffect::None));
+    assert_policy_denied(
+        &result,
+        "foreground application is not on the local allowlist",
+    );
+    assert!(r.world().delivered.is_empty());
+    // On the list: delivered.
+    r.world().foreground = Some(APP.into());
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r3", ExpectedEffect::None));
+    assert_eq!(result.status, ActionStatus::InputDelivered);
+}
+
+#[test]
+fn a_change_before_delivery_is_not_an_observed_effect() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    // Something unrelated to the action changes the screen after the observation.
+    r.world().reactions = 1;
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::VisualChange));
+    assert_eq!(result.status, ActionStatus::Rejected);
+    let error = result.error.unwrap();
+    assert_eq!(
+        (error.code, error.next_step),
+        (ErrorCode::StaleSnapshot, NextStep::ObserveAgain)
+    );
+    assert!(r.world().delivered.is_empty(), "nothing delivered");
+    assert_eq!(r.engine.engine_metrics().delivered_actions, 0);
+}
+
+#[test]
+fn visual_change_is_measured_against_the_pre_delivery_frame() {
+    let mut r = rig(form());
+    {
+        let mut w = r.world();
+        w.live = true;
+        w.react_to_input = true;
+    }
+    r.set_policy(live_policy());
+    let page = r.observe();
+    r.world().events.clear();
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::VisualChange));
+    assert_eq!(result.status, ActionStatus::EffectObserved);
+    // A frame right before delivery and one after it: the effect is their difference.
+    assert_eq!(r.world().events, ["capture", "deliver", "capture"]);
+}
+
+#[test]
+fn a_second_action_after_delivery_needs_a_new_observation() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    let first = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::None));
+    assert_eq!(first.status, ActionStatus::InputDelivered);
+
+    // Live or dry run, the delivered input may have changed what the snapshot shows.
+    for (id, dry_run) in [("r2", false), ("r3", true)] {
+        let request = ActionRequest {
+            dry_run,
+            ..live_click(&page, id, ExpectedEffect::None)
+        };
+        let result = r.engine.execute_action(&request);
+        assert_eq!(result.status, ActionStatus::Rejected);
+        let error = result.error.unwrap();
+        assert_eq!(
+            (error.code, error.next_step),
+            (ErrorCode::StaleSnapshot, NextStep::ObserveAgain)
+        );
+    }
+    assert_eq!(r.world().delivered.len(), 1);
+    // A replay still returns the stored result.
+    assert_eq!(
+        r.engine
+            .execute_action(&live_click(&page, "r1", ExpectedEffect::None)),
+        first
+    );
+
+    // An indeterminate delivery spends the snapshot too.
+    let page = r.observe();
+    r.world().receipt = Err(());
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r4", ExpectedEffect::None));
+    assert_eq!(result.status, ActionStatus::Indeterminate);
+    let result = r
+        .engine
+        .execute_action(&Rig::action(&page, "Save", "r5", ActionKind::Click));
+    assert_eq!(error_code(&result), Some(ErrorCode::StaleSnapshot));
+
+    let page = r.observe();
+    let result = r
+        .engine
+        .execute_action(&Rig::action(&page, "Save", "r6", ActionKind::Click));
+    assert_eq!(result.status, ActionStatus::Simulated);
 }
 
 #[test]

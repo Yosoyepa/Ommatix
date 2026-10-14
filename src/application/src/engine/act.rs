@@ -1,15 +1,18 @@
 //! The action gate (SDD §2.9, ADR-0007) and the honest delivery report (chapter 07 §7.5).
 //!
 //! Order: arguments → `request_id` deduplication → a snapshot that reflects the last
-//! observation → session, epoch, snapshot, target, revision and actionability (the
-//! registry's checks) → the action's own needs → dry run (`simulated`, the default) or,
-//! only when the operator's policy allows it and a live actuator exists, delivery and a
-//! report of exactly what is known: `input_delivered` never claims an effect, and any
-//! doubt is `indeterminate`, never an automatic retry.
+//! observation and has not been spent by a delivery → session, epoch, snapshot, target,
+//! revision and actionability (the registry's checks) → the action's own needs → dry run
+//! (`simulated`, the default) or, only when the operator's policy allows it, a live
+//! actuator exists and attests an allowlisted foreground application, a freshness check
+//! (the screen is still the committed base), delivery and a report of exactly what is
+//! known: `input_delivered` never claims an effect, and any doubt is `indeterminate`,
+//! never an automatic retry. Any delivery spends the snapshot: the next action needs a
+//! new observation.
 
 use ommatix_domain::fusion::Role;
 use ommatix_domain::identity::{ActionRef, ActionRejection, ActionStatus, Clearance, Delivery};
-use ommatix_domain::incremental::dirty_tiles;
+use ommatix_domain::incremental::{BgraFrame, dirty_tiles};
 
 use super::Engine;
 use super::journal::{Lookup, arguments_hash};
@@ -66,6 +69,10 @@ fn policy_denied() -> ToolError {
         ErrorCode::PolicyDenied,
         "live input is not allowed by the local policy or no live actuator is available",
     )
+}
+
+fn not_allowlisted(message: &str) -> ToolError {
+    ToolError::new(ErrorCode::PolicyDenied, message)
 }
 
 fn indeterminate(message: &str) -> ToolError {
@@ -150,7 +157,7 @@ impl Engine {
         &mut self,
         request: &ActionRequest,
     ) -> Result<(ActionStatus, Option<ToolError>, Option<ObservedEffect>), ToolError> {
-        if !self.store.actions_allowed() {
+        if !self.store.actions_allowed() || self.snapshot_spent {
             return Err(stale_snapshot());
         }
         let published = self.store.published().ok_or_else(stale_snapshot)?;
@@ -189,6 +196,17 @@ impl Engine {
         if !allowed {
             return Err(policy_denied());
         }
+        // Fail closed on the application allowlist (chapter 08): an empty list allows
+        // nothing, and a foreground application the actuator cannot attest is not on it.
+        if policy.allowed_applications.is_empty() {
+            return Err(not_allowlisted("no application is on the local allowlist"));
+        }
+        let foreground = self.ports.actuator.foreground_application();
+        if !foreground.is_some_and(|app| policy.allowed_applications.contains(&app)) {
+            return Err(not_allowlisted(
+                "foreground application is not on the local allowlist",
+            ));
+        }
         let Clearance::Deliver { bbox, .. } = registry
             .check_action(
                 &action,
@@ -200,20 +218,51 @@ impl Engine {
         else {
             return Err(policy_denied());
         };
+        let before = self.fresh_frame()?;
         let validated = ValidatedAction {
             target_id,
             kind: request.action.clone(),
             point: bbox.center(),
         };
-        Ok(self.deliver(&validated, request.expected_effect))
+        Ok(self.deliver(&validated, &before, request.expected_effect))
+    }
+
+    /// Freshness (SDD §2.9): a frame captured right before delivery must still be the
+    /// committed base, or the snapshot no longer shows the screen and nothing is
+    /// delivered. Returns that frame, the reference for the action's visual effect.
+    fn fresh_frame(&mut self) -> Result<BgraFrame, ToolError> {
+        let Ok(captured) = self.ports.capturer.capture() else {
+            return Err(ToolError::new(
+                ErrorCode::CaptureUnavailable,
+                "the screen could not be captured to confirm the snapshot; nothing was delivered",
+            ));
+        };
+        let unchanged = dirty_tiles(
+            self.store.base(),
+            &captured.frame,
+            self.config.plan.tile_size,
+        )
+        .is_ok_and(|diff| diff.full_refresh.is_none() && diff.tiles.is_empty());
+        if unchanged {
+            Ok(captured.frame)
+        } else {
+            self.snapshot_spent = true;
+            Err(ToolError::new(
+                ErrorCode::StaleSnapshot,
+                "the screen changed since the observation; nothing was delivered; observe again",
+            ))
+        }
     }
 
     /// Hands a validated action to the actuator and reports what is known, no more.
     fn deliver(
         &mut self,
         action: &ValidatedAction,
+        before: &BgraFrame,
         expected: ExpectedEffect,
     ) -> (ActionStatus, Option<ToolError>, Option<ObservedEffect>) {
+        // Whatever happens next, input may have reached the OS: the snapshot is spent.
+        self.snapshot_spent = true;
         let uncertain = |message| {
             (
                 ActionStatus::Indeterminate,
@@ -232,7 +281,7 @@ impl Engine {
         match expected {
             ExpectedEffect::None => (ActionStatus::InputDelivered, None, None),
             ExpectedEffect::VisualChange => {
-                if self.screen_changed() {
+                if self.screen_changed_since(before) {
                     (
                         ActionStatus::EffectObserved,
                         None,
@@ -250,17 +299,15 @@ impl Engine {
         }
     }
 
-    /// Whether a fresh capture differs from the committed base. Nothing is published.
-    fn screen_changed(&mut self) -> bool {
+    /// Whether a fresh capture differs from `before`, the frame captured right before
+    /// delivery; changes that happened earlier are not this action's effect. Nothing is
+    /// published.
+    fn screen_changed_since(&mut self, before: &BgraFrame) -> bool {
         let Ok(captured) = self.ports.capturer.capture() else {
             return false;
         };
-        dirty_tiles(
-            self.store.base(),
-            &captured.frame,
-            self.config.plan.tile_size,
-        )
-        .is_ok_and(|diff| diff.full_refresh.is_some() || !diff.tiles.is_empty())
+        dirty_tiles(Some(before), &captured.frame, self.config.plan.tile_size)
+            .is_ok_and(|diff| diff.full_refresh.is_some() || !diff.tiles.is_empty())
     }
 }
 

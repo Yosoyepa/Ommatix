@@ -84,6 +84,9 @@ pub struct Engine {
     store: SnapshotStore<Published>,
     journal: Journal,
     counters: Counters,
+    /// Input was handed to the actuator since the last commit (whatever its outcome): the
+    /// published snapshot may no longer show the screen and cannot be acted on again.
+    snapshot_spent: bool,
 }
 
 impl Engine {
@@ -94,6 +97,7 @@ impl Engine {
             store: SnapshotStore::new(),
             journal: Journal::new(JOURNAL_CAPACITY),
             counters: Counters::default(),
+            snapshot_spent: false,
         }
     }
 

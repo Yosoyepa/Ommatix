@@ -5,6 +5,7 @@
 //! regions reach the detector and the recogniser, and evidence outside them is kept. A
 //! failed stage publishes nothing, keeps the planned tiles pending and blocks actions.
 
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use ommatix_domain::bbox::BBox;
@@ -276,16 +277,33 @@ impl Engine {
     pub(super) fn observe(&mut self) -> Result<(), ToolError> {
         let clock = self.ports.clock.clone();
         let t0 = clock.now();
-        let captured = self.ports.capturer.capture().map_err(|_| {
-            ToolError::new(
+        // Any failed observation blocks actions on the evidence it could not refresh
+        // (SDD §2.7); with no plan yet, no tile is known to be dirty.
+        let Ok(captured) = self.ports.capturer.capture() else {
+            self.store.record_failure(&BTreeSet::new());
+            return Err(ToolError::new(
                 ErrorCode::CaptureUnavailable,
                 "the screen could not be captured",
-            )
-        })?;
+            ));
+        };
         let frame = captured.frame;
         let t_capture = clock.now();
 
-        let plan = self.plan(&frame)?;
+        // Geometry epochs start at 1 on the wire: an epoch-0 frame cannot be published.
+        if frame.geometry_epoch() == 0 {
+            self.store.record_failure(&BTreeSet::new());
+            return Err(ToolError::new(
+                ErrorCode::UnsupportedGeometry,
+                "the frame has no valid geometry epoch",
+            ));
+        }
+        let plan = match self.plan(&frame) {
+            Ok(plan) => plan,
+            Err(error) => {
+                self.store.record_failure(&BTreeSet::new());
+                return Err(error);
+            }
+        };
         let t_plan = clock.now();
 
         let regions: Vec<BBox> = match &plan.work {
@@ -353,6 +371,7 @@ impl Engine {
             self.store.record_failure(&plan.dirty);
             return Err(inference_failed());
         }
+        self.snapshot_spent = false;
         Ok(())
     }
 

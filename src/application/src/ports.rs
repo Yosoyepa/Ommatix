@@ -75,6 +75,12 @@ pub trait OsActuator: Send {
 
     fn is_live(&self) -> bool;
 
+    /// The application in the foreground, as the actuator can attest it. `None` when it
+    /// cannot (the default): live input then never passes the application allowlist.
+    fn foreground_application(&self) -> Option<String> {
+        None
+    }
+
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError>;
 }
 

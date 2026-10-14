@@ -4,8 +4,9 @@
 //! of the label (and of the value, when values are shown); it never touches the registry.
 //! Values are shown only when the request asks for them **and** the local policy allows
 //! them. A page holds at most `limit` elements; when more remain, the page carries an
-//! opaque cursor bound to the snapshot, the offset, the query and `include_values`. A
-//! cursor is only honoured while its snapshot is the published one.
+//! opaque cursor bound to the snapshot, the offset, the query and whether values are
+//! shown (the request's `include_values` and the policy's together). A cursor is only
+//! honoured while its snapshot is the published one and the view it paged still holds.
 
 use ommatix_domain::fusion::normalized;
 
@@ -179,7 +180,7 @@ impl Engine {
         let published = self.store.published().ok_or_else(stale_cursor)?;
         let key = query_key(request);
         if cursor.snapshot != published.registry.snapshot_id()
-            || cursor.include_values != request.include_values
+            || cursor.include_values != self.show_values(request)
             || cursor.query_hash != query_hash(key.as_deref())
             || cursor.offset == 0
         {
@@ -194,6 +195,12 @@ impl Engine {
         Ok(page)
     }
 
+    /// Whether values are shown: the request asks **and** the local policy allows. The
+    /// cursor binds this effective value, so a policy change invalidates it.
+    fn show_values(&self, request: &ObserveRequest) -> bool {
+        request.include_values && self.ports.policy.current().include_values
+    }
+
     fn page(
         &self,
         published: &Published,
@@ -201,7 +208,7 @@ impl Engine {
         offset: usize,
         degraded: bool,
     ) -> ObservePage {
-        let show_values = request.include_values && self.ports.policy.current().include_values;
+        let show_values = self.show_values(request);
         let key = query_key(request);
         let filtered: Vec<&StoredElement> = published
             .elements
@@ -220,7 +227,7 @@ impl Engine {
             Cursor {
                 snapshot: published.registry.snapshot_id(),
                 offset: end,
-                include_values: request.include_values,
+                include_values: show_values,
                 query_hash: query_hash(key.as_deref()),
             }
             .encode()
