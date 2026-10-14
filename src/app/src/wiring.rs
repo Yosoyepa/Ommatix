@@ -23,7 +23,8 @@ use ommatix_adapter_sim::{SimulatedDesktop, Theme};
 use ommatix_adapter_vision::{FlatRegionDetector, NullTextRecognizer};
 use ommatix_application::contract::limits;
 use ommatix_application::{
-    Clock, Engine, EngineConfig, FrameCapturer, OsActuator, Ports, TextRecognizer, VisionDetector,
+    Clock, Engine, EngineConfig, FrameCapturer, IconResolverConfig, OsActuator, Ports,
+    TextRecognizer, VisionDetector,
 };
 
 use crate::cli::{InputKind, RunArgs, SourceKind, ThemeKind};
@@ -107,6 +108,7 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
     let session_id = session_id(args.session_id.as_deref())?;
     let input = input_kind(args, config);
     check_input(args.source, input, config)?;
+    let icons = config.icon_resolver()?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock::new());
 
     let mut sim = None;
@@ -155,10 +157,11 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
         if live { " (live)" } else { " (never live)" },
     );
     let mut notes = config.notes();
+    notes.push(icon_note(icons.as_ref()));
     if live && config.safety.actuation_enabled {
         notes.push(
-            "[safety] allowed_applications is not enforced yet: the engine cannot identify \
-             the foreground application"
+            "[safety] live input is denied until the input adapter can attest that the \
+             foreground application is in allowed_applications (none can before S3)"
                 .to_owned(),
         );
     }
@@ -171,6 +174,7 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
 
     let mut engine_config = EngineConfig::new(session_id);
     engine_config.plan = config.plan_params();
+    engine_config.icons = icons;
     let engine = Engine::new(
         engine_config,
         Ports {
@@ -188,6 +192,25 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
         summary,
         notes,
     })
+}
+
+/// What Algorithm 3A will do, for stderr.
+fn icon_note(icons: Option<&IconResolverConfig>) -> String {
+    let Some(icons) = icons else {
+        return "[cache] no curated icon prototypes are configured: icon labels stay unknown"
+            .to_owned();
+    };
+    let total = icons.cache.prototypes().len();
+    let in_context = icons
+        .cache
+        .prototypes()
+        .iter()
+        .filter(|p| p.context == icons.context)
+        .count();
+    format!(
+        "[cache] {total} curated icon prototypes, {in_context} for context {:?}; the          thresholds are the operator's, not calibrated by this build",
+        icons.context
+    )
 }
 
 fn theme(kind: ThemeKind) -> Theme {
@@ -320,6 +343,12 @@ mod tests {
                 .notes
                 .iter()
                 .any(|n| n.contains("max_snapshot_age_ms"))
+        );
+        assert!(
+            wired
+                .notes
+                .iter()
+                .any(|n| n.contains("no curated icon prototypes"))
         );
     }
 

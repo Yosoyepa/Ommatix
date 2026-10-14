@@ -9,6 +9,7 @@ mod clock;
 mod config;
 mod demo;
 mod policy;
+mod prototypes;
 mod wiring;
 
 use anyhow::{Context, Result};

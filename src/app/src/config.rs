@@ -7,15 +7,22 @@
 //! instead of accepting them silently, and [`Config::notes`] lists the accepted values that
 //! the engine does not enforce yet, for stderr.
 //!
+//! `[cache]` may add, beyond the template, a curated prototypes file for Algorithm 3A and
+//! the thresholds to use it with. The thesis calibrates those thresholds (H4), so none has
+//! a default: the resolver is on only when the file, the context, `gradient_tau`,
+//! `max_distance` and `min_margin` are all set, and any of them without the others is
+//! refused.
+//!
 //! The file is the operator's: nothing the agent sends can change it, and no CLI flag
 //! loosens `[safety]`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use ommatix_adapter_mcp::config::MIN_MAX_MESSAGE_BYTES;
 use ommatix_adapter_mcp::{DEFAULT_MAX_MESSAGE_BYTES, MODERN_PROTOCOL_VERSION, McpConfig};
-use ommatix_application::LocalPolicy;
+use ommatix_application::{IconResolverConfig, LocalPolicy};
+use ommatix_domain::appearance::CachePolicy;
 use ommatix_domain::incremental::PlanParams;
 use serde::Deserialize;
 
@@ -106,11 +113,24 @@ pub struct ModelsSection {
 }
 
 /// `[cache]`: the icon cache (Algorithm 3A).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct CacheSection {
+    /// Most curated prototypes the file may hold.
     pub max_entries: u32,
     pub persist: bool,
+    /// Curated prototypes, JSON lines (see `prototypes.rs`); relative to the configuration
+    /// file. Empty: no prototypes, every icon stays unknown.
+    pub prototypes: String,
+    /// The application or screen whose prototypes apply. Until the engine can identify
+    /// the foreground application (S3), the operator names it here.
+    pub context: String,
+    /// Gradient threshold of the descriptor, in grey levels (1..=255).
+    pub gradient_tau: Option<u8>,
+    /// Largest descriptor distance accepted as a match, in [0, 1].
+    pub max_distance: Option<f64>,
+    /// Smallest distance gap to the next different label, in [0, 1].
+    pub min_margin: Option<f64>,
 }
 
 impl Default for CacheSection {
@@ -118,7 +138,73 @@ impl Default for CacheSection {
         Self {
             max_entries: 4096,
             persist: false,
+            prototypes: String::new(),
+            context: String::new(),
+            gradient_tau: None,
+            max_distance: None,
+            min_margin: None,
         }
+    }
+}
+
+impl CacheSection {
+    /// Whether any key of the icon resolver is set.
+    fn resolver_requested(&self) -> bool {
+        !self.prototypes.is_empty()
+            || !self.context.is_empty()
+            || self.gradient_tau.is_some()
+            || self.max_distance.is_some()
+            || self.min_margin.is_some()
+    }
+
+    /// What is wrong with this section, one problem per entry.
+    fn problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut check = |ok: bool, problem: &str| {
+            if !ok {
+                out.push(problem.to_owned());
+            }
+        };
+        check(
+            self.max_entries >= 1,
+            "[cache] max_entries must be at least 1",
+        );
+        check(
+            !self.persist,
+            "[cache] persist = true cannot be honoured: the icon cache lives in memory only",
+        );
+        let c = self;
+        if c.resolver_requested() {
+            check(
+                !c.prototypes.trim().is_empty()
+                    && !c.context.is_empty()
+                    && c.gradient_tau.is_some()
+                    && c.max_distance.is_some()
+                    && c.min_margin.is_some(),
+                "[cache] the icon resolver needs all of prototypes, context, gradient_tau, \
+                 max_distance and min_margin (the thesis calibrates them; there are no \
+                 defaults)",
+            );
+            check(
+                c.context.is_empty()
+                    || (!c.context.trim().is_empty()
+                        && c.context.chars().count() <= crate::prototypes::MAX_CONTEXT_CHARS
+                        && !c.context.chars().any(char::is_control)),
+                "[cache] context must be a visible name of at most 256 characters",
+            );
+            check(
+                c.gradient_tau != Some(0),
+                "[cache] gradient_tau must be between 1 and 255",
+            );
+            check(
+                [c.max_distance, c.min_margin]
+                    .iter()
+                    .flatten()
+                    .all(|v| (0.0..=1.0).contains(v)),
+                "[cache] max_distance and min_margin must be between 0 and 1",
+            );
+        }
+        out
     }
 }
 
@@ -131,6 +217,10 @@ pub struct Config {
     pub safety: SafetySection,
     pub models: ModelsSection,
     pub cache: CacheSection,
+    /// Directory of the file this configuration was read from: relative paths in it
+    /// resolve there.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -154,7 +244,9 @@ impl Config {
             Ok(std::fs::read_to_string(path)?)
         };
         let text = read().with_context(|| format!("cannot read {}", path.display()))?;
-        Self::parse(&text).with_context(|| format!("in {}", path.display()))
+        let mut config = Self::parse(&text).with_context(|| format!("in {}", path.display()))?;
+        config.base_dir = path.parent().map(Path::to_path_buf);
+        Ok(config)
     }
 
     /// Rejects values that are out of range or that this build cannot honour. Every
@@ -219,7 +311,7 @@ impl Config {
         );
         check(
             (MIN_MAX_MESSAGE_BYTES..=DEFAULT_MAX_MESSAGE_BYTES).contains(&m.max_message_bytes),
-            "[mcp] max_message_bytes must be between 1024 and 65536 (the contract's 64 KiB \
+            "[mcp] max_message_bytes must be between 4096 and 65536 (the contract's 64 KiB \
              limit)",
         );
 
@@ -256,30 +348,46 @@ impl Config {
              leave detector_path, detector_sha256, ocr_path and ocr_sha256 empty",
         );
 
-        check(
-            self.cache.max_entries >= 1,
-            "[cache] max_entries must be at least 1",
-        );
-        check(
-            !self.cache.persist,
-            "[cache] persist = true cannot be honoured: the icon cache lives in memory only",
-        );
+        out.extend(self.cache.problems());
         out
     }
 
     /// Accepted values that the engine does not enforce yet, to report on stderr.
     pub fn notes(&self) -> Vec<String> {
-        vec![
-            format!(
-                "[engine] max_snapshot_age_ms = {} is not enforced yet; every page reports \
+        vec![format!(
+            "[engine] max_snapshot_age_ms = {} is not enforced yet; every page reports \
                  its age_ms",
-                self.engine.max_snapshot_age_ms
-            ),
-            format!(
-                "[cache] max_entries = {} is not used yet: the engine has no icon cache wired",
-                self.cache.max_entries
-            ),
-        ]
+            self.engine.max_snapshot_age_ms
+        )]
+    }
+
+    /// Algorithm 3A's settings, reading the prototypes file; `None` when the resolver is
+    /// not configured. Assumes [`Self::validate`] passed.
+    pub fn icon_resolver(&self) -> Result<Option<IconResolverConfig>> {
+        let c = &self.cache;
+        let (Some(tau), Some(max_distance), Some(min_margin)) =
+            (c.gradient_tau, c.max_distance, c.min_margin)
+        else {
+            return Ok(None);
+        };
+        if c.prototypes.trim().is_empty() || c.context.is_empty() {
+            return Ok(None);
+        }
+        let policy = CachePolicy::new(max_distance, min_margin)
+            .context("[cache] max_distance and min_margin must be between 0 and 1")?;
+        let path = Path::new(&c.prototypes);
+        let path = match &self.base_dir {
+            Some(dir) if path.is_relative() => dir.join(path),
+            _ => path.to_path_buf(),
+        };
+        let cache =
+            crate::prototypes::load(&path, c.max_entries, tau).context("[cache] prototypes")?;
+        Ok(Some(IconResolverConfig {
+            cache,
+            policy,
+            tau,
+            context: c.context.clone(),
+        }))
     }
 
     /// Algorithm 1's parameters.
@@ -389,6 +497,13 @@ mod tests {
             ("[models]\ndetector_path = \"d.onnx\"\n", "[models]"),
             ("[cache]\npersist = true\n", "persist"),
             ("[cache]\nmax_entries = 0\n", "max_entries"),
+            ("[cache]\nprototypes = \"icons.jsonl\"\n", "no defaults"),
+            ("[cache]\nmax_distance = 0.1\n", "no defaults"),
+            ("[cache]\ncontext = \"app\"\n", "no defaults"),
+            ("[cache]\ngradient_tau = 0\n", "gradient_tau"),
+            ("[cache]\ngradient_tau = 256\n", "gradient_tau"),
+            ("[cache]\nmin_margin = 1.5\n", "min_margin"),
+            ("[cache]\ncontext = \" \"\n", "context"),
             ("[engine]\ntile_size = \"big\"\n", "tile_size"),
         ] {
             let message = error(text);
@@ -427,6 +542,53 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.mcp_config(true), McpConfig::with_legacy());
         assert_eq!(config.local_policy(), LocalPolicy::default());
+    }
+
+    const RESOLVER: &str = "[cache]\nprototypes = \"icons.jsonl\"\ncontext = \"notepad.exe\"\n\
+                            gradient_tau = 3\nmax_distance = 0.1\nmin_margin = 0.1\n";
+
+    #[test]
+    fn the_icon_resolver_is_off_unless_fully_configured() {
+        assert_eq!(Config::default().icon_resolver().unwrap(), None);
+        let config = Config::parse(RESOLVER).unwrap();
+        assert_eq!(config.cache.context, "notepad.exe");
+        // The file is read relative to the configuration file and refused when missing.
+        let config = Config {
+            base_dir: Some(PathBuf::from("definitely/not/here")),
+            ..config
+        };
+        let message = format!("{:#}", config.icon_resolver().unwrap_err());
+        assert!(
+            message.contains("cannot read") && message.contains("here"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_curated_prototypes_file_configures_the_resolver() {
+        let dir = std::env::temp_dir().join(format!("ommatix-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let grid: Vec<String> = [0, 90, 90, 0, 0, 90, 90, 0, 0]
+            .repeat(8)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        std::fs::write(
+            dir.join("icons.jsonl"),
+            format!(
+                "{{\"label\":\"Save\",\"context\":\"notepad.exe\",\"grid\":[{}]}}\n",
+                grid.join(",")
+            ),
+        )
+        .unwrap();
+        std::fs::write(dir.join("ommatix.toml"), RESOLVER).unwrap();
+        let config = Config::load(Some(&dir.join("ommatix.toml"))).unwrap();
+        let resolver = config.icon_resolver().unwrap().expect("configured");
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(resolver.context, "notepad.exe");
+        assert_eq!(resolver.tau, 3);
+        assert_eq!(resolver.cache.prototypes().len(), 1);
+        assert_eq!(resolver.policy, CachePolicy::new(0.1, 0.1).unwrap());
     }
 
     #[test]
