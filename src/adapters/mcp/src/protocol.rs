@@ -10,7 +10,8 @@
 //! | `initialize`, only when `legacy_enabled` | 2025-11-25 | `initialize` → `notifications/initialized`; legacy result shapes (no `resultType`, no cache hints); `ping` |
 //!
 //! Error codes (JSON-RPC): `-32700` unparsable message, `-32600` invalid request (not an
-//! object, bad `jsonrpc`/`id`, oversized message, repeated `initialize`), `-32601` unknown
+//! object, bad `jsonrpc`/`id`, oversized message, repeated `initialize`, a legacy request
+//! other than `ping` before `notifications/initialized`), `-32601` unknown
 //! method (or a method of the other profile), `-32602` invalid params (missing request
 //! metadata, unknown tool, arguments that violate the tool's input schema, a legacy
 //! session request that declares another protocol version), `-32022` unsupported protocol
@@ -272,7 +273,7 @@ impl Connection {
                 check_modern_meta(meta)?;
                 self.modern(method, params)
             }
-            State::Legacy { .. } => {
+            State::Legacy { initialized } => {
                 if let Some(declared) = meta.and_then(|m| m.get(META_PROTOCOL_VERSION))
                     && declared.as_str() != Some(LEGACY_PROTOCOL_VERSION)
                 {
@@ -282,6 +283,15 @@ impl Connection {
                             "supported": [LEGACY_PROTOCOL_VERSION],
                             "requested": declared,
                         })),
+                    ));
+                }
+                // 2025-11-25 lifecycle: until the client sends `notifications/initialized`
+                // the session is not operational; only `ping` is served.
+                if !initialized && method != "ping" && method != "initialize" {
+                    return Err(ErrorData::invalid_request(
+                        "Invalid request: the session is not initialized; send \
+                         notifications/initialized first",
+                        None,
                     ));
                 }
                 self.legacy(method, params)
@@ -401,14 +411,33 @@ impl Connection {
 
 /// Encodes a tool result for the profile, within `limit` bytes: an observation page that
 /// does not fit becomes a `LIMIT_EXCEEDED` tool error asking for a smaller request.
+///
+/// Any other result (above all an `execute_action` one, the agent's only record of input
+/// that may have reached the OS) is never replaced: it sheds its text duplicate and its
+/// `_meta` first, keeping `structuredContent`, which [`MIN_MAX_MESSAGE_BYTES`] always
+/// fits; only an oversized request id can still turn it into an error.
+///
+/// [`MIN_MAX_MESSAGE_BYTES`]: crate::config::MIN_MAX_MESSAGE_BYTES
 fn encode_tool(id: &Value, output: ToolOutput, modern: bool, limit: usize) -> String {
-    let observe = output.tool == OBSERVE_SCREEN;
-    let line = envelope(id, Some(&call_result(output, modern)), None);
-    if line.len() <= limit || !observe {
-        return fit(id, &line, limit);
+    let encode = |result: &Value| envelope(id, Some(result), None);
+    if output.tool == OBSERVE_SCREEN {
+        let line = encode(&call_result(output, modern, Shape::Full));
+        if line.len() <= limit {
+            return line;
+        }
+        let reduced = call_result(tools::limit_exceeded(limit), modern, Shape::Full);
+        return fit(id, &encode(&reduced), limit);
     }
-    let reduced = call_result(tools::limit_exceeded(limit), modern);
-    fit(id, &envelope(id, Some(&reduced), None), limit)
+    // Small results: the copy kept for the lean fallback is cheap.
+    let line = encode(&call_result(output.clone(), modern, Shape::Full));
+    if line.len() <= limit {
+        return line;
+    }
+    fit(
+        id,
+        &encode(&call_result(output, modern, Shape::Lean)),
+        limit,
+    )
 }
 
 /// Never emits more than the limit: an oversized line becomes an internal error, and if
@@ -429,21 +458,41 @@ fn fit(id: &Value, line: &str, limit: usize) -> String {
     }
 }
 
-/// A `CallToolResult`: the Ommatix object as `structuredContent` and as the single text
-/// block; `resultType` and `serverInfo` only for the modern profile; run-dependent values
-/// in `_meta`.
-fn call_result(output: ToolOutput, modern: bool) -> Value {
-    let mut result = CallToolResult::success(vec![ContentBlock::text(output.text)]);
+/// How much of a tool result to encode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// `structuredContent`, its text duplicate and `_meta`.
+    Full,
+    /// `structuredContent` only, with a short text block pointing at it.
+    Lean,
+}
+
+/// The text block of a [`Shape::Lean`] result.
+const LEAN_TEXT: &str = "The result is in structuredContent.";
+
+/// A `CallToolResult`: the Ommatix object as `structuredContent` and (in full) as the
+/// single text block; `resultType` and `serverInfo` only for the modern profile;
+/// run-dependent values in `_meta`.
+fn call_result(output: ToolOutput, modern: bool, shape: Shape) -> Value {
+    let full = shape == Shape::Full;
+    let text = if full {
+        output.text
+    } else {
+        LEAN_TEXT.to_owned()
+    };
+    let mut result = CallToolResult::success(vec![ContentBlock::text(text)]);
     result.structured_content = Some(output.structured);
     result.is_error = Some(output.is_error);
     let mut meta = JsonObject::new();
-    if modern {
-        meta.insert(META_SERVER_INFO.to_owned(), server_info_value());
-    } else {
+    if !modern {
         result.result_type = None;
+    } else if full {
+        meta.insert(META_SERVER_INFO.to_owned(), server_info_value());
     }
-    for (key, value) in output.meta {
-        meta.insert(key.to_owned(), value);
+    if full {
+        for (key, value) in output.meta {
+            meta.insert(key.to_owned(), value);
+        }
     }
     if !meta.is_empty() {
         result.meta = Some(MetaObject(meta));
@@ -627,9 +676,75 @@ mod tests {
         assert_eq!(response["result"]["isError"], false);
     }
 
+    /// CT-10: the result of an action that reached the OS is the agent's only record of
+    /// it; no message limit may turn it into a protocol error.
+    #[test]
+    fn ct_10_a_delivered_action_result_always_fits_the_minimum_limit() {
+        use ommatix_application::contract::{
+            ActionResult, ErrorCode as Code, ObservedEffect, ToolError, limits,
+        };
+        use ommatix_domain::identity::ActionStatus;
+
+        use crate::config::{MIN_MAX_MESSAGE_BYTES, McpConfig};
+        use crate::dto::ExecuteActionOutput;
+        use crate::tools::EXECUTE_ACTION;
+
+        assert_eq!(MIN_MAX_MESSAGE_BYTES, 4096);
+        let tiny = McpConfig {
+            legacy_enabled: false,
+            max_message_bytes: 1,
+        };
+        assert_eq!(tiny.message_limit(), MIN_MAX_MESSAGE_BYTES);
+
+        // Agent-chosen ids echoed back at their longest, in the costliest JSON escape.
+        let worst = "\u{1}".repeat(limits::MAX_ID_CHARS);
+        let message = "\u{1}".repeat(limits::MAX_MESSAGE_CHARS);
+        let results = [
+            (ActionStatus::InputDelivered, None, None),
+            (
+                ActionStatus::EffectObserved,
+                None,
+                Some(ObservedEffect::VisualChange),
+            ),
+            (
+                ActionStatus::Indeterminate,
+                Some(ToolError::new(Code::IndeterminateEffect, message)),
+                Some(ObservedEffect::Unknown),
+            ),
+        ];
+        for (status, error, observed_effect) in results {
+            let result = ActionResult {
+                request_id: worst.clone(),
+                status,
+                target_id: worst.clone(),
+                snapshot_id: worst.clone(),
+                error,
+                observed_effect,
+            };
+            let output = ToolOutput::new(
+                EXECUTE_ACTION,
+                &ExecuteActionOutput::from(&result),
+                result.error.is_some(),
+            );
+            let expected = output.structured.clone();
+            for modern in [true, false] {
+                let id = json!("request-0001");
+                let line = encode_tool(&id, output.clone(), modern, MIN_MAX_MESSAGE_BYTES);
+                assert!(line.len() <= MIN_MAX_MESSAGE_BYTES, "{}", line.len());
+                let response: Value = serde_json::from_str(&line).unwrap();
+                assert!(response.get("error").is_none(), "{response}");
+                assert_eq!(response["id"], id);
+                assert_eq!(response["result"]["structuredContent"], expected);
+                if modern {
+                    assert_eq!(response["result"]["resultType"], "complete");
+                }
+            }
+        }
+    }
+
     #[test]
     fn legacy_tool_results_have_no_modern_fields() {
-        let result = call_result(observe_output(1), false);
+        let result = call_result(observe_output(1), false, Shape::Full);
         assert!(result.get("resultType").is_none());
         assert!(result.get("_meta").is_none());
     }

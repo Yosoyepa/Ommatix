@@ -367,6 +367,49 @@ fn ct_08_legacy_session_uses_legacy_rules_only() {
 }
 
 #[test]
+fn legacy_requests_before_initialized_are_rejected() {
+    let mut conn = legacy_server().connect();
+    request(&mut conn, 1, "initialize", initialize_params());
+    assert!(!conn.legacy_initialized());
+    let early = [
+        ("tools/list", json!({})),
+        (
+            "tools/call",
+            json!({ "name": "get_engine_metrics", "arguments": {} }),
+        ),
+        (
+            "tools/call",
+            json!({ "name": "observe_screen", "arguments": {} }),
+        ),
+        ("server/discover", json!({})),
+    ];
+    for (i, (method, params)) in early.into_iter().enumerate() {
+        let r = request(&mut conn, 10 + i as u64, method, params);
+        assert_eq!(error_code(&r), INVALID_REQUEST, "{method}: {r}");
+    }
+    // Ping is the one request the lifecycle allows before initialized.
+    assert_eq!(
+        request(&mut conn, 20, "ping", json!({}))["result"],
+        json!({})
+    );
+
+    send_raw(
+        &mut conn,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    );
+    let r = request(&mut conn, 21, "tools/list", json!({}));
+    assert!(r["result"]["tools"].is_array(), "{r}");
+    let r = request(
+        &mut conn,
+        22,
+        "tools/call",
+        json!({ "name": "get_engine_metrics", "arguments": {} }),
+    );
+    // The early observe_screen never reached the engine.
+    assert_eq!(r["result"]["structuredContent"]["observations"], 0, "{r}");
+}
+
+#[test]
 fn ct_08_a_modern_connection_never_switches_to_legacy() {
     let mut conn = legacy_server().connect();
     modern(&mut conn, 1, "server/discover", json!({}));

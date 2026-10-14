@@ -76,7 +76,7 @@ pub(crate) struct ToolOutput {
 }
 
 impl ToolOutput {
-    fn new<T: Serialize>(tool: &'static str, object: &T, is_error: bool) -> Self {
+    pub(crate) fn new<T: Serialize>(tool: &'static str, object: &T, is_error: bool) -> Self {
         // Serialising plain structs of strings, numbers and booleans cannot fail.
         let text = serde_json::to_string(object).unwrap_or_default();
         let structured = serde_json::to_value(object).unwrap_or(Value::Null);

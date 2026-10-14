@@ -160,34 +160,51 @@ fn parse_object<T: DeserializeOwned>(value: &Value) -> Result<T, InvalidArgument
 }
 
 /// serde messages quote the offending value (`invalid type: string "…"`, ``unknown variant
-/// `…` ``). Drop the quoted values so agent or screen text is never echoed; field names and
-/// the expected alternatives stay.
+/// `…` ``), and its escaping makes stripping the quotes unreliable. Every message is
+/// therefore replaced by a fixed one per error category. Only a field name may appear, and
+/// only one shaped like this server's field names (`[a-z_]{1,32}`): an unknown field's
+/// name is agent text too. Nothing else the agent sent is ever echoed.
 fn sanitize_serde_message(message: &str) -> String {
-    let mut out = String::with_capacity(message.len());
-    let mut rest = message;
-    if let Some(after) = rest.strip_prefix("unknown variant `") {
-        out.push_str("unknown variant");
-        rest = after.find('`').map_or("", |i| &after[i + 1..]);
+    const FIELD_ENDS: [&str; 2] = ["`, expected", "`, there are no fields"];
+    const NAMED: [(&str, &str, &[&str]); 3] = [
+        ("unknown field `", "unknown field", &FIELD_ENDS),
+        ("missing field `", "missing field", &[]),
+        ("duplicate field `", "duplicate field", &[]),
+    ];
+    /// The name serde wrapped in backticks after `prefix`: up to the last `terminator`
+    /// (serde's own text after it holds none), or up to the closing backtick at the end.
+    fn named<'a>(message: &'a str, prefix: &str, terminators: &[&str]) -> Option<&'a str> {
+        let rest = message.strip_prefix(prefix)?;
+        let end = terminators
+            .iter()
+            .filter_map(|t| rest.rfind(t))
+            .max()
+            .or_else(|| rest.strip_suffix('`').map(str::len))?;
+        rest.get(..end)
     }
-    let mut in_quotes = false;
-    for c in rest.chars() {
-        match (c, in_quotes) {
-            ('"', _) => in_quotes = !in_quotes,
-            (_, false) => out.push(c),
-            (_, true) => {}
+    fn tame(name: &str) -> bool {
+        (1..=32).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+    }
+    for (prefix, category, ends) in NAMED {
+        if message.starts_with(prefix) {
+            return match named(message, prefix, ends).filter(|n| tame(n)) {
+                Some(name) => format!("{category} `{name}`"),
+                None => category.to_owned(),
+            };
         }
     }
-    let mut out: String = out
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(limits::MAX_MESSAGE_CHARS - 32)
-        .collect();
-    if out.is_empty() {
-        out.push_str("arguments do not match the input schema");
-    }
-    out
+    let fixed = if message.starts_with("unknown variant") {
+        "unknown variant, expected one of the values the input schema lists"
+    } else if message.starts_with("invalid type") {
+        "invalid type for a field of the input schema"
+    } else if message.starts_with("invalid value") {
+        "invalid value for a field of the input schema"
+    } else if message.starts_with("invalid length") {
+        "invalid length for a field of the input schema"
+    } else {
+        "arguments do not match the input schema"
+    };
+    fixed.to_owned()
 }
 
 // ---- enums: one wire enum per contract enum ----
@@ -878,5 +895,61 @@ mod tests {
         a["geometry_epoch"] = json!("secret");
         let e = parse_action_args(&a).unwrap_err();
         assert!(!e.0.contains("secret"), "{e}");
+    }
+
+    #[test]
+    fn messages_do_not_echo_values_with_escaped_quotes() {
+        let hostile = [
+            r#"x" secret "y"#,
+            r#"a\" secret \"b"#,
+            "` secret `",
+            "`, expected secret `",
+            "secret\u{1}\n\"",
+        ];
+        for value in hostile {
+            let mut cases = Vec::new();
+            for field in ["geometry_epoch", "action", "dry_run", "direction"] {
+                let mut a = click();
+                a[field] = json!(value);
+                cases.push(a);
+            }
+            let mut a = click();
+            a[value] = json!(1);
+            cases.push(a);
+            let mut a = click();
+            a["action"] = json!("scroll");
+            a["steps"] = json!(1);
+            a["direction"] = json!([value]);
+            cases.push(a);
+            cases.push(json!({ "query": [value] }));
+            let mut unknown = json!({});
+            unknown[value] = json!(value);
+            cases.push(unknown);
+            for case in cases {
+                let e = if case.get("request_id").is_some() {
+                    parse_action_args(&case).unwrap_err()
+                } else {
+                    parse_observe_args(&case).unwrap_err()
+                };
+                assert!(!e.0.contains("secret"), "{value:?} -> {e}");
+                assert!(!e.0.contains('"'), "{value:?} -> {e}");
+            }
+        }
+        // Field names this server defines may be named; agent-chosen ones only when tame.
+        let mut a = click();
+        a["coordinates_x"] = json!(1);
+        assert_eq!(
+            parse_action_args(&a).unwrap_err().0,
+            "unknown field `coordinates_x`"
+        );
+        let mut a = click();
+        a["Secret Field"] = json!(1);
+        assert_eq!(parse_action_args(&a).unwrap_err().0, "unknown field");
+        let mut a = click();
+        a.as_object_mut().unwrap().remove("target_id");
+        assert_eq!(
+            parse_action_args(&a).unwrap_err().0,
+            "missing field `target_id`"
+        );
     }
 }

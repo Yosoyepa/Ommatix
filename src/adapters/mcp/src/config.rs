@@ -3,9 +3,11 @@
 /// Default and contract limit for one message in either direction (chapter 07 §7.2).
 pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 64 * 1024;
 
-/// The smallest accepted `max_message_bytes`: below it even an `execute_action` result
-/// could not be sent. Smaller configured values are raised to it.
-pub const MIN_MAX_MESSAGE_BYTES: usize = 1024;
+/// The smallest accepted `max_message_bytes`: an `execute_action` result always fits in
+/// it (its echoed ids and message at their longest and costliest escaping, without the
+/// text duplicate and `_meta` the encoder sheds first). Smaller configured values are
+/// raised to it.
+pub const MIN_MAX_MESSAGE_BYTES: usize = 4096;
 
 /// MCP adapter settings. The modern profile (2026-07-28) is always served.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
