@@ -1,0 +1,29 @@
+[package]
+name = "ommatix-adapter-accessibility"
+description = "Ommatix driven adapter for the AccessibilityProvider port: the UI Automation tree of the foreground window (ADR-0017)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+## Read the foreground window's UI Automation tree (`UiaProvider`, Windows only). No
+## effect on other platforms.
+uia = ["dep:uiautomation"]
+
+[dependencies]
+ommatix-application = { workspace = true }
+ommatix-domain = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# Safe UI Automation client (Apache-2.0) on the same `windows` 0.62.2 as the other
+# adapters. Its default features (`input`, `control`) are the only set that builds, so the
+# input modules are compiled but unreachable by policy: `clippy.toml` forbids every input,
+# focus and pattern call, and CI runs clippy with `-D warnings`.
+uiautomation = { workspace = true, optional = true }
+
+[lints]
+workspace = true

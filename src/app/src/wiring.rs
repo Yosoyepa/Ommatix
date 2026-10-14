@@ -13,6 +13,15 @@
 //! to another model or language. Without `[models]`, no model is loaded
 //! (`models_loaded: false`) and roles stay `unknown`.
 //!
+//! Accessibility evidence (`[models] accessibility = "uia"`, ADR-0017) reads the
+//! foreground application's UI Automation tree on the monitor the capturer captures, so
+//! it needs a live source (`dxgi`, or `screen`) and a Windows build with the `uia`
+//! feature; with `images` it is refused (the tree would not match the frames) and the
+//! simulated desktop ignores it. Otherwise the engine gets no accessibility evidence. It also
+//! reads which element has keyboard focus, so with `--input sendinput` the engine delivers
+//! `type` in two phases and sends the keys only once the target field has focus (ADR-0018);
+//! without it `type` keeps the actuator's window-level focus check.
+//!
 //! Live input needs all of: `--input native` with `--source screen` (or `[engine] mode =
 //! "native"`) and the `native-input` build, or `--input sendinput` with `--source dxgi`
 //! and the Windows `sendinput` build; plus `[safety] actuation_enabled = true`. Even then
@@ -35,21 +44,30 @@ use ommatix_adapter_sim::{SimulatedDesktop, Theme};
 use ommatix_adapter_vision::{FlatRegionDetector, NullTextRecognizer};
 use ommatix_application::contract::limits;
 use ommatix_application::{
-    Clock, Engine, EngineConfig, FrameCapturer, IconResolverConfig, OsActuator, Ports,
-    TextRecognizer, VisionDetector,
+    AccessibilityProvider, Clock, Engine, EngineConfig, FrameCapturer, IconResolverConfig,
+    NoAccessibility, OsActuator, Ports, TextRecognizer, VisionDetector,
 };
 
 use crate::cli::{InputKind, RunArgs, SourceKind, ThemeKind};
 use crate::clock::SystemClock;
 use ommatix::policy::ConfigPolicy;
 
-use crate::config::{Config, EngineMode, OcrKind};
+use crate::config::{AccessibilityKind, Config, EngineMode, OcrKind};
 
-/// The four driven adapters chosen for a source.
+/// The driven adapters chosen for a source.
 type Adapters = (
     Box<dyn FrameCapturer>,
     Box<dyn VisionDetector>,
     Box<dyn TextRecognizer>,
+    Box<dyn AccessibilityProvider>,
+    Box<dyn OsActuator>,
+);
+
+/// The capturer, the accessibility provider on its monitor and the actuator of a live
+/// source.
+type LivePorts = (
+    Box<dyn FrameCapturer>,
+    Box<dyn AccessibilityProvider>,
     Box<dyn OsActuator>,
 );
 
@@ -103,6 +121,29 @@ pub fn check_input(source: SourceKind, input: InputKind, config: &Config) -> Res
         InputKind::Native => check_native(source, config),
         InputKind::Sendinput => check_sendinput(source, config),
     }
+}
+
+/// Refuses accessibility evidence on a source it would not describe: the desktop's tree
+/// matches live frames only (`dxgi`, `screen`). The simulated desktop ignores it, with a
+/// note.
+pub fn check_accessibility(source: SourceKind, config: &Config) -> Result<()> {
+    if source == SourceKind::Images && config.models.accessibility == AccessibilityKind::Uia {
+        bail!(
+            "[models] accessibility = \"uia\" needs a live source (--source dxgi or screen): \
+             the desktop's accessibility tree does not describe recorded images"
+        );
+    }
+    // Refuse before any live source is opened (a headless host cannot open one).
+    if matches!(source, SourceKind::Dxgi | SourceKind::Screen)
+        && config.models.accessibility == AccessibilityKind::Uia
+        && !cfg!(all(windows, feature = "uia"))
+    {
+        bail!(
+            "[models] accessibility = \"uia\" but this build has no UI Automation; rebuild on \
+             Windows with `--features uia`"
+        );
+    }
+    Ok(())
 }
 
 fn check_native(source: SourceKind, config: &Config) -> Result<()> {
@@ -161,17 +202,20 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
     let session_id = session_id(args.session_id.as_deref())?;
     let input = input_kind(args, config);
     check_input(args.source, input, config)?;
+    check_accessibility(args.source, config)?;
     let icons = config.icon_resolver()?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock::new());
 
     let mut sim = None;
-    let (capturer, detector, recognizer, actuator): Adapters = match args.source {
+    let access = config.models.accessibility;
+    let (capturer, detector, recognizer, accessibility, actuator): Adapters = match args.source {
         SourceKind::Sim => {
             let desktop = SimulatedDesktop::with_theme(theme(args.theme)).with_clock(clock.clone());
             let ports = (
                 Box::new(desktop.capturer()) as Box<dyn FrameCapturer>,
                 Box::new(desktop.detector()) as Box<dyn VisionDetector>,
                 Box::new(desktop.recognizer()) as Box<dyn TextRecognizer>,
+                Box::new(NoAccessibility) as Box<dyn AccessibilityProvider>,
                 Box::new(desktop.actuator()) as Box<dyn OsActuator>,
             );
             sim = Some(desktop);
@@ -182,53 +226,41 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
                 .images
                 .as_deref()
                 .context("--source images requires --images <DIR>")?;
+            if access == AccessibilityKind::Uia {
+                bail!(
+                    "[models] accessibility = \"uia\" needs a live source (--source dxgi or \
+                     screen): the desktop's accessibility tree does not describe recorded \
+                     images"
+                );
+            }
             let (detector, recognizer) = perception(config)?;
-            (images(dir, &clock)?, detector, recognizer, dry_run())
+            let none: Box<dyn AccessibilityProvider> = Box::new(NoAccessibility);
+            (images(dir, &clock)?, detector, recognizer, none, dry_run())
         }
         SourceKind::Screen => {
             let (detector, recognizer) = perception(config)?;
-            let (capturer, actuator) = screen_ports(&clock, input)?;
-            (capturer, detector, recognizer, actuator)
+            let (capturer, accessibility, actuator) = screen_ports(&clock, input, access)?;
+            (capturer, detector, recognizer, accessibility, actuator)
         }
         SourceKind::Dxgi => {
             let (detector, recognizer) = perception(config)?;
-            let (capturer, actuator) = dxgi_ports(&clock, input, args.output)?;
-            (capturer, detector, recognizer, actuator)
+            let (capturer, accessibility, actuator) =
+                dxgi_ports(&clock, input, args.output, access)?;
+            (capturer, detector, recognizer, accessibility, actuator)
         }
     };
 
     let live = actuator.is_live();
     let summary = format!(
-        "source={} detector={} recognizer={} input={}{}",
+        "source={} detector={} recognizer={} accessibility={} input={}{}",
         capturer.name(),
         detector.name(),
         recognizer.name(),
+        accessibility.name(),
         actuator.name(),
         if live { " (live)" } else { " (never live)" },
     );
-    let mut notes = config.notes();
-    notes.push(icon_note(icons.as_ref()));
-    if args.source != SourceKind::Sim && config.models.has_detector() {
-        let m = &config.models;
-        notes.push(format!(
-            "[models] detector: intra-op threads {}",
-            if m.detector_threads == 0 {
-                "ONNX Runtime default (physical cores)".to_owned()
-            } else {
-                m.detector_threads.to_string()
-            }
-        ));
-    }
-    if args.source == SourceKind::Sim
-        && (config.models.has_detector() || config.models.ocr != OcrKind::None)
-    {
-        notes.push(
-            "[models] is not used with --source sim: the simulated desktop brings its own \
-             detector and recogniser"
-                .to_owned(),
-        );
-    }
-    notes.extend(input_notes(config, input, live));
+    let notes = startup_notes(args.source, config, icons.as_ref(), input, live);
     let active_control = (live && config.safety.actuation_enabled).then(|| active_control(config));
 
     let mut engine_config = EngineConfig::new(session_id);
@@ -241,6 +273,7 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
             capturer,
             detector,
             recognizer,
+            accessibility,
             actuator,
             policy: Arc::new(operator_policy(config)),
             clock,
@@ -253,6 +286,43 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
         notes,
         active_control,
     })
+}
+
+/// What the operator should know at startup, for stderr.
+fn startup_notes(
+    source: SourceKind,
+    config: &Config,
+    icons: Option<&IconResolverConfig>,
+    input: InputKind,
+    live: bool,
+) -> Vec<String> {
+    let access = config.models.accessibility;
+    let mut notes = config.notes();
+    notes.push(icon_note(icons));
+    if source != SourceKind::Sim && config.models.has_detector() {
+        let m = &config.models;
+        notes.push(format!(
+            "[models] detector: intra-op threads {}",
+            if m.detector_threads == 0 {
+                "ONNX Runtime default (physical cores)".to_owned()
+            } else {
+                m.detector_threads.to_string()
+            }
+        ));
+    }
+    if source == SourceKind::Sim
+        && (config.models.has_detector()
+            || config.models.ocr != OcrKind::None
+            || access != AccessibilityKind::None)
+    {
+        notes.push(
+            "[models] is not used with --source sim: the simulated desktop brings its own \
+             detector and recogniser"
+                .to_owned(),
+        );
+    }
+    notes.extend(input_notes(config, input, live));
+    notes
 }
 
 /// What the operator should know about live input, for stderr.
@@ -422,21 +492,20 @@ fn dry_run() -> Box<dyn OsActuator> {
 fn screen_ports(
     clock: &Arc<dyn Clock>,
     input: InputKind,
-) -> Result<(Box<dyn FrameCapturer>, Box<dyn OsActuator>)> {
+    access: AccessibilityKind,
+) -> Result<LivePorts> {
     let screen = ommatix_adapter_capture::ScreenSource::primary(clock.clone())?;
     let actuator = match input {
         InputKind::DryRun => dry_run(),
         InputKind::Native => native_input(&screen)?,
         InputKind::Sendinput => bail!("sendinput input requires --source dxgi"),
     };
-    Ok((Box::new(screen), actuator))
+    let accessibility = accessibility(access, screen.mapping_source())?;
+    Ok((Box::new(screen), accessibility, actuator))
 }
 
 #[cfg(not(feature = "screen"))]
-fn screen_ports(
-    _: &Arc<dyn Clock>,
-    _: InputKind,
-) -> Result<(Box<dyn FrameCapturer>, Box<dyn OsActuator>)> {
+fn screen_ports(_: &Arc<dyn Clock>, _: InputKind, _: AccessibilityKind) -> Result<LivePorts> {
     bail!("this build has no screen capture; rebuild with `--features screen`")
 }
 
@@ -459,7 +528,8 @@ fn dxgi_ports(
     clock: &Arc<dyn Clock>,
     input: InputKind,
     output: u32,
-) -> Result<(Box<dyn FrameCapturer>, Box<dyn OsActuator>)> {
+    access: AccessibilityKind,
+) -> Result<LivePorts> {
     use ommatix_adapter_capture::{DxgiCapturer, DxgiOptions};
 
     let options = DxgiOptions {
@@ -473,16 +543,66 @@ fn dxgi_ports(
         InputKind::Sendinput => send_input(&dxgi)?,
         InputKind::Native => bail!("native input requires --source screen"),
     };
-    Ok((Box::new(dxgi), actuator))
+    let accessibility = accessibility(access, dxgi.mapping_source())?;
+    Ok((Box::new(dxgi), accessibility, actuator))
 }
 
 #[cfg(not(all(windows, feature = "dxgi")))]
-fn dxgi_ports(
-    _: &Arc<dyn Clock>,
-    _: InputKind,
-    _: u32,
-) -> Result<(Box<dyn FrameCapturer>, Box<dyn OsActuator>)> {
+fn dxgi_ports(_: &Arc<dyn Clock>, _: InputKind, _: u32, _: AccessibilityKind) -> Result<LivePorts> {
     bail!("this build has no DXGI capture; rebuild on Windows with `--features dxgi`")
+}
+
+/// The capturer's live mapping from frame pixels to desktop coordinates.
+#[cfg(any(feature = "screen", all(windows, feature = "dxgi")))]
+trait MappingSource:
+    Fn() -> Result<ommatix_domain::DisplayMapping, ommatix_application::PortError>
+    + Send
+    + Sync
+    + 'static
+{
+}
+
+#[cfg(any(feature = "screen", all(windows, feature = "dxgi")))]
+impl<F> MappingSource for F where
+    F: Fn() -> Result<ommatix_domain::DisplayMapping, ommatix_application::PortError>
+        + Send
+        + Sync
+        + 'static
+{
+}
+
+/// The accessibility provider `[models] accessibility` selects, reading the monitor
+/// `mapping` describes.
+#[cfg(any(feature = "screen", all(windows, feature = "dxgi")))]
+fn accessibility(
+    access: AccessibilityKind,
+    mapping: impl MappingSource,
+) -> Result<Box<dyn AccessibilityProvider>> {
+    match access {
+        AccessibilityKind::None => Ok(Box::new(NoAccessibility)),
+        AccessibilityKind::Uia => uia(mapping),
+    }
+}
+
+#[cfg(all(windows, feature = "uia", any(feature = "screen", feature = "dxgi")))]
+fn uia(mapping: impl MappingSource) -> Result<Box<dyn AccessibilityProvider>> {
+    use ommatix_adapter_accessibility::{Budget, UiaProvider};
+
+    Ok(Box::new(
+        UiaProvider::new(mapping, Budget::default())
+            .context("[models] accessibility = \"uia\" is unavailable")?,
+    ))
+}
+
+#[cfg(all(
+    not(all(windows, feature = "uia")),
+    any(feature = "screen", all(windows, feature = "dxgi"))
+))]
+fn uia(_: impl MappingSource) -> Result<Box<dyn AccessibilityProvider>> {
+    bail!(
+        "[models] accessibility = \"uia\" but this build has no UI Automation; rebuild on \
+         Windows with `--features uia`"
+    )
 }
 
 /// `SendInput` aimed through the DXGI capturer's live mapping, which fails closed while
@@ -617,6 +737,38 @@ mod tests {
     }
 
     #[test]
+    fn accessibility_evidence_needs_a_live_source() {
+        let uia = Config::parse(
+            "[models]
+accessibility = \"uia\"
+",
+        )
+        .unwrap();
+        assert!(
+            error("serve --source images --images frames", &uia).contains("needs a live source")
+        );
+        assert!(check_accessibility(SourceKind::Images, &Config::default()).is_ok());
+        // A live source takes it only when this build has UI Automation.
+        let built = cfg!(all(windows, feature = "uia"));
+        assert_eq!(check_accessibility(SourceKind::Dxgi, &uia).is_ok(), built);
+        assert_eq!(check_accessibility(SourceKind::Screen, &uia).is_ok(), built);
+        // The simulated desktop ignores it, with a note.
+        let wired = build(&args("serve"), &uia).expect("the simulator ignores it");
+        assert!(wired.summary.contains("accessibility=none"));
+        assert!(
+            wired
+                .notes
+                .iter()
+                .any(|n| n.contains("not used with --source sim"))
+        );
+        // Without the Windows `uia` build, a live source refuses it before opening anything.
+        if !built {
+            let refusal = check_accessibility(SourceKind::Screen, &uia).unwrap_err();
+            assert!(refusal.to_string().contains("--features uia"));
+        }
+    }
+
+    #[test]
     fn the_simulator_drives_every_port_by_default() {
         let mut wired = build(
             &args("serve --session-id s-1 --theme dark"),
@@ -626,7 +778,7 @@ mod tests {
         assert_eq!(
             wired.summary,
             "source=simulated-desktop detector=simulated-desktop \
-             recognizer=simulated-desktop input=simulated-desktop (never live)"
+             recognizer=simulated-desktop accessibility=none input=simulated-desktop (never live)"
         );
         assert!(wired.sim.is_some());
         assert_eq!(wired.engine.session_id(), "s-1");

@@ -341,6 +341,9 @@ impl FusedControl {
 pub struct FusionParams {
     pub ioc_threshold: f64,
     pub label_margin: f64,
+    /// IoU at which a detector box and an accessibility element are the same control
+    /// (ADR-0017, [P]; containment uses `ioc_threshold`).
+    pub accessibility_iou: f64,
 }
 
 impl Default for FusionParams {
@@ -348,6 +351,7 @@ impl Default for FusionParams {
         Self {
             ioc_threshold: 0.75,
             label_margin: 0.15,
+            accessibility_iou: 0.5,
         }
     }
 }
@@ -435,6 +439,88 @@ pub fn fuse(
         controls: fused,
         text_nodes: reading_order(&orphans),
     })
+}
+
+/// A control the accessibility tree reported (ADR-0017): its box, role and affordance as
+/// the application derived them, its accessible name and whether it is a password field.
+/// The name is untrusted screen data, like OCR text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccessibleControl {
+    pub control: Control,
+    /// The accessible name, whitespace-normalised; empty when the element has none.
+    pub label: String,
+    /// A password field: no OCR text inside it is ever published, as label or value.
+    pub sensitive: bool,
+}
+
+/// Visual detections reconciled with accessibility elements.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reconciled {
+    /// The accessibility controls first (in input order), then the visual detections no
+    /// accessibility element absorbed (in input order).
+    pub controls: Vec<Control>,
+    /// Indexed like `controls`: the accessibility element each control comes from.
+    pub origins: Vec<Option<usize>>,
+}
+
+/// The accessibility element a visual box is the same control as, if any: the best IoU at
+/// or above `iou`, else the smallest element containing the box by IoC at or above
+/// `ioc`. Two equally good candidates abstain.
+fn accessible_match(
+    visual: &BBox,
+    accessible: &[AccessibleControl],
+    params: FusionParams,
+) -> Option<usize> {
+    let mut by_iou: Vec<(f64, usize)> = accessible
+        .iter()
+        .enumerate()
+        .map(|(i, a)| (a.control.bbox.iou(visual), i))
+        .filter(|(v, _)| *v >= params.accessibility_iou)
+        .collect();
+    by_iou.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+    match by_iou.as_slice() {
+        [first, second, ..] if is_close(first.0, second.0) => return None,
+        [first, ..] => return Some(first.1),
+        [] => {}
+    }
+    let containers: Vec<BBox> = accessible.iter().map(|a| a.control.bbox).collect();
+    owner_of(&containers, &Word::new("", *visual), params.ioc_threshold)
+}
+
+/// Reconciles detector boxes with accessibility elements (ADR-0017, an extension of
+/// Algorithm 2). Every accessibility element becomes a control. A detector box that is
+/// the same control as one of them ([`FusionParams::accessibility_iou`], or contained in
+/// it by IoC) is absorbed: the element's box, role and affordance win. A detector box no
+/// element absorbs stays as it was, except that it loses a confirmed affordance when its
+/// click point (the box centre) falls on an accessibility element: a click there would
+/// act on that element, not on what the box shows. Evidence only ever removes
+/// actionability from a visual box, never adds it.
+pub fn reconcile_accessibility(
+    visual: &[Control],
+    accessible: &[AccessibleControl],
+    params: FusionParams,
+) -> Result<Reconciled, FusionError> {
+    check_threshold(params.ioc_threshold)?;
+    check_threshold(params.accessibility_iou)?;
+    let mut controls: Vec<Control> = accessible.iter().map(|a| a.control.clone()).collect();
+    let mut origins: Vec<Option<usize>> = (0..accessible.len()).map(Some).collect();
+    for v in visual {
+        if accessible_match(&v.bbox, accessible, params).is_some() {
+            continue;
+        }
+        let (cx, cy) = v.bbox.center();
+        let lands_elsewhere = accessible.iter().any(|a| {
+            let b = a.control.bbox;
+            b.x0() <= cx && cx < b.x1() && b.y0() <= cy && cy < b.y1()
+        });
+        let mut control = v.clone();
+        if lands_elsewhere && control.affordance.actionability == Actionability::Confirmed {
+            control.affordance.actionability = Actionability::Unknown;
+        }
+        controls.push(control);
+        origins.push(None);
+    }
+    Ok(Reconciled { controls, origins })
 }
 
 #[cfg(test)]
@@ -717,5 +803,100 @@ mod tests {
             "{labels:?}"
         );
         assert_eq!(fusion.text_nodes, vec![word]);
+    }
+
+    fn accessible(bbox: BBox, role: Role, label: &str) -> AccessibleControl {
+        AccessibleControl {
+            control: control(bbox, role, Actionability::Confirmed),
+            label: label.to_owned(),
+            sensitive: false,
+        }
+    }
+
+    /// ADR-0017: a detector box that is the same control as an accessibility element (by
+    /// IoU, or contained in it) is absorbed into it, whatever the input order.
+    #[test]
+    fn ut_44_accessibility_absorbs_the_same_control() {
+        let save = accessible(bx(100.0, 100.0, 200.0, 140.0), Role::Button, "Save");
+        let shifted = control(
+            bx(104.0, 102.0, 204.0, 142.0),
+            Role::Unknown,
+            Actionability::Unknown,
+        );
+        let inner_icon = control(
+            bx(110.0, 110.0, 130.0, 130.0),
+            Role::Unknown,
+            Actionability::Confirmed,
+        );
+        let elsewhere = control(
+            bx(300.0, 100.0, 400.0, 140.0),
+            Role::Unknown,
+            Actionability::Confirmed,
+        );
+        let visual = [shifted, inner_icon, elsewhere.clone()];
+        let r = reconcile_accessibility(
+            &visual,
+            std::slice::from_ref(&save),
+            FusionParams::default(),
+        )
+        .unwrap();
+        assert_eq!(r.controls, vec![save.control.clone(), elsewhere.clone()]);
+        assert_eq!(r.origins, vec![Some(0), None]);
+        let reversed: Vec<Control> = visual.iter().rev().cloned().collect();
+        let r = reconcile_accessibility(&reversed, &[save], FusionParams::default()).unwrap();
+        assert_eq!(r.origins, vec![Some(0), None]);
+        assert_eq!(r.controls[1], elsewhere);
+    }
+
+    /// ADR-0017 (S4 finding 2): a detector box no element absorbs, whose centre lies on an
+    /// accessibility element, would click that element: it keeps its role and box but loses
+    /// its confirmed affordance. Elsewhere, visual boxes stay as they were.
+    #[test]
+    fn a_visual_box_centred_on_another_control_is_not_confirmed() {
+        let square = accessible(bx(100.0, 100.0, 140.0, 130.0), Role::Button, "Square");
+        // Taller and wider than the button, centred on it (IoU 0.2, not contained).
+        let wide = control(
+            bx(60.0, 80.0, 180.0, 150.0),
+            Role::Unknown,
+            Actionability::Confirmed,
+        );
+        let r = reconcile_accessibility(
+            std::slice::from_ref(&wide),
+            &[square],
+            FusionParams::default(),
+        )
+        .unwrap();
+        assert_eq!(r.origins, vec![Some(0), None]);
+        assert_eq!(r.controls[1].bbox, wide.bbox);
+        assert_eq!(
+            r.controls[1].affordance.actionability,
+            Actionability::Unknown
+        );
+    }
+
+    /// Two equally good accessibility matches abstain: the box stays visual (and is not
+    /// confirmed, since its centre lies on them).
+    #[test]
+    fn equal_accessibility_matches_abstain() {
+        let b = bx(0.0, 0.0, 100.0, 40.0);
+        let twins = [
+            accessible(b, Role::Button, "A"),
+            accessible(b, Role::Button, "B"),
+        ];
+        let v = control(b, Role::Unknown, Actionability::Confirmed);
+        let r = reconcile_accessibility(&[v], &twins, FusionParams::default()).unwrap();
+        assert_eq!(r.origins, vec![Some(0), Some(1), None]);
+        assert_eq!(
+            r.controls[2].affordance.actionability,
+            Actionability::Unknown
+        );
+        let bad = FusionParams {
+            accessibility_iou: 1.5,
+            ..FusionParams::default()
+        };
+        assert_eq!(
+            reconcile_accessibility(&[], &[], bad),
+            Err(FusionError::InvalidThreshold(1.5))
+        );
     }
 }

@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-14T08:22:08.167206+00:00",
+  "timestamp_utc": "2026-10-14T17:05:04.624482+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.25.1",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -10,13 +10,13 @@
     "invalid_examples": 8,
     "jsonl_messages": 13,
     "feature_files": 6,
-    "gherkin_scenarios": 32,
+    "gherkin_scenarios": 35,
     "requirements": 28,
-    "planned_tests": 76,
+    "planned_tests": 77,
     "references": 24,
-    "adrs": 16
+    "adrs": 18
   },
-  "checks_run": 199,
+  "checks_run": 210,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -348,7 +348,7 @@
     {
       "check": "adrs_encontradas",
       "passed": true,
-      "detail": "16"
+      "detail": "18"
     },
     {
       "check": "referencias:00_AUDITORIA_TECNICA.md",
@@ -496,6 +496,16 @@
       "detail": "[]"
     },
     {
+      "check": "referencias:0017-ui-automation-evidence-fused-with-vision.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0018-two-phase-type-with-element-level-focus-confirmation.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
       "check": "gherkin_cabecera:01_incrementalidad.feature",
       "passed": true,
       "detail": ""
@@ -622,6 +632,16 @@
     },
     {
       "check": "gherkin_estructura:BDD-12",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-33",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-33",
       "passed": true,
       "detail": ""
     },
@@ -846,6 +866,26 @@
       "detail": ""
     },
     {
+      "check": "gherkin_id_unico:BDD-34",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-34",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-35",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-35",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "check": "escenarios_matriz_completos",
       "passed": true,
       "detail": ""
@@ -1007,6 +1047,21 @@
     },
     {
       "check": "trazabilidad:BDD-32",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-33",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-34",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-35",
       "passed": true,
       "detail": ""
     },

@@ -38,7 +38,7 @@ y el [capítulo 08 de la tesis](../thesis/08_SEGURIDAD_Y_PRIVACIDAD.md).
 
 ## Componentes
 
-El SDD define once componentes ([diagrama](../diagrams/components.md)).
+El SDD define doce componentes ([diagrama](../diagrams/components.md)).
 [ADR-0014](../adr/0014-hexagonal-crate-layout.md) los ubica en crates:
 
 | Componente | Responsabilidad | Contrato | Crate |
@@ -47,7 +47,8 @@ El SDD define once componentes ([diagrama](../diagrams/components.md)).
 | Observation Coordinator | Captura, planificación de regiones y commit | SnapshotRequest → Snapshot | `ommatix-application` (`Engine::observe_screen`) |
 | Capture Provider | Píxeles, stride, tiempos, rectángulos dirty y move | FrameLease | `ommatix-adapter-capture` |
 | Perception Provider | Detector, OCR y transformaciones de imagen | Region → RawEvidence | `ommatix-adapter-vision` |
-| Spatial Fusion | Contención, renglones, etiquetas y relaciones | RawEvidence → Candidates | `ommatix-domain` |
+| Accessibility Provider | El árbol de UI Automation de la ventana en primer plano; evidencia opcional fusionada con la visual | Region → AccessibleElement | `ommatix-adapter-accessibility` |
+| Spatial Fusion | Contención, renglones, etiquetas y relaciones; absorbe las detecciones que coinciden con un elemento accesible | RawEvidence + AccessibleElement → Candidates | `ommatix-domain` |
 | Icon Resolver | Recuperación contextual con rechazo | CropDescriptor → LabelEvidence | `ommatix-domain` |
 | Temporal Registry | IDs, revisiones y bajas | Candidates + Snapshot → Tracks | `ommatix-domain` |
 | Policy & Action Gate | Vigencia, permisos y precondiciones | ActionRequest → Permit o Reject | `ommatix-application` (`Engine::execute_action`) |
@@ -56,7 +57,7 @@ El SDD define once componentes ([diagrama](../diagrams/components.md)).
 | Telemetry | Métricas y auditoría sin texto sensible | Eventos y spans | `get_engine_metrics` y tiempos por etapa en el `_meta` de MCP (parcial; S3) |
 
 El núcleo sólo llega al exterior mediante los puertos `FrameCapturer`, `VisionDetector`,
-`TextRecognizer`, `OsActuator`, `Clock` y `PolicyStore`, de modo que cada adaptador puede
+`TextRecognizer`, `AccessibilityProvider`, `OsActuator`, `Clock` y `PolicyStore`, de modo que cada adaptador puede
 sustituirse por un fixture determinista. En Windows 11
 ([ADR-0008](../adr/0008-one-real-platform-first.md)) la captura usa DXGI Desktop Duplication
 y la entrada usa `SendInput`. La inferencia corre en ONNX Runtime, con CPU como baseline y
@@ -140,8 +141,10 @@ schemas JSON de [`docs/thesis/contratos/`](../thesis/contratos/README.md):
   `observe_again` u `operator_review`; son resultados de herramienta con `isError: true`. Los
   mensajes mal formados, los métodos o herramientas desconocidos y los argumentos que violan
   el schema (`-32602`) son errores JSON-RPC. Los mensajes se limitan a 64 KiB en ambos
-  sentidos. Los tiempos por etapa van en el `_meta` del resultado (`io.ommatix/timings`),
-  nunca en `structuredContent`.
+  sentidos. Los valores que dependen de la ejecución van en el `_meta` del resultado, nunca en
+  `structuredContent`: los tiempos por etapa de una observación (`io.ommatix/timings`) y si su
+  evidencia de accesibilidad es completa (`io.ommatix/accessibility`), y los tiempos por etapa
+  de una acción (`io.ommatix/action_timings`).
 
 ## Atributos de calidad
 
@@ -197,7 +200,11 @@ sin OCR, entrada en dry run y política que lo niega todo.
   envía primero el clic que enfoca el campo y sus teclas sólo cuando `GetGUIThreadInfo`
   muestra el foco de teclado, en el mismo proceso en primer plano, en la ventana bajo el
   punto objetivo o en una que la contiene (lo consulta hasta 200 ms mientras se procesa el
-  clic); si no, no envía ninguna tecla. Un rechazo es un error del actuador, que el motor
+  clic); si no, no envía ninguna tecla. Con evidencia de accesibilidad es el motor quien
+  controla esa pausa (ADR-0018): `deliver_focus_click` envía el clic, el motor consulta
+  `keyboard_focus` del proveedor con su `Clock` hasta que el elemento objetivo tiene el foco
+  y sólo entonces llama a `deliver_keys`, que sigue comprobando la aplicación en primer plano
+  y los modificadores pulsados. Un rechazo es un error del actuador, que el motor
   informa como `indeterminate` y nunca reintenta: tras un `type` rechazado el clic puede
   haberse entregado. Ninguna prueba envía entrada real.
 - *Detector* (`onnx`, `[models] detector_manifest`): un detector genérico de tipo YOLO sobre
@@ -209,6 +216,21 @@ sin OCR, entrada en dry run y política que lo niega todo.
   (`detector_threads` hilos intra-op) o, con la feature `directml`, en DirectML con una
   `DirectML.dll` fijada, ejecución secuencial, sin patrón de memoria y sin recurrir a la
   CPU; el manifiesto enumera los proveedores con los que se validó el modelo.
+- *Accesibilidad* (`uia`, `[models] accessibility = "uia"`,
+  [ADR-0017](../adr/0017-ui-automation-evidence-fused-with-vision.md)): el árbol de UI Automation
+  de la ventana en primer plano que atestigua el actuador (el marco de `ApplicationFrameHost`
+  se resuelve a su aplicación hospedada), leído una vez por observación dentro de las regiones
+  planificadas, acotado por elementos, profundidad y tiempo, con el crate seguro
+  `uiautomation` (sin `unsafe` propio; el `clippy.toml` del adaptador prohíbe las llamadas de
+  entrada y de patrones del crate). Es evidencia, no un reemplazo: un elemento habilitado, en
+  pantalla y con un patrón de acción es `confirmed` con su rol y su nombre (`label_source:
+  accessibility`), las cajas del detector que son el mismo control se funden con él y una caja
+  centrada sobre otro control accesible deja de estar confirmada. Un recorrido que termina por
+  su presupuesto lo declara (`truncated`): esas regiones se leen otra vez en la observación
+  siguiente aunque ningún píxel haya cambiado, la evidencia que la lectura parcial no repite se
+  conserva mientras sus píxeles no cambien y una caja visual dentro de un hueco no se confirma.
+  Nunca lee el valor de un campo y un campo de contraseña no es una entrada. Sólo con `dxgi` o `screen`; apagado por
+  defecto.
 - *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` para exactamente
   `ocr_language`, nunca otro idioma, sin inventar confianzas; el texto reconocido nunca se
   registra.
@@ -291,7 +313,7 @@ cual sea su resultado, agota el snapshot: la acción siguiente necesita una obse
 | Telemetría | Métricas y auditoría sin texto sensible | `get_engine_metrics`; tiempos por etapa en `_meta` | S3 |
 | Plataforma | Windows 11 x64: DXGI y `SendInput` | Captura DXGI y entrada `SendInput` tras las features `dxgi` y `sendinput` (ADR-0016), compiladas y probadas en la integración continua en Windows ejecutadas en parte de forma supervisada ([corridas de S3](../thesis/S3_CORRIDAS_SUPERVISADAS.md): IT-01, IT-03 e IT-04, ocho clics reales sobre `notepad.exe` en dos corridas; el primer frame DXGI ya muestra el escritorio en vivo; IT-07 sin ejecutar) y en el protocolo S4 reducido (118 clics reales en la aplicación de prueba propia, el Bloc de notas y la Calculadora; `SendInput` atestigua la aplicación UWP hospedada, no `ApplicationFrameHost.exe`); escritorios simulado y de fixtures para las pruebas; `xcap` y `enigo` provisionales tras `screen` y `native-input` | S3 (corridas supervisadas) |
 
-Los escenarios de la tesis (BDD-01..32) se quedan en [`docs/thesis/features/`](../thesis/features),
+Los escenarios de la tesis (BDD-01..33) se quedan en [`docs/thesis/features/`](../thesis/features),
 donde los espera la matriz de trazabilidad del dossier; `src/acceptance/tests/thesis.rs`
 los ejecuta todos: BDD-01..10 y BDD-13..21 sobre el núcleo del dominio, BDD-11, 12 y 22..27
 a través del motor y del adaptador MCP sobre los escritorios simulado y de fixtures, y
@@ -301,4 +323,6 @@ permisos, el archivo de parada del operador durante una secuencia) del mismo mod
 doble de prueba del actuador real que registra lo que recibe y no envía nada. Muestran la
 parte del motor de SEC-05, IT-04, IT-05, SEC-03 y SEC-02, que siguen necesitando corridas
 supervisadas con el actuador real; la comprobación del foco de teclado dentro de la
-aplicación permitida es del actuador `SendInput`, y ninguna prueba lo ejecuta.
+aplicación permitida es del actuador `SendInput`, y ninguna prueba lo ejecuta. El `type`
+en dos fases de la ADR-0018 (foco confirmado por el motor en el elemento objetivo, BDD-34 y
+BDD-35) corre sobre dobles del actuador y del proveedor de accesibilidad.

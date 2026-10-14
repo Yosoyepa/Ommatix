@@ -8,7 +8,9 @@ use common::{
     SESSION_ID, basic_scene, call, call_ok, check_tool_result, engine_with, error_code, server,
     server_with, word_grid,
 };
-use ommatix_adapter_mcp::{McpConfig, McpServer, TIMINGS_META_KEY};
+use ommatix_adapter_mcp::{
+    ACCESSIBILITY_META_KEY, ACTION_TIMINGS_META_KEY, McpConfig, McpServer, TIMINGS_META_KEY,
+};
 use ommatix_application::LocalPolicy;
 use ommatix_application::contract::limits;
 use ommatix_domain::fusion::{Actionability, Role, Word};
@@ -52,6 +54,9 @@ fn ct_01_full_snapshot_matches_the_schema_with_a_stable_order() {
     );
     // Timings are run-dependent: `_meta` only.
     assert!(first["_meta"][TIMINGS_META_KEY]["total_us"].is_u64());
+    // Whether the accessibility evidence is complete is run-dependent too: `_meta` only.
+    assert_eq!(first["_meta"][ACCESSIBILITY_META_KEY]["complete"], true);
+    assert!(page.get("complete").is_none());
 
     // Same screen again: a new snapshot with the same elements in the same order.
     let second = observe(&mut conn, 2, json!({}));
@@ -298,4 +303,68 @@ fn ct_04_query_filters_the_view_without_forgetting_elements() {
     );
     let again = observe(&mut conn, 3, json!({}));
     assert_eq!(again["structuredContent"]["total_elements"], total);
+}
+
+/// S4 third round, finding 6: an action's stage timings come back in `_meta`, never in the
+/// Ommatix object.
+#[test]
+fn execute_action_results_carry_their_stage_timings_in_meta() {
+    let mut conn = server().connect();
+    let page = observe(&mut conn, 1, json!({}));
+    let page = &page["structuredContent"];
+    let button = page["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .find(|e| e["role"] == "button")
+        .expect("a button");
+    let click = |request_id: &str, snapshot_id: &str| {
+        json!({
+            "request_id": request_id, "session_id": SESSION_ID, "snapshot_id": snapshot_id,
+            "geometry_epoch": page["geometry_epoch"], "target_id": button["target_id"],
+            "expected_revision": button["revision"], "action": "click"
+        })
+    };
+    let stages = [
+        "gate",
+        "freshness",
+        "delivery",
+        "focus",
+        "verification",
+        "total",
+    ];
+
+    // A dry run and a rejection both went through the gate.
+    for (id, (request_id, snapshot_id)) in [
+        ("r1", page["snapshot_id"].as_str().unwrap()),
+        ("r2", "s999"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let result = call_ok(
+            &mut conn,
+            10 + id as u64,
+            "execute_action",
+            click(request_id, snapshot_id),
+        );
+        check_tool_result(&result, "execute_action");
+        let meta = &result["_meta"][ACTION_TIMINGS_META_KEY];
+        for stage in stages {
+            assert!(meta[format!("{stage}_us")].is_u64(), "{stage}: {result}");
+        }
+        assert!(result["structuredContent"].get("timings").is_none());
+    }
+
+    // A replay of an earlier request has no timings of its own.
+    let replay = call_ok(
+        &mut conn,
+        20,
+        "execute_action",
+        click("r1", page["snapshot_id"].as_str().unwrap()),
+    );
+    assert!(
+        replay["_meta"].get(ACTION_TIMINGS_META_KEY).is_none(),
+        "{replay}"
+    );
 }

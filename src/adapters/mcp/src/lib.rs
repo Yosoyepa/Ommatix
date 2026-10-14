@@ -40,7 +40,10 @@
 //! Exactly `execute_action`, `get_engine_metrics` and `observe_screen` (listed in that
 //! order), with the dossier's input and output schemas. A result carries the Ommatix object
 //! as `structuredContent` and the same JSON as its single text block. Run-dependent values
-//! (stage timings) go only in the result `_meta` under [`TIMINGS_META_KEY`]. Expected domain
+//! go only in the result `_meta`: the stage timings of an observation under
+//! [`TIMINGS_META_KEY`] with whether its accessibility evidence is complete under
+//! [`ACCESSIBILITY_META_KEY`], and the stage timings of an action (gate, freshness capture,
+//! delivery, focus confirmation, verification) under [`ACTION_TIMINGS_META_KEY`]. Expected domain
 //! errors are tool results with `isError: true`; malformed messages, unknown methods or
 //! tools, arguments that violate an input schema and version problems are JSON-RPC errors.
 //!
@@ -72,4 +75,7 @@ pub use protocol::{
     Connection, LEGACY_PROTOCOL_VERSION, MODERN_PROTOCOL_VERSION, Profile, SERVER_NAME,
 };
 pub use server::McpServer;
-pub use tools::{EXECUTE_ACTION, GET_ENGINE_METRICS, OBSERVE_SCREEN, TIMINGS_META_KEY};
+pub use tools::{
+    ACCESSIBILITY_META_KEY, ACTION_TIMINGS_META_KEY, EXECUTE_ACTION, GET_ENGINE_METRICS,
+    OBSERVE_SCREEN, TIMINGS_META_KEY,
+};

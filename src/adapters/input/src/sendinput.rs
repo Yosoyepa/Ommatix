@@ -158,6 +158,17 @@ pub(crate) fn focus_problem(facts: FocusFacts) -> Option<&'static str> {
     None
 }
 
+/// Like [`focus_problem`] for the keys of a two-phase `type` (ADR-0018): the engine has
+/// already confirmed, through UI Automation, that keyboard focus is on the target element,
+/// so the window-at-the-point relation is not asked again. The attested application must
+/// still be in the foreground and own the window with keyboard focus.
+pub(crate) fn keys_problem(facts: FocusFacts) -> Option<&'static str> {
+    focus_problem(FocusFacts {
+        focus_holds_target: true,
+        ..facts
+    })
+}
+
 /// The executable file name of a process image path, lowercase (`notepad.exe`), as the
 /// operator lists it in `[safety] allowed_applications`.
 pub(crate) fn exe_name(path: &str) -> Option<String> {
@@ -452,6 +463,49 @@ mod tests {
         for (facts, expected) in cases {
             let problem = focus_problem(facts).unwrap_or_default();
             assert!(problem.contains(expected), "{facts:?}: {problem}");
+        }
+    }
+
+    #[test]
+    fn the_keys_of_a_two_phase_type_need_only_the_attested_application_to_hold_focus() {
+        const APP: u32 = 41;
+        let facts = FocusFacts {
+            attested: APP,
+            foreground: Some(APP),
+            focus_owner: Some(APP),
+            // UI Automation confirmed the element: the window relation is not asked.
+            focus_holds_target: false,
+        };
+        assert_eq!(keys_problem(facts), None);
+        assert!(
+            focus_problem(facts).is_some(),
+            "the one-shot check still asks"
+        );
+        for (changed, expected) in [
+            (
+                FocusFacts {
+                    foreground: Some(7),
+                    ..facts
+                },
+                "foreground application changed",
+            ),
+            (
+                FocusFacts {
+                    focus_owner: None,
+                    ..facts
+                },
+                "no window has keyboard focus",
+            ),
+            (
+                FocusFacts {
+                    focus_owner: Some(7),
+                    ..facts
+                },
+                "another application",
+            ),
+        ] {
+            let problem = keys_problem(changed).unwrap_or_default();
+            assert!(problem.contains(expected), "{changed:?}: {problem}");
         }
     }
 

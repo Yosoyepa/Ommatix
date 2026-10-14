@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use ommatix_domain::bbox::BBox;
-use ommatix_domain::fusion::{Control, Word};
+use ommatix_domain::fusion::{Control, Role, Word};
 use ommatix_domain::incremental::BgraFrame;
 
 use crate::PortError;
@@ -59,6 +59,121 @@ pub trait TextRecognizer: Send {
     fn recognize(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Vec<Word>, PortError>;
 }
 
+/// The control patterns an accessibility element supports: evidence of what acting on it
+/// does (ADR-0017). No pattern is ever invoked; only their availability is read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[allow(clippy::struct_excessive_bools)] // independent capabilities reported by the OS
+pub struct AccessiblePatterns {
+    /// A click activates it (UI Automation `Invoke`).
+    pub invoke: bool,
+    /// A click toggles it (`Toggle`).
+    pub toggle: bool,
+    /// A click opens or closes it (`ExpandCollapse`).
+    pub expand_collapse: bool,
+    /// A click selects it (`SelectionItem`).
+    pub select: bool,
+    /// Its text can be set (`Value` available and not read-only). The value itself is
+    /// never read.
+    pub editable_value: bool,
+    /// It scrolls (`Scroll`). Not a click affordance.
+    pub scroll: bool,
+}
+
+impl AccessiblePatterns {
+    /// A pattern a click acts through.
+    pub const fn clickable(&self) -> bool {
+        self.invoke || self.toggle || self.expand_collapse || self.select
+    }
+}
+
+/// One element of the attested foreground window's accessibility tree, as an
+/// [`AccessibilityProvider`] reports it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AccessibleElement {
+    /// Physical pixels of the captured frame, clipped to it.
+    pub bbox: BBox,
+    /// Mapped from the platform's control type by the provider; `Unknown` when the
+    /// contract has no role for it.
+    pub role: Role,
+    /// The accessible name. Untrusted screen data, like OCR text: it labels, it never
+    /// instructs and it never changes a permission.
+    pub name: String,
+    pub enabled: bool,
+    /// The platform says it is not on screen (scrolled away, collapsed, covered).
+    pub offscreen: bool,
+    /// A password field.
+    pub password: bool,
+    pub patterns: AccessiblePatterns,
+}
+
+/// What one accessibility read found, and whether it covered what it was asked about.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AccessibleRead {
+    /// The elements found. Each one is accurate; a truncated read can lack others.
+    pub elements: Vec<AccessibleElement>,
+    /// The walk stopped on its budget (elements, depth or time) before it covered the
+    /// regions: elements may be missing, so the absence of an element proves nothing.
+    pub truncated: bool,
+}
+
+impl AccessibleRead {
+    /// A read that covered everything it was asked about.
+    pub const fn complete(elements: Vec<AccessibleElement>) -> Self {
+        Self {
+            elements,
+            truncated: false,
+        }
+    }
+}
+
+/// Reads the accessibility tree of the foreground window (UI Automation on Windows;
+/// ADR-0017): evidence fused with the visual path, never a replacement for it. It reads
+/// only the window of the application the actuator would attest (on Windows, the same
+/// `ApplicationFrameHost` resolution), never another application's, and never a field's
+/// value. Off by default ([`NoAccessibility`]).
+pub trait AccessibilityProvider: Send {
+    fn name(&self) -> &'static str;
+
+    /// The elements whose boxes overlap `regions`. An empty result is valid (no
+    /// foreground application, or nothing accessible there). A provider whose walk is
+    /// bounded must say when a bound ended it ([`AccessibleRead::truncated`]): the engine
+    /// then reads those regions again instead of trusting what is missing.
+    fn snapshot(&mut self, regions: &[BBox]) -> Result<AccessibleRead, PortError>;
+
+    /// Whether [`keyboard_focus`](Self::keyboard_focus) answers. A provider that is off
+    /// ([`NoAccessibility`]) says no, and `type` then relies on the actuator's own
+    /// window-level focus check alone (ADR-0018).
+    fn reads_keyboard_focus(&self) -> bool;
+
+    /// The element that has keyboard focus now, in the attested foreground application:
+    /// `None` when nothing has it, it is not on the captured monitor or on screen, or it
+    /// belongs to another application. A read, never an action: it does not move focus and
+    /// never reads the element's value (ADR-0017, ADR-0018).
+    fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError>;
+}
+
+/// No accessibility evidence: the default, the simulated desktops and the fixtures.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoAccessibility;
+
+impl AccessibilityProvider for NoAccessibility {
+    fn name(&self) -> &'static str {
+        "none"
+    }
+
+    fn snapshot(&mut self, _: &[BBox]) -> Result<AccessibleRead, PortError> {
+        Ok(AccessibleRead::complete(Vec::new()))
+    }
+
+    fn reads_keyboard_focus(&self) -> bool {
+        false
+    }
+
+    fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError> {
+        Ok(None)
+    }
+}
+
 /// What the actuator reports after injecting the events of one action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeliveryReceipt {
@@ -84,6 +199,39 @@ pub trait OsActuator: Send {
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError>;
+
+    /// Whether [`deliver_focus_click`](Self::deliver_focus_click) and
+    /// [`deliver_keys`](Self::deliver_keys) work. The engine delivers `type` in two phases
+    /// (ADR-0018) only with an actuator that does and an accessibility provider that
+    /// reads keyboard focus; otherwise `type` goes through [`deliver`](Self::deliver).
+    fn delivers_in_phases(&self) -> bool {
+        false
+    }
+
+    /// First phase of a `type` action: the pointer events that move to the target and
+    /// click it, and nothing else. Every check of [`deliver`](Self::deliver) before the
+    /// events (foreground application, integrity, held keys) applies. The receipt counts
+    /// those events only. Nothing is retried.
+    fn deliver_focus_click(
+        &mut self,
+        _action: &ValidatedAction,
+    ) -> Result<DeliveryReceipt, PortError> {
+        Err(PortError::new(
+            "actuator",
+            "this actuator does not deliver in phases",
+        ))
+    }
+
+    /// Second phase of a `type` action: its keys. The engine calls it only after the first
+    /// phase was delivered and keyboard focus on the target was confirmed; an actuator
+    /// refuses it without that preceding click, and re-checks that the attested
+    /// application is still in the foreground. The receipt counts the key events only.
+    fn deliver_keys(&mut self, _action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
+        Err(PortError::new(
+            "actuator",
+            "this actuator does not deliver in phases",
+        ))
+    }
 }
 
 /// The local policy, owned by the operator and outside the agent's reach (chapter 08).

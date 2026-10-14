@@ -11,6 +11,11 @@
 //! `indeterminate`, never an automatic retry. Any delivery spends the snapshot: the next
 //! action needs a new observation.
 //!
+//! `type` is delivered in two phases when accessibility evidence reads keyboard focus
+//! (ADR-0018, SDD §2.9): the focusing click, then a poll on the injected clock until UI
+//! Automation reports keyboard focus on the target element, then the keys. No focus in
+//! time means no key at all: the click was delivered, so the action is `indeterminate`.
+//!
 //! The operator's stop (chapter 08 §8.2, SEC-02) is read from the policy store at the
 //! gate and again after the freshness capture, immediately before delivery: an action
 //! that meets it is `POLICY_DENIED` and sends nothing. It never undoes what was already
@@ -18,15 +23,17 @@
 
 use std::time::Duration;
 
+use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::Role;
 use ommatix_domain::identity::{ActionRef, ActionRejection, ActionStatus, Clearance, Delivery};
 use ommatix_domain::incremental::{BgraFrame, dirty_tiles};
 
 use super::Engine;
+use super::accessibility::focus_is_on;
 use super::journal::{Lookup, arguments_hash};
 use crate::contract::{
-    ActionKind, ActionRequest, ActionResult, ErrorCode, ExpectedEffect, ObservedEffect, ToolError,
-    ValidatedAction, limits,
+    ActionKind, ActionRequest, ActionResult, ActionTimings, ErrorCode, ExpectedEffect,
+    ObservedEffect, ToolError, ValidatedAction, limits,
 };
 
 /// Parses `s<n>` (`n >= 1`, no leading zeros) as the registry's snapshot number.
@@ -122,6 +129,15 @@ fn check_arguments(request: &ActionRequest) -> Result<(), ToolError> {
     }
 }
 
+/// The stages of an action that [`ActionTimings`] tells apart.
+#[derive(Debug, Clone, Copy)]
+enum Stage {
+    Freshness,
+    Delivery,
+    Focus,
+    Verification,
+}
+
 /// What the gate and the actuator established about one action.
 struct Outcome {
     status: ActionStatus,
@@ -173,6 +189,8 @@ impl Outcome {
 
 impl Engine {
     pub(super) fn act(&mut self, request: &ActionRequest) -> ActionResult {
+        // A replay or a refusal before the gate has no timings of its own.
+        self.action_timings = None;
         let reply = |outcome: Outcome| ActionResult {
             request_id: request.request_id.clone(),
             status: outcome.status,
@@ -200,10 +218,19 @@ impl Engine {
             Lookup::New => {}
         }
 
+        let started = self.ports.clock.now();
+        self.action_timings = Some(ActionTimings::default());
         let result = reply(
             self.gate_and_perform(request)
                 .unwrap_or_else(Outcome::rejected),
         );
+        // The gate is what no other stage accounts for.
+        let total = self.ports.clock.now().saturating_sub(started);
+        if let Some(t) = self.action_timings.as_mut() {
+            let staged = t.freshness + t.delivery + t.focus + t.verification;
+            t.gate = total.saturating_sub(staged);
+            t.total = total;
+        }
         // Every action whose input the actuator reported delivered counts, including an
         // indeterminate one whose effect could not be verified.
         if result.status == ActionStatus::Rejected {
@@ -214,6 +241,20 @@ impl Engine {
         self.journal
             .record(&request.request_id, hash, result.clone());
         result
+    }
+
+    /// Adds the time since `since` to `stage` of the running action.
+    fn spend(&mut self, since: Duration, stage: Stage) {
+        let elapsed = self.ports.clock.now().saturating_sub(since);
+        if let Some(t) = self.action_timings.as_mut() {
+            let slot = match stage {
+                Stage::Freshness => &mut t.freshness,
+                Stage::Delivery => &mut t.delivery,
+                Stage::Focus => &mut t.focus,
+                Stage::Verification => &mut t.verification,
+            };
+            *slot += elapsed;
+        }
     }
 
     /// Runs the checks and, if they pass, simulates or delivers the action.
@@ -237,9 +278,9 @@ impl Engine {
         {
             Clearance::Simulate { target_id } | Clearance::Deliver { target_id, .. } => target_id,
         };
-        let role = registry
+        let (role, target_box) = registry
             .get(target_id)
-            .map(|t| t.observation.role)
+            .map(|t| (t.observation.role, t.observation.bbox))
             .ok_or_else(|| rejection_error(ActionRejection::TargetNotFound))?;
         if matches!(request.action, ActionKind::Type { .. }) && role != Role::Input {
             return Err(ToolError::new(
@@ -285,13 +326,25 @@ impl Engine {
         else {
             return Err(policy_denied());
         };
-        let before = self.fresh_frame()?;
-        self.last_look(foreground.as_deref())?;
+        let since = self.ports.clock.now();
+        let checked = self
+            .fresh_frame()
+            .and_then(|before| self.last_look(foreground.as_deref()).map(|()| before));
+        self.spend(since, Stage::Freshness);
+        let before = checked?;
         let validated = ValidatedAction {
             target_id,
             kind: request.action.clone(),
             point: bbox.center(),
         };
+        if matches!(validated.kind, ActionKind::Type { .. }) && self.types_in_phases() {
+            return Ok(self.deliver_typing(
+                &validated,
+                &target_box,
+                foreground.as_deref(),
+                request.expected_effect,
+            ));
+        }
         Ok(self.deliver(&validated, &before, request.expected_effect))
     }
 
@@ -357,7 +410,10 @@ impl Engine {
     ) -> Outcome {
         // Whatever happens next, input may have reached the OS: the snapshot is spent.
         self.snapshot_spent = true;
-        let Ok(receipt) = self.ports.actuator.deliver(action) else {
+        let since = self.ports.clock.now();
+        let delivered = self.ports.actuator.deliver(action);
+        self.spend(since, Stage::Delivery);
+        let Ok(receipt) = delivered else {
             return Outcome::uncertain(
                 false,
                 "the actuator failed; input may or may not have reached the OS; do not retry",
@@ -369,24 +425,42 @@ impl Engine {
                 "the OS did not accept every input event; do not retry",
             );
         }
-        // From here on the actuator reported every event delivered: an unverified effect
-        // keeps `input_delivered` true (chapter 07 §7.5).
+        self.report_effect(Some(before), expected)
+    }
+
+    /// What is known once the actuator reported every event delivered: an unverified
+    /// effect keeps `input_delivered` true (chapter 07 §7.5). `before` is the frame the
+    /// visual change is measured against, `None` when it could not be captured.
+    fn report_effect(&mut self, before: Option<&BgraFrame>, expected: ExpectedEffect) -> Outcome {
+        let since = self.ports.clock.now();
+        let outcome = self.report_effect_untimed(before, expected);
+        self.spend(since, Stage::Verification);
+        outcome
+    }
+
+    fn report_effect_untimed(
+        &mut self,
+        before: Option<&BgraFrame>,
+        expected: ExpectedEffect,
+    ) -> Outcome {
         match expected {
             ExpectedEffect::None => Outcome::delivered(ActionStatus::InputDelivered, None),
-            ExpectedEffect::VisualChange => {
-                if self.screen_changed_since(before) {
-                    Outcome::delivered(
-                        ActionStatus::EffectObserved,
-                        Some(ObservedEffect::VisualChange),
-                    )
-                } else {
-                    Outcome::uncertain(
-                        true,
-                        "input was delivered but no visual change was observed within the \
-                         verification window; do not retry",
-                    )
-                }
-            }
+            ExpectedEffect::VisualChange => match before {
+                Some(before) if self.screen_changed_since(before) => Outcome::delivered(
+                    ActionStatus::EffectObserved,
+                    Some(ObservedEffect::VisualChange),
+                ),
+                Some(_) => Outcome::uncertain(
+                    true,
+                    "input was delivered but no visual change was observed within the \
+                     verification window; do not retry",
+                ),
+                None => Outcome::uncertain(
+                    true,
+                    "input was delivered but the screen could not be captured to measure \
+                     its effect; do not retry",
+                ),
+            },
             ExpectedEffect::FocusChanged
             | ExpectedEffect::ValueUpdated
             | ExpectedEffect::ScrollMoved => Outcome::uncertain(
@@ -396,20 +470,123 @@ impl Engine {
         }
     }
 
-    /// Whether the screen differs from `before`, the frame captured right before
-    /// delivery, within the settle window ([`VerifyParams`](super::VerifyParams)): a
-    /// check right away, then one every `poll` on the injected clock until `timeout` has
-    /// elapsed. Changes that happened before delivery are not this action's effect. Only
-    /// captures: nothing is published and no input is sent again.
+    /// Whether `type` is delivered in two phases (ADR-0018): the actuator can split it and
+    /// accessibility evidence can say where keyboard focus is. Otherwise the actuator's own
+    /// window-level check between its click and its keys is all there is.
+    fn types_in_phases(&self) -> bool {
+        self.ports.actuator.delivers_in_phases() && self.ports.accessibility.reads_keyboard_focus()
+    }
+
+    /// `type` in two phases (ADR-0018, SDD §2.9). The focusing click goes first. Keys follow
+    /// only once the accessibility provider reports keyboard focus on the target element
+    /// within the verification window, and only if the operator's stop and consent and the
+    /// foreground application still hold. Whatever stops the keys leaves the action
+    /// `indeterminate` with the delivered click reported: never retried, never rolled back.
+    /// The visual change is measured against a frame captured after the click and before
+    /// the keys, so the click's own redraw is not the effect of typing. The field's value
+    /// is never read.
+    fn deliver_typing(
+        &mut self,
+        action: &ValidatedAction,
+        target: &BBox,
+        foreground: Option<&str>,
+        expected: ExpectedEffect,
+    ) -> Outcome {
+        // Whatever happens next, input may have reached the OS: the snapshot is spent.
+        self.snapshot_spent = true;
+        let since = self.ports.clock.now();
+        let clicked = self.ports.actuator.deliver_focus_click(action);
+        self.spend(since, Stage::Delivery);
+        let Ok(click) = clicked else {
+            return Outcome::uncertain(
+                false,
+                "the actuator failed; input may or may not have reached the OS; do not retry",
+            );
+        };
+        if click.submitted == 0 || click.inserted != click.submitted {
+            return Outcome::uncertain(
+                false,
+                "the OS did not accept every input event; do not retry",
+            );
+        }
+        // From here the click is delivered: nothing below reports the action as not
+        // delivered and nothing sends it again.
+        let since = self.ports.clock.now();
+        let focused = self.keyboard_focus_on(target);
+        self.spend(since, Stage::Focus);
+        if !focused {
+            return Outcome::uncertain(
+                true,
+                "the click was delivered but keyboard focus on the target field was not \
+                 confirmed in time; no key was sent; do not retry",
+            );
+        }
+        let since = self.ports.clock.now();
+        let reference = if expected == ExpectedEffect::VisualChange {
+            self.ports.capturer.capture().ok().map(|c| c.frame)
+        } else {
+            None
+        };
+        let unchanged = self.last_look(foreground).is_ok();
+        self.spend(since, Stage::Freshness);
+        if !unchanged {
+            return Outcome::uncertain(
+                true,
+                "the click was delivered, then the operator's stop or consent or the \
+                 foreground application changed; no key was sent; do not retry",
+            );
+        }
+        let since = self.ports.clock.now();
+        let sent = self.ports.actuator.deliver_keys(action);
+        self.spend(since, Stage::Delivery);
+        let Ok(keys) = sent else {
+            return Outcome::uncertain(
+                true,
+                "the click was delivered but the actuator failed on the keys; some may have \
+                 reached the OS; do not retry",
+            );
+        };
+        if keys.submitted == 0 || keys.inserted != keys.submitted {
+            return Outcome::uncertain(
+                true,
+                "the click was delivered but the OS did not accept every key; do not retry",
+            );
+        }
+        self.report_effect(reference.as_ref(), expected)
+    }
+
+    /// Whether the accessibility provider reports keyboard focus on `target` within the
+    /// verification window. A failed read counts as no focus. Only reads: no input and no
+    /// focus change.
+    fn keyboard_focus_on(&mut self, target: &BBox) -> bool {
+        let min_iou = self.config.fusion.accessibility_iou;
+        self.within_verification_window(|engine| {
+            matches!(
+                engine.ports.accessibility.keyboard_focus(),
+                Ok(Some(focused)) if focus_is_on(&focused, target, min_iou)
+            )
+        })
+    }
+
+    /// Whether the screen differs from `before` within the settle window
+    /// ([`VerifyParams`](super::VerifyParams)). Changes that happened before `before` was
+    /// captured are not this action's effect. Only captures: nothing is published and no
+    /// input is sent again.
     fn screen_changed_since(&mut self, before: &BgraFrame) -> bool {
+        self.within_verification_window(|engine| engine.capture_differs(before))
+    }
+
+    /// Whether `probe` holds within the verification window: a check right away, then one
+    /// every `poll` on the injected clock until `timeout` has elapsed.
+    fn within_verification_window(&mut self, mut probe: impl FnMut(&mut Self) -> bool) -> bool {
         let verify = self.config.verify;
         let poll = verify.poll.max(Duration::from_millis(1));
-        // Bounds the captures even under a clock that does not advance.
+        // Bounds the probes even under a clock that does not advance.
         let max_waits = verify.timeout.as_nanos().div_ceil(poll.as_nanos());
         let start = self.ports.clock.now();
         let mut waits = 0u128;
         loop {
-            if self.capture_differs(before) {
+            if probe(self) {
                 return true;
             }
             let elapsed = self.ports.clock.now().saturating_sub(start);

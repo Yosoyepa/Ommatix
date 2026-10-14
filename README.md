@@ -28,10 +28,10 @@ engineering and research dossier, in Spanish, is the baseline of this repository
 |---|---|
 | Technical audit, thesis framework, SDD, requirements (RF-01..18, RNF-01..10) | [chapters 00–03](docs/thesis/README.md) |
 | Algorithms: incremental perception, spatial fusion, icon cache, temporal identity | [chapter 04](docs/thesis/04_ALGORITMOS_CORE.md) |
-| TDD plan (76 planned tests), integration plan S0–S4 and definition of done | [chapters 05–06](docs/thesis/05_TDD_PLAN_Y_MATRIZ.md) |
+| TDD plan (77 planned tests), integration plan S0–S4 and definition of done | [chapters 05–06](docs/thesis/05_TDD_PLAN_Y_MATRIZ.md) |
 | MCP contract, errors, JSON schemas and examples | [chapter 07](docs/thesis/07_CONTRATOS_MCP_Y_ERRORES.md), [`contratos/`](docs/thesis/contratos/README.md) |
 | Security, evaluation protocol, runbook, references | chapters 08–12 |
-| 32 Gherkin scenarios (BDD-01..32) and traceability matrices | [`features/`](docs/thesis/features), [`matrices/`](docs/thesis/matrices) |
+| 33 Gherkin scenarios (BDD-01..33) and traceability matrices | [`features/`](docs/thesis/features), [`matrices/`](docs/thesis/matrices) |
 | Python reference oracle (48 tests) and package validator | [`referencia_ejecutable/`](docs/thesis/referencia_ejecutable) |
 | Architecture decisions ADR-0001..0016, in English | [`docs/adr/`](docs/adr/README.md) |
 
@@ -67,7 +67,7 @@ unless the agent and a local policy both allow them. More in the
 - `ommatix-application` runs it as one engine behind the SDD ports, and `ommatix-adapter-mcp`
   serves the thesis contract (`observe_screen`, `execute_action`, `get_engine_metrics`) over
   MCP 2026-07-28 ([ADR-0015](docs/adr/0015-mcp-transport-on-rmcp-wire-types.md)). Contract
-  tests CT-01..10 and scenarios BDD-01..32 run in CI (BDD-28..32 over a test double of
+  tests CT-01..10 and scenarios BDD-01..33 run in CI (BDD-28..32 over a test double of
   the live actuator). `serve` and `demo` use this engine. Each observation also resolves text-less icons against curated prototypes (Algorithm 3A) when the operator
   configures them; otherwise icon labels stay `unknown`.
 - **S3, first part (Windows adapters):** DXGI Desktop Duplication capture (`--source dxgi`,
@@ -77,7 +77,9 @@ unless the agent and a local policy both allow them. More in the
   and input adapters need is bounded by
   [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (accepted on 2026-10-14). CI builds, lints and tests them on Windows. The operator
   can stop live input locally with a stop file (`[safety] stop_file`), and `type` sends
-  its keys only once keyboard focus is verified on the target field.
+  its keys only once keyboard focus is verified on the target field: with UI Automation
+  evidence the engine confirms focus on the target element between the focusing click and
+  the keys ([ADR-0018](docs/adr/0018-two-phase-type-with-element-level-focus-confirmation.md)).
 - **S3, supervised runs** ([report, in Spanish](docs/thesis/S3_CORRIDAS_SUPERVISADAS.md)):
   real DXGI capture and real `SendInput` on `notepad.exe` with disposable data, driven over
   MCP by `tools/s3/mcp_driver.py`. Four live clicks on the File menu reached the OS; the
@@ -100,7 +102,27 @@ unless the agent and a local policy both allow them. More in the
   Calculator was not scored: Windows OCR does not read its single-glyph buttons, and its
   one usable label belonged to a box centred on another button. No flow types: `type`
   needs a confirmed input role, which the one-class detector never gives. E2E-01 and
-  PERF-02 ran in part; the 450-run protocol remains.
+  PERF-02 ran in part; the 450-run protocol remains. A second round with UI Automation
+  evidence ([ADR-0017](docs/adr/0017-ui-automation-evidence-fused-with-vision.md), [CHANGELOG
+  1.0.15](docs/thesis/CHANGELOG.md)) confirmed the test application's and the Calculator's keys
+  by accessibility name in dry-run probes, with 36 real deliveries, all on the requested
+  control. Its scored typing runs failed: `type` dropped the keys that arrived in the frame
+  of its focusing click, because its focus check was window-level. ADR-0018 fixes that in
+  code (two-phase `type`, tested on doubles). The second round's scored series stopped at its
+  three-failure rule, so the Calculator and Notepad flows did not run live. A third round
+  ([CHANGELOG 1.0.17](docs/thesis/CHANGELOG.md)) ran `type` live in its two phases: the test
+  application passed 10 of 10 scored runs, with the typed text confirmed by the window title in
+  every run and no false success or lost key. The Calculator's scored flow stopped at 0 of 3,
+  because its final "Borrar" key is not exposed after "=" in scientific mode; the Notepad pilots
+  did not show the Edit menu reliably and were not scored. Two findings remain open: a partial
+  accessibility read is not re-read on incremental observations, and the client's Notepad menu
+  step is neither verified nor cleaned up after a failure. A fourth round
+  ([CHANGELOG 1.0.19](docs/thesis/CHANGELOG.md)) repeated the test application with the fixes of
+  1.0.18: 10 of 10 scored runs again, with the action stage timings recorded in `_meta`. The
+  Calculator was in scientific mode, with no clear key after "=", and its switch to standard mode
+  was not completed safely: its first navigation click was not confirmed on the requested control,
+  so the series was aborted. The Notepad series did not run, pending the owner's decision.
+  A fifth round ([CHANGELOG 1.0.21](docs/thesis/CHANGELOG.md)) scored no runs. Its switch of the Calculator to Standard mode stopped before the second click, so E2E-02 did not run, and the Notepad pilot's click on Edit did not pass its identity check after the click, so the scored E2E-03 series was not run.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML,
@@ -135,7 +157,9 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
   remaining supervised runs
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
   and the acceptance report. A reduced, click-only protocol ran (20 scored runs in two
-  applications; E2E-01 and PERF-02 in part)
+  applications; E2E-01 and PERF-02 in part; with UI Automation and two-phase `type`, the test
+  application passed 10 of 10 typing runs in two rounds, and the Calculator and Notepad flows did not
+  complete)
 
 ## Quick start
 
@@ -168,6 +192,7 @@ Build features, all off by default:
 | `onnx` | the ONNX detector of `[models]`; ONNX Runtime is loaded at run time from the library the operator pins, nothing is downloaded at build time | any |
 | `directml` | `[models] detector_execution_provider = "directml"`: the detector on DirectML (implies `onnx`); needs an ONNX Runtime build with DirectML and a pinned `DirectML.dll` | Windows |
 | `winrt-ocr` | `[models] ocr = "winrt"`: the OCR built into Windows | Windows |
+| `uia` | `[models] accessibility = "uia"`: the foreground window's UI Automation tree as evidence fused with the visual path ([ADR-0017](docs/adr/0017-ui-automation-evidence-fused-with-vision.md)); needs `--source dxgi` or `screen` | Windows |
 
 `serve` and `demo` take the same options:
 
@@ -202,7 +227,11 @@ foreground process with a higher integrity level (UIPI would drop the input sile
 target point outside that process's windows and held modifier keys or mouse buttons; for
 `type`, after the click that focuses the field it checks that keyboard focus is on the
 window at the target point (or a window containing it) of the same foreground process, and
-otherwise sends no key. Such a refusal is reported `indeterminate`, never retried: for
+otherwise sends no key. With `[models] accessibility = "uia"` the engine itself delivers
+`type` in two phases ([ADR-0018](docs/adr/0018-two-phase-type-with-element-level-focus-confirmation.md)):
+it sends the click, polls on its clock until UI Automation reports keyboard focus on the
+target element, and only then sends the keys; no confirmation in the verification window
+means no key. Such a refusal is reported `indeterminate`, never retried: for
 `type` the click may already have been delivered. `--input native`
 (or `[engine] mode = "native"`) is still accepted with `--source screen` and
 `actuation_enabled = true`, but `enigo` cannot attest
@@ -277,7 +306,10 @@ The MCP server exposes three tools, with the dossier's JSON schemas:
 | `get_engine_metrics` | Mode, observations, rejected and delivered actions, pending regions, whether models are loaded |
 
 Domain errors come back as tool results with `isError: true`, a `code`, `retryable` and a
-`next_step`; stage timings travel in the result's `_meta` under `io.ommatix/timings`.
+`next_step`; run-dependent values travel in the result's `_meta`: stage timings under
+`io.ommatix/timings` and whether the accessibility evidence is complete under
+`io.ommatix/accessibility` (`observe_screen`), the stage timings of the action under
+`io.ommatix/action_timings` (`execute_action`).
 
 ## Repository layout
 
@@ -287,6 +319,7 @@ src/                       Cargo workspace (modular monolith, ADR-0014)
 │                                                appearance, identity, snapshot
 ├── application/           ommatix-application   SDD ports, the Engine use case, contract types
 ├── adapters/
+│   ├── accessibility/     ommatix-adapter-accessibility  AccessibilityProvider: UI Automation (feature `uia`)
 │   ├── capture/           ommatix-adapter-capture  FrameCapturer: scripted, PNG frames, screen, DXGI
 │   ├── vision/            ommatix-adapter-vision   VisionDetector, TextRecognizer (flat-region, ONNX, Windows OCR)
 │   ├── input/             ommatix-adapter-input    OsActuator: dry run, native input, SendInput
@@ -316,6 +349,7 @@ map onto the crates:
 | Icon Resolver | `ommatix-domain` (`appearance`), run by the `Engine` on text-less controls of the planned regions with the operator's curated prototypes |
 | Capture Provider | `ommatix-adapter-capture` (`FrameCapturer`) |
 | Perception Provider | `ommatix-adapter-vision` (`VisionDetector`, `TextRecognizer`) |
+| Accessibility Provider | `ommatix-adapter-accessibility` (`AccessibilityProvider`; optional, off by default) |
 | OS Actuator | `ommatix-adapter-input` (`OsActuator`) |
 | Effect Verifier | the `Engine`'s re-capture after delivery (visual change only); partial, completed in S3 |
 | Telemetry | stage timings in MCP `_meta`; partial, completed in S3 |
@@ -333,8 +367,8 @@ git config core.hooksPath .githooks     # once: fmt + clippy + tests before comm
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                  # unit, integration and Gherkin acceptance tests
-cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr --all-targets -- -D warnings   # on Windows
-cargo test -p ommatix --features dxgi,sendinput,onnx,winrt-ocr                                  # on Windows
+cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia --all-targets -- -D warnings   # on Windows
+cargo test -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia                              # on Windows
 ```
 
 No test sends real input: the `SendInput` actuator is tested through its pure helpers only.

@@ -37,7 +37,7 @@ MVP opens no network port; MCP runs over stdio. See [context](../diagrams/contex
 
 ## Components
 
-The SDD defines eleven components ([diagram](../diagrams/components.md)).
+The SDD defines twelve components ([diagram](../diagrams/components.md)).
 [ADR-0014](../adr/0014-hexagonal-crate-layout.md) places them in crates:
 
 | Component | Responsibility | Contract | Crate |
@@ -46,7 +46,8 @@ The SDD defines eleven components ([diagram](../diagrams/components.md)).
 | Observation Coordinator | Capture, region planning and commit | SnapshotRequest → Snapshot | `ommatix-application` (`Engine::observe_screen`) |
 | Capture Provider | Pixels, stride, timing, dirty and move rectangles | FrameLease | `ommatix-adapter-capture` |
 | Perception Provider | Detector, OCR and image transforms | Region → RawEvidence | `ommatix-adapter-vision` |
-| Spatial Fusion | Containment, lines, labels and relations | RawEvidence → Candidates | `ommatix-domain` |
+| Accessibility Provider | The foreground window's UI Automation tree; optional evidence fused with the visual path | Region → AccessibleElement | `ommatix-adapter-accessibility` |
+| Spatial Fusion | Containment, lines, labels and relations; absorbs detections that match an accessible element | RawEvidence + AccessibleElement → Candidates | `ommatix-domain` |
 | Icon Resolver | Contextual lookup with rejection | CropDescriptor → LabelEvidence | `ommatix-domain` |
 | Temporal Registry | IDs, revisions and retirement | Candidates + Snapshot → Tracks | `ommatix-domain` |
 | Policy & Action Gate | Freshness, permissions and preconditions | ActionRequest → Permit or Reject | `ommatix-application` (`Engine::execute_action`) |
@@ -55,7 +56,7 @@ The SDD defines eleven components ([diagram](../diagrams/components.md)).
 | Telemetry | Metrics and audit without sensitive text | Events and spans | `get_engine_metrics` and stage timings in MCP `_meta` (partial; S3) |
 
 The core reaches the outside world only through the ports `FrameCapturer`, `VisionDetector`,
-`TextRecognizer`, `OsActuator`, `Clock` and `PolicyStore`, so every adapter can be replaced by
+`TextRecognizer`, `AccessibilityProvider`, `OsActuator`, `Clock` and `PolicyStore`, so every adapter can be replaced by
 a deterministic fixture. On Windows 11 ([ADR-0008](../adr/0008-one-real-platform-first.md)),
 capture uses DXGI Desktop Duplication and input uses `SendInput`. Inference runs on ONNX
 Runtime, with the CPU as the baseline and DirectML as an option; the models are chosen in the
@@ -134,8 +135,10 @@ unless the agent sets it to false, and even then the local consent and allowlist
   `POLICY_DENIED`, `REQUEST_CONFLICT` and others), `retryable` and a `next_step` such as
   `observe_again` or `operator_review`; they are tool results with `isError: true`.
   Malformed messages, unknown methods or tools and schema-invalid arguments (`-32602`) are
-  JSON-RPC errors. Messages are limited to 64 KiB in both directions. Stage timings go in
-  the result's `_meta` (`io.ommatix/timings`), never in `structuredContent`.
+  JSON-RPC errors. Messages are limited to 64 KiB in both directions. Run-dependent values
+  go in the result's `_meta`, never in `structuredContent`: an observation's stage timings
+  (`io.ommatix/timings`) and whether its accessibility evidence is complete
+  (`io.ommatix/accessibility`), and an action's stage timings (`io.ommatix/action_timings`).
 
 ## Quality attributes
 
@@ -186,9 +189,13 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   buttons. `type` sends its focusing click first and its keys only after
   `GetGUIThreadInfo` shows keyboard focus, in the same foreground process, on the window at
   the target point or a window containing it (polled for up to 200 ms while the click is
-  handled); otherwise no key is sent. A refusal is an actuator error, which the engine
-  reports `indeterminate` and never retries: after a refused `type` the click may have been
-  delivered. No test sends real input.
+  handled); otherwise no key is sent. With accessibility evidence the engine owns that
+  pause instead (ADR-0018): `deliver_focus_click` sends the click, the engine polls the
+  provider's `keyboard_focus` on its `Clock` until the target element has focus, and only
+  then calls `deliver_keys`, which still checks the foreground application and held
+  modifiers. A refusal is an actuator error, which the engine reports `indeterminate` and
+  never retries: after a refused `type` the click may have been delivered. No test sends
+  real input.
 - *Detector* (`onnx`, `[models] detector_manifest`): a generic YOLO-style detector on ONNX
   Runtime loaded at run time (`load-dynamic`) from a library pinned by SHA-256. The model
   manifest is pinned by SHA-256 and names the weights, their SHA-256 and each class's role
@@ -198,6 +205,20 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   with the `directml` feature, on DirectML with a pinned `DirectML.dll`, sequential
   execution, no memory pattern and no CPU fallback; the manifest lists the providers the
   model was validated on.
+- *Accessibility* (`uia`, `[models] accessibility = "uia"`,
+  [ADR-0017](../adr/0017-ui-automation-evidence-fused-with-vision.md)): the UI Automation tree
+  of the foreground window the actuator attests (the `ApplicationFrameHost` frame resolves to
+  its hosted app), read once per observation inside the planned regions, bounded by elements,
+  depth and time, through the safe `uiautomation` crate (no `unsafe` of our own; the crate's
+  input and pattern calls are forbidden by the adapter's `clippy.toml`). Evidence, not a
+  replacement: an enabled, on-screen element with an action pattern is `confirmed` with its
+  role and name (`label_source: accessibility`), the detector boxes that are the same control
+  merge into it, and a box centred on another accessible control stops being confirmed. A walk
+  that ends on its budget says so (`truncated`): those regions are read again on the next
+  observation even if no pixel changed, evidence the partial read does not repeat is kept while
+  its pixels are unchanged, and a visual box inside such a gap is not confirmed. It
+  never reads a field's value, and a password field is no input. Allowed only with `dxgi` or
+  `screen`; off by default.
 - *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` for exactly
   `ocr_language`, never another language, without invented confidences; recognised text is
   never logged.
@@ -281,4 +302,6 @@ operator's stop file during a sequence) the same way over a test double of the l
 actuator that records what it is handed and sends nothing. They show the engine's side of
 SEC-05, IT-04, IT-05, SEC-03 and SEC-02, which still need supervised runs with the real
 actuator; the keyboard-focus check inside the allowed application is the `SendInput`
-actuator's, and no test drives it.
+actuator's, and no test drives it. The two-phase `type` of ADR-0018 (focus confirmed on the
+target element by the engine, BDD-34 and BDD-35) runs over doubles of the actuator and of
+the accessibility provider.

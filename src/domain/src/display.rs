@@ -1,3 +1,4 @@
+use crate::bbox::BBox;
 use crate::{DomainError, Point};
 
 /// Maps frame pixel coordinates to the coordinate space of the OS input system.
@@ -40,6 +41,24 @@ impl DisplayMapping {
     /// Frame pixels are OS coordinates (single monitor at the origin, no scaling).
     pub fn identity(width: u32, height: u32) -> Result<Self, DomainError> {
         Self::new((0, 0), (width, height), (width, height))
+    }
+
+    /// The frame-pixel box of an OS rectangle `[left, right) × [top, bottom)` (the
+    /// inverse of [`to_os`](Self::to_os)), clipped to the frame; `None` when nothing of it
+    /// lies on this monitor.
+    pub fn frame_box(&self, left: i32, top: i32, right: i32, bottom: i32) -> Option<BBox> {
+        let map = |v: i32, origin: i32, frame: u32, os: u32| -> f64 {
+            (f64::from(v) - f64::from(origin)) * f64::from(frame) / f64::from(os)
+        };
+        let raw = BBox::new(
+            map(left, self.origin_x, self.frame_w, self.os_w),
+            map(top, self.origin_y, self.frame_h, self.os_h),
+            map(right, self.origin_x, self.frame_w, self.os_w),
+            map(bottom, self.origin_y, self.frame_h, self.os_h),
+        )
+        .ok()?;
+        let frame = BBox::new(0.0, 0.0, f64::from(self.frame_w), f64::from(self.frame_h)).ok()?;
+        raw.clip(&frame)
     }
 
     /// OS input coordinates for a frame pixel, saturating at the `i32` range.
@@ -87,6 +106,27 @@ mod tests {
         assert_eq!(huge.to_os(Point::new(u32::MAX, 0)), (i32::MAX, i32::MIN));
         let shrink = DisplayMapping::new((0, 0), (u32::MAX, u32::MAX), (1, 1)).unwrap();
         assert_eq!(shrink.to_os(Point::new(u32::MAX, u32::MAX)), (1, 1));
+    }
+
+    #[test]
+    fn os_rectangles_map_back_to_clipped_frame_boxes() {
+        let m = DisplayMapping::new((-1920, 0), (1920, 1080), (1920, 1080)).unwrap();
+        assert_eq!(
+            m.frame_box(-1910, 20, -1810, 60),
+            Some(BBox::new(10.0, 20.0, 110.0, 60.0).unwrap())
+        );
+        // Partly on the primary monitor: clipped to this one.
+        assert_eq!(
+            m.frame_box(-20, 0, 40, 10),
+            Some(BBox::new(1900.0, 0.0, 1920.0, 10.0).unwrap())
+        );
+        assert_eq!(m.frame_box(0, 0, 100, 100), None);
+        assert_eq!(m.frame_box(-1900, 10, -1900, 50), None);
+        let retina = DisplayMapping::new((0, 0), (2880, 1800), (1440, 900)).unwrap();
+        assert_eq!(
+            retina.frame_box(10, 10, 20, 30),
+            Some(BBox::new(20.0, 20.0, 40.0, 60.0).unwrap())
+        );
     }
 
     #[test]

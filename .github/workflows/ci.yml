@@ -92,7 +92,7 @@ jobs:
         run: cargo test -p ommatix-adapter-capture -p ommatix-adapter-input --features ommatix-adapter-capture/dxgi,ommatix-adapter-input/sendinput
 
   windows:
-    name: DXGI capture + SendInput + ONNX detector + Windows OCR (windows-latest)
+    name: DXGI capture + SendInput + ONNX detector + Windows OCR + UI Automation (windows-latest)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,22 +100,24 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build -p ommatix --features dxgi,sendinput,onnx,winrt-ocr
-      - run: cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr --all-targets -- -D warnings
-      - run: cargo clippy -p ommatix --features dxgi,sendinput,directml,winrt-ocr --all-targets -- -D warnings
+      - run: cargo build -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia
+      - run: cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia --all-targets -- -D warnings
+      - run: cargo clippy -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia --all-targets -- -D warnings
       - run: >-
-          cargo clippy --all-targets -p ommatix-adapter-capture -p ommatix-adapter-input -p ommatix-adapter-vision
+          cargo clippy --all-targets -p ommatix-adapter-capture -p ommatix-adapter-input -p ommatix-adapter-vision -p ommatix-adapter-accessibility
           --features ommatix-adapter-capture/dxgi,ommatix-adapter-input/sendinput
           --features ommatix-adapter-vision/directml,ommatix-adapter-vision/winrt-ocr
+          --features ommatix-adapter-accessibility/uia
           -- -D warnings
       # Unit tests only: the DXGI test that reads a real screen and the OCR tests that need
       # an installed language are #[ignore]d (a hosted runner has no interactive desktop),
       # no model is loaded and no test ever injects input.
-      - run: cargo test -p ommatix --features dxgi,sendinput,onnx,winrt-ocr
+      - run: cargo test -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia
       - run: >-
-          cargo test -p ommatix-adapter-capture -p ommatix-adapter-input -p ommatix-adapter-vision
+          cargo test -p ommatix-adapter-capture -p ommatix-adapter-input -p ommatix-adapter-vision -p ommatix-adapter-accessibility
           --features ommatix-adapter-capture/dxgi,ommatix-adapter-input/sendinput
           --features ommatix-adapter-vision/directml,ommatix-adapter-vision/winrt-ocr
+          --features ommatix-adapter-accessibility/uia
 
   cross-check:
     name: capture + native input compile for ${{ matrix.target }}
