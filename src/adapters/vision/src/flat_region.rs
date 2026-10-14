@@ -1,4 +1,7 @@
-use ommatix_application::{ElementDetector, PortError};
+use ommatix_application::{PortError, VisionDetector};
+use ommatix_domain::bbox::BBox;
+use ommatix_domain::fusion::{Actionability, Affordance, Control, Role};
+use ommatix_domain::incremental::BgraFrame;
 use ommatix_domain::{Detection, ElementKind, Frame, Rect};
 
 use crate::border::FrameBorder;
@@ -66,17 +69,14 @@ impl FlatRegionDetector {
     }
 }
 
-impl ElementDetector for FlatRegionDetector {
-    fn name(&self) -> &'static str {
-        NAME
-    }
-
-    /// Glyphs up to `merge_gap` apart are grouped into one word.
-    fn context_margin(&self) -> u32 {
+impl FlatRegionDetector {
+    /// How far, in pixels, grouping reaches: glyphs up to `merge_gap` apart are one word.
+    pub fn context_margin(&self) -> u32 {
         self.config.merge_gap
     }
 
-    fn detect(&self, frame: &Frame, region: Rect) -> Result<Vec<Detection>, PortError> {
+    /// Flat-colour blobs inside `region` of an RGBA frame (the prototype representation).
+    pub fn detect_blobs(&self, frame: &Frame, region: Rect) -> Result<Vec<Detection>, PortError> {
         let area = region.clip(&frame.bounds());
         if area.is_empty() {
             return Ok(Vec::new());
@@ -107,6 +107,89 @@ impl ElementDetector for FlatRegionDetector {
     }
 }
 
+/// What a blob is to the engine: a box with no role and no affordance evidence. The
+/// detector cannot tell a button from a panel, so it never invents a role and never
+/// confirms that anything can be acted on.
+fn unknown_control(bbox: BBox) -> Control {
+    Control {
+        bbox,
+        role: Role::Unknown,
+        affordance: Affordance {
+            actionability: Actionability::Unknown,
+            enabled: true,
+            visible: true,
+        },
+    }
+}
+
+/// The RGBA frame the segmenter works on.
+fn to_rgba(frame: &BgraFrame) -> Result<Frame, PortError> {
+    let (w, h) = (frame.width() as usize, frame.height() as usize);
+    let mut rgba = Vec::with_capacity(4 * w * h);
+    for row in frame.pixels().chunks(frame.row_stride()).take(h) {
+        for px in row[..4 * w].as_chunks::<4>().0 {
+            rgba.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+        }
+    }
+    Frame::from_rgba(frame.width(), frame.height(), rgba)
+        .map_err(|e| PortError::new(NAME, "the frame cannot be converted").with_source(e))
+}
+
+/// The pixels a region covers, rounded outwards and clipped to the frame.
+fn pixel_rect(region: &BBox, frame: &BgraFrame) -> Rect {
+    let clamp = |v: f64, max: u32| v.clamp(0.0, f64::from(max)) as u32;
+    let (x0, y0) = (
+        clamp(region.x0().floor(), frame.width()),
+        clamp(region.y0().floor(), frame.height()),
+    );
+    let (x1, y1) = (
+        clamp(region.x1().ceil(), frame.width()),
+        clamp(region.y1().ceil(), frame.height()),
+    );
+    Rect::new(x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0))
+}
+
+fn to_bbox(r: Rect) -> Option<BBox> {
+    BBox::new(
+        f64::from(r.x),
+        f64::from(r.y),
+        f64::from(r.right()),
+        f64::from(r.bottom()),
+    )
+    .ok()
+}
+
+impl VisionDetector for FlatRegionDetector {
+    fn name(&self) -> &'static str {
+        NAME
+    }
+
+    fn models_loaded(&self) -> bool {
+        false
+    }
+
+    /// Blobs inside each region, as controls of unknown role and actionability, sorted by
+    /// box and without duplicates.
+    fn detect(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Vec<Control>, PortError> {
+        if regions.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rgba = to_rgba(frame)?;
+        let mut boxes = Vec::new();
+        for region in regions {
+            let rect = pixel_rect(region, frame);
+            boxes.extend(
+                self.detect_blobs(&rgba, rect)?
+                    .into_iter()
+                    .filter_map(|d| to_bbox(d.bounds)),
+            );
+        }
+        boxes.sort_by(BBox::cmp_corners);
+        boxes.dedup();
+        Ok(boxes.into_iter().map(unknown_control).collect())
+    }
+}
+
 fn is_background(s: &Segment, border: &FrameBorder, tolerance: u8) -> bool {
     s.continues_outside
         || s.on_border_surface
@@ -123,11 +206,36 @@ mod tests {
 
     fn detect(frame: &Frame, region: Rect) -> Vec<Rect> {
         FlatRegionDetector::default()
-            .detect(frame, region)
+            .detect_blobs(frame, region)
             .unwrap()
             .into_iter()
             .map(|d| d.bounds)
             .collect()
+    }
+
+    #[test]
+    fn as_a_vision_detector_it_reports_unknown_controls_in_the_regions() {
+        let mut f = Frame::solid(100, 50, WHITE).unwrap();
+        f.fill_rect(Rect::new(10, 10, 20, 10), BLUE);
+        f.fill_rect(Rect::new(60, 10, 20, 10), BLUE);
+        let mut bgra = f.as_rgba().to_vec();
+        for p in bgra.as_chunks_mut::<4>().0 {
+            p.swap(0, 2);
+        }
+        let frame = BgraFrame::new(100, 50, 400, 1, bgra).unwrap();
+        let mut detector = FlatRegionDetector::default();
+        assert!(!detector.models_loaded());
+        let right = BBox::new(50.5, 0.0, 100.0, 50.0).unwrap();
+        let found = detector.detect(&frame, &[right]).unwrap();
+        assert_eq!(
+            found,
+            vec![unknown_control(BBox::new(60.0, 10.0, 80.0, 20.0).unwrap())]
+        );
+        assert_eq!(found[0].role, Role::Unknown);
+        assert_eq!(found[0].affordance.actionability, Actionability::Unknown);
+        let all = detector.detect(&frame, &[frame.bounds()]).unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(detector.detect(&frame, &[]).unwrap().is_empty());
     }
 
     #[test]

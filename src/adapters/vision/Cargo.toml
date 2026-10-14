@@ -1,6 +1,6 @@
 [package]
 name = "ommatix-adapter-vision"
-description = "Ommatix driven adapter: deterministic CPU element detectors implementing the ElementDetector port."
+description = "Ommatix driven adapters: a deterministic CPU flat-region VisionDetector and the null TextRecognizer."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
