@@ -176,7 +176,7 @@ pub enum IconMatch {
 }
 
 /// Curated prototypes, partitioned by context and descriptor version.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct IconCache {
     prototypes: Vec<Prototype>,
 }

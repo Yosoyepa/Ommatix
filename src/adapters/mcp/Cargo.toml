@@ -1,6 +1,6 @@
 [package]
 name = "ommatix-adapter-mcp"
-description = "Ommatix driving adapter: a Model Context Protocol (MCP) server over stdio exposing perception as tools."
+description = "Ommatix driving adapter: the Ommatix 1.0 tool contract over the Model Context Protocol (stdio; profile 2026-07-28, opt-in 2025-11-25)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,14 +11,14 @@ publish.workspace = true
 [dependencies]
 ommatix-application = { workspace = true }
 ommatix-domain = { workspace = true }
+rmcp = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util"] }
 
 [dev-dependencies]
-ommatix-adapter-capture = { workspace = true }
-ommatix-adapter-input = { workspace = true }
-ommatix-adapter-sim = { workspace = true }
-ommatix-adapter-vision = { workspace = true }
+jsonschema = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt"] }
 
 [lints]
 workspace = true

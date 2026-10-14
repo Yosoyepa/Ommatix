@@ -9,23 +9,23 @@ BDD-07,RF-06,UT-16,features/02_fusion.feature,Texto pequeño dentro de botón,EJ
 BDD-08,RF-06,UT-18,features/02_fusion.feature,Panel y control anidado,EJECUTADO_SOBRE_NUCLEO_S1
 BDD-09,RF-06,UT-20,features/02_fusion.feature,Renglones estables,EJECUTADO_SOBRE_NUCLEO_S1
 BDD-10,RF-06,UT-23,features/02_fusion.feature,Labels ambiguos,EJECUTADO_SOBRE_NUCLEO_S1
-BDD-11,RF-07,UT-24,features/02_fusion.feature,Texto informativo,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-12,RF-07,UT-25,features/02_fusion.feature,Placeholder desconocido,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-13,RF-09,UT-34,features/03_identidad.feature,Cruce de celda,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-14,RF-09,UT-36,features/03_identidad.feature,Dos controles repetidos,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-15,RF-09,UT-37,features/03_identidad.feature,Fila virtualizada,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-16,RF-11,UT-38,features/03_identidad.feature,Snapshot anterior,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-17,RF-09,UT-35,features/03_identidad.feature,ID retirado,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-18,RF-08,UT-28,features/04_iconos.feature,Inversión de luminancia ideal,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-19,RF-08,UT-29,features/04_iconos.feature,Crop plano,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-20,RF-08,UT-31,features/04_iconos.feature,Conflicto entre prototipos,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-21,RF-08,UT-31,features/04_iconos.feature,Icono fuera de contexto,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-22,RF-15,CT-05,features/05_mcp.feature,Petición moderna,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-23,RF-15,CT-08,features/05_mcp.feature,Compatibilidad legacy,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-24,RF-15,CT-07,features/05_mcp.feature,Notification,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-25,RF-11,CT-10,features/05_mcp.feature,Coordenadas no admitidas,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-26,RF-10,CT-02,features/05_mcp.feature,Truncamiento explícito,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-27,RF-12,UT-42,features/06_accion_segura.feature,Dry-run,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
+BDD-11,RF-07,UT-24,features/02_fusion.feature,Texto informativo,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-12,RF-07,UT-25,features/02_fusion.feature,Placeholder desconocido,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-13,RF-09,UT-34,features/03_identidad.feature,Cruce de celda,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-14,RF-09,UT-36,features/03_identidad.feature,Dos controles repetidos,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-15,RF-09,UT-37,features/03_identidad.feature,Fila virtualizada,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-16,RF-11,UT-38,features/03_identidad.feature,Snapshot anterior,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-17,RF-09,UT-35,features/03_identidad.feature,ID retirado,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-18,RF-08,UT-28,features/04_iconos.feature,Inversión de luminancia ideal,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-19,RF-08,UT-29,features/04_iconos.feature,Crop plano,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-20,RF-08,UT-31,features/04_iconos.feature,Conflicto entre prototipos,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-21,RF-08,UT-31,features/04_iconos.feature,Icono fuera de contexto,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-22,RF-15,CT-05,features/05_mcp.feature,Petición moderna,EJECUTADO_SOBRE_CONTRATO_S2
+BDD-23,RF-15,CT-08,features/05_mcp.feature,Compatibilidad legacy,EJECUTADO_SOBRE_CONTRATO_S2
+BDD-24,RF-15,CT-07,features/05_mcp.feature,Notification,EJECUTADO_SOBRE_CONTRATO_S2
+BDD-25,RF-11,CT-10,features/05_mcp.feature,Coordenadas no admitidas,EJECUTADO_SOBRE_CONTRATO_S2
+BDD-26,RF-10,CT-02,features/05_mcp.feature,Truncamiento explícito,EJECUTADO_SOBRE_CONTRATO_S2
+BDD-27,RF-12,UT-42,features/06_accion_segura.feature,Dry-run,EJECUTADO_SOBRE_CONTRATO_S2
 BDD-28,RF-11,SEC-05,features/06_accion_segura.feature,Foco incorrecto,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
 BDD-29,RF-13,IT-04,features/06_accion_segura.feature,Verificación indeterminada,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
 BDD-30,RF-14,IT-05,features/06_accion_segura.feature,Solicitud repetida,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION

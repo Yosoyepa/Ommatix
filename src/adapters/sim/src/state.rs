@@ -1,3 +1,5 @@
+use ommatix_domain::bbox::BBox;
+use ommatix_domain::fusion::{Actionability, Affordance, Control, Role, Word};
 use ommatix_domain::{Action, Frame, Key, MouseButton, Rect};
 
 use crate::Palette;
@@ -14,7 +16,8 @@ pub struct SimState {
 }
 
 impl SimState {
-    pub(crate) fn apply(&mut self, action: &Action) {
+    /// Applies one user input to the form.
+    pub fn apply(&mut self, action: &Action) {
         match action {
             Action::Click {
                 at,
@@ -52,6 +55,61 @@ impl SimState {
                 _ => {}
             },
         }
+    }
+
+    /// The controls on screen, as a perfect detector would report them: the field and the
+    /// two buttons (disabled while the modal dialog is open), and the dialog's OK button.
+    pub fn controls(&self) -> Vec<Control> {
+        let control = |rect: Rect, role, enabled| Control {
+            bbox: to_bbox(rect),
+            role,
+            affordance: Affordance {
+                actionability: Actionability::Confirmed,
+                enabled,
+                visible: true,
+            },
+        };
+        let form_enabled = !self.dialog_open;
+        let mut controls = vec![
+            control(layout::TEXT_FIELD, Role::Input, form_enabled),
+            control(layout::CANCEL_BUTTON, Role::Button, form_enabled),
+            control(layout::SAVE_BUTTON, Role::Button, form_enabled),
+        ];
+        if self.dialog_open {
+            controls.push(control(layout::OK_BUTTON, Role::Button, true));
+        }
+        controls
+    }
+
+    /// The words on screen, as a perfect OCR would report them: the field's label, the
+    /// button captions, the typed text (one word per run of non-blank characters) and,
+    /// while it is open, the dialog's prompt and OK caption.
+    pub fn words(&self) -> Vec<Word> {
+        let word = |text: &str, rect: Rect| Word::new(text, to_bbox(rect));
+        let mut words = vec![
+            word("Name", layout::FIELD_LABEL),
+            word("Cancel", layout::CANCEL_CAPTION),
+            word("Save", layout::SAVE_CAPTION),
+        ];
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut start = None;
+        for i in 0..=chars.len() {
+            let blank = chars.get(i).is_none_or(|c| c.is_whitespace());
+            match (start, blank) {
+                (None, false) => start = Some(i),
+                (Some(a), true) => {
+                    let text: String = chars[a..i].iter().collect();
+                    words.push(word(&text, layout::glyph_run(a as u32, i as u32)));
+                    start = None;
+                }
+                _ => {}
+            }
+        }
+        if self.dialog_open {
+            words.push(word("Confirm", layout::DIALOG_PROMPT));
+            words.push(word("OK", layout::OK_CAPTION));
+        }
+        words
     }
 
     fn confirm(&mut self) {
@@ -103,6 +161,16 @@ impl SimState {
         }
         f
     }
+}
+
+fn to_bbox(r: Rect) -> BBox {
+    BBox::new(
+        f64::from(r.x),
+        f64::from(r.y),
+        f64::from(r.right()),
+        f64::from(r.bottom()),
+    )
+    .expect("layout rectangles are non-empty")
 }
 
 #[cfg(test)]
@@ -159,5 +227,43 @@ mod tests {
             assert_eq!(s.render(&palette), s.render(&palette));
             assert_eq!(s.render(&palette).pixel(5, 5), palette.desktop);
         }
+    }
+}
+
+#[cfg(test)]
+mod truth_tests {
+    use super::*;
+
+    #[test]
+    fn typed_text_is_one_word_per_run() {
+        let s = SimState {
+            text: "ab  c".into(),
+            ..SimState::default()
+        };
+        let words = s.words();
+        let typed: Vec<(&str, f64, f64)> = words[3..]
+            .iter()
+            .map(|w| (w.text.as_str(), w.bbox.x0(), w.bbox.x1()))
+            .collect();
+        let x = f64::from(layout::TEXT_ORIGIN_X);
+        assert_eq!(typed, vec![("ab", x, x + 15.0), ("c", x + 36.0, x + 42.0)]);
+    }
+
+    #[test]
+    fn the_modal_dialog_disables_the_form() {
+        let open = SimState {
+            dialog_open: true,
+            ..SimState::default()
+        };
+        let controls = open.controls();
+        assert_eq!(controls.len(), 4);
+        assert!(controls[..3].iter().all(|c| !c.affordance.enabled));
+        assert!(controls[3].affordance.enabled);
+        assert!(
+            SimState::default()
+                .controls()
+                .iter()
+                .all(|c| c.affordance.enabled)
+        );
     }
 }

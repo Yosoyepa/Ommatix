@@ -1,72 +1,82 @@
-//! `ommatix` binary: parse the CLI, wire the services, run a driving adapter.
+//! `ommatix` binary: read the configuration, wire the engine, run a front end.
+//!
+//! - `serve`: the MCP server on stdio. stdout carries protocol messages only; every
+//!   diagnostic goes to stderr.
+//! - `demo`: a few observations and one dry-run click, printed for a human.
 
 mod cli;
 mod clock;
+mod config;
+mod demo;
+mod policy;
+mod prototypes;
 mod wiring;
 
-use std::io::{self, BufWriter};
-
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
-use ommatix_adapter_mcp::McpServer;
-use ommatix_application::PerceptionEngine;
+use ommatix_adapter_mcp::{LEGACY_PROTOCOL_VERSION, MODERN_PROTOCOL_VERSION, McpServer};
 
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, DemoArgs, RunArgs};
+use crate::config::Config;
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Serve(args) => {
-            let session = wiring::build(&args)?;
-            eprintln!(
-                "ommatix: MCP server on stdio (source={}, detector={}, input={})",
-                session.perception().source_name(),
-                session.perception().detector_name(),
-                session.actuation().input_name(),
-            );
-            let stdin = io::stdin().lock();
-            let stdout = BufWriter::new(io::stdout().lock());
-            McpServer::new(session).serve(stdin, stdout)?;
-        }
-        Command::Demo(args) => run_demo(wiring::build(&args)?.perception_mut())?,
+        Command::Serve(args) => serve(&args),
+        Command::Demo(args) => run_demo(&args),
     }
-    Ok(())
 }
 
-/// Frames printed by `demo` when the source never ends (`--loop`, `sim`, `screen`).
-const DEMO_MAX_FRAMES: u64 = 20;
+fn report_notes(notes: &[String]) {
+    for note in notes {
+        eprintln!("ommatix: note: {note}");
+    }
+}
 
-/// `demo` is the one command whose output is meant for a human on stdout.
-#[allow(clippy::print_stdout)]
-fn run_demo(engine: &mut PerceptionEngine) -> Result<()> {
-    println!(
-        "source={} detector={}",
-        engine.source_name(),
-        engine.detector_name()
+fn serve(args: &RunArgs) -> Result<()> {
+    let config = Config::load(args.config.as_deref())?;
+    let wired = wiring::build(args, &config)?;
+    let mcp = config.mcp_config(args.legacy);
+    let policy = config.local_policy();
+    eprintln!(
+        "ommatix: serving MCP {MODERN_PROTOCOL_VERSION}{} on stdio | session {} | {} | \
+         actuation {} | values {}",
+        if mcp.legacy_enabled {
+            format!(" (+ legacy {LEGACY_PROTOCOL_VERSION})")
+        } else {
+            String::new()
+        },
+        wired.engine.session_id(),
+        wired.summary,
+        if policy.actuation_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if policy.include_values {
+            "allowed"
+        } else {
+            "redacted"
+        },
     );
-    while let Some(r) = engine.tick()? {
-        println!(
-            "frame {:>3} | dirty {:>4}/{:<4} cells | analysed {:>7} px in {:>2} regions | +{} ~{} -{} | elements {:>3} | {} us",
-            r.frame_no,
-            r.dirty_cells,
-            r.total_cells,
-            r.analysed_px,
-            r.analysed_regions.len(),
-            r.delta.added.len(),
-            r.delta.updated.len(),
-            r.delta.removed.len(),
-            r.element_count,
-            r.timings.total.as_micros(),
-        );
-        if engine.frame_no() >= DEMO_MAX_FRAMES {
-            break;
-        }
-    }
-    for e in engine.elements() {
-        let (b, c) = (e.bounds, e.bounds.center());
-        println!(
-            "  e{:<3} {:?} at ({},{}) {}x{} click=({},{})",
-            e.id.0, e.kind, b.x, b.y, b.w, b.h, c.x, c.y
-        );
-    }
+    report_notes(&wired.notes);
+    let server = McpServer::new(wired.engine, mcp);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .context("cannot start the I/O runtime")?;
+    runtime
+        .block_on(server.serve_stdio())
+        .context("the stdio transport failed")
+}
+
+fn run_demo(args: &DemoArgs) -> Result<()> {
+    let config = Config::load(args.run.config.as_deref())?;
+    let mut wired = wiring::build(&args.run, &config)?;
+    report_notes(&wired.notes);
+    demo::run(
+        &mut wired.engine,
+        wired.sim.as_ref(),
+        &wired.summary,
+        args.observations,
+    );
     Ok(())
 }

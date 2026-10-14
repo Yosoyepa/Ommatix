@@ -3,7 +3,6 @@
 //! neighbour search scanned a 64-px bucket of some 450 boxes.
 
 use ommatix_adapter_vision::FlatRegionDetector;
-use ommatix_application::ElementDetector;
 use ommatix_domain::{Frame, Rect};
 
 const WHITE: [u8; 4] = [255; 4];
@@ -11,7 +10,7 @@ const INK: [u8; 4] = [0, 0, 0, 255];
 
 fn detect(f: &Frame) -> Vec<Rect> {
     FlatRegionDetector::default()
-        .detect(f, f.bounds())
+        .detect_blobs(f, f.bounds())
         .unwrap()
         .into_iter()
         .map(|d| d.bounds)

@@ -3,8 +3,6 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use ommatix_adapter_vision::FlatRegionConfig;
-use ommatix_application::PerceptionConfig;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -19,36 +17,36 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Run the MCP server on stdio (point your agent's MCP client at this command).
-    Serve(EngineArgs),
-    /// Run the perception pipeline over a source and print one line per frame.
-    Demo(EngineArgs),
+    /// Serve the Ommatix tools over MCP on stdio (point your agent's MCP client at this
+    /// command). Diagnostics go to stderr; stdout carries protocol messages only.
+    Serve(RunArgs),
+    /// Run a few observations over the source and print them, plus one dry-run click,
+    /// for a human.
+    Demo(DemoArgs),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SourceKind {
-    /// Recorded session of the simulated desktop (replay, ignores input).
-    Demo,
-    /// Interactive simulated desktop: clicks and typing change the next frame.
+    /// The simulated desktop, with its own detector, recogniser and (never live)
+    /// actuator.
     Sim,
-    /// A directory of PNG frames (`--images`).
+    /// A directory of PNG frames (`--images DIR`), with the flat-region detector.
     Images,
-    /// Live capture of the primary monitor (build with `--features screen`).
+    /// Live capture of the primary monitor, with the flat-region detector (build with
+    /// `--features screen`).
     Screen,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum InputKind {
-    /// `sim` when `--source sim`, otherwise `dry-run`.
-    Auto,
-    /// Record actions, never touch the OS.
+    /// Simulate and record actions; never touch the OS.
     DryRun,
-    /// Real mouse and keyboard; requires `--source screen` (build with
-    /// `--features native-input`).
+    /// Real mouse and keyboard. Needs `--source screen`, `[safety] actuation_enabled =
+    /// true` and a build with `--features native-input`.
     Native,
 }
 
-/// Colour scheme of the simulated desktop (`--source demo` and `--source sim`).
+/// Colour scheme of the simulated desktop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ThemeKind {
     Light,
@@ -56,24 +54,38 @@ pub enum ThemeKind {
     ContrastingWallpaper,
 }
 
-#[derive(Debug, clap::Args)]
-pub struct EngineArgs {
-    #[arg(long, value_enum, default_value_t = SourceKind::Demo)]
+#[derive(Debug, Clone, clap::Args)]
+pub struct RunArgs {
+    /// Configuration file shaped like the dossier's `configuracion_mvp.toml`; without
+    /// it, the template's defaults apply (no actuation, no values).
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+    #[arg(long, value_enum, default_value_t = SourceKind::Sim)]
     pub source: SourceKind,
-    /// Directory with PNG frames, used with `--source images`.
-    #[arg(long)]
+    /// Directory with PNG frames, for `--source images`.
+    #[arg(long, value_name = "DIR")]
     pub images: Option<PathBuf>,
-    /// Replay the recorded session forever instead of stopping after the last frame.
-    #[arg(long = "loop")]
-    pub looping: bool,
+    /// Input adapter; defaults to `[engine] mode` (`dry-run` in the template).
+    #[arg(long, value_enum)]
+    pub input: Option<InputKind>,
+    /// Theme of the simulated desktop.
     #[arg(long, value_enum, default_value_t = ThemeKind::Light)]
     pub theme: ThemeKind,
-    #[arg(long, value_enum, default_value_t = InputKind::Auto)]
-    pub input: InputKind,
-    /// Grid cell edge in pixels.
-    #[arg(long, default_value_t = PerceptionConfig::default().cell_size)]
-    pub cell_size: u32,
-    /// Max per-channel colour difference between neighbouring pixels of one region.
-    #[arg(long, default_value_t = FlatRegionConfig::default().tolerance)]
-    pub tolerance: u8,
+    /// Session identifier (1-64 visible ASCII characters). Defaults to one derived from
+    /// the start time, unique per process; set it for reproducible output.
+    #[arg(long, value_name = "ID")]
+    pub session_id: Option<String>,
+    /// Also serve the legacy MCP 2025-11-25 profile (same as `[mcp] legacy_enabled =
+    /// true`).
+    #[arg(long)]
+    pub legacy: bool,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct DemoArgs {
+    #[command(flatten)]
+    pub run: RunArgs,
+    /// Observations to run.
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=20))]
+    pub observations: u8,
 }

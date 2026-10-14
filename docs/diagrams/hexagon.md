@@ -1,26 +1,26 @@
 # Hexagonal architecture / Arquitectura hexagonal
 
-*Target layout from ADR-0014. Arrows point in the direction of the code dependency; nothing
-points out of the domain.*
-*Disposición objetivo según ADR-0014. Las flechas indican la dirección de la dependencia;
-nada sale del dominio.*
+*Crate layout from ADR-0014, as of S2b. Arrows point in the direction of the code
+dependency; nothing points out of the domain.*
+*Disposición en crates según ADR-0014, a partir de S2b. Las flechas indican la dirección de
+la dependencia; nada sale del dominio.*
 
 ```mermaid
 flowchart TB
     subgraph app["ommatix (src/app): composition root and CLI"]
       direction TB
       subgraph driving["Driving adapter"]
-        mcp["ommatix-adapter-mcp<br/>MCP profiles · wire DTOs"]
+        mcp["ommatix-adapter-mcp<br/>MCP 2026-07-28 (+ opt-in 2025-11-25) · rmcp wire types<br/>bounded message loop · wire DTOs · tools"]
       end
       subgraph core["Core"]
-        appl["ommatix-application<br/>Observation coordinator · Policy and action gate · Effect verifier<br/>ports: FrameCapturer, VisionDetector, TextRecognizer,<br/>OsActuator, Clock, PolicyStore"]
+        appl["ommatix-application<br/>Engine: observe_screen · execute_action · get_engine_metrics<br/>(observation coordinator · policy and action gate · effect verifier)<br/>ports: FrameCapturer, VisionDetector, TextRecognizer,<br/>OsActuator, Clock, PolicyStore"]
         dom["ommatix-domain<br/>Tiles and regions (Alg. 1) · Spatial fusion (Alg. 2)<br/>Icon descriptor (Alg. 3A) · Temporal registry (Alg. 3B) · Snapshots"]
       end
       subgraph driven["Driven adapters"]
-        cap["ommatix-adapter-capture<br/>DXGI Desktop Duplication"]
-        vis["ommatix-adapter-vision<br/>ONNX Runtime: detector and OCR"]
-        inp["ommatix-adapter-input<br/>SendInput"]
-        sim["ommatix-adapter-sim<br/>deterministic fixtures"]
+        cap["ommatix-adapter-capture<br/>scripted · PNG frames · screen (xcap)<br/>DXGI in S3"]
+        vis["ommatix-adapter-vision<br/>flat-region detector · no OCR<br/>ONNX Runtime models in S3"]
+        inp["ommatix-adapter-input<br/>dry run · native (enigo)<br/>SendInput in S3"]
+        sim["ommatix-adapter-sim<br/>simulated and fixture desktops"]
       end
     end
     mcp --> appl
@@ -28,17 +28,20 @@ flowchart TB
     cap -->|implements FrameCapturer| appl
     vis -->|implements VisionDetector, TextRecognizer| appl
     inp -->|implements OsActuator| appl
-    sim -->|implements fixtures for the ports| appl
+    sim -->|implements FrameCapturer, VisionDetector,<br/>TextRecognizer, OsActuator| appl
     cap --> dom
     vis --> dom
     inp --> dom
     sim --> dom
 ```
 
-Today these crates still hold the bootstrap prototype: capture with `xcap`, a flat-region
-detector, input with `enigo`, and the ports `FrameSource`, `ElementDetector` and
-`InputController`. Stages S1–S3 of the thesis plan move them to this shape.
+`app` reads the configuration (shaped like `docs/thesis/plantillas/configuracion_mvp.toml`),
+provides the `Clock` and the `PolicyStore`, picks the adapters and builds the `Engine`. The
+bootstrap ports `FrameSource`, `ElementDetector` and `InputController` are gone. The Windows
+adapters (DXGI, ONNX Runtime, `SendInput`) replace the current driven adapters in S3.
 
-Hoy estos crates contienen todavía el prototipo del arranque: captura con `xcap`, un detector
-de regiones planas, entrada con `enigo` y los puertos `FrameSource`, `ElementDetector` e
-`InputController`. Las etapas S1–S3 del plan de la tesis los llevan a esta forma.
+`app` lee la configuración (con la forma de `docs/thesis/plantillas/configuracion_mvp.toml`),
+aporta el `Clock` y el `PolicyStore`, elige los adaptadores y construye el `Engine`. Los puertos
+del arranque `FrameSource`, `ElementDetector` e `InputController` ya no existen. Los
+adaptadores de Windows (DXGI, ONNX Runtime, `SendInput`) reemplazan en S3 a los adaptadores
+conducidos actuales.

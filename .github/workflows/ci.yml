@@ -26,10 +26,33 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
-      - name: Acceptance specification (Gherkin)
+      - name: Thesis scenarios (Gherkin, docs/thesis/features)
         run: cargo test -p ommatix-acceptance
-      - name: Smoke test (demo pipeline)
-        run: cargo run --quiet -- demo
+      - name: Smoke test (demo)
+        run: cargo run --quiet -- demo --session-id ci
+      - name: Smoke test (MCP server on stdio; stdout carries JSON-RPC only)
+        run: |
+          python3 - <<'PY'
+          import json, subprocess
+          meta = {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                  "io.modelcontextprotocol/clientCapabilities": {}}
+          requests = [
+              {"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": {"_meta": meta}},
+              {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {"_meta": meta}},
+              {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+               "params": {"name": "observe_screen", "arguments": {}, "_meta": meta}},
+          ]
+          stdin = "".join(json.dumps(r) + "\n" for r in requests)
+          out = subprocess.run(
+              ["cargo", "run", "--quiet", "--", "serve", "--session-id", "ci"],
+              input=stdin, capture_output=True, text=True, encoding="utf-8", check=True,
+          ).stdout
+          replies = [json.loads(line) for line in out.splitlines()]
+          assert [r["id"] for r in replies] == [1, 2, 3], out
+          assert all(r["jsonrpc"] == "2.0" and "result" in r for r in replies), out
+          assert replies[2]["result"]["isError"] is False, out
+          print(f"serve: {len(replies)} JSON-RPC replies and nothing else on stdout")
+          PY
 
   thesis:
     name: thesis oracle · package validator
@@ -49,7 +72,7 @@ jobs:
         run: python validar_paquete.py
 
   screen-feature:
-    name: screen capture + native input features build
+    name: screen capture + native input features (app, capture, input)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,6 +86,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings
+      - run: cargo test -p ommatix --features screen,native-input
       - run: cargo test -p ommatix-adapter-capture -p ommatix-adapter-input --features ommatix-adapter-capture/screen,ommatix-adapter-input/native
 
   cross-check:

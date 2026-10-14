@@ -1,2 +1,3 @@
-//! Test-only crate. The executable specification lives in `features/*.feature` and is
-//! run by `tests/acceptance.rs` (`cargo test -p ommatix-acceptance`).
+//! Test-only crate. The executable specification is the thesis's Gherkin in
+//! `docs/thesis/features/`, run in place by `tests/thesis.rs`
+//! (`cargo test -p ommatix-acceptance`).

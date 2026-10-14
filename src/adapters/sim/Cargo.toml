@@ -1,6 +1,6 @@
 [package]
 name = "ommatix-adapter-sim"
-description = "Ommatix simulated desktop: a tiny deterministic GUI implementing both FrameSource and InputController, for acceptance tests and demos."
+description = "Ommatix simulated desktops: deterministic in-memory GUIs implementing FrameCapturer, VisionDetector, TextRecognizer and OsActuator, for acceptance tests and demos."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

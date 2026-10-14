@@ -1,14 +1,23 @@
-use ommatix_application::{FrameSource, PortError};
-use ommatix_domain::{DisplayMapping, Frame};
+use std::sync::{Arc, Mutex, PoisonError};
+
+use ommatix_application::{CapturedFrame, Clock, FrameCapturer, PortError};
+use ommatix_domain::DisplayMapping;
 use xcap::Monitor;
+
+use crate::stamp::Stamper;
 
 const ADAPTER: &str = "screen";
 
-/// Captures the primary monitor (or the first one found), freshly on every call.
+/// The mapping native input must use, shared with whoever converts action points.
+type SharedMapping = Arc<Mutex<Result<DisplayMapping, String>>>;
+
+/// Captures the primary monitor (or the first one found), freshly on every call, as BGRA
+/// frames.
 ///
 /// When opened it measures the monitor once, to learn the frame size and how frame
 /// pixels map to OS input coordinates ([`ScreenSource::display_mapping`]). A later frame
-/// of another size is an error: restart after changing the resolution or the scale.
+/// of another size starts a new geometry epoch (so every earlier target is stale) and
+/// invalidates that mapping for good: native input fails closed until Ommatix restarts.
 ///
 /// The monitor is looked up by id for every capture: xcap's handle is not `Send` on
 /// Windows, and a monitor that disappears must be an error, not another screen.
@@ -16,11 +25,13 @@ const ADAPTER: &str = "screen";
 pub struct ScreenSource {
     monitor_id: u32,
     frame_size: (u32, u32),
-    mapping: Result<DisplayMapping, &'static str>,
+    mapping: SharedMapping,
+    stamper: Stamper,
 }
 
 impl ScreenSource {
-    pub fn primary() -> Result<Self, PortError> {
+    /// `clock` stamps each capture; it must be the engine's monotonic clock.
+    pub fn primary(clock: Arc<dyn Clock>) -> Result<Self, PortError> {
         let monitors = all_monitors()?;
         let monitor = monitors
             .iter()
@@ -28,7 +39,7 @@ impl ScreenSource {
             .or_else(|| monitors.first())
             .ok_or_else(|| PortError::new(ADAPTER, "no monitor found"))?;
 
-        let probe = capture(monitor)?;
+        let probe = capture_rgba(monitor)?;
         let frame_size = (probe.width(), probe.height());
         let geometry = |e| PortError::new(ADAPTER, "cannot read monitor geometry").with_source(e);
         let origin = (
@@ -39,71 +50,81 @@ impl ScreenSource {
             monitor.width().map_err(geometry)?,
             monitor.height().map_err(geometry)?,
         );
-        let mapping = input_mapping(input_space(monitor), origin, size, frame_size);
+        let mapping = input_mapping(input_space(monitor), origin, size, frame_size)
+            .map_err(|reason| format!("native input is not available: {reason}"));
         Ok(Self {
             monitor_id: monitor.id().map_err(geometry)?,
             frame_size,
-            mapping,
+            mapping: Arc::new(Mutex::new(mapping)),
+            stamper: Stamper::new(clock),
         })
     }
 
     /// How this monitor's frame pixels map to OS input coordinates (HiDPI scale and the
     /// monitor's position on a multi-monitor desktop), for the native input adapter.
     ///
-    /// An error on systems where the mapping has not been verified: native input must
-    /// never guess where a click lands.
+    /// An error on systems where the mapping has not been verified, and after the frame
+    /// size changed: native input must never guess where a click lands.
     pub fn display_mapping(&self) -> Result<DisplayMapping, PortError> {
-        self.mapping.map_err(|reason| {
-            PortError::new(ADAPTER, format!("native input is not available: {reason}"))
-        })
+        read_mapping(&self.mapping)
     }
+
+    /// A live view of [`ScreenSource::display_mapping`] for the native input adapter,
+    /// which starts failing as soon as a capture sees another frame size.
+    pub fn mapping_source(
+        &self,
+    ) -> impl Fn() -> Result<DisplayMapping, PortError> + Send + Sync + 'static {
+        let mapping = self.mapping.clone();
+        move || read_mapping(&mapping)
+    }
+}
+
+fn read_mapping(mapping: &SharedMapping) -> Result<DisplayMapping, PortError> {
+    mapping
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+        .map_err(|reason| PortError::new(ADAPTER, reason))
 }
 
 fn all_monitors() -> Result<Vec<Monitor>, PortError> {
     Monitor::all().map_err(|e| PortError::new(ADAPTER, "cannot list monitors").with_source(e))
 }
 
-fn capture(monitor: &Monitor) -> Result<Frame, PortError> {
-    let img = monitor
+fn capture_rgba(monitor: &Monitor) -> Result<xcap::image::RgbaImage, PortError> {
+    monitor
         .capture_image()
-        .map_err(|e| PortError::new(ADAPTER, "capture failed").with_source(e))?;
-    let (w, h) = (img.width(), img.height());
-    Frame::from_rgba(w, h, img.into_raw())
-        .map_err(|e| PortError::new(ADAPTER, "captured image is unusable").with_source(e))
+        .map_err(|e| PortError::new(ADAPTER, "capture failed").with_source(e))
 }
 
-impl FrameSource for ScreenSource {
+impl FrameCapturer for ScreenSource {
     fn name(&self) -> &'static str {
         ADAPTER
     }
 
-    fn next_frame(&mut self) -> Result<Option<Frame>, PortError> {
+    fn capture(&mut self) -> Result<CapturedFrame, PortError> {
         let monitor = all_monitors()?
             .into_iter()
             .find(|m| m.id().is_ok_and(|id| id == self.monitor_id))
             .ok_or_else(|| {
                 PortError::new(ADAPTER, "the captured monitor is gone; restart Ommatix")
             })?;
-        let frame = capture(&monitor)?;
-        same_size(self.frame_size, &frame)?;
-        Ok(Some(frame))
+        let captured_at = self.stamper.now();
+        let img = capture_rgba(&monitor)?;
+        let (w, h) = (img.width(), img.height());
+        if let Some(reason) = size_change(self.frame_size, (w, h)) {
+            *self.mapping.lock().unwrap_or_else(PoisonError::into_inner) = Err(reason);
+        }
+        self.stamper
+            .stamp_rgba(ADAPTER, w, h, img.into_raw(), captured_at)
     }
 }
 
-/// A frame of another size than the first one means the resolution or the display scale
-/// changed: the input mapping measured at start-up no longer holds.
-fn same_size((w, h): (u32, u32), frame: &Frame) -> Result<(), PortError> {
-    if (frame.width(), frame.height()) == (w, h) {
-        return Ok(());
-    }
-    Err(PortError::new(
-        ADAPTER,
-        format!(
-            "the monitor changed from {w}x{h} to {}x{} pixels; restart Ommatix",
-            frame.width(),
-            frame.height()
-        ),
-    ))
+/// Why the start-up mapping no longer holds, if the frame size changed: the resolution
+/// or the display scale changed.
+fn size_change((w, h): (u32, u32), (fw, fh): (u32, u32)) -> Option<String> {
+    ((fw, fh) != (w, h))
+        .then(|| format!("the monitor changed from {w}x{h} to {fw}x{fh} pixels; restart Ommatix"))
 }
 
 /// The coordinate space the OS input system uses for the captured monitor, given how
@@ -195,11 +216,12 @@ mod tests {
 
     /// Verification N4: a frame of another size invalidates the start-up mapping.
     #[test]
-    fn a_resolution_change_is_an_error() {
-        let frame = |w, h| Frame::solid(w, h, [0, 0, 0, 255]).unwrap();
-        assert!(same_size((1920, 1080), &frame(1920, 1080)).is_ok());
-        let err = same_size((1920, 1080), &frame(2560, 1440)).unwrap_err();
-        assert!(err.to_string().contains("1920x1080 to 2560x1440"), "{err}");
+    fn a_resolution_change_invalidates_the_mapping() {
+        assert_eq!(size_change((1920, 1080), (1920, 1080)), None);
+        let reason = size_change((1920, 1080), (2560, 1440)).unwrap();
+        assert!(reason.contains("1920x1080 to 2560x1440"), "{reason}");
+        let shared: SharedMapping = Arc::new(Mutex::new(Err(reason)));
+        assert!(read_mapping(&shared).is_err());
     }
 
     #[test]

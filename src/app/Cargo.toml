@@ -16,8 +16,9 @@ path = "src/main.rs"
 default = []
 ## Enable live screen capture (`--source screen`).
 screen = ["ommatix-adapter-capture/screen"]
-## Enable real mouse/keyboard input (`--input native`).
-native-input = ["ommatix-adapter-input/native"]
+## Enable real mouse/keyboard input (`--input native`). Native input only aims at the
+## captured screen, so it implies `screen`.
+native-input = ["screen", "ommatix-adapter-input/native"]
 
 [dependencies]
 ommatix-adapter-capture = { workspace = true }
@@ -29,6 +30,10 @@ ommatix-application = { workspace = true }
 ommatix-domain = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+toml = { workspace = true }
 
 [lints]
 workspace = true

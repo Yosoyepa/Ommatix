@@ -1,4 +1,3 @@
-use ommatix_domain::DomainError;
 use thiserror::Error;
 
 /// Error reported by an adapter through a port.
@@ -30,22 +29,6 @@ impl PortError {
     }
 }
 
-/// Errors of the perception use cases. Each variant's `Display` describes only its own
-/// level; causes are chained through `source()`.
-#[derive(Debug, Error)]
-pub enum AppError {
-    #[error("invalid configuration")]
-    Config(#[from] DomainError),
-    #[error("invalid settle policy: {0}")]
-    InvalidSettlePolicy(&'static str),
-    #[error("frame source failed")]
-    Capture(#[source] PortError),
-    #[error("element detector failed")]
-    Detection(#[source] PortError),
-    #[error("the frame source has no more frames")]
-    SourceExhausted,
-}
-
 /// Formats an error and all its causes on one line: `outer: cause: root cause`.
 pub fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
     let mut out = error.to_string();
@@ -65,14 +48,7 @@ mod tests {
     #[test]
     fn chain_lists_every_cause_once() {
         let io = std::io::Error::other("device busy");
-        let err = AppError::Capture(PortError::new("screen", "capture failed").with_source(io));
-        assert_eq!(
-            error_chain(&err),
-            "frame source failed: screen: capture failed: device busy"
-        );
-        assert_eq!(
-            error_chain(&AppError::Config(DomainError::ZeroCellSize)),
-            format!("invalid configuration: {}", DomainError::ZeroCellSize)
-        );
+        let err = PortError::new("screen", "capture failed").with_source(io);
+        assert_eq!(error_chain(&err), "screen: capture failed: device busy");
     }
 }

@@ -49,16 +49,16 @@ IT-04,Verificación,Postcondición y timeout sin retry,NO_EJECUTADO,PENDIENTE_PR
 IT-05,Idempotencia,"request_id, conflicto y caída ambigua",NO_EJECUTADO,PENDIENTE_PRODUCTO
 IT-06,Telemetría,Redacción y desglose temporal,NO_EJECUTADO,PENDIENTE_PRODUCTO
 IT-07,DPI,"100/125/150%, epoch y fuera de perfil",NO_EJECUTADO,PENDIENTE_PRODUCTO
-CT-01,Snapshot completo,Schema y orden estable,NO_EJECUTADO,PENDIENTE_PRODUCTO
-CT-02,Paginación,Cursor atado a snapshot; truncamiento explícito,NO_EJECUTADO,PENDIENTE_PRODUCTO
-CT-03,Estado unknown,No inventar rol o label,NO_EJECUTADO,PENDIENTE_PRODUCTO
-CT-04,Límites semánticos,Texto y query con topes,NO_EJECUTADO,PENDIENTE_PRODUCTO
-CT-05,MCP moderno,Metadatos por request/resultType,NO_EJECUTADO,PENDIENTE_PRODUCTO
-CT-06,Versión no soportada,Error según perfil,NO_EJECUTADO,PENDIENTE_PRODUCTO
-CT-07,Notificaciones,No responder a notification,NO_EJECUTADO,PENDIENTE_PRODUCTO
-CT-08,Legacy opt-in,Handshake únicamente en perfil legacy,NO_EJECUTADO,PENDIENTE_PRODUCTO
-CT-09,Tools/errors,Listado y separación error herramienta/protocolo,NO_EJECUTADO,PENDIENTE_PRODUCTO
-CT-10,Tamaño,"64 KiB entrada/salida, inputs inválidos",NO_EJECUTADO,PENDIENTE_PRODUCTO
+CT-01,Snapshot completo,Schema y orden estable,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
+CT-02,Paginación,Cursor atado a snapshot; truncamiento explícito,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
+CT-03,Estado unknown,No inventar rol o label,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
+CT-04,Límites semánticos,Texto y query con topes,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
+CT-05,MCP moderno,Metadatos por request/resultType,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
+CT-06,Versión no soportada,Error según perfil,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
+CT-07,Notificaciones,No responder a notification,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
+CT-08,Legacy opt-in,Handshake únicamente en perfil legacy,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
+CT-09,Tools/errors,Listado y separación error herramienta/protocolo,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
+CT-10,Tamaño,"64 KiB entrada/salida, inputs inválidos",NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
 SEC-01,Política local,Agente no puede habilitarse,NO_EJECUTADO,PENDIENTE_PRODUCTO
 SEC-02,Parada,Detener nuevas inyecciones,NO_EJECUTADO,PENDIENTE_PRODUCTO
 SEC-03,Prompt injection visual,OCR no cambia permisos,NO_EJECUTADO,PENDIENTE_PRODUCTO

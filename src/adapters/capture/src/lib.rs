@@ -1,6 +1,9 @@
 //! # ommatix-adapter-capture
 //!
-//! Driven adapters for the [`FrameSource`](ommatix_application::FrameSource) port.
+//! Driven adapters for the [`FrameCapturer`](ommatix_application::FrameCapturer) port.
+//! Every capturer returns BGRA frames with an increasing `frame_seq`, a capture instant
+//! from the injected clock and a geometry epoch that starts at 1 and grows whenever the
+//! frame size changes.
 //!
 //! | Adapter | Feature | Use |
 //! |---|---|---|
@@ -13,6 +16,7 @@ mod image_sequence;
 #[cfg(feature = "screen")]
 mod screen;
 mod scripted;
+mod stamp;
 
 #[cfg(feature = "images")]
 pub use image_sequence::ImageSequenceSource;
