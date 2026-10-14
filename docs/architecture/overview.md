@@ -159,7 +159,7 @@ and S3 replace the prototype's use case and adapters.
 | Fusion | IoC ownership, reading order, external labels with abstention | None (no text) | Core in S1; wired in S3 with OCR |
 | Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | Flat-colour region detector, no text, every element a `blob` | S0, S3 |
 | State | Immutable snapshots, staging, atomic commit, geometry epoch | One mutable scene | Core in S1; wired in S2 |
-| Identity | Session IDs, revisions, tombstones, one-to-one matching with abstention | Monotonic IDs matched by IoU | S2 |
+| Identity | Session IDs, revisions, tombstones, one-to-one matching with abstention | Monotonic IDs matched by IoU | Core in S2 (`identity`, `appearance`); wired with the contract |
 | Agent contract | `observe_screen`, `execute_action`, `get_engine_metrics`; no coordinates | Seven tools that expose coordinates; MCP 2025-06-18 | S2 |
 | Platform | Windows 11 x64: DXGI and `SendInput` | `xcap` and `enigo` on macOS, Linux X11 and Windows at 100 % | S3 |
 

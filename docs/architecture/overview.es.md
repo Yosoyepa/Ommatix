@@ -164,7 +164,7 @@ prototipo.
 | Fusión | Propiedad por IoC, orden de lectura, labels externos con abstención | No hay (sin texto) | Núcleo en S1; se conecta en S3 con el OCR |
 | Percepción | Detector y OCR en ONNX Runtime, roles según el spike S0 | Detector de regiones de color plano, sin texto, todo elemento es `blob` | S0, S3 |
 | Estado | Snapshots inmutables, staging, commit atómico, epoch geométrico | Una escena mutable | Núcleo en S1; se conecta en S2 |
-| Identidad | IDs de sesión, revisiones, tombstones, matching uno a uno con abstención | IDs monotónicos emparejados por IoU | S2 |
+| Identidad | IDs de sesión, revisiones, tombstones, matching uno a uno con abstención | IDs monotónicos emparejados por IoU | Núcleo en S2 (`identity`, `appearance`); se conecta con el contrato |
 | Contrato con el agente | `observe_screen`, `execute_action`, `get_engine_metrics`; sin coordenadas | Siete herramientas que exponen coordenadas; MCP 2025-06-18 | S2 |
 | Plataforma | Windows 11 x64: DXGI y `SendInput` | `xcap` y `enigo` en macOS, Linux X11 y Windows al 100 % | S3 |
 

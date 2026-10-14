@@ -1,5 +1,14 @@
 # Historial documental
 
+## 1.0.3 — 2026-10-14: S2a, caché de apariencia e identidad
+
+No cambia ningún requisito, algoritmo, contrato ni escenario. Cambia el estado de las matrices:
+
+- UT-27 a UT-43 pasan a `IMPLEMENTADO_EN_RUST_S2` en `matrices/plan_pruebas.csv`. Son pruebas de los módulos `appearance` (algoritmo 3A) e `identity` (algoritmo 3B y comprobaciones de vigencia de una acción) de `ommatix-domain`.
+- Los contraejemplos del diseño original (dHash de 64 bits, ID FNV por celda, probabilidad de colisión) sólo existen dentro de las pruebas UT-27, UT-32 y UT-33.
+- El caché no fija umbrales de distancia ni de margen: la tesis los calibra antes del test (H4), así que quien lo usa debe elegirlos. El IoU mínimo de asociación (0,5) es un valor inicial [P].
+- BDD-11..21 y el contrato MCP (CT-01..10, BDD-22..26) quedan para S2b.
+
 ## 1.0.2 — 2026-10-14: S1, núcleo geométrico e incremental
 
 No cambia ningún requisito, algoritmo, contrato ni escenario. Cambia el estado de las matrices:
