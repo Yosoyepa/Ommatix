@@ -166,7 +166,7 @@ cargo clippy --workspace --all-targets -- -D warnings  # lint (CI-blocking)
 cargo test --workspace                                 # unit + integration + Gherkin (CI-blocking)
 cargo run -- demo                                      # smoke test: the engine on the simulated desktop
 cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings  # when touching capture/input
-cargo clippy -p ommatix --features dxgi,sendinput --all-targets -- -D warnings       # on Windows (CI job `windows`)
+cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr --all-targets -- -D warnings  # on Windows (CI job `windows`)
 cargo test -p ommatix-adapter-capture --features dxgi -- --ignored                   # manual: one DXGI frame, never saved
 ```
 
@@ -181,8 +181,8 @@ python referencia_ejecutable/run_tests.py              # oracle: 48 reference te
 python validar_paquete.py                              # schemas, examples, traceability, Gherkin structure
 ```
 
-CI builds, lints and tests the `dxgi,sendinput` features on `windows-latest` (job
-`windows`), and also compiles capture and native input for Windows and macOS (job
+CI builds, lints and tests the `dxgi,sendinput,onnx,winrt-ocr` features on `windows-latest`
+(job `windows`), and also compiles capture and native input for Windows and macOS (job
 `cross-check`). To run
 it locally: `rustup target add x86_64-pc-windows-gnu aarch64-apple-darwin`, then
 `cargo clippy --target <target> -p ommatix-adapter-capture -p ommatix-adapter-input
