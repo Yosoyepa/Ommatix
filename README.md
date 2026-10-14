@@ -123,6 +123,7 @@ unless the agent and a local policy both allow them. More in the
   was not completed safely: its first navigation click was not confirmed on the requested control,
   so the series was aborted. The Notepad series did not run, pending the owner's decision.
   A fifth round ([CHANGELOG 1.0.21](docs/thesis/CHANGELOG.md)) scored no runs. Its switch of the Calculator to Standard mode stopped before the second click, so E2E-02 did not run, and the Notepad pilot's click on Edit did not pass its identity check after the click, so the scored E2E-03 series was not run.
+  The client was then corrected without a live run ([CHANGELOG 1.0.23](docs/thesis/CHANGELOG.md)): the menu-closing click is grounded by identity, a step records why it found no target, and the Notepad menu step records a read-only diagnostic. The owner decided that S4 runs now use the float16 detector manifest and that ADR-0017's window enumeration is not changed to reach the two-region RNF-05 target, so RNF-05 stays not met by about 3 ms.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML;

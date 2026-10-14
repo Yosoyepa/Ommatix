@@ -30,7 +30,8 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | S4, quinta ronda (rama `feat/uia-evidence`, #11, CHANGELOG 1.0.21): E2E-02 no se ejecutó (el cambio a Estándar se detuvo en el paso «Estándar» tras un clic de navegación anclado); E2E-03, piloto con un clic en «Editar» sin anclaje tras el clic (falso éxito según el cliente, hallazgo de seguridad): la serie puntuada no se ejecutó; 0 corridas puntuadas, 3 solicitudes reales (cuaderno 396 → 399), sin archivo de parada. Informe §«Quinta ronda» y revisión en [`reviews/2026-10-14-s4-fifth-round.md`](reviews/2026-10-14-s4-fifth-round.md) | Abierto |
 
 | — | RNF-05, latencia de la percepción incremental (rama `perf/rnf05-latency`, sobre `adfb1ea`, CHANGELOG 1.0.22, ADR-0019): las etapas de una observación (detección, OCR, accesibilidad) corren en hilos acotados y se unen antes de fusionar (`[engine] concurrent_stages`); red de `icon_detect_v3` en float16 con la decodificación en float32 (`export_omniparser_v3.py --fp16`, manifiesto `model_manifest.rnf05.json`, sólo DirectML, equivalente al float32 salvo cajas en el umbral); entradas más pequeñas para regiones pequeñas medidas y descartadas (cambian las detecciones). Con 30 procesos por variante: refresco completo en caliente p95 240 → 98 ms, una región 195 → 102 ms, dos regiones 310 → 153 ms (**RNF-05 no cumplido por 3 ms con dos regiones**). La aplicación de prueba tiene banderas ocultas `--animate` y `tools/perf/measure_latency.py` mide sin entrada. Informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §10 | Abierto |
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.22)
+| — | S4, correcciones del cliente tras la quinta ronda (rama `fix/s4-driver-grounding`, CHANGELOG 1.0.23): el clic que cierra el menú «Editar» se ancla por identidad (hallazgo 2); cada paso registra por qué no halló objetivo (hallazgo 3); el paso del menú registra un diagnóstico de sólo lectura (hallazgo 1, sin cambiar la regla); análisis del cierre `indeterminate` (hallazgo 4, sin cambio del motor); sin ejecución en vivo. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Preparación de la sexta ronda» y revisión en [`reviews/2026-10-14-s4-fifth-round.md`](reviews/2026-10-14-s4-fifth-round.md) | Abierto |
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.23)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
@@ -54,6 +55,8 @@ serie se abandonó. E2E-03 no se ejecutó por ese mismo desajuste. El archivo de
 retiró una vez al inicio, como autorizó el responsable, y no se creó otro.
 
 La quinta ronda (1.0.21) no puntúa ninguna corrida. E2E-02 no se ejecutó: el cambio a modo Estándar, que pulsa el conmutador de navegación anclado por identidad, se detuvo en el paso «Estándar», que no encontró un objetivo confirmado, y sin Estándar la serie no se lanza según el protocolo. E2E-03 tuvo un piloto cuyo clic en «Editar» quedó sin anclaje confirmado tras el clic, con el efecto informado como `effect_observed`; por tratarse de un hecho de seguridad, la serie puntuada no se ejecutó. La ventana del propietario se restauró y el archivo de parada no existió en ningún momento. Quedan abiertos cuatro hallazgos: la causa del anclaje en «Editar» (decisión del responsable), el cierre del menú sin anclaje por identidad, el registro insuficiente del paso «Estándar» y un cierre del menú `indeterminate`.
+
+Después de la quinta ronda (1.0.23) se corrigió el cliente sin ejecución en vivo (SHA-256 `6dad0dc3…8e2a77`): ancla el cierre del menú, registra por qué un paso no halla objetivo y diagnostica, de sólo lectura, el menú «Editar». Decisiones del responsable del 2026-10-14: (a) las corridas de S4 usan desde ahora el manifiesto float16 de RNF-05 (`model_manifest.rnf05.json`, S0 §10); (b) no se cambia la enumeración de ventanas de ADR-0017 para llegar a la meta de dos regiones, así que RNF-05 sigue sin cumplirse por unos 3 ms con dos regiones; (c) el responsable estará presente para un clic de diagnóstico de sólo lectura sobre «Editar» (hallazgo 1) después de fusionar el PR: se usa la invocación de [`S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) con `--max-live 2` (nunca 1, que crearía `stop.flag`); ningún agente lo ejecuta. Sigue abierto el conflicto del protocolo sobre `stop.flag` (dos opciones en la revisión de la quinta ronda).
 
 ## Cómo está el código
 
@@ -206,15 +209,19 @@ La quinta ronda (1.0.21) no puntúa ninguna corrida. E2E-02 no se ejecutó: el c
      la última versión con DirectML, en ingeniería sostenida) es aceptable como proveedor del
      producto, medir RSS y VRAM (RNF-06) y la precisión, o buscar un modelo más ligero. Los
      pesos `icon_detect` v2 (AGPL-3.0) no se usan.
-   - RNF-05 (`thesis/S0_RESULTADOS.md` §10), lo que decide el responsable: (a) si la red en
-     float16 (`manifest.rnf05.json`, sólo DirectML) pasa a ser la del producto en las corridas
-     de S4, que hoy usan el manifiesto float32 y habría que repetir; con una región y una
-     aplicación que repinta de forma continua el float16 es peor que el float32 concurrente
-     (la GPU saturada retrasa a UI Automation, §10.5); (b) si se cambia qué ventanas lee
-     ADR-0017 o se guarda la lista entre observaciones: enumerar las ventanas de nivel
-     superior cuesta unos 48 ms de los 58 ms de la lectura de accesibilidad, y es lo que
-     separa a dos regiones de la meta de 150 ms; (c) medir RSS y VRAM (RNF-06) con las
-     sesiones y el float16.
+   - RNF-05 (`thesis/S0_RESULTADOS.md` §10). Decidido por el responsable el 2026-10-14:
+     (a) las corridas de S4 usan desde ahora la red en float16 (`model_manifest.rnf05.json`,
+     sólo DirectML; con una aplicación que repinta de forma continua es peor que el float32
+     concurrente porque la GPU saturada retrasa a UI Automation, §10.5); (b) **no** se cambia
+     qué ventanas lee ADR-0017 ni se guarda la lista entre observaciones (enumerar las
+     ventanas de nivel superior cuesta unos 48 ms de los 58 ms de la lectura de accesibilidad
+     y es lo que separa a dos regiones de la meta de 150 ms), así que RNF-05 sigue sin
+     cumplirse por unos 3 ms con dos regiones. Sigue pendiente: (c) medir RSS y VRAM (RNF-06)
+     con las sesiones y el float16.
+   - Protocolo de S4: el conflicto entre crear `stop.flag` tras tres corridas fallidas y dejar
+     correr la serie siguiente cuando una se abortó por una causa propia (dos opciones en la
+     [revisión de la quinta ronda](reviews/2026-10-14-s4-fifth-round.md)), y el clic de
+     diagnóstico sobre «Editar» con el responsable presente (hallazgo 1).
    - OCR: `Windows.Media.Ocr` (es-ES) funciona, pero no informa confianza y pierde signos como
      "¡"; el candidato PP-OCRv5 mobile (Apache-2.0, ONNX oficial) tampoco tiene "¡" en su
      diccionario.

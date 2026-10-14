@@ -135,6 +135,7 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   navegación no quedó confirmado sobre el control pedido, así que la serie se abandonó. La serie del
   Bloc de notas no se ejecutó, a la espera de la decisión del responsable.
   Una quinta ronda ([CHANGELOG 1.0.21](docs/thesis/CHANGELOG.md)) no puntuó corridas. Su cambio de la Calculadora a modo Estándar se detuvo antes del segundo clic, así que E2E-02 no se ejecutó, y el piloto del Bloc de notas tuvo un clic en «Editar» sin anclaje confirmado tras el clic, así que la serie puntuada de E2E-03 no se ejecutó.
+  Después se corrigió el cliente sin ejecutar nada en vivo ([CHANGELOG 1.0.23](docs/thesis/CHANGELOG.md)): el clic que cierra el menú se ancla por identidad, un paso registra por qué no halló objetivo y el paso del menú del Bloc de notas registra un diagnóstico de sólo lectura. El responsable decidió que las corridas de S4 usen desde ahora el manifiesto del detector en float16 y que no se cambie la enumeración de ventanas de ADR-0017 para llegar a la meta de dos regiones de RNF-05, así que RNF-05 sigue sin cumplirse por unos 3 ms.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con

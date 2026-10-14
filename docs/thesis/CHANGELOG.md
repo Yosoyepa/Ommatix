@@ -1,5 +1,17 @@
 # Historial documental
 
+## 1.0.23 — 2026-10-14: S4, correcciones del cliente tras la quinta ronda (rama `fix/s4-driver-grounding`)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust. Cambia el cliente de la aceptación (`tools/s4/e2e_driver.py`, SHA-256 `6dad0dc3…8e2a77`, antes `98f0ae08…1967e5`) y sus pruebas, que usan un motor y una cadena de accesibilidad falsos: no se ejecutó nada en vivo ni se envió entrada. El informe está en la sección «Preparación de la sexta ronda» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md) y los hallazgos, en la [revisión de la quinta ronda](../reviews/2026-10-14-s4-fifth-round.md).
+
+- **Hallazgo 2 (cierre del menú sin anclaje):** el clic de restauración que cierra el menú «Editar» ancla por identidad antes y después, como los clics de `steps()`. Una discrepancia se registra, cuenta como `grounding_wrong` y no se reintenta. Prueba: `RestoreGroundingTest`.
+- **Hallazgo 3 (paso «Estándar» sin diagnóstico):** cada paso registra el número de candidatos de su etiqueta, sus roles y, si se detiene, la condición (`zero_candidates`, `several_candidates`, `not_confirmed`) y lo que UI Automation ve bajo los mismos nombres, sin nombres. Prueba: `TargetRecordTest`.
+- **Hallazgo 1 (preparación, sin cambiar la regla):** el paso del menú del Bloc de notas registra, de sólo lectura, el elemento bajo el centro del objetivo y hasta 4 ancestros antes y después del clic (tipo de control, `AutomationId`, clase, estado de ExpandCollapse, si el `RuntimeId` es el anterior). No cambia la puntuación ni relaja el anclaje. Prueba: `MenuDiagnosticTest`.
+- **Hallazgo 4 (cierre `indeterminate`):** análisis desde el código en la revisión; no se cambia el motor, porque no hay un defecto demostrado y una incertidumbre nunca pasa a éxito.
+- **Conflicto del protocolo (`stop.flag` tras tres corridas fallidas frente a «una serie abortada por una causa propia deja correr la siguiente»):** sin cambio; las dos opciones y su compromiso de seguridad, en la revisión, para el responsable.
+- **Decisiones del responsable (14 de octubre de 2026):** (a) las corridas de S4 usan el manifiesto float16 de RNF-05 ([`S0_RESULTADOS.md`](S0_RESULTADOS.md) §10); (b) la enumeración de ventanas de ADR-0017 no se cambia para llegar a la meta de dos regiones, de modo que RNF-05 sigue sin cumplirse por unos 3 ms con dos regiones; (c) el responsable estará presente para un clic de diagnóstico de sólo lectura sobre «Editar» (hallazgo 1), después de este PR.
+- **Matrices:** sin cambio.
+
 ## 1.0.22 — 2026-10-14: RNF-05, etapas concurrentes y red en float16 (rama `perf/rnf05-latency`)
 
 No cambia ningún requisito, algoritmo, contrato ni escenario: lo que informa el contrato es lo mismo, con las mismas detecciones salvo el ruido de redondeo de float16 que se mide en S0 §10.3. Cambia cómo se ejecuta una observación y el artefacto del detector con DirectML. El informe está en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §10, la decisión en [ADR-0019](../adr/0019-concurrent-observation-stages.md) y los números por etapa antes y después, en §10.4.
