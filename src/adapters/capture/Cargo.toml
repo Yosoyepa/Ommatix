@@ -1,6 +1,6 @@
 [package]
 name = "ommatix-adapter-capture"
-description = "Ommatix driven adapters for the FrameCapturer port: synthetic scripts, PNG sequences and live screen capture, as BGRA frames."
+description = "Ommatix driven adapters for the FrameCapturer port: synthetic scripts, PNG sequences, live screen capture and DXGI Desktop Duplication, as BGRA frames."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -14,6 +14,8 @@ default = ["images"]
 images = ["dep:image"]
 ## Live screen capture through `xcap` (needs platform libraries, see README).
 screen = ["dep:xcap"]
+## Live capture of one monitor through DXGI Desktop Duplication (Windows only; ADR-0016).
+dxgi = ["dep:windows"]
 
 [dependencies]
 ommatix-application = { workspace = true }
@@ -21,8 +23,40 @@ ommatix-domain = { workspace = true }
 image = { workspace = true, optional = true }
 xcap = { workspace = true, optional = true }
 
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
+] }
+
 [dev-dependencies]
 image = { workspace = true }
 
-[lints]
-workspace = true
+# The workspace lints, except `unsafe_code`: `forbid` cannot be relaxed by an inner
+# `allow`, so this crate denies it and allows it only on its `#[cfg(windows)] mod win`
+# (ADR-0016). Keep in sync with `[workspace.lints]`.
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+many_single_char_names = "allow"
+return_self_not_must_use = "allow"
+doc_markdown = "allow"
+print_stdout = "deny"
+# Every unsafe block states why it is sound (ADR-0016).
+undocumented_unsafe_blocks = "deny"

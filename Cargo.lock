@@ -2189,6 +2189,7 @@ dependencies = [
  "image",
  "ommatix-application",
  "ommatix-domain",
+ "windows 0.62.2",
  "xcap",
 ]
 
@@ -2199,6 +2200,7 @@ dependencies = [
  "enigo",
  "ommatix-application",
  "ommatix-domain",
+ "windows 0.62.2",
 ]
 
 [[package]]
