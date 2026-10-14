@@ -58,8 +58,10 @@ cargo run --features screen,native-input -- serve --source screen --input native
 La entrada es **dry-run por defecto**: las acciones se validan y registran pero no llegan al
 sistema operativo salvo que compiles con `native-input` y pases `--input native` (ADR-0008).
 La entrada nativa exige `--source screen`, para que los clics caigan en el monitor que ve el
-agente, con el escalado HiDPI aplicado (ADR-0012). La captura en vivo en Linux necesita las
-librerías de sistema listadas en [AGENTS.md](AGENTS.md#toolchain).
+agente, con el mapeo HiDPI y multi-monitor aplicado (ADR-0012). Funciona en macOS, Linux X11
+y Windows con escalado al 100%; en Wayland y en Windows con otro escalado, Ommatix rechaza
+la entrada nativa al arrancar en lugar de adivinar dónde cae el clic. La captura en vivo en
+Linux necesita las librerías de sistema listadas en [AGENTS.md](AGENTS.md#toolchain).
 
 ### Uso desde un cliente MCP
 
@@ -130,7 +132,8 @@ Las reglas de contribución (para personas y agentes de IA) están en [AGENTS.md
 - [x] Herramientas de actuación (clic, texto, teclas) detrás de un puerto `InputController`, dry-run por defecto
 - [x] Las acciones esperan a que la pantalla se estabilice; mapeo de coordenadas HiDPI y multi-monitor
 - [x] Especificación Gherkin ejecutable sobre un escritorio simulado
-- [ ] Validación en un escritorio real (Linux X11/Wayland, Windows, macOS)
+- [ ] Validación en un escritorio real (clics en X11 comprobados con Xvfb; faltan Windows y macOS)
+- [ ] Entrada nativa en Wayland y en pantallas de Windows con escalado
 - [ ] Benchmarks (criterion) y presupuesto de latencia por etapa
 - [ ] Adaptador de detección de texto / OCR, clasificación de elementos (botón, texto, icono)
 - [ ] Detección paralela por región y hashing SIMD

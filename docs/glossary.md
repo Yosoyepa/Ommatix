@@ -7,8 +7,10 @@
 | Grid signature | Firma de cuadrícula | Per-cell hashes of one frame. / Hashes por celda de un frame. |
 | Dirty cell | Celda sucia | Cell whose hash changed since the previous frame. / Celda cuyo hash cambió respecto al frame anterior. |
 | Dirty region | Región sucia | Bounding box of 4-connected dirty cells, expanded to whole elements. / Caja envolvente de celdas sucias conectadas, expandida a elementos completos. |
-| Container | Contenedor | Element that strictly encloses a change (a window around a button); not re-analysed for it. / Elemento que encierra estrictamente un cambio (una ventana alrededor de un botón); no se re-analiza por él. |
+| Container | Contenedor | Element that encloses a change without sharing an edge with it (a window around a button); not re-analysed for it. / Elemento que encierra un cambio sin compartir un borde con él (una ventana alrededor de un botón); no se re-analiza por él. |
+| Context margin | Margen de contexto | Distance up to which a detector groups elements (the gap between glyphs); a change reaches every element within it. / Distancia hasta la que un detector agrupa elementos (el espacio entre glifos); un cambio alcanza a todo elemento dentro de ella. |
 | Flat region | Región plana | Connected pixels whose neighbours differ by at most the tolerance; the detector's unit. / Píxeles conectados cuyos vecinos difieren como mucho la tolerancia; la unidad del detector. |
+| Surface | Superficie | Flat stretch covering at least half of a screen edge (wallpaper, maximised or snapped window, taskbar); background, never an element. / Tramo plano que cubre al menos la mitad de un borde de la pantalla (fondo, ventana maximizada o acoplada, barra de tareas); es fondo, nunca un elemento. |
 | Detection | Detección | Raw detector output (bounds + kind), no identity yet. / Salida cruda del detector, aún sin identidad. |
 | Element | Elemento | Detection with a stable id living in the scene. / Detección con id estable dentro de la escena. |
 | Scene | Escena | Current set of elements plus their spatial index. / Conjunto actual de elementos y su índice espacial. |

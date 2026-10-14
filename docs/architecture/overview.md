@@ -41,10 +41,11 @@ See the [pipeline sequence](../diagrams/perception-pipeline.md),
 [ADR-0011](../adr/0011-incremental-perception-invariants.md).
 
 1. Capture a frame.
-2. Hash each cell (8 bytes at a time); compare with the last committed signature. A new
-   frame size means a new scene.
-3. Merge dirty cells into regions; grow them to whole elements until nothing changes,
-   leaving out containers that strictly enclose a change (a window around a button).
+2. Hash the colour of each cell, two pixels (8 bytes) at a time; compare with the last
+   committed signature. A new frame size means a new scene.
+3. Merge dirty cells into regions; grow them to whole elements, and to the elements within
+   the detector's context margin, until nothing changes. Containers that enclose a change
+   without sharing an edge with it (a window around a button) are left out.
 4. Run the detector inside regions only ([ADR-0010](../adr/0010-flat-region-detector.md))
    and clip what it returns to the region.
 5. Update the scene: pair old and new elements by best IoU, add new ones, remove vanished
@@ -59,9 +60,11 @@ each request against the last perceived frame (target on screen, element id exis
 length, no control characters) and only then calls the injected `InputController`. The
 `Observer` then perceives until the screen settles, so the agent receives the settled
 effect of its action in the same response; if watching fails, the response still says
-the action was performed. Clicks are converted from frame pixels to OS coordinates
-(HiDPI, multi-monitor). Input is dry-run unless the binary is built with `native-input`
-and started with `--source screen --input native`.
+the action was performed and reports what was seen before the failure. Clicks are
+converted from frame pixels to OS coordinates (HiDPI, multi-monitor) with a mapping
+verified per platform: macOS, Linux X11 and Windows at 100% scale; elsewhere native input
+is refused. Input is dry-run unless the binary is built with `native-input` and started
+with `--source screen --input native`.
 
 ## Acceptance specification
 

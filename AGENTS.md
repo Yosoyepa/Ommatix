@@ -81,8 +81,8 @@ Nothing MVP-related goes in the repository root except workspace configuration.
 1. **Determinism.** Same frames ⇒ same elements, ids and JSON. Use `BTreeMap`/`BTreeSet` or
    sort explicitly before anything is emitted; never iterate a `HashMap` into output; no
    randomness in domain or application. Time comes from the injected `Clock` (`ManualClock`
-   in tests); run-dependent values (timings) go in MCP `_meta`, never in
-   `structuredContent`.
+   in tests); time measurements (timings) go in MCP `_meta`, never in `structuredContent`,
+   which depends only on the frames seen.
 2. **Incrementality.** Never re-process the full frame when only regions changed. Any new
    pipeline stage must take dirty regions as input.
 3. **No `unsafe`** (`unsafe_code = "forbid"` at workspace level). Lift it only with an ADR.
@@ -116,6 +116,11 @@ cargo test --workspace                                 # unit + integration + Gh
 cargo run -- demo                                      # smoke test of the full pipeline
 cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings  # when touching capture/input
 ```
+
+CI also compiles capture and native input for Windows and macOS (job `cross-check`). To run
+it locally: `rustup target add x86_64-pc-windows-gnu aarch64-apple-darwin`, then
+`cargo clippy --target <target> -p ommatix-adapter-capture -p ommatix-adapter-input
+--features ommatix-adapter-capture/screen,ommatix-adapter-input/native -- -D warnings`.
 
 A change is done when fmt, clippy and tests pass, any new user-visible behaviour has a
 Gherkin scenario, docs (and their `*.es.md` twins) reflect

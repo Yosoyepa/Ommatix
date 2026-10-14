@@ -42,11 +42,12 @@ Ver la [secuencia del pipeline](../diagrams/perception-pipeline.md), el
 [ADR-0011](../adr/0011-incremental-perception-invariants.md).
 
 1. Capturar un frame.
-2. Calcular el hash de cada celda (8 bytes a la vez) y compararlo con la última firma
-   confirmada. Un tamaño de frame nuevo implica una escena nueva.
-3. Fusionar celdas sucias en regiones y crecerlas hasta cubrir elementos completos hasta
-   que nada cambie, sin absorber contenedores que encierran el cambio (la ventana alrededor
-   de un botón).
+2. Calcular el hash del color de cada celda, dos píxeles (8 bytes) a la vez, y compararlo
+   con la última firma confirmada. Un tamaño de frame nuevo implica una escena nueva.
+3. Fusionar celdas sucias en regiones y crecerlas hasta cubrir elementos completos, y los
+   elementos a menos del margen de contexto del detector, hasta que nada cambie. Los
+   contenedores que encierran el cambio sin compartir un borde con él (la ventana
+   alrededor de un botón) no se absorben.
 4. Ejecutar el detector solo dentro de las regiones
    ([ADR-0010](../adr/0010-flat-region-detector.md)) y recortar lo que devuelva a la región.
 5. Actualizar la escena: emparejar elementos viejos y nuevos por mejor IoU, añadir los
@@ -62,10 +63,12 @@ cada petición contra el último frame percibido (objetivo dentro de la pantalla
 elemento existente, longitud del texto, sin caracteres de control) y solo entonces llama
 al `InputController` inyectado. Después el `Observer` percibe hasta que la pantalla se
 estabiliza, así que el agente recibe el efecto ya asentado de su acción en la misma
-respuesta; si observar falla, la respuesta igual indica que la acción se realizó. Los
-clics se convierten de píxeles del frame a coordenadas del sistema (HiDPI, varios
-monitores). La entrada es dry-run salvo que el binario se compile con `native-input` y se
-inicie con `--source screen --input native`.
+respuesta; si observar falla, la respuesta igual indica que la acción se realizó e incluye
+lo observado antes del fallo. Los clics se convierten de píxeles del frame a coordenadas
+del sistema (HiDPI, varios monitores) con un mapeo verificado por plataforma: macOS, Linux
+X11 y Windows al 100% de escalado; en el resto la entrada nativa se rechaza. La entrada es
+dry-run salvo que el binario se compile con `native-input` y se inicie con
+`--source screen --input native`.
 
 ## Especificación de aceptación
 

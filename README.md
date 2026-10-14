@@ -53,9 +53,11 @@ cargo run --features screen,native-input -- serve --source screen --input native
 
 Input is **dry-run by default**: actions are validated and recorded but never reach the OS
 unless you build with `native-input` and pass `--input native` (ADR-0008). Native input
-requires `--source screen`, so clicks land on the monitor the agent sees, scaled for HiDPI
-(ADR-0012). Live capture on Linux needs the system libraries listed in
-[AGENTS.md](AGENTS.md#toolchain).
+requires `--source screen`, so clicks land on the monitor the agent sees, mapped for HiDPI
+and multi-monitor setups (ADR-0012). It works on macOS, Linux X11 and Windows at 100%
+display scale; on Wayland and on scaled Windows displays Ommatix refuses native input at
+start-up rather than guess where clicks land. Live capture on Linux needs the system
+libraries listed in [AGENTS.md](AGENTS.md#toolchain).
 
 ### Use it from an MCP client
 
@@ -126,7 +128,8 @@ Contribution rules (for humans and AI agents) live in [AGENTS.md](AGENTS.md).
 - [x] Actuation tools (click, type, keys) behind an `InputController` port, dry-run by default
 - [x] Actions wait for the screen to settle; HiDPI and multi-monitor coordinate mapping
 - [x] Executable Gherkin acceptance specification on a simulated desktop
-- [ ] Validation on a real desktop (Linux X11/Wayland, Windows, macOS)
+- [ ] Validation on a real desktop (X11 clicks checked under Xvfb; Windows, macOS pending)
+- [ ] Native input on Wayland and on scaled Windows displays
 - [ ] Benchmarks (criterion) and latency budget per stage
 - [ ] Text detection / OCR adapter, element classification (button, text, icon)
 - [ ] Parallel per-region detection and SIMD hashing
