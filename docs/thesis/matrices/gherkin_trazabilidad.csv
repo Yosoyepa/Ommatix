@@ -1,14 +1,14 @@
 ﻿scenario,requirement,planned_test,file,name,status
-BDD-01,RF-02,UT-03,features/01_incrementalidad.feature,Píxel pequeño en fila impar,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-02,RF-02,UT-05,features/01_incrementalidad.feature,Stride de captura,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-03,RF-03,UT-09,features/01_incrementalidad.feature,Halo transitivo,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-04,RF-04,UT-14,features/01_incrementalidad.feature,Fallo de inferencia,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-05,RF-04,UT-15,features/01_incrementalidad.feature,Resultado fuera de orden,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-06,RF-03,UT-11,features/01_incrementalidad.feature,Presupuesto de regiones,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-07,RF-06,UT-16,features/02_fusion.feature,Texto pequeño dentro de botón,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-08,RF-06,UT-18,features/02_fusion.feature,Panel y control anidado,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-09,RF-06,UT-20,features/02_fusion.feature,Renglones estables,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-10,RF-06,UT-23,features/02_fusion.feature,Labels ambiguos,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
+BDD-01,RF-02,UT-03,features/01_incrementalidad.feature,Píxel pequeño en fila impar,EJECUTADO_SOBRE_NUCLEO_S1
+BDD-02,RF-02,UT-05,features/01_incrementalidad.feature,Stride de captura,EJECUTADO_SOBRE_NUCLEO_S1
+BDD-03,RF-03,UT-09,features/01_incrementalidad.feature,Halo transitivo,EJECUTADO_SOBRE_NUCLEO_S1
+BDD-04,RF-04,UT-14,features/01_incrementalidad.feature,Fallo de inferencia,EJECUTADO_SOBRE_NUCLEO_S1
+BDD-05,RF-04,UT-15,features/01_incrementalidad.feature,Resultado fuera de orden,EJECUTADO_SOBRE_NUCLEO_S1
+BDD-06,RF-03,UT-11,features/01_incrementalidad.feature,Presupuesto de regiones,EJECUTADO_SOBRE_NUCLEO_S1
+BDD-07,RF-06,UT-16,features/02_fusion.feature,Texto pequeño dentro de botón,EJECUTADO_SOBRE_NUCLEO_S1
+BDD-08,RF-06,UT-18,features/02_fusion.feature,Panel y control anidado,EJECUTADO_SOBRE_NUCLEO_S1
+BDD-09,RF-06,UT-20,features/02_fusion.feature,Renglones estables,EJECUTADO_SOBRE_NUCLEO_S1
+BDD-10,RF-06,UT-23,features/02_fusion.feature,Labels ambiguos,EJECUTADO_SOBRE_NUCLEO_S1
 BDD-11,RF-07,UT-24,features/02_fusion.feature,Texto informativo,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
 BDD-12,RF-07,UT-25,features/02_fusion.feature,Placeholder desconocido,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
 BDD-13,RF-09,UT-34,features/03_identidad.feature,Cruce de celda,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION

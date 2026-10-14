@@ -146,20 +146,30 @@ schemas JSON de [`docs/thesis/contratos/`](../thesis/contratos/README.md):
 
 ## Dónde está el código hoy
 
-El código de `src/` se escribió al arrancar el repositorio, antes de consolidar la tesis. Ya
-sigue la organización en crates, el reloj inyectado, stdout reservado a MCP y la entrada en
-dry-run por defecto, pero no el pipeline de la tesis:
+Casi todo el código de `src/` se escribió al arrancar el repositorio, antes de consolidar la
+tesis. Ya sigue la organización en crates, el reloj inyectado, stdout reservado a MCP y la
+entrada en dry-run por defecto, pero no el pipeline de la tesis.
+
+S1 añadió el núcleo de la tesis a `ommatix-domain`, junto al prototipo: `incremental`
+(algoritmo 1: diff exacto por tiles, plan de regiones, cierre halo, refresco completo de
+respaldo), `snapshot` (staging y commit atómico, tiles sucios pendientes, estado degradado) y
+`fusion` (algoritmo 2: propiedad por IoC, orden de lectura, labels externos, abstención,
+accionabilidad). Están probados (UT-01..26, BDD-01..10) pero aún no se conectan al pipeline
+en ejecución; eso ocurre cuando S2 y S3 reemplacen el caso de uso y los adaptadores del
+prototipo.
 
 | Área | Tesis | Prototipo en `src/` | Se reemplaza en |
 |---|---|---|---|
-| Detección de cambios | Tiles de 64×64 exactos contra la base confirmada, cierre halo con presupuesto | Celdas de 32 px con hash contra el frame anterior, expansión por margen de contexto | S1 |
+| Detección de cambios | Tiles de 64×64 exactos contra la base confirmada, cierre halo con presupuesto | Celdas de 32 px con hash contra el frame anterior, expansión por margen de contexto | Núcleo en S1; se conecta en S2–S3 |
+| Fusión | Propiedad por IoC, orden de lectura, labels externos con abstención | No hay (sin texto) | Núcleo en S1; se conecta en S3 con el OCR |
 | Percepción | Detector y OCR en ONNX Runtime, roles según el spike S0 | Detector de regiones de color plano, sin texto, todo elemento es `blob` | S0, S3 |
-| Estado | Snapshots inmutables, staging, commit atómico, epoch geométrico | Una escena mutable | S1 |
+| Estado | Snapshots inmutables, staging, commit atómico, epoch geométrico | Una escena mutable | Núcleo en S1; se conecta en S2 |
 | Identidad | IDs de sesión, revisiones, tombstones, matching uno a uno con abstención | IDs monotónicos emparejados por IoU | S2 |
 | Contrato con el agente | `observe_screen`, `execute_action`, `get_engine_metrics`; sin coordenadas | Siete herramientas que exponen coordenadas; MCP 2025-06-18 | S2 |
 | Plataforma | Windows 11 x64: DXGI y `SendInput` | `xcap` y `enigo` en macOS, Linux X11 y Windows al 100 % | S3 |
 
 Las features Gherkin del prototipo en `src/acceptance/features/` y sus decisiones archivadas
 en [`docs/adr/bootstrap/`](../adr/bootstrap/README.md) lo describen hasta que se reemplace. Los
-escenarios de la tesis (BDD-01..32, en [`docs/thesis/features/`](../thesis/features)) pasan al
-crate de aceptación a medida que cada etapa los vuelve ejecutables.
+escenarios de la tesis (BDD-01..32) se quedan en [`docs/thesis/features/`](../thesis/features),
+donde los espera la matriz de trazabilidad del dossier; `src/acceptance/tests/thesis.rs`
+ejecuta los que cada etapa vuelve ejecutables (BDD-01..10 desde S1).

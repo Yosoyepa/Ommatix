@@ -71,6 +71,8 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   Las etapas de abajo lo reemplazan. La
   [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla las
   diferencias.
+- El núcleo de la tesis de S1 (algoritmos 1 y 2, staging y commit) está en `ommatix-domain`,
+  probado con los casos del oráculo pero aún sin uso en el pipeline en ejecución.
 - Primera plataforma: **Windows 11 x64**, un monitor, DPI de 100/125/150 %
   ([ADR-0008](docs/adr/0008-one-real-platform-first.md), aprobada el 14-oct-2026).
 
@@ -81,9 +83,10 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
 - [x] Dossier consolidado en el repositorio; oráculo y validador en la integración continua
 - [ ] **S0, spike:** hardware, detectores y OCR candidatos, licencias y exportación ONNX,
   proveedor de ejecución, captura DXGI con stride, compatibilidad del cliente MCP
-- [ ] **S1, core geométrico e incremental:** diff exacto por tiles, cierre halo, agrupación
-  de renglones, propiedad del texto, staging y commit (UT-01..26); pruebas del oráculo
-  portadas a Rust
+- [x] **S1, core geométrico e incremental:** diff exacto por tiles, cierre halo, agrupación
+  de renglones, propiedad del texto, staging y commit (UT-01..26, BDD-01..10) en
+  `ommatix-domain`; pruebas del oráculo portadas a Rust. Se conectan al pipeline en
+  ejecución en S2–S3
 - [ ] **S2, identidad, caché y contrato:** registro temporal con tombstones, caché de íconos,
   contrato MCP con `rmcp`, dry run honesto (UT-27..43, CT)
 - [ ] **S3, adaptadores reales y bucle de acción en Windows 11:** DXGI, ONNX Runtime,

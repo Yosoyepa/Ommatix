@@ -66,6 +66,8 @@ unless the agent and a local policy both allow them. More in the
   without OCR, hashed cells, a mutable scene and seven MCP tools that return coordinates. The
   stages below replace it. The [overview](docs/architecture/overview.md#where-the-code-is-today)
   lists the differences.
+- The thesis core from S1 (Algorithms 1 and 2, staging and commit) is in `ommatix-domain`,
+  tested against the oracle's cases but not yet used by the running pipeline.
 - First platform: **Windows 11 x64**, one monitor, DPI 100/125/150 %
   ([ADR-0008](docs/adr/0008-one-real-platform-first.md), approved 2026-10-14).
 
@@ -76,8 +78,9 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
 - [x] Dossier consolidated into the repository; oracle and validator in CI
 - [ ] **S0, spike:** hardware, candidate detectors and OCR, licences and ONNX export,
   execution provider, DXGI capture with stride, MCP client compatibility
-- [ ] **S1, geometric and incremental core:** exact tile diff, halo closure, line grouping,
-  text ownership, staging and commit (UT-01..26); oracle tests ported to Rust
+- [x] **S1, geometric and incremental core:** exact tile diff, halo closure, line grouping,
+  text ownership, staging and commit (UT-01..26, BDD-01..10) in `ommatix-domain`; oracle
+  tests ported to Rust. Wired into the running pipeline in S2–S3
 - [ ] **S2, identity, cache and contract:** temporal registry with tombstones, icon cache,
   MCP contract through `rmcp`, honest dry run (UT-27..43, CT)
 - [ ] **S3, real adapters and action loop on Windows 11:** DXGI, ONNX Runtime, `SendInput`,

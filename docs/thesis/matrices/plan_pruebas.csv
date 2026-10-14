@@ -1,30 +1,30 @@
 ﻿id,caso,resultado_esperado,referencia_oraculo_parcial,estado_aceptacion_producto
-UT-01,Primer frame,"Toda la pantalla sucia, incluso si es negra.",OR-04,PENDIENTE_EN_RUNTIME_RUST
-UT-02,Sin cambios,Conjunto dirty vacío con pixels idénticos.,OR-05,PENDIENTE_EN_RUNTIME_RUST
-UT-03,Cambio mínimo,Detectar un píxel en fila impar.,OR-06,PENDIENTE_EN_RUNTIME_RUST
-UT-04,Borde parcial,Detectar último píxel con ancho/alto impar.,OR-07,PENDIENTE_EN_RUNTIME_RUST
-UT-05,Formato/stride,"Ignorar padding y alfa, no ignorar RGB real.",OR-08..OR-10,PENDIENTE_EN_RUNTIME_RUST
-UT-06,Entrada inválida,Rechazar dimensiones/stride/buffer inválidos sin panic.,OR-11,PENDIENTE_EN_RUNTIME_RUST
-UT-07,Epoch,Cambio geométrico fuerza full refresh.,OR-12,PENDIENTE_EN_RUNTIME_RUST
-UT-08,Propiedad diferencial,Cada píxel válido alterado activa su tile.,OR-48,PENDIENTE_EN_RUNTIME_RUST
-UT-09,Halo transitivo,Expandir hasta cubrir soportes alcanzados indirectamente.,OR-14,PENDIENTE_EN_RUNTIME_RUST
-UT-10,Halo independiente de orden,Permutar soportes conserva el cierre.,OR-15,PENDIENTE_EN_RUNTIME_RUST
-UT-11,Budget de halo,Fallback completo cuando se agota el trabajo permitido.,OR-16,PENDIENTE_EN_RUNTIME_RUST
-UT-12,Solapamiento,Fusionar regiones hasta punto fijo.,OR-17,PENDIENTE_EN_RUNTIME_RUST
-UT-13,Staging,No mutar base publicada al construir candidato.,OR-18,PENDIENTE_EN_RUNTIME_RUST
-UT-14,Rollback lógico,Fallo conserva base y cambio pendiente.,OR-19,PENDIENTE_EN_RUNTIME_RUST
-UT-15,Commit obsoleto,Rechazar resultado de revisión anterior.,OR-20,PENDIENTE_EN_RUNTIME_RUST
-UT-16,IoC,Texto pequeño contenido devuelve 1.,OR-01,PENDIENTE_EN_RUNTIME_RUST
-UT-17,Geometría inválida,"Rechazar NaN, infinito y área no positiva.",OR-02..OR-03,PENDIENTE_EN_RUNTIME_RUST
-UT-18,Propietario específico,El panel no roba texto al control interno.,OR-23,PENDIENTE_EN_RUNTIME_RUST
-UT-19,Empate de contención,Abstenerse sin depender del orden.,OR-24,PENDIENTE_EN_RUNTIME_RUST
-UT-20,Lectura multilínea,Renglones antes de orden X; resultado determinista.,OR-21..OR-22,PENDIENTE_EN_RUNTIME_RUST
-UT-21,Unicode,NFC y límites de palabras preservados.,OR-25,PENDIENTE_EN_RUNTIME_RUST
-UT-22,Asociación externa,Corredor entre bordes y caso de dos columnas.,OR-26..OR-27,PENDIENTE_EN_RUNTIME_RUST
-UT-23,Asociación ambigua,Empates retornan ausencia de label.,OR-28,PENDIENTE_EN_RUNTIME_RUST
-UT-24,Texto huérfano,No actuar sobre texto sin evidencia positiva.,OR-41,PENDIENTE_EN_RUNTIME_RUST
-UT-25,Value/placeholder,Conservar unknown sin inferir valor confirmado.,PENDIENTE,PENDIENTE_EN_RUNTIME_RUST
-UT-26,Ocultos/deshabilitados,No dar permiso a elementos tapados o disabled.,OR-45..OR-46,PENDIENTE_EN_RUNTIME_RUST
+UT-01,Primer frame,"Toda la pantalla sucia, incluso si es negra.",OR-04,IMPLEMENTADO_EN_RUST_S1
+UT-02,Sin cambios,Conjunto dirty vacío con pixels idénticos.,OR-05,IMPLEMENTADO_EN_RUST_S1
+UT-03,Cambio mínimo,Detectar un píxel en fila impar.,OR-06,IMPLEMENTADO_EN_RUST_S1
+UT-04,Borde parcial,Detectar último píxel con ancho/alto impar.,OR-07,IMPLEMENTADO_EN_RUST_S1
+UT-05,Formato/stride,"Ignorar padding y alfa, no ignorar RGB real.",OR-08..OR-10,IMPLEMENTADO_EN_RUST_S1
+UT-06,Entrada inválida,Rechazar dimensiones/stride/buffer inválidos sin panic.,OR-11,IMPLEMENTADO_EN_RUST_S1
+UT-07,Epoch,Cambio geométrico fuerza full refresh.,OR-12,IMPLEMENTADO_EN_RUST_S1
+UT-08,Propiedad diferencial,Cada píxel válido alterado activa su tile.,OR-48,IMPLEMENTADO_EN_RUST_S1
+UT-09,Halo transitivo,Expandir hasta cubrir soportes alcanzados indirectamente.,OR-14,IMPLEMENTADO_EN_RUST_S1
+UT-10,Halo independiente de orden,Permutar soportes conserva el cierre.,OR-15,IMPLEMENTADO_EN_RUST_S1
+UT-11,Budget de halo,Fallback completo cuando se agota el trabajo permitido.,OR-16,IMPLEMENTADO_EN_RUST_S1
+UT-12,Solapamiento,Fusionar regiones hasta punto fijo.,OR-17,IMPLEMENTADO_EN_RUST_S1
+UT-13,Staging,No mutar base publicada al construir candidato.,OR-18,IMPLEMENTADO_EN_RUST_S1
+UT-14,Rollback lógico,Fallo conserva base y cambio pendiente.,OR-19,IMPLEMENTADO_EN_RUST_S1
+UT-15,Commit obsoleto,Rechazar resultado de revisión anterior.,OR-20,IMPLEMENTADO_EN_RUST_S1
+UT-16,IoC,Texto pequeño contenido devuelve 1.,OR-01,IMPLEMENTADO_EN_RUST_S1
+UT-17,Geometría inválida,"Rechazar NaN, infinito y área no positiva.",OR-02..OR-03,IMPLEMENTADO_EN_RUST_S1
+UT-18,Propietario específico,El panel no roba texto al control interno.,OR-23,IMPLEMENTADO_EN_RUST_S1
+UT-19,Empate de contención,Abstenerse sin depender del orden.,OR-24,IMPLEMENTADO_EN_RUST_S1
+UT-20,Lectura multilínea,Renglones antes de orden X; resultado determinista.,OR-21..OR-22,IMPLEMENTADO_EN_RUST_S1
+UT-21,Unicode,NFC y límites de palabras preservados.,OR-25,IMPLEMENTADO_EN_RUST_S1
+UT-22,Asociación externa,Corredor entre bordes y caso de dos columnas.,OR-26..OR-27,IMPLEMENTADO_EN_RUST_S1
+UT-23,Asociación ambigua,Empates retornan ausencia de label.,OR-28,IMPLEMENTADO_EN_RUST_S1
+UT-24,Texto huérfano,No actuar sobre texto sin evidencia positiva.,OR-41,IMPLEMENTADO_EN_RUST_S1
+UT-25,Value/placeholder,Conservar unknown sin inferir valor confirmado.,PENDIENTE,IMPLEMENTADO_EN_RUST_S1
+UT-26,Ocultos/deshabilitados,No dar permiso a elementos tapados o disabled.,OR-45..OR-46,IMPLEMENTADO_EN_RUST_S1
 UT-27,dHash defectuoso,Reproducir contraejemplo con distancia 32.,OR-29,PENDIENTE_EN_RUNTIME_RUST
 UT-28,Inversión ideal,Descriptor enmascarado conserva match.,OR-30,PENDIENTE_EN_RUNTIME_RUST
 UT-29,Soporte vacío,Rechazar crops planos/soporte insuficiente.,OR-31..OR-33,PENDIENTE_EN_RUNTIME_RUST

@@ -11,6 +11,13 @@
 //! 3. Detections found inside the regions update the [`Scene`], whose elements are served
 //!    through a [`SpatialIndex`].
 
+// Thesis core (S1): Algorithm 1 (incremental perception), Algorithm 2 (spatial fusion) and
+// the staging/commit store. The other modules are the bootstrap prototype they replace.
+pub mod bbox;
+pub mod fusion;
+pub mod incremental;
+pub mod snapshot;
+
 mod action;
 mod change;
 mod display;

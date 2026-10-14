@@ -142,20 +142,29 @@ unless the agent sets it to false, and even then the local consent and allowlist
 
 ## Where the code is today
 
-The code in `src/` was written while the repository was bootstrapped, before the thesis was
-consolidated. It already follows the crate layout, the injected clock, stdout reserved for
-MCP and dry-run input by default, but not the thesis pipeline:
+Most of the code in `src/` was written while the repository was bootstrapped, before the
+thesis was consolidated. It already follows the crate layout, the injected clock, stdout
+reserved for MCP and dry-run input by default, but not the thesis pipeline.
+
+S1 added the thesis core to `ommatix-domain`, next to the prototype: `incremental`
+(Algorithm 1: exact tile diff, region plan, halo closure, full-refresh fallback), `snapshot`
+(staging and atomic commit, pending dirty tiles, degraded state) and `fusion` (Algorithm 2:
+IoC ownership, reading order, external labels, abstention, actionability). They are tested
+(UT-01..26, BDD-01..10) but not wired into the running pipeline yet; that happens when S2
+and S3 replace the prototype's use case and adapters.
 
 | Area | Thesis | Prototype in `src/` | Replaced in |
 |---|---|---|---|
-| Change detection | Exact 64×64 tiles against the committed base, halo closure with budget | Hashed 32 px cells against the previous frame, context-margin expansion | S1 |
+| Change detection | Exact 64×64 tiles against the committed base, halo closure with budget | Hashed 32 px cells against the previous frame, context-margin expansion | Core in S1; wired in S2–S3 |
+| Fusion | IoC ownership, reading order, external labels with abstention | None (no text) | Core in S1; wired in S3 with OCR |
 | Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | Flat-colour region detector, no text, every element a `blob` | S0, S3 |
-| State | Immutable snapshots, staging, atomic commit, geometry epoch | One mutable scene | S1 |
+| State | Immutable snapshots, staging, atomic commit, geometry epoch | One mutable scene | Core in S1; wired in S2 |
 | Identity | Session IDs, revisions, tombstones, one-to-one matching with abstention | Monotonic IDs matched by IoU | S2 |
 | Agent contract | `observe_screen`, `execute_action`, `get_engine_metrics`; no coordinates | Seven tools that expose coordinates; MCP 2025-06-18 | S2 |
 | Platform | Windows 11 x64: DXGI and `SendInput` | `xcap` and `enigo` on macOS, Linux X11 and Windows at 100 % | S3 |
 
 The prototype's Gherkin features in `src/acceptance/features/` and its archived decisions in
 [`docs/adr/bootstrap/`](../adr/bootstrap/README.md) describe it until it is replaced. The
-thesis scenarios (BDD-01..32, in [`docs/thesis/features/`](../thesis/features)) move into the
-acceptance crate as each stage makes them executable.
+thesis scenarios (BDD-01..32) stay in [`docs/thesis/features/`](../thesis/features), where the
+dossier's traceability matrix expects them; `src/acceptance/tests/thesis.rs` runs the ones
+each stage makes executable (BDD-01..10 since S1).
