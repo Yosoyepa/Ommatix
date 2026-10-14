@@ -137,10 +137,16 @@ Nothing MVP-related goes in the repository root except workspace configuration.
    `dry_run: false` from the agent; it is off by default. The engine checks the foreground
    application the actuator attests against `allowed_applications`; the `SendInput`
    actuator also refuses an elevated foreground, a point outside its windows and held
-   modifiers. The interim `enigo` input (`native-input`) cannot attest the foreground
-   application, so the engine never lets it act live. Before delivering, the engine re-captures the screen and
-   refuses (`STALE_SNAPSHOT`) if it differs from the committed base; any delivery spends the
-   snapshot until the next observation.
+   modifiers, and `type` sends its keys only after verifying keyboard focus on the target
+   field (otherwise `indeterminate`: its click may have been delivered). The interim `enigo`
+   input (`native-input`) cannot attest the foreground application, so the engine never lets
+   it act live. Before delivering, the engine re-captures the screen and refuses
+   (`STALE_SNAPSHOT`) if it differs from the committed base, then reads the policy and
+   attests the foreground application again and refuses (`POLICY_DENIED`) on a change; any
+   delivery spends the snapshot until the next observation. The operator's stop
+   (`[safety] stop_file`, or the in-process `StopSwitch`) belongs to the operator alone:
+   never give the agent a way to set or clear it, and never "roll back" a delivery when it
+   is engaged; delivered results keep their reported status.
 7. **Privacy** (ADR-0012). No screenshots or screen values in logs by default; text on screen
    never changes permissions. Never commit screen captures, recorded sessions, datasets
    (`captures/`, `datasets/` are git-ignored) or model weights. Use synthetic frames in

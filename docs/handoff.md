@@ -15,9 +15,9 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | #4 | S1: núcleo geométrico e incremental en `ommatix-domain` (`bbox`, `incremental`, `snapshot`, `fusion`); UT-01..26; BDD-01..10 ejecutados desde `docs/thesis/features/` con `src/acceptance/tests/thesis.rs` | Fusionado |
 | #5 | S2a: `appearance` (algoritmo 3A, caché de íconos con rechazo) e `identity` (algoritmo 3B, registro de sesión, comprobaciones de vigencia de una acción); UT-27..43; este documento | Abierto |
 | #6 | S2b: puertos del SDD y `Engine` en `ommatix-application` (`observe_screen`, `execute_action`, `get_engine_metrics`); adaptador MCP con tipos de `rmcp` 3.5.1 y bucle acotado (ADR-0015); CT-01..10 y los 17 ejemplos del dossier; BDD-11..27 ejecutados; `serve`/`demo` con el motor nuevo y `--config`; algoritmo 3A dentro de la observación; se retira el prototipo; revisión en [`reviews/2026-10-14-s2b-engine-and-mcp.md`](reviews/2026-10-14-s2b-engine-and-mcp.md) | Abierto |
-| por asignar | S3, primera parte (rama `feat/s3-windows-adapters`, sobre S2b): captura DXGI (`--source dxgi`, `--output N`) y entrada `SendInput` (`--input sendinput`) con `unsafe` acotado (ADR-0016, propuesta); detector ONNX que falla de forma segura con manifiesto y SHA-256 y OCR de Windows (`[models]`); job `windows` en la CI; BDD-29..31 ejecutados sobre un doble del actuador real | Abierto |
+| por asignar | S3, primera parte (rama `feat/s3-windows-adapters`, sobre S2b): captura DXGI (`--source dxgi`, `--output N`) y entrada `SendInput` (`--input sendinput`) con `unsafe` acotado (ADR-0016, propuesta); detector ONNX que falla de forma segura con manifiesto y SHA-256 y OCR de Windows (`[models]`); job `windows` en la CI; parada del operador (`[safety] stop_file`) y comprobación del foco antes de escribir; BDD-28..32 ejecutados sobre un doble del actuador real | Abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.5)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.6)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 Ninguna prueba IT ni SEC se ha ejecutado.
@@ -115,16 +115,19 @@ Ninguna prueba IT ni SEC se ha ejecutado.
   abrir la captura. `[cache]` admite un archivo JSON lines de prototipos curados con
   `context`, `gradient_tau`, `max_distance` y `min_margin`, todos juntos y sin valores por
   defecto; el archivo se rechaza entero ante cualquier error o si supera `max_entries`.
-- **Aceptación**: `src/acceptance/tests/thesis.rs` ejecuta BDD-01..27 y BDD-29..31 desde
+- **Aceptación**: `src/acceptance/tests/thesis.rs` ejecuta BDD-01..32 desde
   `docs/thesis/features/` (BDD-01..10 y 13..21 sobre el núcleo; BDD-11, 12 y 22..27 a través
-  del motor y del adaptador MCP; BDD-29..31 igual, sobre `LiveDouble`, un doble del actuador
-  real que registra lo que recibe y no envía nada). BDD-28 y BDD-32 siguen sin steps: el
-  motor no comprueba la ventana con el foco y nada permite al operador activar
-  `LocalPolicy::stopped`. Se retiraron las siete herramientas del prototipo y su suite de
+  del motor y del adaptador MCP; BDD-28..32 igual, sobre `LiveDouble`, un doble del actuador
+  real que registra lo que recibe y no envía nada). BDD-32 usa la política real del operador
+  (`ommatix::policy::ConfigPolicy`, expuesta por la biblioteca del crate `ommatix`) con un
+  archivo de parada en un directorio temporal. BDD-28 cubre otra aplicación que pasa a
+  primer plano antes de escribir; el foco de teclado dentro de la aplicación permitida lo
+  comprueba el actuador `SendInput`, que ninguna prueba ejecuta. Se retiraron las siete herramientas del prototipo y su suite de
   aceptación (`src/acceptance/features/` y `tests/acceptance.rs`).
 - **Límites conocidos**: la entrada real sólo es posible con `--source dxgi --input
   sendinput` y el consentimiento del operador, y nunca se ha ejecutado de forma supervisada;
-  el motor no comprueba la ventana con el foco ni el operador puede activar la parada;
+  la parada del operador (`[safety] stop_file`) y la comprobación del foco antes de
+  escribir sólo se han probado sobre dobles (SEC-02 y SEC-05 esperan corridas supervisadas);
   sólo se verifica el efecto `visual_change`; no hay modelo seleccionado, así que los roles
   siguen `unknown` y no hay OCR por defecto; OR-44 espera "actuación no implementada" y el
   motor responde `POLICY_DENIED` sin entregar nada; el contexto del caché de íconos lo fija

@@ -67,9 +67,8 @@ unless the agent and a local policy both allow them. More in the
 - `ommatix-application` runs it as one engine behind the SDD ports, and `ommatix-adapter-mcp`
   serves the thesis contract (`observe_screen`, `execute_action`, `get_engine_metrics`) over
   MCP 2026-07-28 ([ADR-0015](docs/adr/0015-mcp-transport-on-rmcp-wire-types.md)). Contract
-  tests CT-01..10 and scenarios BDD-01..27 and BDD-29..31 run in CI (BDD-29..31 over a
-  test double of the live actuator). `serve` and `demo` use this engine. Each observation
-  also resolves text-less icons against curated prototypes (Algorithm 3A) when the operator
+  tests CT-01..10 and scenarios BDD-01..32 run in CI (BDD-28..32 over a test double of
+  the live actuator). `serve` and `demo` use this engine. Each observation also resolves text-less icons against curated prototypes (Algorithm 3A) when the operator
   configures them; otherwise icon labels stay `unknown`.
 - **S3, first part (Windows adapters):** DXGI Desktop Duplication capture (`--source dxgi`,
   `--output N`), Win32 `SendInput` input that attests the foreground application
@@ -77,14 +76,15 @@ unless the agent and a local policy both allow them. More in the
   manifest and the Windows OCR, all behind opt-in build features. The `unsafe` the capture
   and input adapters need is bounded by
   [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (**Proposed**,
-  awaiting the owner's approval). CI builds, lints and tests them on Windows.
+  awaiting the owner's approval). CI builds, lints and tests them on Windows. The operator
+  can stop live input locally with a stop file (`[safety] stop_file`), and `type` sends
+  its keys only once keyboard focus is verified on the target field.
 - What is **not** done yet: no model has been selected (S0, ADR-0009), so by default the
   detector is the bootstrap's flat-colour region finder (roles `unknown`) and there is no
-  OCR; no real MCP client has been tested; the engine checks the foreground application but
-  not the focused window; nothing lets the operator trigger the local stop; and none of the
-  integration and security tests (IT-01..07, SEC-01..06) has been run: they need supervised
-  runs on the reference hardware. Live input stays **off** unless the operator enables it
-  (below). The [overview](docs/architecture/overview.md#where-the-code-is-today) lists what
+  OCR; no real MCP client has been tested; and none of the integration and security tests
+  (IT-01..07, SEC-01..06) has been run: they need supervised runs on the reference
+  hardware (the stop and the focus check included). Live input stays **off** unless the
+  operator enables it (below). The [overview](docs/architecture/overview.md#where-the-code-is-today) lists what
   remains.
 - First platform: **Windows 11 x64**, one monitor, DPI 100/125/150 %
   ([ADR-0008](docs/adr/0008-one-real-platform-first.md), approved 2026-10-14).
@@ -105,8 +105,8 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
 - [ ] **S3, real adapters and action loop on Windows 11:** DXGI, ONNX Runtime, `SendInput`,
   policy, stop and effect verification; the bootstrap's macOS and X11 adapters are retired.
   First part done: the DXGI, `SendInput`, ONNX and Windows OCR adapters behind build
-  features; pending: models (S0), focus, the operator stop, effect checks beyond the visual
-  change, a real MCP client and the supervised runs
+  features, the operator's stop file and the focus check before typing; pending: models
+  (S0), effect checks beyond the visual change, a real MCP client and the supervised runs
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
   and the acceptance report
 
@@ -167,13 +167,28 @@ sets `dry_run: false`; and no CLI flag loosens `[safety]`. Live input needs **al
 The CLI refuses a live input adapter before any adapter opens when 1 or 2 does not hold.
 For each action the engine then checks the foreground application the actuator attests
 against `allowed_applications`, captures the screen again and refuses (`STALE_SNAPSHOT`) if
-it no longer matches the snapshot, and only then delivers. The `SendInput` actuator also
-refuses a foreground process with a higher integrity level (UIPI would drop the input
-silently), a target point outside that process's windows and held modifier keys or mouse
-buttons; such a refusal is reported `indeterminate`, never retried. `--input native`
+it no longer matches the snapshot, reads the operator's stop and attests the foreground
+application once more (refusing with `POLICY_DENIED` if the stop is engaged or the
+application changed), and only then delivers. The `SendInput` actuator also refuses a
+foreground process with a higher integrity level (UIPI would drop the input silently), a
+target point outside that process's windows and held modifier keys or mouse buttons; for
+`type`, after the click that focuses the field it checks that keyboard focus is on the
+window at the target point (or a window containing it) of the same foreground process, and
+otherwise sends no key. Such a refusal is reported `indeterminate`, never retried: for
+`type` the click may already have been delivered. `--input native`
 (or `[engine] mode = "native"`) is still accepted with `--source screen` and
 `actuation_enabled = true`, but `enigo` cannot attest
 the foreground application, so its live actions are always `POLICY_DENIED`.
+
+**Operator stop.** While live input is possible, `serve` prints an `ACTIVE CONTROL` line on
+stderr naming the allowed applications and how to stop. With `[safety] stop_file =
+"STOP"` (relative to the configuration file), creating that file stops live input: the
+engine reads it before each action and again right before delivery, refuses new actions
+with `POLICY_DENIED` (`next_step: operator_review`) without sending any event, and prints a
+line on stderr when the stop is engaged or cleared; removing the file clears it. Actions
+already delivered keep their reported status (a replay of their `request_id` still says
+`input_delivered`); nothing is rolled back. No MCP tool can set or clear the stop. Ending
+the process (Ctrl+C) also stops it; without a `stop_file`, that is the only local stop.
 
 The configuration file has the shape of
 [`docs/thesis/plantillas/configuracion_mvp.toml`](docs/thesis/plantillas/configuracion_mvp.toml)
@@ -184,8 +199,8 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
 - **Refused** (the server does not start): unknown sections or keys; out-of-range values
   (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024, `full_refresh_area_ratio`
   in (0, 1], `max_snapshot_age_ms` ≥ 1, `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
-  blank `allowed_applications` entries); and values this build cannot honour: a `platform`
-  other than `windows`, a `snapshot_policy` other than `strict`, a `profile` other than
+  blank `allowed_applications` entries, a blank `stop_file`); and values this build cannot
+  honour: a `platform` other than `windows`, a `snapshot_policy` other than `strict`, a `profile` other than
   `2026-07-28` (the legacy profile is enabled with `legacy_enabled`), a `transport` other than
   `stdio`, `allow_destructive = true`, `allow_screenshots_to_client = true`,
   `[models] detector_path`, `detector_sha256`, `ocr_path` or `ocr_sha256` (weights are

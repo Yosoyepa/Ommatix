@@ -180,8 +180,12 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   the foreground window's process) to the engine's allowlist check, and before sending it
   refuses a different foreground process, a target point outside that process's windows, a
   higher integrity level (UIPI would drop the input silently) and held modifiers or mouse
-  buttons. A refusal is an actuator error, which the engine reports `indeterminate` and never
-  retries. No test sends real input.
+  buttons. `type` sends its focusing click first and its keys only after
+  `GetGUIThreadInfo` shows keyboard focus, in the same foreground process, on the window at
+  the target point or a window containing it (polled for up to 200 ms while the click is
+  handled); otherwise no key is sent. A refusal is an actuator error, which the engine
+  reports `indeterminate` and never retries: after a refused `type` the click may have been
+  delivered. No test sends real input.
 - *Detector* (`onnx`, `[models] detector_manifest`): a generic YOLO-style detector on ONNX
   Runtime loaded at run time (`load-dynamic`) from a library pinned by SHA-256. The model
   manifest is pinned by SHA-256 and names the weights, their SHA-256 and each class's role
@@ -230,9 +234,17 @@ run (the default) is `simulated`. Live input needs the operator's policy
 (`actuation_enabled`, not stopped), a live actuator **and** a foreground application on the
 non-empty `allowed_applications` list, as the actuator attests it; otherwise `POLICY_DENIED`
 with nothing delivered. Only the `SendInput` actuator attests the foreground application;
-the interim `enigo` input cannot, so its live actions are always denied. Before delivering, a freshness check captures the screen
-again: if it differs from the committed base, the action is `STALE_SNAPSHOT` and nothing is
-delivered. A delivery receipt whose inserted events match the submitted ones is
+the interim `enigo` input cannot, so its live actions are always denied. Before delivering, a
+freshness check captures the screen again: if it differs from the committed base, the action
+is `STALE_SNAPSHOT` and nothing is delivered. Then the engine takes a last look: it reads
+the policy again (the operator's stop, consent, allowlist) and asks the actuator for the
+foreground application again; a stop, or a foreground that is not the one attested at the
+gate, is `POLICY_DENIED` with nothing delivered. The operator's stop comes from `[safety]
+stop_file` (a file whose existence stops new input, read on every action; an unreadable
+path counts as present) or an in-process `StopSwitch` in the composition root; no MCP tool
+reaches either, and results already delivered stay recorded as reported. While live input is
+possible, `serve` prints an active-control indicator on stderr, and a line whenever the stop
+is engaged or cleared. A delivery receipt whose inserted events match the submitted ones is
 `input_delivered`; anything else is `indeterminate`. An expected `visual_change` is verified
 by a capture after delivery compared with the pre-delivery frame (`effect_observed` or
 `indeterminate`); the other effects (focus, value, scroll) are reported `indeterminate`
@@ -246,18 +258,19 @@ observation (`STALE_SNAPSHOT`), while journal replays still return the stored re
 | Icon cache | Algorithm 3A in the observation | Run by the `Engine` on icon candidates of the planned regions with the operator's curated prototypes; off without them; context configured, thresholds not calibrated | S3 (context), S4 (calibration) |
 | Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | By default, flat-colour region detector (roles `unknown`) and no OCR (`NullTextRecognizer`); the simulated desktops report ground truth. Opt-in adapters exist for `images`, `screen` and `dxgi`, but no model is selected: a fail-closed ONNX detector driven by a SHA-256-pinned manifest (feature `onnx`) and Windows OCR for one language (feature `winrt-ocr`) | S0 (models), S3 |
 | Agent contract | Ommatix 1.0 over MCP 2026-07-28; 2025-11-25 opt-in | Implemented (CT-01..10); not yet tested against a real client | S0/S3 for the client |
-| Action gate | Freshness, policy, allowlist, focus, stop | Snapshot freshness (also re-checked by a capture before delivery), policy and the allowlist against the foreground application `SendInput` attests; the actuator also checks the process under the target point, integrity level and held modifiers. No check of the focused window; the gate honours `LocalPolicy::stopped`, but nothing lets the operator set it yet | S3 |
+| Action gate | Freshness, policy, allowlist, focus, stop | Snapshot freshness (also re-checked by a capture before delivery), policy and the allowlist against the foreground application `SendInput` attests, all checked again right before delivery; the operator's stop file (`[safety] stop_file`); the actuator also checks the process under the target point, integrity level and held modifiers, and for `type` keyboard focus after the focusing click. Not yet run under supervision (SEC-02, SEC-05) | S3 (supervised runs) |
 | Effect verification | Focus, value, scroll and visual postconditions | Visual change by re-capture only | S3 |
 | Telemetry | Metrics and audit without sensitive text | `get_engine_metrics`; stage timings in `_meta` | S3 |
 | Platform | Windows 11 x64: DXGI and `SendInput` | DXGI capture and `SendInput` input behind the `dxgi` and `sendinput` features (ADR-0016, proposed), built and tested in CI on Windows but not yet run under supervision (IT-01, IT-03, IT-07); simulated and fixture desktops for tests; interim `xcap` and `enigo` behind `screen` and `native-input` | S3 (supervised runs) |
 
 The thesis scenarios (BDD-01..32) stay in [`docs/thesis/features/`](../thesis/features),
 where the dossier's traceability matrix expects them; `src/acceptance/tests/thesis.rs` runs
-BDD-01..27 and BDD-29..31: BDD-01..10 and BDD-13..21 on the domain core, BDD-11, 12 and
-22..27 through the engine and the MCP adapter over the simulated and fixture desktops, and
-BDD-29..31 (indeterminate verification without retry, a repeated `request_id`, on-screen text
-asking for more permission) the same way over a test double of the live actuator that
-records what it is handed and sends nothing. They show the engine's side of IT-04, IT-05 and
-SEC-03, which still need supervised runs with the real actuator. BDD-28 (focus change) and
-BDD-32 (operator stop) wait: the engine checks the foreground application but not the
-focused window, and nothing lets the operator trigger the stop.
+all of them: BDD-01..10 and BDD-13..21 on the domain core, BDD-11, 12 and 22..27 through
+the engine and the MCP adapter over the simulated and fixture desktops, and BDD-28..32
+(another application taking the foreground before typing, indeterminate verification
+without retry, a repeated `request_id`, on-screen text asking for more permission, the
+operator's stop file during a sequence) the same way over a test double of the live
+actuator that records what it is handed and sends nothing. They show the engine's side of
+SEC-05, IT-04, IT-05, SEC-03 and SEC-02, which still need supervised runs with the real
+actuator; the keyboard-focus check inside the allowed application is the `SendInput`
+actuator's, and no test drives it.

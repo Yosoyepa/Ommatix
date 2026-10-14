@@ -72,8 +72,8 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   `ommatix-adapter-mcp` sirve el contrato de la tesis (`observe_screen`, `execute_action`,
   `get_engine_metrics`) por MCP 2026-07-28
   ([ADR-0015](docs/adr/0015-mcp-transport-on-rmcp-wire-types.md)). Las pruebas de contrato
-  CT-01..10 y los escenarios BDD-01..27 y BDD-29..31 corren en la integración continua
-  (BDD-29..31 sobre un doble de prueba del actuador real). `serve` y `demo` usan este motor.
+  CT-01..10 y los escenarios BDD-01..32 corren en la integración continua
+  (BDD-28..32 sobre un doble de prueba del actuador real). `serve` y `demo` usan este motor.
   Cada observación resuelve además los íconos sin texto con prototipos curados (algoritmo 3A)
   cuando el operador los configura; si no, sus etiquetas quedan `unknown`.
 - **S3, primera parte (adaptadores de Windows):** captura con DXGI Desktop Duplication
@@ -84,13 +84,14 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   captura y entrada lo acota la
   [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (**propuesta**,
   pendiente de aprobación del responsable). La integración continua los compila, revisa y
-  prueba en Windows.
+  prueba en Windows. El operador puede detener localmente la entrada real con un archivo de
+  parada (`[safety] stop_file`), y `type` sólo envía sus teclas tras verificar que el foco
+  de teclado está en el campo objetivo.
 - Lo que **todavía no** está: no se ha seleccionado ningún modelo (S0, ADR-0009), así que por
   defecto el detector es el buscador de regiones de color plano del arranque (roles
-  `unknown`) y no hay OCR; no se ha probado un cliente MCP real; el motor comprueba la
-  aplicación en primer plano pero no la ventana con el foco; nada permite al operador activar
-  la parada local; y no se ha ejecutado ninguna prueba de integración ni de seguridad
-  (IT-01..07, SEC-01..06): necesitan corridas supervisadas en el hardware de referencia. La
+  `unknown`) y no hay OCR; no se ha probado un cliente MCP real; y no se ha ejecutado
+  ninguna prueba de integración ni de seguridad (IT-01..07, SEC-01..06): necesitan corridas
+  supervisadas en el hardware de referencia (también la parada y la comprobación del foco). La
   entrada real sigue **apagada** salvo que el operador la habilite (abajo). La
   [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo que
   falta.
@@ -113,9 +114,9 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
 - [ ] **S3, adaptadores reales y bucle de acción en Windows 11:** DXGI, ONNX Runtime,
   `SendInput`, política, parada y verificación del efecto; se retiran los adaptadores de
   macOS y X11 del arranque. Primera parte hecha: los adaptadores DXGI, `SendInput`, ONNX y
-  OCR de Windows tras features de compilación; falta: modelos (S0), foco, la parada del
-  operador, comprobar efectos más allá del cambio visual, un cliente MCP real y las corridas
-  supervisadas
+  OCR de Windows tras features de compilación, el archivo de parada del operador y la
+  comprobación del foco antes de escribir; falta: modelos (S0), comprobar efectos más allá
+  del cambio visual, un cliente MCP real y las corridas supervisadas
 - [ ] **S4, aceptación:** 450 corridas de extremo a extremo en aplicaciones controladas,
   benchmarks, soak e informe de aceptación
 
@@ -178,14 +179,30 @@ La entrada real exige **todo** lo siguiente:
 La línea de órdenes rechaza un adaptador de entrada real antes de abrir ningún adaptador si
 no se cumplen 1 o 2. En cada acción, el motor comprueba después la aplicación en primer plano
 que atestigua el actuador contra `allowed_applications`, vuelve a capturar la pantalla y
-rechaza (`STALE_SNAPSHOT`) si ya no coincide con el snapshot, y sólo entonces entrega. El
-actuador `SendInput` rechaza además un proceso en primer plano con un nivel de integridad
-mayor (UIPI descartaría la entrada en silencio), un punto fuera de las ventanas de ese
-proceso y teclas modificadoras o botones del ratón pulsados; ese rechazo se informa como
-`indeterminate` y nunca se reintenta. `--input native` (o `[engine] mode = "native"`) se
+rechaza (`STALE_SNAPSHOT`) si ya no coincide con el snapshot, lee la parada del operador y
+vuelve a atestiguar la aplicación en primer plano (rechaza con `POLICY_DENIED` si la parada
+está activa o la aplicación cambió), y sólo entonces entrega. El actuador `SendInput`
+rechaza además un proceso en primer plano con un nivel de integridad mayor (UIPI
+descartaría la entrada en silencio), un punto fuera de las ventanas de ese proceso y teclas
+modificadoras o botones del ratón pulsados; en `type`, tras el clic que enfoca el campo,
+comprueba que el foco de teclado está en la ventana bajo el punto objetivo (o en una que la
+contiene) del mismo proceso en primer plano y, si no, no envía ninguna tecla. Ese rechazo se
+informa como `indeterminate` y nunca se reintenta: en `type` el clic puede haberse
+entregado ya. `--input native` (o `[engine] mode = "native"`) se
 sigue aceptando con `--source screen` y `actuation_enabled = true`, pero `enigo` no puede
 atestiguar la aplicación en primer plano, así que sus acciones reales son siempre
 `POLICY_DENIED`.
+
+**Parada del operador.** Mientras la entrada real es posible, `serve` escribe en stderr una
+línea `ACTIVE CONTROL` con las aplicaciones permitidas y cómo detenerla. Con `[safety]
+stop_file = "STOP"` (relativo al archivo de configuración), crear ese archivo detiene la
+entrada real: el motor lo lee antes de cada acción y otra vez justo antes de entregar,
+rechaza las acciones nuevas con `POLICY_DENIED` (`next_step: operator_review`) sin enviar
+ningún evento y escribe una línea en stderr al activarse o retirarse la parada; borrar el
+archivo la retira. Las acciones ya entregadas conservan el estado informado (repetir su
+`request_id` sigue diciendo `input_delivered`); no se deshace nada. Ninguna herramienta MCP
+puede activar ni retirar la parada. Terminar el proceso (Ctrl+C) también detiene; sin
+`stop_file`, es la única parada local.
 
 El archivo de configuración tiene la forma de
 [`docs/thesis/plantillas/configuracion_mvp.toml`](docs/thesis/plantillas/configuracion_mvp.toml)
@@ -196,8 +213,9 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
 - **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
   rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
   `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `max_message_bytes`
-  4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`); y valores que
-  este binario no puede cumplir: un `platform` distinto de `windows`, un `snapshot_policy`
+  4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`
+  en blanco); y valores que este binario no puede cumplir: un `platform` distinto de
+  `windows`, un `snapshot_policy`
   distinto de `strict`, un `profile` distinto de `2026-07-28` (el perfil legacy se habilita
   con `legacy_enabled`), un `transport` distinto de `stdio`, `allow_destructive = true`,
   `allow_screenshots_to_client = true`, `[models] detector_path`, `detector_sha256`,
