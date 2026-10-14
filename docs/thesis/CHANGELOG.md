@@ -1,5 +1,14 @@
 # Historial documental
 
+## 1.0.25 — 2026-10-14: S4, anclaje de los clics dentro de una isla XAML (rama `fix/s4-island-grounding`)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust. Cambia el cliente de la aceptación (`tools/s4/e2e_driver.py`, SHA-256 `60486d87…c214a`, antes `6dad0dc3…8e2a77`) y sus pruebas, que usan un motor y una cadena de accesibilidad falsos: no se envió entrada. La regla y su resolución están en la [revisión](../reviews/2026-10-14-s4-fifth-round.md), sección «Seventh round», y el informe, en la sección «Preparación de la séptima ronda» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md).
+
+- **Hallazgo 1 (decisión del responsable, 14 de octubre de 2026: «descender dentro de la isla»):** cuando la consulta por posición devuelve el anfitrión de una isla XAML (clase `Microsoft.UI.Content.DesktopChildSiteBridge`, lista cerrada), el cliente recorre el subárbol del anfitrión, acotado a 500 elementos y 16 niveles, y toma el elemento en pantalla más profundo cuyo rectángulo contiene el punto; la cadena es ese elemento y sus ancestros hasta el anfitrión, y `identity_hit` se aplica sin cambios. Dos elementos en el nivel más profundo, una cota alcanzada, una lectura que falla o un anfitrión que cambia no confirman nada. No hay anclaje por cambio de estado, ni comparación de nombres, ni reintento. Con otra clase, el comportamiento no cambia. Se aplica en `steps()`, en `restore_menu` y en el diagnóstico del menú, que registra además si hubo descenso, su profundidad, los elementos visitados y si fue truncado o ambiguo (sin nombres).
+- **Pruebas:** 113 correctas (81 anteriores y 32 nuevas: `DescentRuleTest`, `WalkParsingTest`, `IslandGroundingTest`, `IslandRestoreTest`); las 32 nuevas fallan con el cliente anterior.
+- **Comprobación de sólo lectura sobre el Bloc de notas del responsable:** el descenso llega a `MenuItem` `Edit` con el RuntimeId del elemento hallado por nombre (20 elementos, nivel 3, sin truncar). No se ejecutó entrada ni se enfocó ninguna ventana. La consulta por posición en vivo y el tiempo del recorrido quedan por medir en la próxima ronda.
+- **Matrices:** sin cambio. El hallazgo 1 queda a la espera de una ronda en vivo.
+
 ## 1.0.24 — 2026-10-14: S4, sexta ronda (diagnóstico del menú «Editar»; una corrida no puntuada)
 
 No cambia ningún requisito, algoritmo, contrato, escenario, código de Rust ni del cliente. Se ejecutó en vivo una vez el cliente comprometido en 1.0.23 (`tools/s4/e2e_driver.py`, SHA-256 `6dad0dc3…8e2a77`) con el binario de `main` (`11a3d792…aca9da`) y el manifiesto float16 de RNF-05: una corrida de E2E-03 con dos solicitudes reales (cuaderno 399 → 401), sin puntuar. El detalle está en la sección «Sexta ronda» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), y los hallazgos, en la [revisión de la quinta ronda](../reviews/2026-10-14-s4-fifth-round.md).
