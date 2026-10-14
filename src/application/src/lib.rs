@@ -1,17 +1,32 @@
 //! # ommatix-application
 //!
 //! The application hexagon. It defines the **ports** the outside world must implement
-//! ([`FrameSource`], [`ElementDetector`], [`InputController`]) and the **use cases** that
-//! drive the domain ([`PerceptionEngine`], [`ActuationService`]). It knows nothing about screens, files, MCP or JSON.
+//! ([`FrameSource`], [`ElementDetector`], [`InputController`], [`Clock`]) and the **use
+//! cases** that drive the domain:
+//!
+//! - [`PerceptionEngine`]: capture, diff, detect only what changed, keep the scene.
+//! - [`Observer`]: after an action, perceive until the screen settles.
+//! - [`ActuationService`]: validate an agent's action against the screen, then perform it.
+//! - [`AgentSession`]: the three wired together for a driving adapter.
+//!
+//! It knows nothing about screens, files, MCP or JSON.
 
 mod actuation;
+mod clock;
 mod error;
+mod observe;
 mod perception;
 pub mod ports;
+mod screen_model;
+mod session;
 
 pub use actuation::{
     ActionReceipt, ActuationError, ActuationPolicy, ActuationService, ClickTarget,
 };
-pub use error::{AppError, PortError};
+pub use clock::ManualClock;
+pub use error::{AppError, PortError, error_chain};
+pub use observe::{Observation, Observer, SettlePolicy};
 pub use perception::{PerceptionConfig, PerceptionEngine, PerceptionReport, Timings};
-pub use ports::{ElementDetector, FrameSource, InputController, ScreenModel};
+pub use ports::{Clock, ElementDetector, FrameSource, InputController};
+pub use screen_model::ScreenModel;
+pub use session::{ActionOutcome, AgentSession};

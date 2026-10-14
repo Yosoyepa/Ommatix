@@ -1,6 +1,7 @@
 use ommatix_domain::{Action, Frame, Key, MouseButton, Rect};
 
-use crate::layout::{self, colors};
+use crate::Palette;
+use crate::layout;
 
 /// Everything the simulated form remembers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -58,22 +59,23 @@ impl SimState {
         self.saves += 1;
     }
 
-    pub(crate) fn render(&self) -> Frame {
+    /// Draws the desktop. Pure: the same state and palette always give the same pixels.
+    pub fn render(&self, palette: &Palette) -> Frame {
         let s = layout::SCREEN;
-        let mut f = Frame::solid(s.w, s.h, colors::DESKTOP).expect("layout screen is non-empty");
-        f.fill_rect(layout::WINDOW, colors::WINDOW);
-        f.fill_rect(layout::TITLE_BAR, colors::TITLE);
+        let mut f = Frame::solid(s.w, s.h, palette.desktop).expect("layout screen is non-empty");
+        f.fill_rect(layout::WINDOW, palette.window);
+        f.fill_rect(layout::TITLE_BAR, palette.title);
 
         let field = layout::TEXT_FIELD;
         let border = if self.field_focused {
-            colors::FOCUS
+            palette.focus
         } else {
-            colors::BORDER
+            palette.border
         };
         f.fill_rect(field, border);
         f.fill_rect(
             Rect::new(field.x + 1, field.y + 1, field.w - 2, field.h - 2),
-            colors::WINDOW,
+            palette.window,
         );
         for i in 0..self.text.chars().count() as u32 {
             f.fill_rect(
@@ -83,21 +85,21 @@ impl SimState {
                     layout::GLYPH_W,
                     layout::GLYPH_H,
                 ),
-                colors::INK,
+                palette.ink,
             );
         }
 
-        f.fill_rect(layout::CANCEL_BUTTON, colors::SECONDARY);
-        f.fill_rect(layout::SAVE_BUTTON, colors::PRIMARY);
+        f.fill_rect(layout::CANCEL_BUTTON, palette.secondary);
+        f.fill_rect(layout::SAVE_BUTTON, palette.primary);
 
         if self.dialog_open {
             let d = layout::DIALOG;
-            f.fill_rect(d, colors::TITLE);
+            f.fill_rect(d, palette.title);
             f.fill_rect(
                 Rect::new(d.x + 2, d.y + 2, d.w - 4, d.h - 4),
-                colors::WINDOW,
+                palette.window,
             );
-            f.fill_rect(layout::OK_BUTTON, colors::PRIMARY);
+            f.fill_rect(layout::OK_BUTTON, palette.primary);
         }
         f
     }
@@ -106,6 +108,7 @@ impl SimState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Theme;
 
     fn click(r: Rect) -> Action {
         Action::Click {
@@ -151,7 +154,10 @@ mod tests {
             text: "x".repeat(100),
         });
         assert_eq!(s.text.len(), layout::MAX_CHARS);
-        assert_eq!(s.render(), s.render());
-        assert_eq!(s.render().pixel(5, 5), colors::DESKTOP);
+        for theme in Theme::ALL {
+            let palette = theme.palette();
+            assert_eq!(s.render(&palette), s.render(&palette));
+            assert_eq!(s.render(&palette).pixel(5, 5), palette.desktop);
+        }
     }
 }

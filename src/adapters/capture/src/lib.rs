@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | [`ScriptedSource`] | always | tests, demos, benchmarks |
 //! | `ImageSequenceSource` | `images` (default) | replay recorded sessions |
-//! | `ScreenSource` | `screen` | live capture of the primary monitor |
+//! | `ScreenSource` | `screen` | live capture of the primary monitor, with its HiDPI mapping |
 
 #[cfg(feature = "images")]
 mod image_sequence;
@@ -18,4 +18,4 @@ mod scripted;
 pub use image_sequence::ImageSequenceSource;
 #[cfg(feature = "screen")]
 pub use screen::ScreenSource;
-pub use scripted::{ScriptedSource, demo_script};
+pub use scripted::ScriptedSource;

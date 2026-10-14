@@ -26,6 +26,7 @@ ommatix-adapter-mcp = { workspace = true }
 ommatix-adapter-sim = { workspace = true }
 ommatix-adapter-vision = { workspace = true }
 ommatix-application = { workspace = true }
+ommatix-domain = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true }
 

@@ -1,64 +1,95 @@
-use ommatix_application::PerceptionEngine;
+use ommatix_application::{AgentSession, error_chain};
 use ommatix_domain::{Point, Rect};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolResult, parse};
-use crate::dto::{ReportDto, elements};
+use super::{Tool, ToolOutput, ToolResult, parse, to_value};
+use crate::dto::{ReportDto, elements, timings_meta};
 
-pub fn definitions() -> Vec<Value> {
-    let point = json!({
-        "type": "object",
-        "properties": {
-            "x": { "type": "integer", "minimum": 0, "description": "Screen x in pixels" },
-            "y": { "type": "integer", "minimum": 0, "description": "Screen y in pixels" }
-        },
-        "required": ["x", "y"],
-        "additionalProperties": false
-    });
-    let rect = json!({
-        "type": "object",
-        "properties": {
-            "x": { "type": "integer", "minimum": 0 },
-            "y": { "type": "integer", "minimum": 0 },
-            "w": { "type": "integer", "minimum": 1 },
-            "h": { "type": "integer", "minimum": 1 }
-        },
-        "required": ["x", "y", "w", "h"],
-        "additionalProperties": false
-    });
-    let none = json!({ "type": "object", "properties": {}, "additionalProperties": false });
-    vec![
-        json!({
-            "name": "perceive",
-            "title": "Perceive screen",
-            "description": "Capture one frame, re-analyse only the regions that changed and return what was added, updated or removed. Call this after every action you perform.",
-            "inputSchema": none,
-            "annotations": { "readOnlyHint": true, "idempotentHint": false }
-        }),
-        json!({
-            "name": "list_elements",
-            "title": "List elements",
-            "description": "Return every element currently on screen in reading order, with bounds and a click target (center).",
-            "inputSchema": none,
-            "annotations": { "readOnlyHint": true, "idempotentHint": true }
-        }),
-        json!({
-            "name": "element_at",
-            "title": "Element at point",
-            "description": "Return the elements under a screen coordinate, most specific (smallest) first.",
-            "inputSchema": point,
-            "annotations": { "readOnlyHint": true, "idempotentHint": true }
-        }),
-        json!({
-            "name": "elements_in_rect",
-            "title": "Elements in rectangle",
-            "description": "Return the elements intersecting a screen rectangle, in reading order.",
-            "inputSchema": rect,
-            "annotations": { "readOnlyHint": true, "idempotentHint": true }
-        }),
-    ]
+pub(super) const TOOLS: [Tool; 4] = [
+    Tool {
+        name: "perceive",
+        spec: perceive_spec,
+        run: perceive,
+    },
+    Tool {
+        name: "list_elements",
+        spec: list_spec,
+        run: list_elements,
+    },
+    Tool {
+        name: "element_at",
+        spec: element_at_spec,
+        run: element_at,
+    },
+    Tool {
+        name: "elements_in_rect",
+        spec: elements_in_rect_spec,
+        run: elements_in_rect,
+    },
+];
+
+fn no_arguments() -> Value {
+    json!({ "type": "object", "properties": {}, "additionalProperties": false })
 }
+
+fn perceive_spec() -> Value {
+    json!({
+        "title": "Perceive screen",
+        "description": "Capture one frame, re-analyse only the regions that changed and return what was added, updated or removed. Actions already observe their own effect; call this to look again.",
+        "inputSchema": no_arguments(),
+        "annotations": { "readOnlyHint": true, "idempotentHint": false }
+    })
+}
+
+fn list_spec() -> Value {
+    json!({
+        "title": "List elements",
+        "description": "Return every element currently on screen in reading order, with bounds and a click target (center).",
+        "inputSchema": no_arguments(),
+        "annotations": { "readOnlyHint": true, "idempotentHint": true }
+    })
+}
+
+fn element_at_spec() -> Value {
+    json!({
+        "title": "Element at point",
+        "description": "Return the elements under a screen coordinate, most specific (smallest) first.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x": { "type": "integer", "minimum": 0, "description": "Screen x in pixels" },
+                "y": { "type": "integer", "minimum": 0, "description": "Screen y in pixels" }
+            },
+            "required": ["x", "y"],
+            "additionalProperties": false
+        },
+        "annotations": { "readOnlyHint": true, "idempotentHint": true }
+    })
+}
+
+fn elements_in_rect_spec() -> Value {
+    json!({
+        "title": "Elements in rectangle",
+        "description": "Return the elements intersecting a screen rectangle, in reading order.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x": { "type": "integer", "minimum": 0 },
+                "y": { "type": "integer", "minimum": 0 },
+                "w": { "type": "integer", "minimum": 1 },
+                "h": { "type": "integer", "minimum": 1 }
+            },
+            "required": ["x", "y", "w", "h"],
+            "additionalProperties": false
+        },
+        "annotations": { "readOnlyHint": true, "idempotentHint": true }
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoArgs {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,49 +107,50 @@ struct RectArgs {
     h: u32,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct NoArgs {}
-
-pub fn call(engine: &mut PerceptionEngine, name: &str, args: &Value) -> Option<ToolResult> {
-    let result = match name {
-        "perceive" => parse::<NoArgs>(args).and_then(|_| perceive(engine)),
-        "list_elements" => parse::<NoArgs>(args).map(|_| {
-            json!({
-                "frame_no": engine.frame_no(),
-                "elements": elements(&engine.elements()),
-            })
-        }),
-        "element_at" => parse::<PointArgs>(args).map(|a| {
-            json!({
-                "frame_no": engine.frame_no(),
-                "elements": elements(&engine.elements_at(Point::new(a.x, a.y))),
-            })
-        }),
-        "elements_in_rect" => parse::<RectArgs>(args).and_then(|a| {
-            if a.w == 0 || a.h == 0 {
-                return Err("w and h must be >= 1".into());
-            }
-            Ok(json!({
-                "frame_no": engine.frame_no(),
-                "elements": elements(&engine.elements_in(&Rect::new(a.x, a.y, a.w, a.h))),
-            }))
-        }),
-        _ => return None,
-    };
-    Some(result)
+fn perceive(session: &mut AgentSession, args: &Value) -> ToolResult {
+    parse::<NoArgs>(args)?;
+    let report = session.perceive().map_err(|e| error_chain(&e))?;
+    Ok(ToolOutput {
+        structured: to_value(ReportDto::from(&report))?,
+        meta: Some(timings_meta(&report.timings)),
+    })
 }
 
-/// Runs one perception tick and serialises the report. Shared with action tools.
-pub fn perceive(engine: &mut PerceptionEngine) -> ToolResult {
-    match engine.tick() {
-        Ok(Some(report)) => {
-            serde_json::to_value(ReportDto::from(&report)).map_err(|e| e.to_string())
-        }
-        Ok(None) => Err(format!(
-            "frame source '{}' is exhausted",
-            engine.source_name()
-        )),
-        Err(e) => Err(e.to_string()),
+fn list_elements(session: &mut AgentSession, args: &Value) -> ToolResult {
+    parse::<NoArgs>(args)?;
+    let engine = session.perception();
+    answer(engine.frame_no(), &engine.elements())
+}
+
+fn element_at(session: &mut AgentSession, args: &Value) -> ToolResult {
+    let a = parse::<PointArgs>(args)?;
+    let engine = session.perception();
+    answer(engine.frame_no(), &engine.elements_at(Point::new(a.x, a.y)))
+}
+
+fn elements_in_rect(session: &mut AgentSession, args: &Value) -> ToolResult {
+    let a = parse::<RectArgs>(args)?;
+    if a.w == 0 || a.h == 0 {
+        return Err("w and h must be at least 1".into());
     }
+    if a.x.checked_add(a.w).is_none() || a.y.checked_add(a.h).is_none() {
+        return Err("the rectangle exceeds the coordinate range".into());
+    }
+    let engine = session.perception();
+    let mut rect = Rect::new(a.x, a.y, a.w, a.h);
+    if let Some(screen) = engine.screen_bounds() {
+        rect = rect.clip(&screen);
+    }
+    let found = if rect.is_empty() {
+        Vec::new()
+    } else {
+        engine.elements_in(&rect)
+    };
+    answer(engine.frame_no(), &found)
+}
+
+fn answer(frame_no: u64, found: &[ommatix_domain::Element]) -> ToolResult {
+    Ok(ToolOutput::new(
+        json!({ "frame_no": frame_no, "elements": to_value(elements(found))? }),
+    ))
 }

@@ -6,16 +6,18 @@
 // cucumber passes captured step parameters by value.
 #![allow(clippy::needless_pass_by_value)]
 
+use std::sync::Arc;
+
 use cucumber::gherkin::Step;
 use cucumber::{World, given, then, when};
-use ommatix_adapter_capture::{ScriptedSource, demo_script};
+use ommatix_adapter_capture::ScriptedSource;
 use ommatix_adapter_input::{ActionLog, DryRunInput};
 use ommatix_adapter_mcp::McpServer;
-use ommatix_adapter_sim::{SimState, SimulatedDesktop, layout};
-use ommatix_adapter_vision::ContrastBlobDetector;
+use ommatix_adapter_sim::{SimState, SimulatedDesktop, Theme, layout, scripted_session};
+use ommatix_adapter_vision::FlatRegionDetector;
 use ommatix_application::{
-    ActuationPolicy, ActuationService, FrameSource, InputController, PerceptionConfig,
-    PerceptionEngine,
+    ActuationPolicy, ActuationService, AgentSession, FrameSource, InputController, ManualClock,
+    Observer, PerceptionConfig, PerceptionEngine, SettlePolicy,
 };
 use ommatix_domain::{Point, Rect};
 use serde_json::{Value, json};
@@ -36,27 +38,36 @@ struct Agent {
 }
 
 impl Agent {
+    /// Wires Ommatix exactly like the binary does, but with a virtual clock so that
+    /// waiting for the screen to settle is instant and reproducible.
     fn connect(&mut self, source: Box<dyn FrameSource>, input: Box<dyn InputController>) {
+        let clock = Arc::new(ManualClock::new());
         let perception = PerceptionEngine::new(
             source,
-            Box::new(ContrastBlobDetector::default()),
+            Box::new(FlatRegionDetector::default()),
+            clock.clone(),
             PerceptionConfig::default(),
         )
         .expect("valid default config");
+        let observer = Observer::new(clock, SettlePolicy::default()).expect("valid policy");
         let actuation = ActuationService::new(input, ActuationPolicy::default());
-        self.server = Some(McpServer::new(perception, actuation));
+        self.server = Some(McpServer::new(AgentSession::new(
+            perception, observer, actuation,
+        )));
         self.last_report = None;
     }
 
-    fn start_simulator(&mut self) {
-        let sim = SimulatedDesktop::new();
+    fn start_simulator(&mut self, theme: Theme) {
+        let sim = SimulatedDesktop::with_theme(theme);
         self.connect(Box::new(sim.screen()), Box::new(sim.input()));
         self.sim = Some(sim);
     }
 
     fn send_raw(&mut self, line: &str) -> Value {
         let server = self.server.as_mut().expect("a desktop must be running");
-        let response = server.handle_line(line).unwrap_or(Value::Null);
+        let response = server
+            .handle_message(line.as_bytes())
+            .unwrap_or(Value::Null);
         self.last_response = response.clone();
         response
     }
@@ -79,7 +90,7 @@ impl Agent {
         match tool {
             "perceive" => self.last_report = Some(structured.clone()),
             "click" | "type_text" | "press_key" => {
-                self.last_report = Some(structured["observed"].clone());
+                self.last_report = Some(structured["observation"].clone());
             }
             _ => {}
         }
@@ -126,6 +137,26 @@ fn button(name: &str) -> Rect {
     }
 }
 
+/// Named parts of the desktop that are not buttons.
+fn part(name: &str) -> Rect {
+    match name {
+        "text field" => layout::TEXT_FIELD,
+        "window" => layout::CLIENT_AREA,
+        "title bar" => layout::TITLE_BAR,
+        "dialog" => layout::DIALOG,
+        other => panic!("unknown part {other}"),
+    }
+}
+
+fn theme(name: &str) -> Theme {
+    match name {
+        "light" => Theme::Light,
+        "dark" => Theme::Dark,
+        "contrasting wallpaper" => Theme::ContrastingWallpaper,
+        other => panic!("unknown theme {other}"),
+    }
+}
+
 fn count(v: &Value) -> usize {
     v.as_array().map_or(0, Vec::len)
 }
@@ -134,28 +165,44 @@ fn count(v: &Value) -> usize {
 
 #[given("the simulated desktop is running")]
 fn simulated_desktop(w: &mut Agent) {
-    w.start_simulator();
+    w.start_simulator(Theme::Light);
+}
+
+#[given(regex = r"^the simulated desktop is running with the (.+) theme$")]
+fn themed_desktop(w: &mut Agent, name: String) {
+    w.start_simulator(theme(&name));
 }
 
 #[given("a fresh simulated desktop that has not been perceived")]
 fn fresh_desktop(w: &mut Agent) {
-    w.start_simulator();
+    w.start_simulator(Theme::Light);
 }
 
 #[given("the recorded demo session with dry-run input")]
 fn demo_session(w: &mut Agent) {
     let log = ActionLog::default();
     w.connect(
-        Box::new(ScriptedSource::new(demo_script())),
+        Box::new(ScriptedSource::new(scripted_session(Theme::Light))),
         Box::new(DryRunInput::new(log.clone())),
     );
     w.sim = None;
     w.dry_run_log = Some(log);
 }
 
+#[given("the recorded session has been played to the end")]
+fn play_to_the_end(w: &mut Agent) {
+    while w.call("perceive", &json!({})).is_some() {}
+}
+
 #[given(expr = "the agent remembers the id of the {string} button")]
 fn remember_id(w: &mut Agent, name: String) {
     let element = w.find(button(&name)).expect("button visible");
+    w.remembered_id = Some(element["id"].clone());
+}
+
+#[given(regex = r"^the agent remembers the id of the (window|text field|title bar)$")]
+fn remember_part_id(w: &mut Agent, name: String) {
+    let element = w.find(part(&name)).expect("part visible");
     w.remembered_id = Some(element["id"].clone());
 }
 
@@ -196,6 +243,11 @@ fn click_element(w: &mut Agent, id: String) {
 #[when(expr = "the agent types {string}")]
 fn type_text(w: &mut Agent, text: String) {
     w.must_call("type_text", &json!({ "text": text }));
+}
+
+#[when("the agent types a line break")]
+fn type_line_break(w: &mut Agent) {
+    w.call("type_text", &json!({ "text": "a\nb" }));
 }
 
 #[when(expr = "the agent presses {word}")]
@@ -296,9 +348,49 @@ fn same_id(w: &mut Agent, name: String) {
     assert_eq!(Some(element["id"].clone()), w.remembered_id);
 }
 
+#[then(regex = r"^the (window|text field|title bar) still has the remembered id$")]
+fn part_same_id(w: &mut Agent, name: String) {
+    let element = w.find(part(&name)).expect("part visible");
+    assert_eq!(Some(element["id"].clone()), w.remembered_id);
+}
+
+#[then(regex = r"^the (window|text field|title bar) was not re-analysed$")]
+fn part_untouched(w: &mut Agent, name: String) {
+    let id = w.find(part(&name)).expect("part visible")["id"].clone();
+    let r = w.report();
+    let touched = ["added", "updated"]
+        .iter()
+        .flat_map(|k| r[*k].as_array().cloned().unwrap_or_default())
+        .any(|e| e["id"] == id);
+    assert!(!touched, "{name} was re-analysed: {r}");
+}
+
 #[then(expr = "the {string} button is reported at its exact bounds")]
 fn reported(w: &mut Agent, name: String) {
     assert!(w.find(button(&name)).is_some(), "{name} not perceived");
+}
+
+#[then(regex = r"^the (window|text field|title bar|dialog) is reported at its exact bounds$")]
+fn part_reported(w: &mut Agent, name: String) {
+    assert!(w.find(part(&name)).is_some(), "{name} not perceived");
+}
+
+#[then(expr = "the typed text {string} is reported as one element")]
+fn text_is_one_element(w: &mut Agent, text: String) {
+    let want = rect_json(layout::text_bounds(text.chars().count() as u32));
+    let p = Point::new(layout::TEXT_ORIGIN_X + 1, layout::TEXT_ORIGIN_Y + 1);
+    let first = w.elements_at(p).into_iter().next().expect("text perceived");
+    assert_eq!(first["bounds"], want);
+}
+
+#[then(expr = "at most {int}% of the screen is re-analysed")]
+fn analysed_share(w: &mut Agent, percent: u64) {
+    let analysed = w.report()["analysed_px"].as_u64().expect("analysed_px");
+    let screen = layout::SCREEN.area();
+    assert!(
+        analysed * 100 <= screen * percent,
+        "{analysed} of {screen} px re-analysed"
+    );
 }
 
 #[then(expr = "the {string} button is no longer reported")]
@@ -339,6 +431,20 @@ fn call_fails(w: &mut Agent, fragment: String) {
     assert_eq!(result["isError"], true, "{}", w.last_response);
     let text = result["content"][0]["text"].as_str().unwrap_or_default();
     assert!(text.contains(&fragment), "{text:?} lacks {fragment:?}");
+}
+
+#[then("the action is reported as performed with an observation error")]
+fn performed_but_unobserved(w: &mut Agent) {
+    let result = &w.last_response["result"];
+    assert_eq!(result["isError"], false, "{}", w.last_response);
+    let structured = &result["structuredContent"];
+    assert!(structured["performed"].is_object(), "{structured}");
+    assert!(structured["observe_error"].is_string(), "{structured}");
+}
+
+#[then(expr = "the response is a batch of {int} response(s)")]
+fn batch_size(w: &mut Agent, n: usize) {
+    assert_eq!(count(&w.last_response), n, "{}", w.last_response);
 }
 
 #[then("the action is reported as not live")]

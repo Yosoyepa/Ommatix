@@ -1,6 +1,7 @@
 //! `ommatix` binary: parse the CLI, wire the services, run a driving adapter.
 
 mod cli;
+mod clock;
 mod wiring;
 
 use std::io::{self, BufWriter};
@@ -15,18 +16,18 @@ use crate::cli::{Cli, Command};
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Serve(args) => {
-            let services = wiring::build(&args)?;
+            let session = wiring::build(&args)?;
             eprintln!(
                 "ommatix: MCP server on stdio (source={}, detector={}, input={})",
-                services.perception.source_name(),
-                services.perception.detector_name(),
-                services.actuation.input_name(),
+                session.perception().source_name(),
+                session.perception().detector_name(),
+                session.actuation().input_name(),
             );
             let stdin = io::stdin().lock();
             let stdout = BufWriter::new(io::stdout().lock());
-            McpServer::new(services.perception, services.actuation).serve(stdin, stdout)?;
+            McpServer::new(session).serve(stdin, stdout)?;
         }
-        Command::Demo(args) => run_demo(wiring::build(&args)?.perception)?,
+        Command::Demo(args) => run_demo(wiring::build(&args)?.perception_mut())?,
     }
     Ok(())
 }
@@ -34,7 +35,9 @@ fn main() -> Result<()> {
 /// Frames printed by `demo` when the source never ends (`--loop`, `sim`, `screen`).
 const DEMO_MAX_FRAMES: u64 = 20;
 
-fn run_demo(mut engine: PerceptionEngine) -> Result<()> {
+/// `demo` is the one command whose output is meant for a human on stdout.
+#[allow(clippy::print_stdout)]
+fn run_demo(engine: &mut PerceptionEngine) -> Result<()> {
     println!(
         "source={} detector={}",
         engine.source_name(),
@@ -42,33 +45,27 @@ fn run_demo(mut engine: PerceptionEngine) -> Result<()> {
     );
     while let Some(r) = engine.tick()? {
         println!(
-            "frame {:>3} | dirty {:>4}/{:<4} cells | regions {:>2} | +{} ~{} -{} | elements {:>3} | {} us",
+            "frame {:>3} | dirty {:>4}/{:<4} cells | analysed {:>7} px in {:>2} regions | +{} ~{} -{} | elements {:>3} | {} us",
             r.frame_no,
             r.dirty_cells,
             r.total_cells,
-            r.dirty_regions.len(),
+            r.analysed_px,
+            r.analysed_regions.len(),
             r.delta.added.len(),
             r.delta.updated.len(),
             r.delta.removed.len(),
             r.element_count,
-            r.timings.total_us,
+            r.timings.total.as_micros(),
         );
         if engine.frame_no() >= DEMO_MAX_FRAMES {
             break;
         }
     }
     for e in engine.elements() {
-        let c = e.bounds.center();
+        let (b, c) = (e.bounds, e.bounds.center());
         println!(
-            "  {:<4} {:?} at ({},{}) {}x{} click=({},{})",
-            e.id.to_string(),
-            e.kind,
-            e.bounds.x,
-            e.bounds.y,
-            e.bounds.w,
-            e.bounds.h,
-            c.x,
-            c.y
+            "  e{:<3} {:?} at ({},{}) {}x{} click=({},{})",
+            e.id.0, e.kind, b.x, b.y, b.w, b.h, c.x, c.y
         );
     }
     Ok(())

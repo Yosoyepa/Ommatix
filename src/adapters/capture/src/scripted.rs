@@ -1,21 +1,19 @@
-use std::collections::VecDeque;
-
 use ommatix_application::{FrameSource, PortError};
-use ommatix_domain::{Frame, Rect};
+use ommatix_domain::Frame;
 
-/// Replays an in-memory list of frames. Optionally loops forever.
+/// Replays an in-memory list of frames, optionally looping forever.
 #[derive(Debug, Clone)]
 pub struct ScriptedSource {
-    frames: VecDeque<Frame>,
-    original: Vec<Frame>,
+    frames: Vec<Frame>,
+    cursor: usize,
     looping: bool,
 }
 
 impl ScriptedSource {
     pub fn new(frames: Vec<Frame>) -> Self {
         Self {
-            frames: frames.clone().into(),
-            original: frames,
+            frames,
+            cursor: 0,
             looping: false,
         }
     }
@@ -34,68 +32,46 @@ impl FrameSource for ScriptedSource {
     }
 
     fn next_frame(&mut self) -> Result<Option<Frame>, PortError> {
-        if self.frames.is_empty() && self.looping {
-            self.frames = self.original.clone().into();
+        if self.cursor == self.frames.len() && self.looping {
+            self.cursor = 0;
         }
-        Ok(self.frames.pop_front())
+        let frame = self.frames.get(self.cursor).cloned();
+        self.cursor += usize::from(frame.is_some());
+        Ok(frame)
     }
-}
-
-/// A small, deterministic "desktop session" used by `ommatix demo` and integration tests:
-///
-/// 1. A window with a title bar, a text field and two buttons appears.
-/// 2. Nothing changes (a static screen must cost ~nothing).
-/// 3. The user types into the text field.
-/// 4. A modal dialog with an OK button opens.
-pub fn demo_script() -> Vec<Frame> {
-    const DESKTOP: [u8; 4] = [236, 239, 244, 255];
-    const WINDOW: [u8; 4] = [255, 255, 255, 255];
-    const TITLE: [u8; 4] = [46, 52, 64, 255];
-    const PRIMARY: [u8; 4] = [94, 129, 172, 255];
-    const SECONDARY: [u8; 4] = [216, 222, 233, 255];
-    const INK: [u8; 4] = [20, 20, 20, 255];
-    const FIELD: [u8; 4] = [150, 150, 150, 255];
-
-    let mut f1 = Frame::solid(640, 400, DESKTOP).expect("non-empty frame");
-    f1.fill_rect(Rect::new(40, 40, 560, 320), WINDOW);
-    f1.fill_rect(Rect::new(40, 40, 560, 28), TITLE);
-    // Text field: 1px border.
-    f1.fill_rect(Rect::new(80, 120, 300, 30), FIELD);
-    f1.fill_rect(Rect::new(81, 121, 298, 28), WINDOW);
-    f1.fill_rect(Rect::new(400, 300, 90, 32), SECONDARY); // "Cancel"
-    f1.fill_rect(Rect::new(500, 300, 80, 32), PRIMARY); // "Save"
-
-    let f2 = f1.clone();
-
-    let mut f3 = f1.clone();
-    for i in 0..5 {
-        f3.fill_rect(Rect::new(90 + i * 9, 128, 6, 12), INK); // typed glyphs
-    }
-
-    let mut f4 = f3.clone();
-    f4.fill_rect(Rect::new(200, 170, 240, 110), TITLE); // modal frame
-    f4.fill_rect(Rect::new(202, 172, 236, 106), WINDOW);
-    f4.fill_rect(Rect::new(360, 240, 64, 28), PRIMARY); // "OK"
-
-    vec![f1, f2, f3, f4]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn scripted_source_exhausts_or_loops() {
-        let frames = demo_script();
-        let mut once = ScriptedSource::new(frames.clone());
-        for _ in 0..frames.len() {
-            assert!(once.next_frame().unwrap().is_some());
-        }
-        assert!(once.next_frame().unwrap().is_none());
+    fn frames() -> Vec<Frame> {
+        (1..=3)
+            .map(|w| Frame::solid(w, 1, [0, 0, 0, 255]).unwrap())
+            .collect()
+    }
 
-        let mut forever = ScriptedSource::new(frames.clone()).looping();
-        for _ in 0..frames.len() * 2 {
-            assert!(forever.next_frame().unwrap().is_some());
-        }
+    fn widths(src: &mut ScriptedSource, n: usize) -> Vec<Option<u32>> {
+        (0..n)
+            .map(|_| src.next_frame().unwrap().map(|f| f.width()))
+            .collect()
+    }
+
+    #[test]
+    fn replays_once_then_reports_exhaustion() {
+        let mut once = ScriptedSource::new(frames());
+        assert_eq!(widths(&mut once, 4), [Some(1), Some(2), Some(3), None]);
+        assert_eq!(widths(&mut once, 1), [None]);
+    }
+
+    #[test]
+    fn loops_when_asked() {
+        let mut forever = ScriptedSource::new(frames()).looping();
+        assert_eq!(
+            widths(&mut forever, 5),
+            [Some(1), Some(2), Some(3), Some(1), Some(2)]
+        );
+        let mut empty = ScriptedSource::new(Vec::new()).looping();
+        assert_eq!(widths(&mut empty, 2), [None, None]);
     }
 }

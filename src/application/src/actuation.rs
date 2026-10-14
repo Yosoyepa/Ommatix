@@ -1,5 +1,4 @@
 use ommatix_domain::{Action, ElementId, Key, MouseButton, Point, Rect};
-use serde::Serialize;
 use thiserror::Error;
 
 use crate::{InputController, PortError, ScreenModel};
@@ -27,7 +26,7 @@ pub enum ClickTarget {
 }
 
 /// What was actually sent to the input controller.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActionReceipt {
     pub action: Action,
     /// The element the click was resolved from, if any.
@@ -42,13 +41,18 @@ pub enum ActuationError {
     NoFrameYet,
     #[error("point ({}, {}) is outside the screen {}x{}", point.x, point.y, screen.w, screen.h)]
     OutOfBounds { point: Point, screen: Rect },
-    #[error("unknown element {0}; it may have disappeared, call perceive again")]
+    #[error("unknown element; it may have disappeared, call perceive again")]
     UnknownElement(ElementId),
     #[error("text must not be empty")]
     EmptyText,
     #[error("text has {len} characters, the limit is {max}")]
     TextTooLong { len: usize, max: usize },
-    #[error("input controller failed: {0}")]
+    #[error(
+        "text contains a control character at position {position}; \
+         use press_key for Enter, Tab, Backspace and other keys"
+    )]
+    ControlCharacter { position: usize },
+    #[error("input controller failed")]
     Input(#[source] PortError),
 }
 
@@ -107,6 +111,8 @@ impl ActuationService {
         self.perform(Action::Click { at, button }, element)
     }
 
+    /// Types printable text. Control characters (newline, tab, escape...) are rejected:
+    /// their effect depends on the focused control, so agents send them as keys.
     pub fn type_text(&mut self, text: &str) -> Result<ActionReceipt, ActuationError> {
         let len = text.chars().count();
         if len == 0 {
@@ -117,6 +123,9 @@ impl ActuationService {
                 len,
                 max: self.policy.max_text_chars,
             });
+        }
+        if let Some(position) = text.chars().position(char::is_control) {
+            return Err(ActuationError::ControlCharacter { position });
         }
         self.perform(
             Action::TypeText {
@@ -249,6 +258,10 @@ mod tests {
         assert!(matches!(
             svc.type_text(&"x".repeat(1_001)),
             Err(ActuationError::TextTooLong { len: 1_001, .. })
+        ));
+        assert!(matches!(
+            svc.type_text("ok\nrm -rf"),
+            Err(ActuationError::ControlCharacter { position: 2 })
         ));
         assert_eq!(rec.0.lock().unwrap().len(), 0);
     }

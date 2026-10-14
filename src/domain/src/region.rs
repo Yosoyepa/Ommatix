@@ -1,6 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU32;
 
-use crate::{CellCoord, GridSpec, Rect};
+use crate::union_find::UnionFind;
+use crate::{CellCoord, ElementId, GridSpec, Rect, SpatialIndex};
+
+/// Bucket edge used to find overlapping rectangles.
+const MERGE_BUCKET: NonZeroU32 = NonZeroU32::new(64).expect("non-zero");
 
 /// Groups 4-connected dirty cells and returns the pixel bounding box of each group,
 /// clipped to `frame_bounds`. Output is sorted (top-to-bottom, left-to-right) so the
@@ -50,6 +55,45 @@ pub fn merge_dirty_cells(cells: &[CellCoord], grid: &GridSpec, frame_bounds: &Re
     regions
 }
 
+/// Replaces every group of overlapping rectangles by their union, repeating until no two
+/// rectangles overlap. Empty rectangles are dropped; output is sorted.
+///
+/// Each pass finds overlapping pairs through a spatial hash and joins them with a
+/// union-find, so a pass is O(n · neighbours) instead of the O(n²) pair scan.
+pub fn merge_overlapping(rects: Vec<Rect>) -> Vec<Rect> {
+    let mut rects: Vec<Rect> = rects.into_iter().filter(|r| !r.is_empty()).collect();
+    loop {
+        if rects.len() < 2 {
+            break;
+        }
+        let mut index = SpatialIndex::new(MERGE_BUCKET);
+        for (i, r) in rects.iter().enumerate() {
+            index.upsert(ElementId(i as u64), *r);
+        }
+        let mut groups = UnionFind::new(rects.len());
+        let mut merged = false;
+        for (i, r) in rects.iter().enumerate() {
+            for other in index.query_rect(r) {
+                merged |= groups.union(i, other.0 as usize);
+            }
+        }
+        if !merged {
+            break;
+        }
+        let mut unions: BTreeMap<usize, Rect> = BTreeMap::new();
+        for (i, r) in rects.iter().enumerate() {
+            let root = groups.find(i);
+            unions
+                .entry(root)
+                .and_modify(|u| *u = u.union(r))
+                .or_insert(*r);
+        }
+        rects = unions.into_values().collect();
+    }
+    rects.sort_by_key(|r| (r.y, r.x, r.w, r.h));
+    rects
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,6 +121,33 @@ mod tests {
             merge_dirty_cells(&[cell(0, 0), cell(1, 1)], &g, &bounds).len(),
             2
         );
+    }
+
+    #[test]
+    fn overlapping_rects_merge_transitively_and_disjoint_ones_stay() {
+        let out = merge_overlapping(vec![
+            Rect::new(0, 0, 10, 10),
+            Rect::new(100, 100, 5, 5),
+            Rect::new(8, 8, 10, 10),
+            Rect::new(16, 0, 4, 10), // overlaps only the union of the first and third
+            Rect::new(50, 50, 0, 0),
+        ]);
+        assert_eq!(
+            out,
+            vec![Rect::new(0, 0, 20, 18), Rect::new(100, 100, 5, 5)]
+        );
+    }
+
+    #[test]
+    fn merging_thousands_of_rects_is_fast() {
+        // A checkerboard of 1-cell regions: nothing overlaps, so nothing merges.
+        let rects: Vec<Rect> = (0..100u32)
+            .flat_map(|y| (0..100u32).map(move |x| (x, y)))
+            .filter(|(x, y)| (x + y) % 2 == 0)
+            .map(|(x, y)| Rect::new(x * 32, y * 32, 32, 32))
+            .collect();
+        let n = rects.len();
+        assert_eq!(merge_overlapping(rects).len(), n);
     }
 
     #[test]

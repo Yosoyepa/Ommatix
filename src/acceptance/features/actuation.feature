@@ -46,6 +46,19 @@ Feature: Acting on the desktop
     When the agent clicks at 10, 10
     Then the call fails with "perceive first"
 
+  Scenario: An action is never reported as failed once it was performed
+    Given the recorded demo session with dry-run input
+    And the recorded session has been played to the end
+    When the agent types "hola"
+    Then the action is reported as performed with an observation error
+    And the dry-run log contains 1 action
+
+  Scenario: Control characters are rejected, keys are pressed instead
+    When the agent clicks the text field
+    And the agent types a line break
+    Then the call fails with "control character"
+    And the text field contains ""
+
   Scenario: Dry-run input never reaches the operating system
     Given the recorded demo session with dry-run input
     And the agent perceives the screen

@@ -1859,6 +1859,7 @@ dependencies = [
  "ommatix-adapter-sim",
  "ommatix-adapter-vision",
  "ommatix-application",
+ "ommatix-domain",
 ]
 
 [[package]]
@@ -1902,6 +1903,7 @@ version = "0.1.0"
 dependencies = [
  "ommatix-adapter-capture",
  "ommatix-adapter-input",
+ "ommatix-adapter-sim",
  "ommatix-adapter-vision",
  "ommatix-application",
  "ommatix-domain",
@@ -1930,7 +1932,6 @@ name = "ommatix-application"
 version = "0.1.0"
 dependencies = [
  "ommatix-domain",
- "serde",
  "thiserror",
 ]
 
@@ -1938,7 +1939,6 @@ dependencies = [
 name = "ommatix-domain"
 version = "0.1.0"
 dependencies = [
- "serde",
  "thiserror",
 ]
 

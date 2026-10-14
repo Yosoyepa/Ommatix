@@ -1,9 +1,12 @@
 //! Driven ports: what the application needs from the outside world.
 //!
-//! Driving adapters (e.g. the MCP server) do not need a port trait: they call
-//! [`PerceptionEngine`](crate::PerceptionEngine) directly.
+//! Driving adapters (e.g. the MCP server) do not need a port trait: they call the use
+//! cases ([`PerceptionEngine`](crate::PerceptionEngine), [`Observer`](crate::Observer),
+//! [`ActuationService`](crate::ActuationService)) directly.
 
-use ommatix_domain::{Action, Detection, Element, ElementId, Frame, Rect};
+use std::time::Duration;
+
+use ommatix_domain::{Action, Detection, Frame, Rect};
 
 use crate::PortError;
 
@@ -19,11 +22,12 @@ pub trait FrameSource: Send {
 /// Finds visual elements inside a region of a frame.
 ///
 /// Implementations must be **deterministic**: the same pixels and region must always
-/// yield the same detections, and every returned bound must lie inside `region`.
+/// yield the same detections. They may read pixels around `region` for context, but
+/// only elements inside it are kept: the engine clips every bound to `region`.
 pub trait ElementDetector: Send + Sync {
     fn name(&self) -> &'static str;
 
-    fn detect(&self, frame: &Frame, region: Rect) -> Vec<Detection>;
+    fn detect(&self, frame: &Frame, region: Rect) -> Result<Vec<Detection>, PortError>;
 }
 
 /// Performs input on the desktop (mouse, keyboard).
@@ -38,11 +42,12 @@ pub trait InputController: Send {
     fn perform(&mut self, action: &Action) -> Result<(), PortError>;
 }
 
-/// Read-only view of what is currently on screen. Lets use cases that need to resolve
-/// targets (e.g. actuation) depend on an abstraction instead of the perception engine.
-pub trait ScreenModel {
-    /// Bounds of the last perceived frame, `None` before the first frame.
-    fn screen_bounds(&self) -> Option<Rect>;
+/// Monotonic time and waiting. Injected so that stage timings and settle waits are
+/// reproducible under test (see [`ManualClock`](crate::ManualClock)).
+pub trait Clock: Send + Sync {
+    /// Time elapsed since an arbitrary, fixed origin. Never goes backwards.
+    fn now(&self) -> Duration;
 
-    fn element(&self, id: ElementId) -> Option<Element>;
+    /// Waits for `duration` (a virtual clock simply advances).
+    fn sleep(&self, duration: Duration);
 }

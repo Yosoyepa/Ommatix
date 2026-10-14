@@ -58,6 +58,8 @@ cast_sign_loss = "allow"
 many_single_char_names = "allow"
 return_self_not_must_use = "allow"
 doc_markdown = "allow"
+# stdout carries the MCP protocol: nothing else may print there (`demo` opts out).
+print_stdout = "deny"
 
 [profile.release]
 lto = "thin"

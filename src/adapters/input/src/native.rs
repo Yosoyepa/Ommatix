@@ -1,26 +1,35 @@
 use enigo::{Button, Coordinate, Direction, Enigo, Keyboard, Mouse, Settings};
 use ommatix_application::{InputController, PortError};
-use ommatix_domain::{Action, Key, MouseButton};
+use ommatix_domain::{Action, DisplayMapping, Key, MouseButton};
 
 const ADAPTER: &str = "native-input";
 
 /// Sends real mouse and keyboard events to the operating system.
+///
+/// Click coordinates arrive in frame pixels and are converted with the
+/// [`DisplayMapping`] of the captured monitor, so clicks land on the right spot on HiDPI
+/// screens and on secondary monitors.
 pub struct NativeInput {
     enigo: Enigo,
+    mapping: DisplayMapping,
 }
 
 impl std::fmt::Debug for NativeInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NativeInput").finish_non_exhaustive()
+        f.debug_struct("NativeInput")
+            .field("mapping", &self.mapping)
+            .finish_non_exhaustive()
     }
 }
 
 impl NativeInput {
-    pub fn new() -> Result<Self, PortError> {
+    /// `mapping` must describe the monitor the frames come from
+    /// (`ScreenSource::display_mapping` in the capture adapter).
+    pub fn new(mapping: DisplayMapping) -> Result<Self, PortError> {
         let enigo = Enigo::new(&Settings::default()).map_err(|e| {
             PortError::new(ADAPTER, "cannot connect to the input system").with_source(e)
         })?;
-        Ok(Self { enigo })
+        Ok(Self { enigo, mapping })
     }
 }
 
@@ -37,10 +46,7 @@ impl InputController for NativeInput {
         let fail = |e: enigo::InputError| PortError::new(ADAPTER, "input failed").with_source(e);
         match action {
             Action::Click { at, button } => {
-                let x =
-                    i32::try_from(at.x).map_err(|_| PortError::new(ADAPTER, "x out of range"))?;
-                let y =
-                    i32::try_from(at.y).map_err(|_| PortError::new(ADAPTER, "y out of range"))?;
+                let (x, y) = self.mapping.to_os(*at);
                 self.enigo.move_mouse(x, y, Coordinate::Abs).map_err(fail)?;
                 self.enigo
                     .button(to_button(*button), Direction::Click)

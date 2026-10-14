@@ -1,75 +1,105 @@
-use ommatix_application::{ActionReceipt, ActuationService, ClickTarget, PerceptionEngine};
-use ommatix_domain::{Key, MouseButton, Point};
+use ommatix_application::{ActionOutcome, AgentSession, ClickTarget, error_chain};
+use ommatix_domain::Point;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
-use super::{ToolResult, parse, perception};
-use crate::dto::{ReceiptDto, parse_element_id};
+use super::{Tool, ToolOutput, ToolResult, parse, to_value};
+use crate::dto::{
+    BUTTONS, KEYS, ObservationDto, ReceiptDto, elapsed_meta, parse_button, parse_element_id,
+    parse_key,
+};
 
-pub fn definitions() -> Vec<Value> {
-    let observe = json!({
+pub(super) const TOOLS: [Tool; 3] = [
+    Tool {
+        name: "click",
+        spec: click_spec,
+        run: click,
+    },
+    Tool {
+        name: "type_text",
+        spec: type_text_spec,
+        run: type_text,
+    },
+    Tool {
+        name: "press_key",
+        spec: press_key_spec,
+        run: press_key,
+    },
+];
+
+fn observe_property() -> Value {
+    json!({
         "type": "boolean",
         "default": true,
-        "description": "Perceive right after acting and include the resulting change set."
-    });
-    vec![
-        json!({
-            "name": "click",
-            "title": "Click",
-            "description": "Click an element (by id from perception, preferred) or a screen coordinate. The target must be on screen.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "element_id": { "type": "string", "pattern": "^e[0-9]+$", "description": "Element id, e.g. \"e4\"" },
-                    "x": { "type": "integer", "minimum": 0 },
-                    "y": { "type": "integer", "minimum": 0 },
-                    "button": { "type": "string", "enum": ["left", "right", "middle"], "default": "left" },
-                    "observe": observe
-                },
-                "additionalProperties": false
+        "description": "Watch the screen after acting until it settles and report what changed."
+    })
+}
+
+fn acts() -> Value {
+    json!({ "readOnlyHint": false, "destructiveHint": true, "openWorldHint": true })
+}
+
+fn click_spec() -> Value {
+    let buttons: Vec<&str> = BUTTONS.iter().map(|(name, _)| *name).collect();
+    json!({
+        "title": "Click",
+        "description": "Click an element (by id from perception, preferred) or a screen coordinate. The target must be on screen.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "element_id": { "type": "string", "pattern": "^e[0-9]+$", "description": "Element id, e.g. \"e4\"" },
+                "x": { "type": "integer", "minimum": 0 },
+                "y": { "type": "integer", "minimum": 0 },
+                "button": { "type": "string", "enum": buttons, "default": "left" },
+                "observe": observe_property()
             },
-            "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": true }
-        }),
-        json!({
-            "name": "type_text",
-            "title": "Type text",
-            "description": "Type text into the focused control. Click the field first.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "text": { "type": "string", "minLength": 1 },
-                    "observe": observe
-                },
-                "required": ["text"],
-                "additionalProperties": false
+            "additionalProperties": false
+        },
+        "annotations": acts()
+    })
+}
+
+fn type_text_spec() -> Value {
+    json!({
+        "title": "Type text",
+        "description": "Type printable text into the focused control (click the field first). Control characters are rejected: send Enter, Tab or Backspace with press_key.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": { "type": "string", "minLength": 1 },
+                "observe": observe_property()
             },
-            "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": true }
-        }),
-        json!({
-            "name": "press_key",
-            "title": "Press key",
-            "description": "Press a non-character key.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "key": {
-                        "type": "string",
-                        "enum": ["enter", "tab", "escape", "backspace", "delete", "space",
-                                 "arrow_up", "arrow_down", "arrow_left", "arrow_right",
-                                 "home", "end", "page_up", "page_down"]
-                    },
-                    "observe": observe
-                },
-                "required": ["key"],
-                "additionalProperties": false
+            "required": ["text"],
+            "additionalProperties": false
+        },
+        "annotations": acts()
+    })
+}
+
+fn press_key_spec() -> Value {
+    let keys: Vec<&str> = KEYS.iter().map(|(name, _)| *name).collect();
+    json!({
+        "title": "Press key",
+        "description": "Press a non-character key.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "key": { "type": "string", "enum": keys },
+                "observe": observe_property()
             },
-            "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": true }
-        }),
-    ]
+            "required": ["key"],
+            "additionalProperties": false
+        },
+        "annotations": acts()
+    })
 }
 
 const fn yes() -> bool {
     true
+}
+
+fn left() -> String {
+    "left".into()
 }
 
 #[derive(Deserialize)]
@@ -78,8 +108,8 @@ struct ClickArgs {
     element_id: Option<String>,
     x: Option<u32>,
     y: Option<u32>,
-    #[serde(default)]
-    button: MouseButton,
+    #[serde(default = "left")]
+    button: String,
     #[serde(default = "yes")]
     observe: bool,
 }
@@ -95,55 +125,65 @@ struct TypeArgs {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct KeyArgs {
-    key: Key,
+    key: String,
     #[serde(default = "yes")]
     observe: bool,
 }
 
-pub fn call(
-    perception: &mut PerceptionEngine,
-    actuation: &mut ActuationService,
-    name: &str,
-    args: &Value,
-) -> Option<ToolResult> {
-    let result = match name {
-        "click" => parse::<ClickArgs>(args).and_then(|a| {
-            let target = click_target(&a)?;
-            let receipt = actuation
-                .click(perception, target, a.button)
-                .map_err(|e| e.to_string())?;
-            respond(perception, &receipt, a.observe)
-        }),
-        "type_text" => parse::<TypeArgs>(args).and_then(|a| {
-            let receipt = actuation.type_text(&a.text).map_err(|e| e.to_string())?;
-            respond(perception, &receipt, a.observe)
-        }),
-        "press_key" => parse::<KeyArgs>(args).and_then(|a| {
-            let receipt = actuation.press_key(a.key).map_err(|e| e.to_string())?;
-            respond(perception, &receipt, a.observe)
-        }),
-        _ => return None,
+fn click(session: &mut AgentSession, args: &Value) -> ToolResult {
+    let a = parse::<ClickArgs>(args)?;
+    let target = match (&a.element_id, a.x, a.y) {
+        (Some(id), None, None) => ClickTarget::Element(parse_element_id(id)?),
+        (None, Some(x), Some(y)) => ClickTarget::Point(Point::new(x, y)),
+        _ => return Err("provide either element_id, or both x and y".into()),
     };
-    Some(result)
+    let button = parse_button(&a.button)?;
+    let outcome = session
+        .click(target, button, a.observe)
+        .map_err(|e| error_chain(&e))?;
+    respond(&outcome)
 }
 
-fn click_target(a: &ClickArgs) -> Result<ClickTarget, String> {
-    match (&a.element_id, a.x, a.y) {
-        (Some(id), None, None) => parse_element_id(id).map(ClickTarget::Element),
-        (None, Some(x), Some(y)) => Ok(ClickTarget::Point(Point::new(x, y))),
-        _ => Err("provide either element_id, or both x and y".into()),
+fn type_text(session: &mut AgentSession, args: &Value) -> ToolResult {
+    let a = parse::<TypeArgs>(args)?;
+    let outcome = session
+        .type_text(&a.text, a.observe)
+        .map_err(|e| error_chain(&e))?;
+    respond(&outcome)
+}
+
+fn press_key(session: &mut AgentSession, args: &Value) -> ToolResult {
+    let a = parse::<KeyArgs>(args)?;
+    let outcome = session
+        .press_key(parse_key(&a.key)?, a.observe)
+        .map_err(|e| error_chain(&e))?;
+    respond(&outcome)
+}
+
+/// The action happened, so the call succeeds even if watching its effect failed: the
+/// agent must not retry an action that was performed.
+fn respond(outcome: &ActionOutcome) -> ToolResult {
+    let mut body = Map::new();
+    body.insert(
+        "performed".into(),
+        to_value(ReceiptDto::from(&outcome.receipt))?,
+    );
+    let mut meta = None;
+    match &outcome.observation {
+        None => {}
+        Some(Ok(observation)) => {
+            body.insert(
+                "observation".into(),
+                to_value(ObservationDto::from(observation))?,
+            );
+            meta = Some(elapsed_meta(observation.elapsed));
+        }
+        Some(Err(e)) => {
+            body.insert("observe_error".into(), error_chain(e).into());
+        }
     }
-}
-
-fn respond(
-    perception: &mut PerceptionEngine,
-    receipt: &ActionReceipt,
-    observe: bool,
-) -> ToolResult {
-    let observed = if observe {
-        Some(perception::perceive(perception)?)
-    } else {
-        None
-    };
-    Ok(json!({ "performed": ReceiptDto::from(receipt), "observed": observed }))
+    Ok(ToolOutput {
+        structured: Value::Object(body),
+        meta,
+    })
 }

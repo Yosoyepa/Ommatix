@@ -1,40 +1,91 @@
-//! MCP tool catalogue. Each submodule owns one capability (its schemas and handlers);
-//! this module only aggregates and dispatches.
+//! MCP tool registry. Each submodule owns one capability (its schemas and handlers);
+//! this module only lists the tools and parses arguments.
 
 mod actuation;
 mod perception;
 
-use ommatix_application::{ActuationService, PerceptionEngine};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use ommatix_application::AgentSession;
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
 
-/// Outcome of a tool call: `Ok` payloads become `structuredContent`, `Err` messages are
-/// reported with `isError: true` so the agent can self-correct (MCP tool-error semantics).
-pub type ToolResult = Result<Value, String>;
-
-/// The application services a tool may use, injected by the server.
-pub struct Services<'a> {
-    pub perception: &'a mut PerceptionEngine,
-    pub actuation: &'a mut ActuationService,
+/// Payload of a successful call: `structured` becomes `structuredContent`, `meta` (run-
+/// dependent data such as timings) becomes the result's `_meta`.
+pub(crate) struct ToolOutput {
+    pub structured: Value,
+    pub meta: Option<Value>,
 }
 
-pub fn definitions() -> Value {
-    let mut all = perception::definitions();
-    all.extend(actuation::definitions());
-    Value::Array(all)
+impl ToolOutput {
+    fn new(structured: Value) -> Self {
+        Self {
+            structured,
+            meta: None,
+        }
+    }
 }
 
-/// Dispatches a tool by name. `None` means the tool does not exist.
-pub fn call(services: &mut Services<'_>, name: &str, args: &Value) -> Option<ToolResult> {
-    perception::call(services.perception, name, args)
-        .or_else(|| actuation::call(services.perception, services.actuation, name, args))
+/// `Err` messages are reported with `isError: true` so the agent can self-correct (MCP
+/// tool-error semantics), as opposed to JSON-RPC errors for protocol misuse.
+pub(crate) type ToolResult = Result<ToolOutput, String>;
+
+/// One tool: its name, its MCP definition (everything but the name) and its handler.
+pub(crate) struct Tool {
+    pub name: &'static str,
+    pub spec: fn() -> Value,
+    pub run: fn(&mut AgentSession, &Value) -> ToolResult,
 }
 
-fn parse<T: for<'de> Deserialize<'de>>(args: &Value) -> Result<T, String> {
+fn all() -> impl Iterator<Item = &'static Tool> {
+    perception::TOOLS.iter().chain(actuation::TOOLS.iter())
+}
+
+pub(crate) fn find(name: &str) -> Option<&'static Tool> {
+    all().find(|t| t.name == name)
+}
+
+/// The `tools/list` catalogue, in registry order.
+pub(crate) fn definitions() -> Value {
+    all()
+        .map(|tool| {
+            let mut def = Map::new();
+            def.insert("name".into(), tool.name.into());
+            if let Value::Object(spec) = (tool.spec)() {
+                def.extend(spec);
+            }
+            Value::Object(def)
+        })
+        .collect()
+}
+
+/// Deserialises tool arguments; absent arguments mean `{}`.
+fn parse<T: DeserializeOwned>(args: &Value) -> Result<T, String> {
     let args = if args.is_null() {
-        json!({})
+        Value::Object(Map::new())
     } else {
         args.clone()
     };
     serde_json::from_value(args).map_err(|e| format!("invalid arguments: {e}"))
+}
+
+fn to_value(dto: impl serde::Serialize) -> Result<Value, String> {
+    serde_json::to_value(dto).map_err(|e| format!("cannot encode the result: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    #[test]
+    fn names_are_unique_and_definitions_complete() {
+        let names: BTreeSet<&str> = all().map(|t| t.name).collect();
+        assert_eq!(names.len(), all().count());
+        for def in definitions().as_array().unwrap() {
+            for field in ["name", "title", "description", "inputSchema", "annotations"] {
+                assert!(def.get(field).is_some(), "{def} lacks {field}");
+            }
+            assert_eq!(def["inputSchema"]["type"], "object");
+        }
+    }
 }

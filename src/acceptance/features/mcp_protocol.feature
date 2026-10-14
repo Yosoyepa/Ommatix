@@ -31,8 +31,15 @@ Feature: Model Context Protocol interface
     Examples:
       | message                                                                 | code   |
       | {not json                                                               | -32700 |
+      | 42                                                                      | -32600 |
+      | []                                                                      | -32600 |
+      | {"jsonrpc":"1.0","id":1,"method":"ping"}                                | -32600 |
       | {"jsonrpc":"2.0","id":1,"method":"resources/list"}                      | -32601 |
       | {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"nope"}} | -32602 |
+
+  Scenario: A batch gets one response per request and none per notification
+    When the client sends [{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","id":2,"method":"tools/list"}]
+    Then the response is a batch of 2 responses
 
   Scenario: Invalid tool arguments are reported as a tool error the agent can fix
     When the agent calls "element_at" with {"x": 1}
