@@ -1,5 +1,18 @@
 # Historial documental
 
+## 1.0.20 — 2026-10-14: S4, preparación de la quinta ronda (cliente)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código de las crates de Rust. Corrige en el cliente `tools/s4/e2e_driver.py` (SHA-256 `98f0ae08…1967e5`) los hallazgos 1, 2, 4 y 5 de la [revisión de la cuarta ronda](../reviews/2026-10-14-s4-fourth-round.md) y añade el cambio de modo de la Calculadora. No se ejecutó nada en vivo: las pruebas usan un escritorio simulado y no envían entrada. El detalle está en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), «Preparación de la quinta ronda».
+
+- **Decisiones del responsable (14 de octubre de 2026):** el propio E2E cambia la Calculadora a modo Estándar; la quinta ronda ejecuta E2E-02 y E2E-03.
+- **Hallazgo 1, límite por ronda:** `LIVE_CAP` (como máximo 400) limita las solicitudes de la ronda. `--round-start` (obligatorio en modo `run`) es el valor del cuaderno al empezar la ronda; el cuaderno sólo acumula y se registra `ledger_start..ledger_end`.
+- **Hallazgo 2, tiempos de acción:** cada acción registra `io.ommatix/action_timings` como `action_*`; `observe_screen` conserva `io.ommatix/timings`.
+- **Hallazgo 4, anclaje por identidad:** antes de cada clic, UI Automation (lado SO) busca en la ventana en primer plano el elemento con el nombre exacto y el tipo de control del rol informado, y registra su `RuntimeId` y `AutomationId`; con más de uno, ninguno o ninguno de los dos identificadores no se envía ningún clic. Tras el clic, el elemento bajo el cursor debe tener el mismo `RuntimeId` (o el mismo `AutomationId` si no hay `RuntimeId`), aunque su nombre cambie. No hay respaldo por nombre.
+- **Hallazgo 5, contadores:** el cambio de modo es un paso del cliente (`--calc-standard`) y usa el mismo registro de corrida, con todos los contadores inicializados. Pulsa el conmutador de navegación y «Estándar» por etiqueta exacta, con anclaje por identidad, verifica el modo por UI Automation y deja la Calculadora cerrada; se detiene sin más clics si el panel no se abre o «Estándar» no es único y confirmado.
+- **Pruebas:** `tools/s4/test_e2e_driver.py` pasa de 18 a 62 pruebas (`RoundCapTest`, `ActionTimingsTest`, `IdentityFunctionsTest`, `GroundingByIdentityTest`, `ResultCountersTest`, `CalcStandardTest`, `CalcModeTest`); 40 fallan con el cliente anterior.
+- **Sin comprobar en vivo:** las señales del modo de la Calculadora (encabezado `Header` y controles propios de Científica), el tipo de control de «Estándar» y que la Calculadora conserve el modo al cerrarse con `taskkill`.
+- **Matrices:** sin cambio.
+
 ## 1.0.19 — 2026-10-14: S4, cuarta ronda (correcciones de la tercera ronda)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni código de las crates de Rust (el código es el de 1.0.18, `e9e5b2d`). Documenta la cuarta ronda del protocolo reducido, que repite E2E-01, E2E-02 y E2E-03 con las correcciones de 1.0.18. El informe está en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), sección «Cuarta ronda: correcciones de la ronda 3», y la revisión en [`../reviews/2026-10-14-s4-fourth-round.md`](../reviews/2026-10-14-s4-fourth-round.md).

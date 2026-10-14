@@ -55,3 +55,35 @@ decision it needs.
 - No regression test was written, because no defect was fixed in code.
 - The Calculator decision (finding 3), the grounding design (finding 4) and the E2E-03 run need
   the owner.
+
+## Preparation for the fifth round (2026-10-14)
+
+Only the client changes: `tools/s4/e2e_driver.py` (SHA-256 `98f0ae08…1967e5`) and its tests, now 62
+(`python -m unittest discover -s tools/s4 -p "test_*.py"`; 40 of them fail against the
+fourth-round driver). Nothing ran live: the tests use a fake desktop and send no input. The
+owner decided that the E2E itself switches the Calculator to Standard mode and that round 5
+runs E2E-02 and E2E-03. Each defect below is followed by its fix and its test.
+
+| # | Defect | Fix | Regression test |
+|---|---|---|---|
+| 1 | `LIVE_CAP` counted the whole ledger | `LIVE_CAP` (at most 400) limits the requests of the round: `--round-start` is the ledger's value when the round began (required in run mode, checked to lie within the ledger and to leave room), and a request is refused when `ledger - round_start >= LIVE_CAP`. The ledger only accumulates; each run, the start and the end record `ledger_start..ledger_end` | `RoundCapTest`: a ledger at 291 with the round started at 291 allows 400 requests and stops the 401st; 110 requests pass where the whole-ledger cap would have stopped at 109; `round_problem` rejects a missing, out-of-ledger or exhausted start |
+| 2 | `stage_ms` dropped `io.ommatix/action_timings` | `stage_ms` merges them as `action_total`, `action_gate`, `action_freshness`, `action_delivery`, `action_focus` and `action_verification`; `io.ommatix/timings` keeps its names, so the two never collide | `ActionTimingsTest`; `test_the_engine_timings_of_each_action_are_recorded_per_action` |
+| 4 | Grounding compared names after the click, so a toggle that renames itself was not confirmed | Identity grounding. Before each click and before the live request is spent, UI Automation (OS side) finds the elements of the foreground window of the target application with the exact name and a control type that the engine's role stands for (the inverse of the accessibility adapter's `role_of`), ignores off-screen twins, and requires exactly one with a RuntimeId or an AutomationId; it records both. After the click the element under the cursor, or its parent, must have the same RuntimeId, or the same AutomationId when a RuntimeId is unavailable; names are never compared. No name-only fallback: `named_control` and the rectangle check are gone. A click that is not grounded ends the run with no further input | `IdentityFunctionsTest`; `GroundingByIdentityTest`: a toggle renamed by its own click is grounded; two candidates, none, an unreadable tree, no identifier or a role with no UI Automation control send nothing and spend no request; another element under the cursor ends the run before the next step |
+| 5 | The round-4 helper did not initialise counters that `steps()` increments | The mode switch is a step of the client (`--calc-standard`) and builds its record with `new_result`, which `run_once` uses too | `ResultCountersTest`: all counters start at 0 and `steps()` counts `effect_observed`, `indeterminate` and `rejected` without a missing key |
+
+`--calc-standard` (owner decision): one invocation before the E2E-02 series, through the
+engine's gate only, at most 4 live requests. It reads the mode through UI Automation (header
+`Header` and the absence of the Scientific-only controls; no click if it is Standard already or
+unreadable), clicks the navigation toggle by its exact label (recorded; "Abrir navegación"),
+observes again, clicks "Estándar" by its exact label, each click with identity grounding, and
+verifies the mode again through UI Automation. It stops without another click when the pane does
+not open, when "Estándar" is not unique and confirmed, or when a click is not grounded. It leaves
+the Calculator closed and closes only the process it started. Tests: `CalcStandardTest`
+(happy path, already Standard, unreadable mode, pane that does not open, "Estándar" duplicated or
+not confirmed, ungrounded or ambiguous navigation click, mode not reached, own live budget) and
+`CalcModeTest`.
+
+Not verified live: the two mode signals, the control type of "Estándar" and whether the
+Calculator keeps its mode when `taskkill` closes it right after the switch. The first two end the
+step safely when wrong (no click or no second click); the third shows in the E2E-02 pilot as a
+missing clear control, which fails closed. Findings 3 and 6 stay as they were.
