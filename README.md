@@ -89,8 +89,10 @@ unless the agent and a local policy both allow them. More in the
   `verify_poll_ms`, 50 ms; never resending input), and the DXGI capturer no longer returns
   a blank first frame.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
-  OmniParser `icon_detect_v3` to integrate and measure: one class, about 7.5 s per inference
-  on CPU), so by default the detector is the bootstrap's flat-colour region finder (roles
+  OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
+  one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML,
+  where the initial RNF-05 targets are met for a full refresh and a one-region update but
+  not for two or more regions), so by default the detector is the bootstrap's flat-colour region finder (roles
   `unknown`) and there is no OCR; no third-party MCP client has been tested; the
   verification window and the DXGI first-frame fix have not been re-run live yet; IT-02 ran only
   in part (S0); and IT-04, IT-06, IT-07, SEC-03, SEC-04 and SEC-06 have not been run under
@@ -152,6 +154,7 @@ Build features, all off by default:
 | `dxgi` | `--source dxgi`: DXGI Desktop Duplication of one output | Windows |
 | `sendinput` | `--input sendinput`: Win32 `SendInput` (implies `dxgi`) | Windows |
 | `onnx` | the ONNX detector of `[models]`; ONNX Runtime is loaded at run time from the library the operator pins, nothing is downloaded at build time | any |
+| `directml` | `[models] detector_execution_provider = "directml"`: the detector on DirectML (implies `onnx`); needs an ONNX Runtime build with DirectML and a pinned `DirectML.dll` | Windows |
 | `winrt-ocr` | `[models] ocr = "winrt"`: the OCR built into Windows | Windows |
 
 `serve` and `demo` take the same options:
@@ -240,6 +243,9 @@ can select:
 |---|---|
 | `detector_manifest`, `detector_manifest_sha256` | a manifest shaped like [`model_manifest.json`](docs/thesis/plantillas/model_manifest.json), with status `SELECCIONADO`, whose detector entry names the weights, their SHA-256 and the roles and affordances of each class; and the manifest's own SHA-256 (64 hex characters) |
 | `onnxruntime_path`, `onnxruntime_sha256` | the ONNX Runtime library (`onnxruntime.dll`) and its SHA-256; keep it in a directory only the operator can write |
+| `detector_execution_provider` | `"cpu"` (default) or `"directml"` (build feature `directml`); the manifest's `execution_provider` must list it. DirectML never falls back to the CPU: if it cannot be created, or any node would run on the CPU, the detector is refused |
+| `directml_path`, `directml_sha256` | with `directml` only: the `DirectML.dll` loaded by absolute path before ONNX Runtime (never the copy in System32), and its SHA-256 |
+| `detector_threads` | intra-op threads, `1`–`64`; `0` (default) lets ONNX Runtime choose the number of physical cores |
 | `ocr` | `"none"` (default) or `"winrt"`, the OCR built into Windows |
 | `ocr_language` | the BCP-47 tag of the OCR language, default `es-ES`; never replaced by another |
 

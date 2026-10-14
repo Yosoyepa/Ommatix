@@ -19,8 +19,9 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | Spike S0 (rama `feat/s0-omniparser-v3`): detector OmniParser `icon_detect_v3` (MIT) exportado a ONNX con `tools/s0/export_omniparser_v3.py`, manifiesto `SELECCIONADO` (`docs/thesis/plantillas/model_manifest.s0.json`), ONNX Runtime 1.28.0 en CPU, OCR de Windows es-ES; corridas supervisadas sobre `notepad.exe` sin entrada; letterbox sin ampliación; `demo --timings`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) | Abierto (#8) |
 | — | S3, corridas supervisadas (rama `feat/s3-supervised-runs`, apilada sobre #8): captura y entrada reales sobre `notepad.exe` con `tools/s3/mcp_driver.py`; SEC-01 ejecutada, IT-01/03/05 y SEC-02/05 en parte; `indeterminate` informa la entrega del actuador; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) y revisión en [`reviews/2026-10-14-s3-supervised-runs.md`](reviews/2026-10-14-s3-supervised-runs.md) | Abierto (#9) |
 | — | S3, plazo de verificación y primer frame DXGI (rama `fix/s3-verify-settle`, apilada sobre #9): la verificación del cambio visual vuelve a capturar dentro de `[engine] verify_timeout_ms`/`verify_poll_ms` sin reenviar la entrada; el capturador DXGI ya no entrega un primer frame en blanco; `CHANGELOG.md` 1.0.10 y revisión en [`reviews/2026-10-14-s3-verify-settle-and-first-frame.md`](reviews/2026-10-14-s3-verify-settle-and-first-frame.md) | Abierto |
+| — | S0, proveedor e hilos del detector (rama `perf/s0-detector-ep`, apilada sobre `feat/s3-supervised-runs`): `[models] detector_execution_provider = "cpu" \| "directml"` (feature `directml`, `DirectML.dll` fijada, sin vuelta a la CPU) y `detector_threads`; manifiesto S0 con `"cpu,directml"`; DirectML equivalente a la CPU; agrupar regiones se midió y se descartó porque cambia las detecciones; `tools/s0/synthetic_frames.py` y el ejemplo `s0_probe`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §9 (CHANGELOG 1.0.11) | Sin PR |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.10)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.11)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9) ejecutan SEC-01 y,
@@ -160,10 +161,15 @@ en parte, IT-01, IT-03, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ej
      `icon_detect_v3` de OmniParser (MIT, revisión `f55d0750`) para integrar y medir:
      ONNX opset 17 con la cabeza decodificada, ONNX Runtime 1.28.0 en CPU, rol `unknown` y
      affordance `interactive` tomada de su ficha. Queda por decidir si se acepta para el
-     producto: una inferencia cuesta unos 7,5 s en CPU con un hilo (2,6 s con 8 hilos, medido
-     fuera del motor), cada región planificada cuesta una inferencia completa y la precisión
-     no está medida. Opciones: más hilos, DirectML (en ingeniería sostenida), agrupar regiones
-     en una entrada o un modelo más ligero. Los pesos `icon_detect` v2 (AGPL-3.0) no se usan.
+     producto. Medido en el motor (`thesis/S0_RESULTADOS.md` §9): una inferencia cuesta unos
+     7,5 s con un hilo de CPU, 2,6 s con 8 y 0,12 s con DirectML (mismas detecciones). Con
+     DirectML se cumplen las metas iniciales de RNF-05 para el refresco completo (p95 202 ms
+     en Notepad) y para una región (p95 123 ms), pero no para dos o más, porque cada región
+     planificada cuesta una inferencia completa. Agrupar regiones en una entrada se midió y se
+     descartó porque cambia las detecciones. Falta: decidir si DirectML (ONNX Runtime 1.24.4,
+     la última versión con DirectML, en ingeniería sostenida) es aceptable como proveedor del
+     producto, medir RSS y VRAM (RNF-06) y la precisión, o buscar un modelo más ligero. Los
+     pesos `icon_detect` v2 (AGPL-3.0) no se usan.
    - OCR: `Windows.Media.Ocr` (es-ES) funciona, pero no informa confianza y pierde signos como
      "¡"; el candidato PP-OCRv5 mobile (Apache-2.0, ONNX oficial) tampoco tiene "¡" en su
      diccionario.

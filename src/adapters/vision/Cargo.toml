@@ -13,6 +13,10 @@ default = []
 ## The fail-closed ONNX detector (`OnnxVisionDetector`). ONNX Runtime is loaded at run
 ## time from a library the operator pins; nothing is downloaded at build time.
 onnx = ["dep:ort"]
+## The DirectML execution provider for the ONNX detector (Windows, DirectX 12). It needs an
+## ONNX Runtime build with DirectML and the operator's pinned `DirectML.dll`, both loaded
+## at run time.
+directml = ["onnx", "ort/directml"]
 ## Windows OCR (`WinRtTextRecognizer`, `Windows.Media.Ocr`). No effect on other platforms.
 winrt-ocr = ["dep:windows"]
 
@@ -34,6 +38,12 @@ windows = { workspace = true, optional = true, features = [
     "Media_Ocr",
     "Storage_Streams",
 ] }
+
+[[example]]
+## S0 measurement probe (docs/thesis/S0_RESULTADOS.md): detector timings and candidates on
+## synthetic frames, per execution provider.
+name = "s0_probe"
+required-features = ["onnx"]
 
 [lints]
 workspace = true

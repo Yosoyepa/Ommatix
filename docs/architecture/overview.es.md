@@ -205,7 +205,10 @@ sin OCR, entrada en dry run y política que lo niega todo.
   El manifiesto del modelo está fijado por SHA-256 y nombra los pesos, su SHA-256 y el rol y
   la affordance de cada clase; los nombres de clase nunca se convierten en roles. Cada región
   planificada se encaja con letterbox en la entrada, se decodifica, se suprime y se lleva de
-  vuelta al frame.
+  vuelta al frame, con una inferencia por región. Corre en la CPU
+  (`detector_threads` hilos intra-op) o, con la feature `directml`, en DirectML con una
+  `DirectML.dll` fijada, ejecución secuencial, sin patrón de memoria y sin recurrir a la
+  CPU; el manifiesto enumera los proveedores con los que se validó el modelo.
 - *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` para exactamente
   `ocr_language`, nunca otro idioma, sin inventar confianzas; el texto reconocido nunca se
   registra.

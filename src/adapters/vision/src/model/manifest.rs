@@ -31,7 +31,10 @@
 //!   the contract's roles and defaults to `unknown`: no role is inferred from a class name.
 //!   `affordance` defaults to `unknown`; `"interactive"` confirms actionability only with a
 //!   non-empty `affordance_evidence` (where the S0 report shows it), and is refused without.
-//! - `execution_provider` must be `"cpu"`, the only provider this build runs.
+//! - `execution_provider` lists the ONNX Runtime execution providers the S0 report
+//!   validated the model on, comma-separated: `"cpu"`, `"directml"` or `"cpu,directml"`.
+//!   The operator's configuration picks one of them; a provider the manifest does not list
+//!   is refused when the detector loads.
 
 use std::path::{Path, PathBuf};
 
@@ -53,6 +56,33 @@ pub const INPUT_SIDE_RANGE: std::ops::RangeInclusive<u32> = 32..=4096;
 
 /// Most classes a detector may declare.
 pub const MAX_CLASSES: usize = 1024;
+
+/// An ONNX Runtime execution provider the detector can run on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ExecutionProvider {
+    /// `CPUExecutionProvider`, the baseline.
+    Cpu,
+    /// `DmlExecutionProvider` (DirectML on DirectX 12, Windows).
+    DirectMl,
+}
+
+impl ExecutionProvider {
+    /// Every provider, in manifest order.
+    pub const ALL: [Self; 2] = [Self::Cpu, Self::DirectMl];
+
+    /// The manifest and configuration name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::DirectMl => "directml",
+        }
+    }
+
+    /// Parses a manifest or configuration name.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.name() == name)
+    }
+}
 
 /// One class of the detector, as the engine sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +108,8 @@ pub struct DetectorSpec {
     pub classes: Vec<ClassSpec>,
     pub score_threshold: f32,
     pub nms_iou: f32,
+    /// The providers the model was validated on (sorted, without duplicates).
+    pub execution_providers: Vec<ExecutionProvider>,
 }
 
 #[derive(Deserialize)]
@@ -201,9 +233,13 @@ impl DetectorSpec {
                 OutputLayout::ALL.map(OutputLayout::name).join(", ")
             )));
         };
-        if raw.execution_provider != "cpu" {
-            return invalid("detector execution_provider must be \"cpu\" in this build");
-        }
+        let execution_providers = parse_providers(&raw.execution_provider).ok_or_else(|| {
+            ModelError::InvalidManifest(
+                "detector execution_provider must list \"cpu\" and/or \"directml\", \
+                 comma-separated, each once"
+                    .to_owned(),
+            )
+        })?;
         if !(raw.score_threshold > 0.0 && raw.score_threshold <= 1.0) {
             return invalid("detector score_threshold must be in (0, 1]");
         }
@@ -232,8 +268,21 @@ impl DetectorSpec {
             classes,
             score_threshold: raw.score_threshold,
             nms_iou: raw.nms_iou,
+            execution_providers,
         })
     }
+}
+
+/// `"cpu"`, `"directml"` or both, comma-separated; `None` on anything else or a duplicate.
+fn parse_providers(list: &str) -> Option<Vec<ExecutionProvider>> {
+    let mut out = list
+        .split(',')
+        .map(|name| ExecutionProvider::parse(name.trim()))
+        .collect::<Option<Vec<_>>>()?;
+    let count = out.len();
+    out.sort_unstable();
+    out.dedup();
+    (out.len() == count).then_some(out)
 }
 
 fn class_spec(index: usize, raw: RawClass) -> Result<ClassSpec, ModelError> {
@@ -377,7 +426,17 @@ mod tests {
             (
                 "execution_provider",
                 "/artifacts/0/execution_provider",
-                json!("directml"),
+                json!("cuda"),
+            ),
+            (
+                "execution_provider",
+                "/artifacts/0/execution_provider",
+                json!("cpu,cpu"),
+            ),
+            (
+                "execution_provider",
+                "/artifacts/0/execution_provider",
+                json!(""),
             ),
             (
                 "score_threshold",
@@ -429,6 +488,21 @@ mod tests {
         let unknown = with(|m| m["artifacts"][0]["trust_me"] = json!(true));
         assert!(unknown.contains("unknown field"), "{unknown}");
         assert!(DetectorSpec::from_manifest("not json", Path::new(".")).is_err());
+    }
+
+    #[test]
+    fn the_manifest_lists_its_validated_execution_providers() {
+        let providers = |value: &str| {
+            let mut m = manifest();
+            m["artifacts"][0]["execution_provider"] = json!(value);
+            parse(&m).unwrap().execution_providers
+        };
+        assert_eq!(providers("cpu"), [ExecutionProvider::Cpu]);
+        assert_eq!(providers("directml"), [ExecutionProvider::DirectMl]);
+        assert_eq!(
+            providers("directml, cpu"),
+            [ExecutionProvider::Cpu, ExecutionProvider::DirectMl]
+        );
     }
 
     #[test]
