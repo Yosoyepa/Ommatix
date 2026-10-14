@@ -1,6 +1,6 @@
 [package]
 name = "ommatix-adapter-capture"
-description = "Ommatix driven adapters for the FrameSource port: synthetic scripts, PNG sequences and live screen capture."
+description = "Ommatix driven adapters for the FrameCapturer port: synthetic scripts, PNG sequences and live screen capture, as BGRA frames."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
