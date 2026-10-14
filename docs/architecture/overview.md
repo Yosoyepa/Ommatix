@@ -84,7 +84,11 @@ S0 spike ([ADR-0009](../adr/0009-models-and-licences-decided-in-the-spike.md)).
    touches until nothing changes. A geometry change, a closure that runs out of budget, or a
    plan above the initial thresholds (40 % of the area, or more than four regions) falls back
    to a full refresh.
-3. **Perceive** the planned regions with the detector and the OCR.
+3. **Perceive** the planned regions with the detector and the OCR, and read the
+   accessibility tree inside them. The three stages read the same frame and do not
+   depend on each other, so they run concurrently on scoped threads and are joined before
+   anything is fused ([ADR-0019](../adr/0019-concurrent-observation-stages.md)); the
+   coordinator stays the only writer and collects the results by stage, not by arrival.
 4. **Fuse (Algorithm 2).** A text belongs to the most specific control that contains it,
    measured by IoC = area(text ∩ control) / area(text) ≥ 0.75; ties abstain. Texts are grouped
    into lines before the reading order is sorted. External labels are matched by an
@@ -201,6 +205,10 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   manifest is pinned by SHA-256 and names the weights, their SHA-256 and each class's role
   and affordance; class names never become roles. Each planned region is letterboxed into
   the input, decoded, suppressed and mapped back to the frame, one inference per region.
+  An inference costs about as much as its input has pixels, and smaller inputs for small
+  regions change the detections (S0 §10.2), so every region goes through the full input. The
+  DirectML manifest of RNF-05 points at a float16 export of the network with a float32
+  decoding (S0 §10.3).
   It runs on the CPU (`detector_threads` intra-op threads) or,
   with the `directml` feature, on DirectML with a pinned `DirectML.dll`, sequential
   execution, no memory pattern and no CPU fallback; the manifest lists the providers the

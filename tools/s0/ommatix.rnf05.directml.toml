@@ -1,0 +1,36 @@
+# RNF-05: the float16 export of icon_detect_v3 on DirectML (docs/thesis/S0_RESULTADOS.md §10),
+# the configuration the incremental-latency measurements of that section use. Compared with
+# ommatix.s0.directml.toml (float32) it needs one more file in the operator's directory:
+#   models\manifest.rnf05.json                              (= docs/thesis/plantillas/model_manifest.rnf05.json)
+#   models\omniparser-icon-detect-v3\icon_detect_v3_fp16.onnx (tools/s0/export_omniparser_v3.py --fp16)
+# and the runtime of ommatix.s0.directml.toml (ONNX Runtime 1.24.4, DirectML 1.15.4). Only
+# DirectML runs it: the manifest does not list the CPU provider.
+#
+# Copy this file to %LOCALAPPDATA%\Ommatix\ommatix.rnf05.directml.toml, then, from this
+# repository's root:
+#   cargo run --release -p ommatix --features dxgi,directml,winrt-ocr -- demo --source dxgi ^
+#     --config %LOCALAPPDATA%\Ommatix\ommatix.rnf05.directml.toml --session-id rnf05 --timings
+# Input stays dry run: [safety] keeps the template's deny-everything defaults.
+#
+# Detection, text recognition and the accessibility read of one observation run concurrently
+# by default (ADR-0019); `concurrent_stages = false` in [engine] runs them one after the other.
+
+[engine]
+mode = "dry_run"
+concurrent_stages = true
+
+[safety]
+actuation_enabled = false
+allowed_applications = []
+
+[models]
+detector_manifest = "models/manifest.rnf05.json"
+detector_manifest_sha256 = "f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47"
+onnxruntime_path = "runtime/onnxruntime-directml-1.24.4/onnxruntime.dll"
+onnxruntime_sha256 = "e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40"
+detector_execution_provider = "directml"
+directml_path = "runtime/onnxruntime-directml-1.24.4/DirectML.dll"
+directml_sha256 = "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1"
+detector_threads = 0
+ocr = "winrt"
+ocr_language = "es-ES"

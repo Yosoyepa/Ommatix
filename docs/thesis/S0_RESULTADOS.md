@@ -38,6 +38,8 @@ Los artefactos viven fuera del repositorio, bajo `%LOCALAPPDATA%\Ommatix\`.
 | `onnxruntime.dll` (de ese zip) | — | 15 809 848 | `18370c375f07357fa5874344a9d9ac17e6b6fe1eb18b1dd209d79483b4470257` |
 | `manifest.json` (= `plantillas/model_manifest.s0.json`), §§3–7 | este repositorio | 2 920 | `8e1c7ad6ffbab6ba543b34774accd67f434a4ac71342afc12f36f7031b7014f1` |
 | `manifest.json` desde §9 (`execution_provider: "cpu,directml"`) | este repositorio | 2 929 | `63d9df24109308d1e2b354648139fee0c1d4e2563f8cb2a83497d4e26b7d728e` |
+| `icon_detect_v3_fp16.onnx` (exportado, RNF-05, §10) | `tools/s0/export_omniparser_v3.py --fp16` | 116 609 212 | `d7a8901db0ae650616ee43f53e6ee8f57a829de54ab8daae431be77556cc0805` (el mismo hash en dos exportaciones) |
+| `manifest.rnf05.json` (= `plantillas/model_manifest.rnf05.json`), §10 (`execution_provider: "directml"`) | este repositorio | 3 122 | `f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47` |
 | `microsoft.ml.onnxruntime.directml.1.24.4.nupkg` | NuGet `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4 (commit `2d924974ef147392ced8409d36bd6d2e7fcc8a74`) | 12 458 649 | `57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681` (su SHA-512 coincide con el `packageHash` del catálogo de NuGet) |
 | `onnxruntime.dll` (de ese paquete, `runtimes/win-x64/native/`) | — | 17 328 152 | `e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40` (firma Authenticode válida de Microsoft Corporation) |
 | `microsoft.ai.directml.1.15.4.nupkg` | NuGet `Microsoft.AI.DirectML` 1.15.4 (la dependencia que declara el paquete anterior) | 202 292 617 | `4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9` (su SHA-512 coincide con el catálogo) |
@@ -218,3 +220,118 @@ Metas iniciales de RNF-05: refresco completo en caliente p95 ≤ 700 ms e increm
 - **DirectML: cumple en esta medición el refresco completo** (p95 202 ms en Notepad, n = 10; 179 ms en sintéticos, n = 19) **y el incremental con una región** (p95 123 ms, n = 19). **No cumple el incremental con dos o más regiones** (p95 243 ms con dos y 348 ms con tres), porque cada región cuesta una inferencia completa. Tampoco lo cumple la primera observación de una sesión, que paga el calentamiento.
 - **CPU: no cumple ninguna meta** con ningún número de hilos. Con 8 hilos, el refresco completo tiene p95 2,7 a 2,9 s y una sola región p95 2,8 s.
 - Con la pantalla quieta, sin regiones planificadas, la observación cuesta p95 25,5 ms con cualquier proveedor.
+- §10 repite la medición con etapas concurrentes y con la red en float16: refresco completo en caliente p95 98 ms, incremental con una región p95 102 ms y con dos p95 153 ms.
+
+
+## 10. RNF-05: etapas concurrentes, red en float16 y entradas más pequeñas (1.0.22)
+
+**Fecha:** 14 de octubre de 2026, misma máquina (§1), rama `perf/rnf05-latency` sobre `adfb1ea`. Dentro del spike y de la aprobación del responsable del proyecto del 14 de octubre de 2026 («rendimiento de RNF-05 primero»). No se envió ninguna tecla ni ningún clic, y no se guardó ningún frame: de las corridas con DXGI sólo se conservaron los tiempos de stderr y el número de elementos de cada observación.
+
+Punto de partida: una observación incremental con DirectML costaba la suma de sus etapas (§9.4 y `S4_ACEPTACION_REDUCIDA.md`): detección unos 115 ms por región (una inferencia de 1280×1280), lectura de accesibilidad unos 60 ms y OCR de 3 a 8 ms. Con una región, 184 ms; con dos, 298 ms.
+
+### 10.1 Qué cambia
+
+- **Etapas concurrentes (ADR-0019).** La detección, el OCR y la lectura de accesibilidad de una observación leen el mismo frame y no dependen entre sí. El motor las ejecuta en hilos acotados (`std::thread::scope`) y las une antes de fusionar: el coordinador sigue siendo el único escritor, y los resultados se recogen por etapa, no por orden de llegada. `[engine] concurrent_stages = false` las ejecuta una tras otra. Los tiempos por etapa son ahora la duración propia de cada una; las tres se solapan y no suman el `total` (capítulo 09 §9.6), que se mide directamente.
+- **Red en float16, decodificación en float32.** `tools/s0/export_omniparser_v3.py --fp16` parte del mismo grafo exportado de §3, convierte la red (de la imagen a las seis cabezas) a float16 con entrada y salida float32 y deja en float32 la decodificación (sigmoide y aritmética de rejilla en píxeles de la entrada: en float16 la resolución es de un píxel por encima de 1024). Mismos pesos, mismas clases, mismo umbral (0,05) y misma NMS (0,45). Es otro artefacto con otro hash (§2) y otro manifiesto (`plantillas/model_manifest.rnf05.json`), que lista sólo `directml`: el proveedor de CPU de ONNX Runtime no tiene convolución en float16. La exportación es reproducible (el mismo SHA-256 en dos corridas). El manifiesto de §4 y la CPU siguen como estaban.
+- **Calentamiento al cargar.** Con DirectML, el detector hace una inferencia con una entrada vacía al cargarse (la primera inferencia de una sesión cuesta de 2 a 3 veces una en caliente, §9.3), así que la primera observación ya no la paga.
+- **Herramientas.** `tools/s4/testapp` acepta las banderas ocultas `--animate <ms>` (con `--animate-labels 1|2`) y `--animate-flash`: una o dos etiquetas `Tic nnnn` lejanas entre sí cuyo número avanza solo, o un velo sobre toda la ventana, de modo que aparecen regiones incrementales (una, dos) o un refresco completo sin que nadie toque nada. En ese modo pide el foco una vez, al arrancar, y el sistema sólo se lo da si el usuario lleva un rato sin tocar el equipo. `tools/perf/measure_latency.py` ejecuta `demo --source dxgi --timings` contra esa aplicación y alterna las variantes proceso a proceso. `s0_shapes` (ejemplo de `ommatix-adapter-vision`) compara detecciones, región contra región o modelo contra modelo, a IoU 0,5.
+
+### 10.2 Entradas más pequeñas: medido y descartado
+
+El coste de una inferencia sigue al área de la entrada, y un recorte no se amplía nunca (§6): una región de 310×160 px se rellena hasta 1280×1280 y casi todo el cálculo es relleno. Se exportó el mismo modelo con alto y ancho libres (`--dynamic`), se fijó cada tamaño en su propia sesión con las sustituciones de dimensión libre de ONNX Runtime (un solo `.onnx` y varias sesiones: una sesión dinámica no corre entera en DirectML) y cada recorte se mandó al tamaño más pequeño que lo contiene sin reducirlo.
+
+Una inferencia con DirectML (float32, mediana de 15): 1280×1280, 105,6 ms; 1280×736, 64,3 ms; 640×640, 31,8 ms; 640×320, 19,7 ms; 320×320, 12,8 ms; 320×160, 8,7 ms. La ganancia es real.
+
+**Pero las detecciones cambian.** Se compararon las cajas de cada recorte en su entrada más pequeña con las del mismo recorte en 1280×1280, sobre 7 frames sintéticos de 1920×1080 (`synthetic_frames.py`: la ventana con las semillas 0 a 5 y la de tres cambios) y regiones barridas de 229×152, 310×160, 318×160, 300×300, 400×200, 600×300, 640×640 y 900×500 px:
+
+| Entrada de los recortes | Comparaciones | Cajas de referencia | Cajas candidatas | Emparejadas a IoU 0,5 | Recall | Precisión | Conjuntos idénticos |
+|---|---|---|---|---|---|---|---|
+| Mejor ajuste (de 320×160 a 1280×736) | 574 | 1 745 | 5 561 | 1 651 | 0,946 | 0,297 | 167 (29 %) |
+| Todo en 1280×736 | 567 | 1 564 | 1 900 | 1 491 | 0,953 | 0,785 | 351 (62 %) |
+| Todo en 640×640 | 560 | 1 363 | 2 341 | 1 343 | 0,985 | 0,574 | 266 (48 %) |
+
+Un recorte que llena su entrada (310×160 en 320×160) da unas siete veces más cajas que en 1280×1280 (1 065 frente a 156 en las regiones de 310×160), y las cajas emparejadas difieren hasta 0,69 en puntuación. El modelo depende del contexto que rodea al recorte, como ya mostró la agrupación de §9.5, y cada caja de más sería un objetivo `confirmed` (§4). Incluso recortar sólo el relleno vertical (1280×736) cambia el 38 % de los conjuntos.
+
+**Criterio de aceptación** (fijado antes de medir el float16 y aplicado a ambos): a IoU 0,5, recall de las cajas de referencia y precisión de las candidatas ≥ 0,99; ninguna caja emparejada se mueve más de 2 px ni cambia de puntuación más de 0,02; y toda caja sin pareja tiene una puntuación a menos de 0,01 del umbral. **Las entradas más pequeñas no lo cumplen: no se adoptan.** El manifiesto sigue declarando una sola entrada de 1280×1280. La capacidad (`input_shapes` e `input_dimensions` en el manifiesto, una sesión por tamaño, `best_fit`) queda en el adaptador, con pruebas de manifiesto y de elección de tamaño, para el día en que se valide un tamaño menor con datos etiquetados; `s0_shapes` la mide.
+
+### 10.3 Red en float16: equivalencia [V]
+
+Mismos frames, mismas regiones y el mismo criterio, con DirectML en las dos: referencia = float32 (manifiesto de §9, 1280×1280); candidato = float16 con decodificación en float32 (`manifest.rnf05.json`). 656 comparaciones (los 7 frames de §10.2 y el de ruido).
+
+| Región | Comparaciones | Cajas de referencia | Cajas candidatas | Emparejadas | Recall | Precisión | IoU medio | Dif. máx. de esquina (px) | Dif. máx. de puntuación | Conjuntos idénticos |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 229×152 | 200 | 327 | 325 | 325 | 0,994 | 1,000 | 0,9989 | 0,65 | 0,0093 | 198 |
+| 300×300 | 64 | 244 | 244 | 243 | 0,996 | 0,996 | 0,9989 | 0,34 | 0,0058 | 62 |
+| 310×160 | 128 | 172 | 173 | 172 | 1,000 | 0,994 | 0,9992 | 0,57 | 0,0063 | 127 |
+| 318×160 | 128 | 188 | 187 | 187 | 0,995 | 1,000 | 0,9991 | 0,13 | 0,0043 | 127 |
+| 400×200 | 72 | 184 | 183 | 183 | 0,995 | 1,000 | 0,9988 | 0,30 | 0,0078 | 71 |
+| 600×300 | 32 | 147 | 146 | 146 | 0,993 | 1,000 | 0,9990 | 1,41 | 0,0033 | 31 |
+| 640×640 | 16 | 203 | 205 | 203 | 1,000 | 0,990 | 0,9985 | 0,30 | 0,0062 | 14 |
+| 900×500 | 8 | 202 | 201 | 201 | 0,995 | 1,000 | 0,9988 | 0,17 | 0,0093 | 7 |
+| Frame completo | 8 | 181 | 179 | 179 | 0,989 | 1,000 | 0,9979 | 0,35 | 0,0083 | 6 |
+| **Total** | **656** | **1 848** | **1 843** | **1 839** | **0,995** | **0,998** | — | **1,41** | **0,0093** | **643 (98,0 %)** |
+
+Las 13 comparaciones con diferencia tienen una sola caja de más o de menos. Las 11 de regiones registran su puntuación, entre 0,0501 y 0,0510: cajas que estaban en el umbral de 0,05 y que el redondeo de float16 deja a un lado o al otro. El IoU mínimo de una caja emparejada es 0,962. **Cumple el criterio.** No es idéntico bit a bit y no lo pretende: es del orden del redondeo de float (§9.2), no un cambio de contexto como en §10.2. La precisión de la detección frente a un corpus etiquetado sigue sin medirse (§7).
+
+### 10.4 Medición en el motor [V]
+
+`python tools/perf/measure_latency.py` contra `tools/s4/testapp` (compilada en `--release`, maximizada y en primer plano, comprobado con `GetForegroundWindow` antes y después de cada corrida; una corrida con otro primer plano se descarta), `ommatix demo --source dxgi --timings` con DirectML, OCR `winrt` es-ES, `[models] accessibility = "uia"`, `dry_run` y sin entrada. 30 procesos por variante y caso (40 en el refresco completo; 20 observaciones cada uno), alternados proceso a proceso y en orden rotatorio, de modo que lo que haga el resto del escritorio (UI Automation tiene que preguntar a las 13 ventanas de nivel superior de esta sesión) afecte por igual a las tres variantes. Medianas / p95 por rango más cercano, en ms. Las observaciones de un proceso no son independientes (capítulo 09 §9.6), y `n` cuenta observaciones. Una observación sin región planificada (el contador no avanzó entre dos capturas; unos 15 ms) no es un análisis incremental y se cuenta aparte. Las tres variantes: **antes** (`main`, `adfb1ea`, float32, etapas en serie); **concurrentes, float32** (este código con el manifiesto de §9); **concurrentes, float16** (este código con `manifest.rnf05.json`). La etiqueta avanza cada 100 ms y el velo del refresco completo, cada 250 ms.
+
+| Caso | Variante | n | capture | plan | detect | recognize | accessibility | fuse | track | total |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Refresco completo en caliente | antes (`main`) | 349 | 3,9 / 17,9 | 0,3 / 0,4 | 121,4 / 123,1 | 33,3 / 37,2 | 62,5 / 71,3 | 0,1 / 0,1 | 0,5 / 0,7 | 224,5 / 240,2 |
+| Refresco completo en caliente | etapas concurrentes, float32 | 101 | 8,3 / 15,9 | 0,3 / 0,3 | 122,9 / 127,5 | 34,8 / 42,9 | 61,8 / 85,0 | 0,1 / 0,1 | 0,5 / 0,8 | 134,6 / 143,8 |
+| Refresco completo en caliente | etapas concurrentes, float16 (RNF-05) | 71 | 7,8 / 15,5 | 0,3 / 0,3 | 80,8 / 81,8 | 34,1 / 37,0 | 61,2 / 64,8 | 0,1 / 0,1 | 0,4 / 0,5 | 90,8 / 98,2 |
+| Incremental, 1 región | antes (`main`) | 540 | 3,1 / 4,4 | 2,0 / 2,6 | 113,6 / 114,7 | 3,4 / 4,7 | 61,4 / 69,6 | 0,1 / 0,1 | 0,5 / 0,8 | 184,3 / 195,4 |
+| Incremental, 1 región | etapas concurrentes, float32 | 444 | 3,1 / 12,5 | 2,1 / 2,7 | 109,9 / 115,2 | 3,7 / 4,8 | 65,4 / 77,4 | 0,1 / 0,1 | 0,5 / 1,0 | 117,0 / 136,3 |
+| Incremental, 1 región | etapas concurrentes, float16 (RNF-05) | 313 | 6,9 / 14,7 | 2,1 / 2,4 | 70,4 / 77,9 | 3,6 / 4,3 | 58,3 / 83,7 | 0,1 / 0,1 | 0,5 / 0,6 | 83,0 / 101,6 |
+| Incremental, 2 regiones | antes (`main`) | 450 | 3,2 / 3,9 | 2,0 / 2,6 | 221,6 / 223,0 | 7,6 / 9,5 | 62,4 / 72,6 | 0,1 / 0,1 | 0,4 / 0,7 | 297,7 / 309,6 |
+| Incremental, 2 regiones | etapas concurrentes, float32 | 450 | 3,1 / 3,7 | 2,2 / 2,9 | 219,4 / 221,8 | 8,8 / 10,2 | 63,2 / 77,8 | 0,1 / 0,1 | 0,5 / 0,9 | 226,5 / 233,4 |
+| Incremental, 2 regiones | etapas concurrentes, float16 (RNF-05) | 440 | 3,1 / 6,2 | 2,1 / 2,9 | 129,0 / 135,8 | 8,0 / 9,8 | 72,8 / 138,0 | 0,1 / 0,1 | 0,5 / 0,7 | 136,4 / 153,0 |
+| Primera observación de la sesión (refresco completo) | antes (`main`) | 95 | 5,6 / 6,2 | 0,0 / 0,1 | 263,5 / 332,7 | 41,1 / 51,5 | 64,8 / 78,7 | 0,1 / 0,1 | 0,1 / 0,1 | 378,1 / 450,6 |
+| Primera observación de la sesión (refresco completo) | etapas concurrentes, float32 | 95 | 5,6 / 11,9 | 0,0 / 0,1 | 123,4 / 125,0 | 42,4 / 50,4 | 67,8 / 81,4 | 0,1 / 0,1 | 0,1 / 0,1 | 130,5 / 135,8 |
+| Primera observación de la sesión (refresco completo) | etapas concurrentes, float16 (RNF-05) | 96 | 5,5 / 6,5 | 0,0 / 0,1 | 80,8 / 82,3 | 42,0 / 46,0 | 67,8 / 120,2 | 0,1 / 0,1 | 0,1 / 0,1 | 88,9 / 130,9 |
+
+Lectura:
+
+- **Las etapas concurrentes ahorran casi toda la lectura de accesibilidad y el OCR** (con una región, 184 → 117 ms): el total pasa a ser el de la etapa más larga, la detección. Con dos regiones el ahorro es el mismo y la detección sigue mandando (298 → 226 ms).
+- **El float16 recorta la inferencia** de unos 110 ms por región a unos 65 (una inferencia aislada: 105,6 → 60,7 ms): con una región, 117 → 83 ms; con dos, 226 → 136 ms; con refresco completo, 135 → 91 ms; primera observación de la sesión, 130 → 89 ms (p95 131 por casos en que la lectura de accesibilidad tarda 120 ms).
+- **Con dos regiones la etapa más lenta es la accesibilidad en su cola**: p95 138 ms (mediana 73), porque mientras la GPU ejecuta float16 el escritorio responde más despacio (§10.5), y esa cola fija el p95 del total.
+- Los elementos publicados son los mismos en las tres variantes (75 de mediana con una región, 64 con dos, 75 en el refresco completo).
+
+### 10.5 Hallazgo: la GPU saturada por float16 retrasa a UI Automation
+
+Con una etiqueta que avanza cada **30 ms** (la aplicación de prueba repinta a unos 33 fotogramas por segundo, con OpenGL en la misma GPU) el resultado cambia (15 procesos por variante):
+
+| Caso | Variante | n | capture | plan | detect | recognize | accessibility | fuse | track | total |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Incremental, 1 región | antes (`main`) | 270 | 3,1 / 4,1 | 2,0 / 2,6 | 116,5 / 118,0 | 3,6 / 5,1 | 64,2 / 79,5 | 0,1 / 0,1 | 0,5 / 0,8 | 190,5 / 208,2 |
+| Incremental, 1 región | etapas concurrentes, float32 | 270 | 3,1 / 3,6 | 2,2 / 2,9 | 112,2 / 116,4 | 3,8 / 5,1 | 73,6 / 85,1 | 0,1 / 0,1 | 0,5 / 0,9 | 119,2 / 130,8 |
+| Incremental, 1 región | etapas concurrentes, float16 (RNF-05) | 270 | 3,1 / 4,2 | 2,1 / 2,8 | 72,1 / 80,0 | 4,1 / 5,4 | 121,4 / 146,3 | 0,1 / 0,1 | 0,5 / 1,0 | 128,0 / 155,8 |
+| Incremental, 2 regiones | antes (`main`) | 270 | 3,1 / 3,9 | 2,0 / 2,6 | 226,9 / 228,6 | 7,7 / 10,2 | 65,2 / 72,0 | 0,1 / 0,1 | 0,4 / 0,8 | 306,0 / 316,6 |
+| Incremental, 2 regiones | etapas concurrentes, float32 | 270 | 3,2 / 3,8 | 2,1 / 2,9 | 224,2 / 227,0 | 9,1 / 10,4 | 69,6 / 85,6 | 0,1 / 0,1 | 0,5 / 0,8 | 231,2 / 238,7 |
+| Incremental, 2 regiones | etapas concurrentes, float16 (RNF-05) | 270 | 3,0 / 3,8 | 2,1 / 2,7 | 134,7 / 155,9 | 8,6 / 11,2 | 171,0 / 193,2 | 0,1 / 0,1 | 0,5 / 0,9 | 177,7 / 199,5 |
+
+Con float16 la lectura de accesibilidad tarda lo que la GPU más unos 40 a 50 ms (121 ms con una región y 171 con dos, frente a 59 en serie), y con una región el float16 es *peor* que el float32 (p95 156 frente a 131 ms). La causa no está en el motor: con un proceso aparte que sólo carga la GPU con inferencias, la captura DXGI tarda 57 ms en vez de 3 con float16 y 6 ms con float32; desactivar la fusión de grafos de DirectML (`ep.dml.disable_graph_fusion`) no lo arregla y vuelve la inferencia un 29 % más lenta. Los núcleos de float16 de esta GPU parecen ocupar la cola gráfica durante toda la inferencia, y el escritorio (y la aplicación observada, si repinta en ese momento) espera. Con una animación de 100 ms o de 250 ms la lectura no se retrasa (§10.4).
+
+Es una interacción de esta GPU y este controlador, observada en una máquina y una aplicación; no se sabe si ocurre en otro hardware. Para el flujo de S4 (el clic cambia un botón y un texto: dos o tres regiones) el float16 sigue siendo la mejor opción; con una sola región y una aplicación que repinta de forma continua, el float32 concurrente es la alternativa más segura.
+
+### 10.6 RNF-05
+
+Metas iniciales de RNF-05: incremental p95 ≤ 150 ms y refresco completo en caliente p95 ≤ 700 ms (ADR-0010: hipótesis). Con float16 y etapas concurrentes, en esta máquina, con esta aplicación y con la animación de 100 ms:
+
+- **Refresco completo en caliente: se cumple** (p95 98 ms; antes 240).
+- **Incremental con una región: se cumple** (p95 102 ms; antes 195).
+- **Incremental con dos regiones: no se cumple, por poco** (p95 153,0 ms con 440 observaciones y 150,3 en una repetición de 197; mediana 136; antes, p95 310).
+- Con tres o más regiones no se cumple: cada región añade unos 65 ms de GPU (no medido).
+- Con una animación continua de 33 fotogramas por segundo tampoco se cumple con una región (p95 156 ms), por §10.5.
+- La primera observación de una sesión: p95 131 ms (antes 451).
+
+**RNF-05 no queda cumplido.** Hay una máquina, un modelo, una aplicación, observaciones que no son independientes dentro de un proceso y ninguna medición de RSS ni de VRAM (RNF-06). Con float16 la memoria de vídeo debería bajar (116 MB de pesos en vez de 233), pero no se midió.
+
+### 10.7 Qué queda abierto
+
+- La lectura de accesibilidad es ya el 70 % de una observación incremental de una región (58 de 83 ms): enumerar las 13 ventanas de nivel superior de la sesión cuesta unos 48 ms con cualquier condición o caché que se probó (sin propiedades, condición verdadera, vista de control). Evitarlo exigiría cambiar qué ventanas lee ADR-0017 o guardar la lista entre observaciones, con el riesgo de perder una ventana emergente con un campo de contraseña.
+- Dos regiones por debajo de 150 ms (p95) necesitan quitar entre 3 y 5 ms más: bajar la inferencia por región sin cambiar el contexto (§10.2) o evitar la enumeración de ventanas.
+- Las detecciones de float16 se validaron contra float32 sobre frames sintéticos, no contra un corpus etiquetado (§7).
+- Las corridas de S4 de este repositorio usan el manifiesto de §9 (float32); pasar a float16 exige repetirlas.

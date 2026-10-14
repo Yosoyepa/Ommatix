@@ -26,6 +26,14 @@
 //!   Every template field is required and non-empty; unknown fields are rejected.
 //! - `path` is relative to the manifest's directory (or absolute).
 //! - `input_shape` is `[1, 3, H, W]` (NCHW, RGB, values in `[0, 1]`).
+//! - `input_shapes` (optional, with `input_dimensions`) lists every fixed `[1, 3, H, W]`
+//!   the engine may feed a model that exports free height and width: the smallest shape
+//!   that holds a region at its own resolution is used, because the cost of an inference
+//!   follows the input's area, not the region's. `input_dimensions` names the model's two
+//!   free axes, `["height", "width"]`; the detector pins each shape to its own session with
+//!   them. The list holds `input_shape`, which must be the largest (the shape of a full
+//!   refresh and of any region too big for the others); its sides are multiples of 32.
+//!   A model without free axes declares neither field.
 //! - `output_layout` names one of the [`OutputLayout`]s; any other is rejected.
 //! - `class_mapping` lists the model's classes in output order. A class's `role` is one of
 //!   the contract's roles and defaults to `unknown`: no role is inferred from a class name.
@@ -102,8 +110,15 @@ pub struct DetectorSpec {
     pub path: PathBuf,
     pub sha256: Sha256Digest,
     pub opset: u32,
+    /// The reference input, `input_shape`: the largest of [`input_sizes`](Self::input_sizes).
     pub input_width: u32,
     pub input_height: u32,
+    /// Every `(width, height)` the detector may feed the model, smallest area first
+    /// (`input_shapes`); only the reference input when the model is fixed.
+    pub input_sizes: Vec<(u32, u32)>,
+    /// The model's free `(height, width)` axis names (`input_dimensions`); `None` for a model
+    /// exported with a fixed input.
+    pub input_dimensions: Option<(String, String)>,
     pub output_layout: OutputLayout,
     pub classes: Vec<ClassSpec>,
     pub score_threshold: f32,
@@ -135,6 +150,10 @@ struct RawDetector {
     export_command: String,
     opset: u32,
     input_shape: Vec<u32>,
+    #[serde(default)]
+    input_shapes: Option<Vec<Vec<u32>>>,
+    #[serde(default)]
+    input_dimensions: Option<Vec<String>>,
     output_layout: String,
     class_mapping: Vec<RawClass>,
     execution_provider: String,
@@ -226,6 +245,11 @@ impl DetectorSpec {
         if !INPUT_SIDE_RANGE.contains(&input_width) || !INPUT_SIDE_RANGE.contains(&input_height) {
             return invalid("detector input sides must be between 32 and 4096 pixels");
         }
+        let (input_sizes, input_dimensions) = input_sizes(
+            (input_width, input_height),
+            raw.input_shapes.as_deref(),
+            raw.input_dimensions.as_deref(),
+        )?;
         let Some(output_layout) = OutputLayout::parse(&raw.output_layout) else {
             return Err(ModelError::InvalidManifest(format!(
                 "unsupported output_layout {:?}; supported: {}",
@@ -264,6 +288,8 @@ impl DetectorSpec {
             opset: raw.opset,
             input_width,
             input_height,
+            input_sizes,
+            input_dimensions,
             output_layout,
             classes,
             score_threshold: raw.score_threshold,
@@ -271,6 +297,72 @@ impl DetectorSpec {
             execution_providers,
         })
     }
+}
+
+/// Most input shapes a detector may declare: each one is a session in memory.
+pub const MAX_INPUT_SHAPES: usize = 16;
+
+/// The multiple every side of a declared shape must be: the coarsest stride of a YOLO-style
+/// detector.
+pub const INPUT_SIDE_MULTIPLE: u32 = 32;
+
+type InputSizes = (Vec<(u32, u32)>, Option<(String, String)>);
+
+/// Validates `input_shapes` and `input_dimensions` against the reference `(width, height)`.
+fn input_sizes(
+    reference: (u32, u32),
+    shapes: Option<&[Vec<u32>]>,
+    dimensions: Option<&[String]>,
+) -> Result<InputSizes, ModelError> {
+    let invalid = |m: &str| Err(ModelError::InvalidManifest(m.to_owned()));
+    let (Some(shapes), Some(dimensions)) = (shapes, dimensions) else {
+        if shapes.is_some() || dimensions.is_some() {
+            return invalid("detector input_shapes and input_dimensions are declared together");
+        }
+        return Ok((vec![reference], None));
+    };
+    let [height_axis, width_axis] = dimensions else {
+        return invalid("detector input_dimensions must name two axes: [\"height\", \"width\"]");
+    };
+    if [height_axis, width_axis]
+        .iter()
+        .any(|a| a.trim().is_empty() || a.len() > 64)
+        || height_axis == width_axis
+    {
+        return invalid("detector input_dimensions must be two different, non-empty names");
+    }
+    if shapes.is_empty() || shapes.len() > MAX_INPUT_SHAPES {
+        return invalid("detector input_shapes must list between 1 and 16 shapes");
+    }
+    let mut sizes = Vec::with_capacity(shapes.len());
+    for shape in shapes {
+        let [1, 3, height, width] = shape[..] else {
+            return invalid("detector input_shapes must be [1, 3, H, W] each");
+        };
+        if !INPUT_SIDE_RANGE.contains(&width)
+            || !INPUT_SIDE_RANGE.contains(&height)
+            || width % INPUT_SIDE_MULTIPLE != 0
+            || height % INPUT_SIDE_MULTIPLE != 0
+        {
+            return invalid(
+                "detector input_shapes sides must be multiples of 32 between 32 and 4096",
+            );
+        }
+        sizes.push((width, height));
+    }
+    // Smallest area first; equal areas by width, so that the order is the same everywhere.
+    sizes.sort_unstable_by_key(|&(w, h)| (u64::from(w) * u64::from(h), w, h));
+    let count = sizes.len();
+    sizes.dedup();
+    if sizes.len() != count {
+        return invalid("detector input_shapes must not repeat a shape");
+    }
+    if sizes.last() != Some(&reference) {
+        return invalid(
+            "detector input_shapes must include input_shape, and it must be the largest",
+        );
+    }
+    Ok((sizes, Some((height_axis.clone(), width_axis.clone()))))
 }
 
 /// `"cpu"`, `"directml"` or both, comma-separated; `None` on anything else or a duplicate.
@@ -380,6 +472,95 @@ mod tests {
         );
     }
 
+    /// A manifest whose model exports free height and width.
+    fn shaped(shapes: &Value, dimensions: &Value) -> Value {
+        let mut m = manifest();
+        m["artifacts"][0]["input_shape"] = json!([1, 3, 320, 640]);
+        m["artifacts"][0]["input_shapes"] = shapes.clone();
+        m["artifacts"][0]["input_dimensions"] = dimensions.clone();
+        m
+    }
+
+    #[test]
+    fn a_fixed_model_has_one_input_size() {
+        let spec = parse(&manifest()).unwrap();
+        assert_eq!(spec.input_sizes, [(640, 320)]);
+        assert_eq!(spec.input_dimensions, None);
+    }
+
+    #[test]
+    fn a_model_with_free_axes_declares_its_input_sizes_smallest_first() {
+        let m = shaped(
+            &json!([
+                [1, 3, 320, 640],
+                [1, 3, 64, 64],
+                [1, 3, 160, 320],
+                [1, 3, 320, 320]
+            ]),
+            &json!(["height", "width"]),
+        );
+        let spec = parse(&m).unwrap();
+        assert_eq!(
+            spec.input_sizes,
+            [(64, 64), (320, 160), (320, 320), (640, 320)]
+        );
+        assert_eq!((spec.input_width, spec.input_height), (640, 320));
+        assert_eq!(
+            spec.input_dimensions,
+            Some(("height".to_owned(), "width".to_owned()))
+        );
+    }
+
+    #[test]
+    fn input_sizes_are_refused_unless_they_are_whole_and_led_by_the_reference() {
+        let axes = json!(["height", "width"]);
+        let ok = json!([[1, 3, 160, 320], [1, 3, 320, 640]]);
+        assert!(parse(&shaped(&ok, &axes)).is_ok());
+        for (message, shapes, dimensions) in [
+            ("declared together", ok.clone(), Value::Null),
+            ("two axes", ok.clone(), json!(["height"])),
+            ("different", ok.clone(), json!(["size", "size"])),
+            ("non-empty", ok.clone(), json!(["height", " "])),
+            ("between 1 and 16", json!([]), axes.clone()),
+            (
+                "[1, 3, H, W]",
+                json!([[1, 3, 320, 640], [3, 160, 320]]),
+                axes.clone(),
+            ),
+            (
+                "multiples of 32",
+                json!([[1, 3, 330, 320], [1, 3, 320, 640]]),
+                axes.clone(),
+            ),
+            (
+                "multiples of 32",
+                json!([[1, 3, 0, 320], [1, 3, 320, 640]]),
+                axes.clone(),
+            ),
+            (
+                "repeat",
+                json!([[1, 3, 320, 640], [1, 3, 320, 640]]),
+                axes.clone(),
+            ),
+            ("largest", json!([[1, 3, 160, 320]]), axes.clone()),
+            (
+                "largest",
+                json!([[1, 3, 320, 640], [1, 3, 640, 640]]),
+                axes.clone(),
+            ),
+        ] {
+            let mut m = shaped(&shapes, &dimensions);
+            if dimensions.is_null() {
+                m["artifacts"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("input_dimensions");
+            }
+            let err = parse(&m).unwrap_err().to_string();
+            assert!(err.contains(message), "{message}: {err}");
+        }
+    }
+
     #[test]
     fn the_dossier_template_selects_nothing() {
         let template = include_str!("../../../../../docs/thesis/plantillas/model_manifest.json");
@@ -409,6 +590,47 @@ mod tests {
             .map(|c| (c.role, c.actionability))
             .collect();
         assert_eq!(classes, [(Role::Unknown, Actionability::Confirmed)]);
+    }
+
+    /// RNF-05: the float16 export is a different artefact with its own pin, and only
+    /// DirectML was validated on it (ONNX Runtime's CPU provider has no float16 convolution).
+    #[test]
+    fn the_rnf05_manifest_selects_the_float16_export_for_directml_only() {
+        let text = include_str!("../../../../../docs/thesis/plantillas/model_manifest.rnf05.json");
+        let spec = DetectorSpec::from_manifest(text, Path::new("models")).unwrap();
+        assert_eq!(
+            spec.path,
+            Path::new("models").join("omniparser-icon-detect-v3/icon_detect_v3_fp16.onnx")
+        );
+        assert_eq!(
+            spec.sha256.to_hex(),
+            "d7a8901db0ae650616ee43f53e6ee8f57a829de54ab8daae431be77556cc0805"
+        );
+        assert_eq!((spec.input_width, spec.input_height), (1280, 1280));
+        assert_eq!(spec.input_sizes, [(1280, 1280)]);
+        assert_eq!(spec.execution_providers, [ExecutionProvider::DirectMl]);
+        // The same single class, role and affordance as the float32 export.
+        let s0 = include_str!("../../../../../docs/thesis/plantillas/model_manifest.s0.json");
+        let fp32 = DetectorSpec::from_manifest(s0, Path::new("models")).unwrap();
+        assert_eq!(spec.classes, fp32.classes);
+        assert_eq!(
+            (spec.score_threshold, spec.nms_iou, spec.output_layout),
+            (fp32.score_threshold, fp32.nms_iou, fp32.output_layout)
+        );
+    }
+
+    /// The operator's configuration pins the manifest by hash: it must be the hash of the
+    /// manifest this repository ships.
+    #[test]
+    fn the_rnf05_configuration_pins_the_rnf05_manifest() {
+        let manifest =
+            include_str!("../../../../../docs/thesis/plantillas/model_manifest.rnf05.json");
+        let config = include_str!("../../../../../tools/s0/ommatix.rnf05.directml.toml");
+        let pin = format!(
+            "detector_manifest_sha256 = \"{}\"",
+            Sha256Digest::of(manifest.as_bytes()).to_hex()
+        );
+        assert!(config.contains(&pin), "{pin}");
     }
 
     #[test]

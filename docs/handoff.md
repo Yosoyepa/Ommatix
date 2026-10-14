@@ -29,7 +29,8 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | S4, cuarta ronda (rama `feat/uia-evidence`, #11, CHANGELOG 1.0.19): repetición del protocolo con las correcciones de 1.0.18. E2E-01, 10 de 10 corridas puntuadas (escritura verificada por el título, 0 teclas perdidas, 0 falsos éxitos, tiempos de acción en `_meta`); E2E-02 abandonada: sin control de borrado tras «=» en modo Científica, y el clic de navegación de la contingencia no quedó anclado al control pedido; E2E-03 no ejecutada por ese desajuste. Cliente sin cambios, con un envoltorio fuera del repositorio para el límite por ronda y los tiempos de acción. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Cuarta ronda» (CHANGELOG 1.0.19) y revisión en [`reviews/2026-10-14-s4-fourth-round.md`](reviews/2026-10-14-s4-fourth-round.md) | Abierto |
 | — | S4, quinta ronda (rama `feat/uia-evidence`, #11, CHANGELOG 1.0.21): E2E-02 no se ejecutó (el cambio a Estándar se detuvo en el paso «Estándar» tras un clic de navegación anclado); E2E-03, piloto con un clic en «Editar» sin anclaje tras el clic (falso éxito según el cliente, hallazgo de seguridad): la serie puntuada no se ejecutó; 0 corridas puntuadas, 3 solicitudes reales (cuaderno 396 → 399), sin archivo de parada. Informe §«Quinta ronda» y revisión en [`reviews/2026-10-14-s4-fifth-round.md`](reviews/2026-10-14-s4-fifth-round.md) | Abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.21)
+| — | RNF-05, latencia de la percepción incremental (rama `perf/rnf05-latency`, sobre `adfb1ea`, CHANGELOG 1.0.22, ADR-0019): las etapas de una observación (detección, OCR, accesibilidad) corren en hilos acotados y se unen antes de fusionar (`[engine] concurrent_stages`); red de `icon_detect_v3` en float16 con la decodificación en float32 (`export_omniparser_v3.py --fp16`, manifiesto `model_manifest.rnf05.json`, sólo DirectML, equivalente al float32 salvo cajas en el umbral); entradas más pequeñas para regiones pequeñas medidas y descartadas (cambian las detecciones). Con 30 procesos por variante: refresco completo en caliente p95 240 → 98 ms, una región 195 → 102 ms, dos regiones 310 → 153 ms (**RNF-05 no cumplido por 3 ms con dos regiones**). La aplicación de prueba tiene banderas ocultas `--animate` y `tools/perf/measure_latency.py` mide sin entrada. Informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §10 | Abierto |
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.22)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
@@ -197,13 +198,23 @@ La quinta ronda (1.0.21) no puntúa ninguna corrida. E2E-02 no se ejecutó: el c
      affordance `interactive` tomada de su ficha. Queda por decidir si se acepta para el
      producto. Medido en el motor (`thesis/S0_RESULTADOS.md` §9): una inferencia cuesta unos
      7,5 s con un hilo de CPU, 2,6 s con 8 y 0,12 s con DirectML (mismas detecciones). Con
-     DirectML se cumplen las metas iniciales de RNF-05 para el refresco completo (p95 202 ms
-     en Notepad) y para una región (p95 123 ms), pero no para dos o más, porque cada región
-     planificada cuesta una inferencia completa. Agrupar regiones en una entrada se midió y se
-     descartó porque cambia las detecciones. Falta: decidir si DirectML (ONNX Runtime 1.24.4,
+     DirectML, la rama `perf/rnf05-latency` (§10) lleva el refresco completo en caliente a
+     p95 98 ms y una región a p95 102 ms, pero dos regiones quedan en p95 153 ms (meta: 150),
+     porque cada región planificada cuesta una inferencia completa de unos 65 ms con la red
+     en float16. Agrupar regiones en una entrada y usar entradas más pequeñas se midieron y se
+     descartaron porque cambian las detecciones (§9.5 y §10.2). Falta: decidir si DirectML (ONNX Runtime 1.24.4,
      la última versión con DirectML, en ingeniería sostenida) es aceptable como proveedor del
      producto, medir RSS y VRAM (RNF-06) y la precisión, o buscar un modelo más ligero. Los
      pesos `icon_detect` v2 (AGPL-3.0) no se usan.
+   - RNF-05 (`thesis/S0_RESULTADOS.md` §10), lo que decide el responsable: (a) si la red en
+     float16 (`manifest.rnf05.json`, sólo DirectML) pasa a ser la del producto en las corridas
+     de S4, que hoy usan el manifiesto float32 y habría que repetir; con una región y una
+     aplicación que repinta de forma continua el float16 es peor que el float32 concurrente
+     (la GPU saturada retrasa a UI Automation, §10.5); (b) si se cambia qué ventanas lee
+     ADR-0017 o se guarda la lista entre observaciones: enumerar las ventanas de nivel
+     superior cuesta unos 48 ms de los 58 ms de la lectura de accesibilidad, y es lo que
+     separa a dos regiones de la meta de 150 ms; (c) medir RSS y VRAM (RNF-06) con las
+     sesiones y el float16.
    - OCR: `Windows.Media.Ocr` (es-ES) funciona, pero no informa confianza y pierde signos como
      "¡"; el candidato PP-OCRv5 mobile (Apache-2.0, ONNX oficial) tampoco tiene "¡" en su
      diccionario.

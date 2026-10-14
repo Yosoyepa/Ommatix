@@ -45,5 +45,11 @@ windows = { workspace = true, optional = true, features = [
 name = "s0_probe"
 required-features = ["onnx"]
 
+[[example]]
+## RNF-05 measurement (docs/thesis/S0_RESULTADOS.md §10): detections of each region in the
+## smallest input that holds it, against the same region padded to the largest input.
+name = "s0_shapes"
+required-features = ["onnx"]
+
 [lints]
 workspace = true

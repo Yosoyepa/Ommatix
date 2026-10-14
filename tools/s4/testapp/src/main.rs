@@ -16,9 +16,19 @@
 //! Every effect of a click is visible text, so an end-to-end run can verify its end state
 //! by OCR alone. OCR returns one element per word, so each state is spelt with a word that
 //! appears nowhere else in the window (cardinals for the counter, ordinals for the pager):
-//! digits would be ambiguous. Nothing moves on its own: the window only repaints after input.
+//! digits would be ambiguous. Nothing moves on its own: the window only repaints after input,
+//! except in the hidden measurement mode below.
+//!
+//! **Hidden `--animate <ms>` flag** (performance measurements, not used by the acceptance
+//! protocol): one or two small `Tic nnnn` labels, far apart, whose number advances every
+//! `<ms>` milliseconds without any input, so that incremental regions appear by themselves.
+//! `--animate-labels <1|2>` picks how many (default 1). `--animate-flash` replaces the labels
+//! with a dark veil over the whole window that comes and goes every `<ms>` milliseconds, so
+//! that every observation is a full refresh. The flags are not listed anywhere user-visible.
 
 #![windows_subsystem = "windows"]
+
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
@@ -111,14 +121,115 @@ impl State {
     }
 }
 
+/// How long after start the measurement mode keeps asking for the keyboard focus.
+const FOCUS_REQUEST_WINDOW: Duration = Duration::from_secs(2);
+
 const BUTTON_SIZE: [f32; 2] = [340.0, 110.0];
 const BUTTON_TEXT: f32 = 52.0;
 const VALUE_TEXT: f32 = 64.0;
 const HEADING_TEXT: f32 = 40.0;
 
-#[derive(Debug, Default)]
+/// The hidden measurement mode: how often the animated labels advance and how many there are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Animation {
+    period: Duration,
+    labels: u8,
+    /// A veil over the whole window instead of the labels.
+    flash: bool,
+}
+
+impl Animation {
+    /// Reads `--animate <ms>` and `--animate-labels <1|2>`; `None` without `--animate` or with
+    /// a value that is not a positive number of milliseconds.
+    fn from_args(args: impl IntoIterator<Item = String>) -> Option<Self> {
+        let mut args = args.into_iter();
+        let (mut period, mut labels, mut flash) = (None, 1, false);
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--animate" => period = args.next().and_then(|v| v.parse::<u64>().ok()),
+                "--animate-labels" => {
+                    labels = args
+                        .next()
+                        .and_then(|v| v.parse::<u8>().ok())
+                        .unwrap_or(1)
+                        .clamp(1, 2);
+                }
+                "--animate-flash" => flash = true,
+                _ => {}
+            }
+        }
+        period.filter(|ms| *ms > 0).map(|ms| Self {
+            period: Duration::from_millis(ms),
+            labels,
+            flash,
+        })
+    }
+
+    /// The tick number after `elapsed`.
+    fn tick(&self, elapsed: Duration) -> u128 {
+        elapsed.as_millis() / self.period.as_millis()
+    }
+
+    /// The text of the label with the given tick: the second label counts from a different
+    /// origin so that the two never read alike.
+    fn text(tick: u128, second: bool) -> String {
+        format!("Tic {:04}", (tick + if second { 5000 } else { 0 }) % 10_000)
+    }
+}
+
 struct TestApp {
     state: State,
+    animation: Option<Animation>,
+    started: Instant,
+}
+
+impl TestApp {
+    fn new(animation: Option<Animation>) -> Self {
+        Self {
+            state: State::default(),
+            animation,
+            started: Instant::now(),
+        }
+    }
+
+    /// Draws the animated labels at the top-left and the bottom-right of the window.
+    fn animated_labels(&self, ctx: &egui::Context, animation: Animation) {
+        let tick = animation.tick(self.started.elapsed());
+        let screen = ctx.content_rect();
+        if animation.flash {
+            let veil = if tick.is_multiple_of(2) { 0 } else { 170 };
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("veil"),
+            ))
+            .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(veil));
+        }
+        let draw = |id: &str, pos: egui::Pos2, second: bool| {
+            egui::Area::new(egui::Id::new(id))
+                .fixed_pos(pos)
+                .show(ctx, |ui| {
+                    ui.label(
+                        egui::RichText::new(Animation::text(tick, second))
+                            .size(HEADING_TEXT)
+                            .strong(),
+                    );
+                });
+        };
+        if !animation.flash {
+            draw("tick-a", screen.min + egui::vec2(24.0, 16.0), false);
+        }
+        if !animation.flash && animation.labels > 1 {
+            draw("tick-b", screen.max - egui::vec2(220.0, 64.0), true);
+        }
+        // A window started by a background process is not brought to the front by the OS, and
+        // UI Automation (like the engine) reads the foreground application. Ask for the focus
+        // once, early: the OS grants it only when the user has not touched the machine for a
+        // while, and never takes it from someone who is working.
+        if self.started.elapsed() < FOCUS_REQUEST_WINDOW {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        ctx.request_repaint_after(animation.period);
+    }
 }
 
 fn button(ui: &mut egui::Ui, label: &str) -> bool {
@@ -216,10 +327,14 @@ impl eframe::App for TestApp {
                     .send_viewport_cmd(egui::ViewportCommand::Title(self.state.title()));
             }
         });
+        if let Some(animation) = self.animation {
+            self.animated_labels(ui.ctx(), animation);
+        }
     }
 }
 
 fn main() -> eframe::Result {
+    let animation = Animation::from_args(std::env::args().skip(1));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(State::default().title())
@@ -231,7 +346,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             cc.egui_ctx.set_theme(egui::Theme::Light);
-            Ok(Box::new(TestApp::default()))
+            Ok(Box::new(TestApp::new(animation)))
         }),
     )
 }
@@ -239,6 +354,48 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|a| (*a).to_owned()).collect()
+    }
+
+    #[test]
+    fn nothing_animates_without_the_hidden_flag() {
+        assert_eq!(Animation::from_args(args(&[])), None);
+        assert_eq!(Animation::from_args(args(&["--animate-labels", "2"])), None);
+        assert_eq!(Animation::from_args(args(&["--animate", "0"])), None);
+        assert_eq!(Animation::from_args(args(&["--animate", "x"])), None);
+    }
+
+    #[test]
+    fn the_animation_reads_its_period_and_label_count() {
+        let a = Animation::from_args(args(&["--animate", "80"])).unwrap();
+        assert_eq!((a.period, a.labels), (Duration::from_millis(80), 1));
+        let b = Animation::from_args(args(&["--animate", "40", "--animate-labels", "2"])).unwrap();
+        assert_eq!((b.period, b.labels), (Duration::from_millis(40), 2));
+        let c = Animation::from_args(args(&["--animate", "40", "--animate-labels", "9"])).unwrap();
+        assert_eq!(c.labels, 2);
+    }
+
+    #[test]
+    fn the_flash_mode_is_a_separate_hidden_flag() {
+        let a = Animation::from_args(args(&["--animate", "250", "--animate-flash"])).unwrap();
+        assert!(a.flash);
+        let b = Animation::from_args(args(&["--animate", "250"])).unwrap();
+        assert!(!b.flash);
+        assert_eq!(Animation::from_args(args(&["--animate-flash"])), None);
+    }
+
+    #[test]
+    fn the_animated_labels_advance_with_time_and_never_read_alike() {
+        let a = Animation::from_args(args(&["--animate", "50"])).unwrap();
+        assert_eq!(a.tick(Duration::from_millis(49)), 0);
+        assert_eq!(a.tick(Duration::from_millis(50)), 1);
+        assert_ne!(Animation::text(3, false), Animation::text(4, false));
+        assert_ne!(Animation::text(3, false), Animation::text(3, true));
+        assert_eq!(Animation::text(9_999, false), "Tic 9999");
+        assert_eq!(Animation::text(10_000, false), "Tic 0000");
+    }
 
     #[test]
     fn the_counter_adds_subtracts_and_resets() {

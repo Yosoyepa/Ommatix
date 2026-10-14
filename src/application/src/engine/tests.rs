@@ -2107,4 +2107,5 @@ mod icons {
 // ---- accessibility evidence (ADR-0017) ----
 
 mod accessibility;
+mod concurrency;
 mod typing;

@@ -86,7 +86,11 @@ DirectML como opción; los modelos se eligen en el spike S0
    cerrarlo sobre la evidencia que toca hasta que nada cambie. Un cambio de geometría, un
    cierre que agota su presupuesto o un plan por encima de los umbrales iniciales (40 % del
    área o más de cuatro regiones) pasa a un refresco completo.
-3. **Percibir** las regiones planificadas con el detector y el OCR.
+3. **Percibir** las regiones planificadas con el detector y el OCR, y leer dentro de ellas
+   el árbol de accesibilidad. Las tres etapas leen el mismo frame y no dependen entre sí,
+   así que se ejecutan en hilos acotados y se unen antes de fusionar
+   ([ADR-0019](../adr/0019-concurrent-observation-stages.md)); el coordinador sigue siendo
+   el único escritor y recoge los resultados por etapa, no por orden de llegada.
 4. **Fusionar (algoritmo 2).** Un texto pertenece al control más específico que lo contiene,
    medido por IoC = área(texto ∩ control) / área(texto) ≥ 0,75; ante un empate se abstiene.
    Los textos se agrupan en renglones antes de ordenar la lectura. Las etiquetas externas se
@@ -212,7 +216,11 @@ sin OCR, entrada en dry run y política que lo niega todo.
   El manifiesto del modelo está fijado por SHA-256 y nombra los pesos, su SHA-256 y el rol y
   la affordance de cada clase; los nombres de clase nunca se convierten en roles. Cada región
   planificada se encaja con letterbox en la entrada, se decodifica, se suprime y se lleva de
-  vuelta al frame, con una inferencia por región. Corre en la CPU
+  vuelta al frame, con una inferencia por región. Una inferencia cuesta casi lo que píxeles
+  tiene su entrada, y las entradas más pequeñas para las regiones pequeñas cambian las
+  detecciones (S0 §10.2), así que toda región pasa por la entrada completa. El manifiesto de
+  RNF-05 para DirectML apunta a una exportación de la red en float16 con la decodificación en
+  float32 (S0 §10.3). Corre en la CPU
   (`detector_threads` hilos intra-op) o, con la feature `directml`, en DirectML con una
   `DirectML.dll` fijada, ejecución secuencial, sin patrón de memoria y sin recurrir a la
   CPU; el manifiesto enumera los proveedores con los que se validó el modelo.

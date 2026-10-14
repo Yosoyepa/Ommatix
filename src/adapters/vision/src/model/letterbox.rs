@@ -15,6 +15,26 @@ use crate::crop::BPP;
 /// Value of the padding, as YOLO-style exporters train with it (114 / 255 on each channel).
 pub const PAD_VALUE: f32 = 114.0 / 255.0;
 
+/// The input size, among `sizes` (`(width, height)`, smallest area first), a
+/// `crop_width × crop_height` crop is best fed through: the one that keeps the largest
+/// scale (so a crop is only ever reduced when no size holds it whole) and, among those, the
+/// smallest area, because the cost of an inference follows the input's area. Ties on both go
+/// to the earlier size. `None` if `sizes` is empty or the crop has an empty side.
+///
+/// A crop that fits a smaller size at scale 1 is laid out exactly as it would be in a
+/// larger one (the same pixels, padded at its own resolution), only with less padding
+/// around it; the largest size is the fallback for anything too big for the rest.
+pub fn best_fit(sizes: &[(u32, u32)], crop_width: u32, crop_height: u32) -> Option<usize> {
+    let mut best: Option<(usize, f64)> = None;
+    for (index, &(width, height)) in sizes.iter().enumerate() {
+        let scale = Letterbox::fit(crop_width, crop_height, width, height)?.scale;
+        if best.is_none_or(|(_, s)| scale > s) {
+            best = Some((index, scale));
+        }
+    }
+    best.map(|(index, _)| index)
+}
+
 /// How a `crop_width × crop_height` crop sits in an `input_width × input_height` tensor.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Letterbox {
@@ -222,6 +242,59 @@ mod tests {
         // A whole 1920x1080 frame is still scaled down to fit.
         let full = Letterbox::fit(1920, 1080, 1280, 1280).unwrap();
         assert!(close(full.scale, 2.0 / 3.0) && close(full.pad_y, 280.0));
+    }
+
+    #[test]
+    fn a_crop_goes_to_the_smallest_input_that_holds_it_whole() {
+        // Smallest area first, as the manifest lists them.
+        let sizes = [
+            (320, 160),
+            (320, 320),
+            (640, 320),
+            (640, 640),
+            (1280, 736),
+            (1280, 1280),
+        ];
+        let pick = |w, h| sizes[best_fit(&sizes, w, h).unwrap()];
+        assert_eq!(pick(310, 160), (320, 160));
+        assert_eq!(pick(318, 160), (320, 160));
+        assert_eq!(pick(321, 160), (640, 320));
+        assert_eq!(pick(229, 152), (320, 160));
+        assert_eq!(pick(300, 300), (320, 320));
+        assert_eq!(
+            pick(100, 321),
+            (640, 640),
+            "tall crops need the squarer sizes"
+        );
+        assert_eq!(pick(900, 500), (1280, 736));
+        assert_eq!(pick(1280, 736), (1280, 736));
+        assert_eq!(pick(700, 1000), (1280, 1280));
+        // Too big for every size: the largest scale wins, and among equal scales the
+        // smaller input. A 1920x1080 frame is reduced to 1280 wide either way.
+        assert_eq!(pick(1920, 1080), (1280, 736));
+        assert_eq!(pick(2560, 1440), (1280, 736));
+        assert_eq!(pick(1920, 1200), (1280, 1280));
+        assert_eq!(pick(4000, 4000), (1280, 1280));
+    }
+
+    #[test]
+    fn a_whole_fit_is_the_same_layout_in_every_input_that_holds_it() {
+        // The 310x160 crop at scale 1 in a 320x160 input and in a 1280x1280 one: the same
+        // pixels, one scale, the padding being the only difference.
+        let small = Letterbox::fit(310, 160, 320, 160).unwrap();
+        let large = Letterbox::fit(310, 160, 1280, 1280).unwrap();
+        assert!(close(small.scale, 1.0) && close(large.scale, 1.0));
+        let (sx, sy) = small.to_tensor(10.0, 20.0);
+        let (lx, ly) = large.to_tensor(10.0, 20.0);
+        assert!(close(sx - small.pad_x, lx - large.pad_x));
+        assert!(close(sy - small.pad_y, ly - large.pad_y));
+    }
+
+    #[test]
+    fn no_input_or_an_empty_crop_has_no_best_fit() {
+        assert_eq!(best_fit(&[], 10, 10), None);
+        assert_eq!(best_fit(&[(64, 64)], 0, 10), None);
+        assert_eq!(best_fit(&[(64, 64)], 10, 10), Some(0));
     }
 
     #[test]

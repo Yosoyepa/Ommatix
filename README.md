@@ -125,9 +125,12 @@ unless the agent and a local policy both allow them. More in the
   A fifth round ([CHANGELOG 1.0.21](docs/thesis/CHANGELOG.md)) scored no runs. Its switch of the Calculator to Standard mode stopped before the second click, so E2E-02 did not run, and the Notepad pilot's click on Edit did not pass its identity check after the click, so the scored E2E-03 series was not run.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
-  one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML,
-  where the initial RNF-05 targets are met for a full refresh and a one-region update but
-  not for two or more regions), so by default the detector is the bootstrap's flat-colour region finder (roles
+  one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML;
+  with the stages of an observation running concurrently and the network in float16
+  ([ADR-0019](docs/adr/0019-concurrent-observation-stages.md), [CHANGELOG 1.0.22](docs/thesis/CHANGELOG.md))
+  the initial RNF-05 targets are met on the reference machine for a full refresh
+  (p95 98 ms) and a one-region update (p95 102 ms) but not, by 3 ms, for two regions
+  (p95 153 ms), so RNF-05 is not closed), so by default the detector is the bootstrap's flat-colour region finder (roles
   `unknown`) and there is no OCR; no third-party MCP client has been tested; IT-02 ran only
   in part (S0); and IT-06, IT-07, SEC-03, SEC-04 and SEC-06 have not been run under
   supervision. Live input stays **off** unless the
@@ -255,7 +258,7 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
 
 - **Refused** (the server does not start): unknown sections or keys; out-of-range values
   (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024, `full_refresh_area_ratio`
-  in (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
+  in (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` a boolean (default `true`), `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
   blank `allowed_applications` entries, a blank `stop_file`); and values this build cannot
   honour: a `platform` other than `windows`, a `snapshot_policy` other than `strict`, a `profile` other than
   `2026-07-28` (the legacy profile is enabled with `legacy_enabled`), a `transport` other than
@@ -336,6 +339,12 @@ docs/
 ├── architecture/          overview (EN/ES)
 ├── diagrams/              Mermaid diagrams, English labels
 └── reviews/               code reviews: finding, resolution, regression test
+tools/                     measurement and acceptance tools outside the workspace (never linked
+├── s0/                    into the binary): model export (`--fp16`, `--dynamic`), synthetic frames,
+│                          operator configurations
+├── s3/, s4/               MCP drivers and the controlled test application (`s4/testapp`, with
+│                          the hidden `--animate` flags of the RNF-05 measurements)
+└── perf/                  `measure_latency.py`: per-stage latency against the test application
 ```
 
 How the dossier's SDD components ([chapter 02 §2.3](docs/thesis/02_SDD_ARQUITECTURA_MVP.md))
