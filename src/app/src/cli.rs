@@ -103,4 +103,8 @@ pub struct DemoArgs {
     /// Observations to run.
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..=20))]
     pub observations: u8,
+    /// Also print each observation's per-stage timings (milliseconds, monotonic clock) to
+    /// stderr. They depend on the run, so they never reach stdout.
+    #[arg(long)]
+    pub timings: bool,
 }

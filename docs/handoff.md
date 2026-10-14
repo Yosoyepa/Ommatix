@@ -13,11 +13,12 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | #2 | Prototipo hexagonal del arranque (`src/`), sin el dossier | Fusionado |
 | #3 | Dossier de la tesis consolidado en `docs/thesis/` como Ommatix; ADR-0001..0012 de la tesis en inglés (aprobadas el 2026-10-14), ADR-0013/0014; ADR del arranque archivadas en `docs/adr/bootstrap/`; job `thesis` en la CI | Fusionado |
 | #4 | S1: núcleo geométrico e incremental en `ommatix-domain` (`bbox`, `incremental`, `snapshot`, `fusion`); UT-01..26; BDD-01..10 ejecutados desde `docs/thesis/features/` con `src/acceptance/tests/thesis.rs` | Fusionado |
-| #5 | S2a: `appearance` (algoritmo 3A, caché de íconos con rechazo) e `identity` (algoritmo 3B, registro de sesión, comprobaciones de vigencia de una acción); UT-27..43; este documento | Abierto |
-| #6 | S2b: puertos del SDD y `Engine` en `ommatix-application` (`observe_screen`, `execute_action`, `get_engine_metrics`); adaptador MCP con tipos de `rmcp` 3.5.1 y bucle acotado (ADR-0015); CT-01..10 y los 17 ejemplos del dossier; BDD-11..27 ejecutados; `serve`/`demo` con el motor nuevo y `--config`; algoritmo 3A dentro de la observación; se retira el prototipo; revisión en [`reviews/2026-10-14-s2b-engine-and-mcp.md`](reviews/2026-10-14-s2b-engine-and-mcp.md) | Abierto |
-| #7 | S3, primera parte (rama `feat/s3-windows-adapters`, sobre S2b): captura DXGI (`--source dxgi`, `--output N`) y entrada `SendInput` (`--input sendinput`) con `unsafe` acotado (ADR-0016); detector ONNX que falla de forma segura con manifiesto y SHA-256 y OCR de Windows (`[models]`); job `windows` en la CI; parada del operador (`[safety] stop_file`) y comprobación del foco antes de escribir; BDD-28..32 ejecutados sobre un doble del actuador real | Abierto |
+| #5 | S2a: `appearance` (algoritmo 3A, caché de íconos con rechazo) e `identity` (algoritmo 3B, registro de sesión, comprobaciones de vigencia de una acción); UT-27..43; este documento | Fusionado |
+| #6 | S2b: puertos del SDD y `Engine` en `ommatix-application` (`observe_screen`, `execute_action`, `get_engine_metrics`); adaptador MCP con tipos de `rmcp` 3.5.1 y bucle acotado (ADR-0015); CT-01..10 y los 17 ejemplos del dossier; BDD-11..27 ejecutados; `serve`/`demo` con el motor nuevo y `--config`; algoritmo 3A dentro de la observación; se retira el prototipo; revisión en [`reviews/2026-10-14-s2b-engine-and-mcp.md`](reviews/2026-10-14-s2b-engine-and-mcp.md) | Fusionado |
+| #7 | S3, primera parte (rama `feat/s3-windows-adapters`, sobre S2b): captura DXGI (`--source dxgi`, `--output N`) y entrada `SendInput` (`--input sendinput`) con `unsafe` acotado (ADR-0016); detector ONNX que falla de forma segura con manifiesto y SHA-256 y OCR de Windows (`[models]`); job `windows` en la CI; parada del operador (`[safety] stop_file`) y comprobación del foco antes de escribir; BDD-28..32 ejecutados sobre un doble del actuador real | Fusionado |
+| — | Spike S0 (rama `feat/s0-omniparser-v3`): detector OmniParser `icon_detect_v3` (MIT) exportado a ONNX con `tools/s0/export_omniparser_v3.py`, manifiesto `SELECCIONADO` (`docs/thesis/plantillas/model_manifest.s0.json`), ONNX Runtime 1.28.0 en CPU, OCR de Windows es-ES; corridas supervisadas sobre `notepad.exe` sin entrada; letterbox sin ampliación; `demo --timings`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) | Abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.6)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.8)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 Ninguna prueba IT ni SEC se ha ejecutado.
@@ -100,7 +101,7 @@ Ninguna prueba IT ni SEC se ha ejecutado.
   feature `native-input` y la fuente `screen`; `sendinput` con la feature `sendinput`, la
   fuente `dxgi` y una lista `allowed_applications` no vacía de nombres en minúsculas; ambas
   exigen `actuation_enabled = true`), `--theme`, `--session-id` y `--legacy`; `demo` añade
-  `--observations N` (1–20). Features: `screen`, `native-input`, `dxgi`, `sendinput`,
+  `--observations N` (1–20) y `--timings` (tiempos por etapa en stderr). Features: `screen`, `native-input`, `dxgi`, `sendinput`,
   `onnx`, `winrt-ocr`, todas apagadas por defecto. La configuración tiene la forma de
   `docs/thesis/plantillas/configuracion_mvp.toml` y se valida de forma estricta: se rechazan
   claves desconocidas, valores fuera de rango y valores que el binario no puede cumplir
@@ -128,33 +129,36 @@ Ninguna prueba IT ni SEC se ha ejecutado.
   sendinput` y el consentimiento del operador, y nunca se ha ejecutado de forma supervisada;
   la parada del operador (`[safety] stop_file`) y la comprobación del foco antes de
   escribir sólo se han probado sobre dobles (SEC-02 y SEC-05 esperan corridas supervisadas);
-  sólo se verifica el efecto `visual_change`; no hay modelo seleccionado, así que los roles
-  siguen `unknown` y no hay OCR por defecto; OR-44 espera "actuación no implementada" y el
+  sólo se verifica el efecto `visual_change`; el único detector seleccionado (spike S0, `icon_detect_v3`) tiene una sola clase, así que los roles
+  siguen `unknown`, una inferencia cuesta unos 7,5 s en CPU y su precisión no está medida; el
+  primer frame DXGI de una sesión llega en blanco (`thesis/S0_RESULTADOS.md` §7); no hay OCR por defecto; OR-44 espera "actuación no implementada" y el
   motor responde `POLICY_DENIED` sin entregar nada; el contexto del caché de íconos lo fija
   el operador y sus umbrales no están calibrados; no se ha probado un cliente MCP real
   (capítulo 07 §7.1).
 
 ## Qué sigue
 
-1. **Revisar y fusionar** los PR abiertos en orden: #5 (S2a), #6 (S2b) y el de S3, primera
-   parte (`feat/s3-windows-adapters`).
+1. **Revisar y fusionar** el PR del spike S0 (`feat/s0-omniparser-v3`).
 2. **Decisiones que esperan al responsable** (ningún agente puede tomarlas):
-   - Elegir los modelos y sus licencias (ADR-0009, spike S0): detector y OCR, su
-     exportación ONNX, el manifiesto con estado `SELECCIONADO` y los SHA-256, y la versión
-     de ONNX Runtime que se fija. Hallazgos del spike, todavía sin aprobar: hardware Ryzen 7
-     5700X, RX 6700 XT, 32 GiB, dos monitores 1920×1080 al 100 % (se usa la salida 0;
-     ADR-0008: un monitor); `ort` 2.0.0-rc.13 mantiene el MSRV 1.88 (rc.14 exige 1.92);
-     DirectML está en ingeniería sostenida, así que la CPU es la base; los pesos
-     `icon_detect` v2 de OmniParser son AGPL-3.0 (sólo línea base local, nunca se
-     distribuyen) e `icon_detect_v3` es MIT pero sin ONNX oficial; candidato de OCR
-     PP-OCRv5 mobile (Apache-2.0, ONNX oficial, sin "¡" en su diccionario);
-     `Windows.Media.Ocr` sólo tiene es-ES y es-MX instalados y no informa confianza.
+   - Detector del producto (ADR-0009). El spike S0 (`thesis/S0_RESULTADOS.md`) seleccionó
+     `icon_detect_v3` de OmniParser (MIT, revisión `f55d0750`) para integrar y medir:
+     ONNX opset 17 con la cabeza decodificada, ONNX Runtime 1.28.0 en CPU, rol `unknown` y
+     affordance `interactive` tomada de su ficha. Queda por decidir si se acepta para el
+     producto: una inferencia cuesta unos 7,5 s en CPU con un hilo (2,6 s con 8 hilos, medido
+     fuera del motor), cada región planificada cuesta una inferencia completa y la precisión
+     no está medida. Opciones: más hilos, DirectML (en ingeniería sostenida), agrupar regiones
+     en una entrada o un modelo más ligero. Los pesos `icon_detect` v2 (AGPL-3.0) no se usan.
+   - OCR: `Windows.Media.Ocr` (es-ES) funciona, pero no informa confianza y pierde signos como
+     "¡"; el candidato PP-OCRv5 mobile (Apache-2.0, ONNX oficial) tampoco tiene "¡" en su
+     diccionario.
    - Elegir el cliente MCP real con el que se prueba la conformidad (capítulo 07 §7.1).
    - Elegir las aplicaciones de prueba controladas (para `allowed_applications`, las
      corridas IT y la evaluación de S4).
 3. **Corridas supervisadas en el hardware de referencia**, con el operador presente y una
-   aplicación de prueba en `allowed_applications`; ninguna está hecha y ninguna prueba
-   automática las sustituye:
+   aplicación de prueba en `allowed_applications`. S0 ejecutó en parte IT-01 e IT-02 sin
+   entrada; las demás no están hechas y ninguna prueba automática las sustituye. Antes de la
+   próxima corrida: corregir el primer frame DXGI en blanco y abrir el Bloc de notas en una
+   sesión limpia (restaura pestañas de sesiones anteriores):
    - IT-01 (captura DXGI: frames reales, stride, rotación, pérdida de acceso;
      `cargo test -p ommatix-adapter-capture --features dxgi -- --ignored` toma un frame sin
      guardarlo), IT-02 (detector y OCR reales, deshacer el letterbox; necesita modelos),

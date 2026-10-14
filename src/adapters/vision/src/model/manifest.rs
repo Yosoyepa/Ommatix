@@ -342,6 +342,27 @@ mod tests {
     }
 
     #[test]
+    fn the_s0_manifest_selects_one_class_without_a_role() {
+        let s0 = include_str!("../../../../../docs/thesis/plantillas/model_manifest.s0.json");
+        let spec = DetectorSpec::from_manifest(s0, Path::new("models")).unwrap();
+        assert_eq!(
+            spec.path,
+            Path::new("models").join("omniparser-icon-detect-v3/icon_detect_v3.onnx")
+        );
+        assert_eq!((spec.input_width, spec.input_height), (1280, 1280));
+        assert_eq!(spec.output_layout, OutputLayout::ChannelsFirst);
+        assert_eq!(spec.opset, 17);
+        // One interactable-region class: no role is claimed, only the affordance the
+        // model card states, with that statement as evidence.
+        let classes: Vec<_> = spec
+            .classes
+            .iter()
+            .map(|c| (c.role, c.actionability))
+            .collect();
+        assert_eq!(classes, [(Role::Unknown, Actionability::Confirmed)]);
+    }
+
+    #[test]
     fn incomplete_or_unsupported_manifests_are_refused() {
         for (message, pointer, value) in [
             ("selected", "/status", json!("CANDIDATOS_NO_SELECCIONADOS")),

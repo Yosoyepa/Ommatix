@@ -1,7 +1,10 @@
 //! Letterboxing a crop into the model's input, and undoing it (thesis chapter 02 §2.8).
 //!
-//! The crop is scaled by one factor `scale` (the largest that fits), centred, and the rest
-//! of the tensor is padded. The resampling is defined as the inverse map, so undoing it is
+//! The crop is scaled by one factor `scale` (the largest that fits, but never above 1),
+//! centred, and the rest of the tensor is padded. A crop smaller than the input is padded
+//! at its own resolution, never magnified: GUI detectors are trained on whole screens
+//! scaled down, and in the S0 spike a magnified small region produced spurious detections
+//! (docs/thesis/S0_RESULTADOS.md). The resampling is defined as the inverse map, so undoing it is
 //! exact: a tensor coordinate `x_t` is the crop coordinate
 //! `x_crop = (x_t - pad_x) / scale` (and likewise for Y), and the frame coordinate is
 //! `x_crop` plus the crop's origin. Coordinates are continuous, with pixel `i` covering
@@ -27,7 +30,7 @@ pub struct Letterbox {
 }
 
 impl Letterbox {
-    /// The letterbox of a crop; `None` if any side is zero.
+    /// The letterbox of a crop (scale at most 1); `None` if any side is zero.
     pub fn fit(
         crop_width: u32,
         crop_height: u32,
@@ -38,7 +41,8 @@ impl Letterbox {
             return None;
         }
         let scale = (f64::from(input_width) / f64::from(crop_width))
-            .min(f64::from(input_height) / f64::from(crop_height));
+            .min(f64::from(input_height) / f64::from(crop_height))
+            .min(1.0);
         let content = |side: u32, input: u32| {
             (f64::from(side) * scale)
                 .round()
@@ -171,25 +175,53 @@ mod tests {
 
     #[test]
     fn the_tensor_is_rgb_planes_with_padding() {
-        // A 2x1 crop: blue then red, into a 4x4 input → scale 2, content 4x2, pad_y 1.
+        // A 2x1 crop: blue then red, into a 4x4 input → scale 1, content 2x1 at (1, 1).
         let crop = [255, 0, 0, 255, 0, 0, 255, 255];
         let lb = Letterbox::fit(2, 1, 4, 4).unwrap();
-        assert!(close(lb.pad_y, 1.0));
+        assert!(close(lb.scale, 1.0) && close(lb.pad_x, 1.0) && close(lb.pad_y, 1.0));
         let t = lb.tensor(&crop);
         assert_eq!(t.len(), 3 * 16);
         let (r, b) = (&t[0..16], &t[32..48]);
-        // Padding rows 0 and 3.
-        assert!(
-            r[0..4]
-                .iter()
-                .chain(&r[12..16])
-                .all(|v| (*v - PAD_VALUE).abs() < 1e-6)
-        );
-        // Row 1: the left half is blue, the right half is red.
-        assert!((b[4] - 1.0).abs() < 1e-6 && r[4].abs() < 1e-6);
-        assert!((r[7] - 1.0).abs() < 1e-6 && b[7].abs() < 1e-6);
-        // Bilinear in between, symmetric.
-        assert!((r[5] - 0.25).abs() < 1e-6 && (r[6] - 0.75).abs() < 1e-6);
+        // Everything but pixels 5 and 6 is padding.
+        for (i, v) in r.iter().enumerate() {
+            if i != 5 && i != 6 {
+                assert!((*v - PAD_VALUE).abs() < 1e-6, "pixel {i}");
+            }
+        }
+        // Row 1: blue then red, BGRA → RGB planes.
+        assert!((b[5] - 1.0).abs() < 1e-6 && r[5].abs() < 1e-6);
+        assert!((r[6] - 1.0).abs() < 1e-6 && b[6].abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_downscaled_crop_is_resampled_bilinearly() {
+        // A 4x2 crop: two blue columns then two red ones, into 2x2 → scale 0.5.
+        let blue = [255, 0, 0, 255];
+        let red = [0, 0, 255, 255];
+        let crop: Vec<u8> = [blue, blue, red, red, blue, blue, red, red].concat();
+        let lb = Letterbox::fit(4, 2, 2, 2).unwrap();
+        assert!(close(lb.scale, 0.5) && close(lb.pad_x, 0.0) && close(lb.pad_y, 0.0));
+        let t = lb.tensor(&crop);
+        let (r, b) = (&t[0..4], &t[8..12]);
+        // Content row 0: each tensor pixel averages two source pixels of one colour.
+        assert!((b[0] - 1.0).abs() < 1e-6 && r[0].abs() < 1e-6);
+        assert!((r[1] - 1.0).abs() < 1e-6 && b[1].abs() < 1e-6);
+        // Row 1 is padding.
+        assert!(r[2..4].iter().all(|v| (*v - PAD_VALUE).abs() < 1e-6));
+    }
+
+    /// S0 regression: a small dirty region letterboxed into a 1280 input was magnified
+    /// more than ten times, and the detector reported spurious regions inside it.
+    #[test]
+    fn a_small_crop_is_not_magnified() {
+        let lb = Letterbox::fit(128, 96, 1280, 1280).unwrap();
+        assert!(close(lb.scale, 1.0));
+        assert!(close(lb.pad_x, 576.0) && close(lb.pad_y, 592.0));
+        assert_eq!(lb.to_tensor(0.0, 0.0), (576.0, 592.0));
+        assert_eq!(lb.to_crop(704.0, 688.0), (128.0, 96.0));
+        // A whole 1920x1080 frame is still scaled down to fit.
+        let full = Letterbox::fit(1920, 1080, 1280, 1280).unwrap();
+        assert!(close(full.scale, 2.0 / 3.0) && close(full.pad_y, 280.0));
     }
 
     #[test]
