@@ -3,7 +3,8 @@
 //!
 //! Every field is optional and defaults to the template's value; unknown sections and keys
 //! are rejected. [`Config::validate`] rejects values this build cannot honour (another
-//! transport or profile, model paths, a persistent cache, permissions it cannot enforce)
+//! transport or profile, weights outside a model manifest, unpinned or half-configured
+//! models, a persistent cache, permissions it cannot enforce)
 //! instead of accepting them silently, and [`Config::notes`] lists the accepted values that
 //! the engine does not enforce yet, for stderr.
 //!
@@ -15,6 +16,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use ommatix_adapter_mcp::config::MIN_MAX_MESSAGE_BYTES;
 use ommatix_adapter_mcp::{DEFAULT_MAX_MESSAGE_BYTES, MODERN_PROTOCOL_VERSION, McpConfig};
+use ommatix_adapter_vision::model::integrity::Sha256Digest;
 use ommatix_application::LocalPolicy;
 use ommatix_domain::incremental::PlanParams;
 use serde::Deserialize;
@@ -95,14 +97,118 @@ pub struct SafetySection {
     pub include_values: bool,
 }
 
-/// `[models]`: weights chosen in the S0 spike. Empty until then.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+/// The OCR engine (`[models] ocr`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OcrKind {
+    /// No OCR: elements carry empty labels with `label_source: unknown`.
+    #[default]
+    None,
+    /// The OCR built into Windows (`Windows.Media.Ocr`), for exactly `ocr_language`.
+    Winrt,
+}
+
+/// `[models]`: the perception models, chosen in the S0 spike. Empty (no model, no OCR)
+/// until the operator pins them; every file is pinned by SHA-256 and refused on mismatch.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct ModelsSection {
+    /// Model manifest shaped like `docs/thesis/plantillas/model_manifest.json`, whose
+    /// detector entry names the weights and their SHA-256.
+    pub detector_manifest: String,
+    pub detector_manifest_sha256: String,
+    /// The ONNX Runtime library the detector runs on (`onnxruntime.dll`).
+    pub onnxruntime_path: String,
+    pub onnxruntime_sha256: String,
+    pub ocr: OcrKind,
+    /// BCP-47 tag of the OCR language; never replaced by another language.
+    pub ocr_language: String,
+    /// Template keys: the weights are declared in the manifest, so these stay empty.
     pub detector_path: String,
     pub detector_sha256: String,
     pub ocr_path: String,
     pub ocr_sha256: String,
+}
+
+impl Default for ModelsSection {
+    fn default() -> Self {
+        Self {
+            detector_manifest: String::new(),
+            detector_manifest_sha256: String::new(),
+            onnxruntime_path: String::new(),
+            onnxruntime_sha256: String::new(),
+            ocr: OcrKind::None,
+            ocr_language: "es-ES".to_owned(),
+            detector_path: String::new(),
+            detector_sha256: String::new(),
+            ocr_path: String::new(),
+            ocr_sha256: String::new(),
+        }
+    }
+}
+
+impl ModelsSection {
+    /// Whether a detector is configured (validation makes the four keys all-or-nothing).
+    pub fn has_detector(&self) -> bool {
+        !self.detector_manifest.is_empty()
+    }
+
+    fn problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut check = |ok: bool, problem: &str| {
+            if !ok {
+                out.push(problem.to_owned());
+            }
+        };
+        check(
+            self.detector_path.is_empty() && self.detector_sha256.is_empty(),
+            "[models] detector_path and detector_sha256 must stay empty: the weights and \
+             their SHA-256 are declared in the model manifest (set detector_manifest and \
+             detector_manifest_sha256)",
+        );
+        check(
+            self.ocr_path.is_empty() && self.ocr_sha256.is_empty(),
+            "[models] ocr_path and ocr_sha256 must stay empty: no file-based OCR model is \
+             supported (use ocr = \"winrt\")",
+        );
+        let detector = [
+            &self.detector_manifest,
+            &self.detector_manifest_sha256,
+            &self.onnxruntime_path,
+            &self.onnxruntime_sha256,
+        ];
+        check(
+            detector.iter().all(|v| v.is_empty()) || detector.iter().all(|v| !v.is_empty()),
+            "[models] detector_manifest, detector_manifest_sha256, onnxruntime_path and \
+             onnxruntime_sha256 must be set together (or all left empty for no detector \
+             model)",
+        );
+        check(
+            [&self.detector_manifest_sha256, &self.onnxruntime_sha256]
+                .iter()
+                .all(|v| v.is_empty() || is_sha256(v)),
+            "[models] detector_manifest_sha256 and onnxruntime_sha256 must be SHA-256 \
+             digests (64 hexadecimal characters)",
+        );
+        check(
+            is_language_tag(&self.ocr_language),
+            "[models] ocr_language must be a BCP-47 language tag such as \"es-ES\"",
+        );
+        out
+    }
+}
+
+fn is_sha256(hex: &str) -> bool {
+    Sha256Digest::parse(hex).is_ok()
+}
+
+/// A BCP-47-shaped tag: ASCII letters, digits and inner hyphens, 2 to 35 characters.
+fn is_language_tag(tag: &str) -> bool {
+    (2..=35).contains(&tag.len())
+        && tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && !tag.starts_with('-')
+        && !tag.ends_with('-')
+        && !tag.contains("--")
 }
 
 /// `[cache]`: the icon cache (Algorithm 3A).
@@ -242,20 +348,6 @@ impl Config {
              sends no screenshots",
         );
 
-        let models = &self.models;
-        check(
-            [
-                &models.detector_path,
-                &models.detector_sha256,
-                &models.ocr_path,
-                &models.ocr_sha256,
-            ]
-            .iter()
-            .all(|v| v.is_empty()),
-            "[models]: this build loads no model weights (they are chosen in the S0 spike); \
-             leave detector_path, detector_sha256, ocr_path and ocr_sha256 empty",
-        );
-
         check(
             self.cache.max_entries >= 1,
             "[cache] max_entries must be at least 1",
@@ -264,6 +356,7 @@ impl Config {
             !self.cache.persist,
             "[cache] persist = true cannot be honoured: the icon cache lives in memory only",
         );
+        out.extend(self.models.problems());
         out
     }
 
@@ -420,6 +513,61 @@ mod tests {
         let policy = config.local_policy();
         assert!(policy.actuation_enabled && policy.include_values && !policy.stopped);
         assert_eq!(policy.allowed_applications, vec!["notepad.exe".to_owned()]);
+    }
+
+    const DIGEST: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    #[test]
+    fn models_default_to_none_and_are_pinned_when_configured() {
+        let models = Config::default().models;
+        assert!(!models.has_detector());
+        assert_eq!(models.ocr, OcrKind::None);
+        assert_eq!(models.ocr_language, "es-ES");
+
+        let config = Config::parse(&format!(
+            "[models]\ndetector_manifest = \"models/manifest.json\"\n\
+             detector_manifest_sha256 = \"{DIGEST}\"\n\
+             onnxruntime_path = \"C:/onnxruntime/onnxruntime.dll\"\n\
+             onnxruntime_sha256 = \"{}\"\n\
+             ocr = \"winrt\"\nocr_language = \"es-MX\"\n",
+            DIGEST.to_uppercase()
+        ))
+        .unwrap();
+        assert!(config.models.has_detector());
+        assert_eq!(config.models.ocr, OcrKind::Winrt);
+        assert_eq!(config.models.ocr_language, "es-MX");
+    }
+
+    #[test]
+    fn half_configured_or_unpinned_models_are_rejected() {
+        for (text, expected) in [
+            (
+                "[models]\ndetector_manifest = \"m.json\"\n".to_owned(),
+                "must be set together",
+            ),
+            (
+                format!(
+                    "[models]\ndetector_manifest = \"m.json\"\ndetector_manifest_sha256 = \
+                     \"{DIGEST}\"\nonnxruntime_path = \"o.dll\"\nonnxruntime_sha256 = \"abc\"\n"
+                ),
+                "SHA-256",
+            ),
+            ("[models]\ndetector_sha256 = \"x\"\n".to_owned(), "manifest"),
+            ("[models]\nocr_path = \"rec.onnx\"\n".to_owned(), "ocr_path"),
+            ("[models]\nocr = \"tesseract\"\n".to_owned(), "ocr"),
+            ("[models]\nocr_language = \"\"\n".to_owned(), "ocr_language"),
+            (
+                "[models]\nocr_language = \"es ES\"\n".to_owned(),
+                "ocr_language",
+            ),
+            (
+                "[models]\nocr_language = \"-es\"\n".to_owned(),
+                "ocr_language",
+            ),
+        ] {
+            let message = error(&text);
+            assert!(message.contains(expected), "{text}: {message}");
+        }
     }
 
     #[test]

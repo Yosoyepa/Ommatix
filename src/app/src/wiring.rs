@@ -4,8 +4,13 @@
 //! | `--source` | capturer | detector | recogniser | `--input dry-run` | `--input native` |
 //! |---|---|---|---|---|---|
 //! | `sim` | simulated desktop | simulated desktop | simulated desktop | simulated desktop (never live) | refused |
-//! | `images` | PNG sequence | flat-region | none | dry-run recorder | refused |
-//! | `screen` | primary monitor | flat-region | none | dry-run recorder | `enigo`, if `[safety] actuation_enabled` |
+//! | `images` | PNG sequence | `[models]` detector, else flat-region | `[models] ocr` | dry-run recorder | refused |
+//! | `screen` | primary monitor | `[models]` detector, else flat-region | `[models] ocr` | dry-run recorder | `enigo`, if `[safety] actuation_enabled` |
+//!
+//! Models fail closed: a configured detector or OCR that this build lacks, or whose files
+//! do not match their pinned SHA-256, stops the engine from starting; nothing falls back
+//! to another model or language. Without `[models]`, no model is loaded
+//! (`models_loaded: false`) and roles stay `unknown`.
 //!
 //! Live input needs all of: `--input native` (or `[engine] mode = "native"`), the
 //! `native-input` build, `--source screen` and `[safety] actuation_enabled = true`. Even
@@ -28,7 +33,7 @@ use ommatix_application::{
 
 use crate::cli::{InputKind, RunArgs, SourceKind, ThemeKind};
 use crate::clock::SystemClock;
-use crate::config::{Config, EngineMode};
+use crate::config::{Config, EngineMode, OcrKind};
 use crate::policy::ConfigPolicy;
 
 /// The four driven adapters chosen for a source.
@@ -127,21 +132,13 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
                 .images
                 .as_deref()
                 .context("--source images requires --images <DIR>")?;
-            (
-                images(dir, &clock)?,
-                Box::new(FlatRegionDetector::default()),
-                Box::new(NullTextRecognizer),
-                dry_run(),
-            )
+            let (detector, recognizer) = perception(config)?;
+            (images(dir, &clock)?, detector, recognizer, dry_run())
         }
         SourceKind::Screen => {
+            let (detector, recognizer) = perception(config)?;
             let (capturer, actuator) = screen_ports(&clock, input)?;
-            (
-                capturer,
-                Box::new(FlatRegionDetector::default()),
-                Box::new(NullTextRecognizer),
-                actuator,
-            )
+            (capturer, detector, recognizer, actuator)
         }
     };
 
@@ -155,6 +152,15 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
         if live { " (live)" } else { " (never live)" },
     );
     let mut notes = config.notes();
+    if args.source == SourceKind::Sim
+        && (config.models.has_detector() || config.models.ocr != OcrKind::None)
+    {
+        notes.push(
+            "[models] is not used with --source sim: the simulated desktop brings its own \
+             detector and recogniser"
+                .to_owned(),
+        );
+    }
     if live && config.safety.actuation_enabled {
         notes.push(
             "[safety] allowed_applications is not enforced yet: the engine cannot identify \
@@ -188,6 +194,65 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
         summary,
         notes,
     })
+}
+
+/// The detector and recogniser `[models]` selects for a real source, loaded and verified
+/// before any capture opens.
+fn perception(config: &Config) -> Result<(Box<dyn VisionDetector>, Box<dyn TextRecognizer>)> {
+    Ok((detector(config)?, recognizer(config)?))
+}
+
+fn detector(config: &Config) -> Result<Box<dyn VisionDetector>> {
+    if !config.models.has_detector() {
+        return Ok(Box::new(FlatRegionDetector::default()));
+    }
+    onnx_detector(config)
+}
+
+#[cfg(feature = "onnx")]
+fn onnx_detector(config: &Config) -> Result<Box<dyn VisionDetector>> {
+    let m = &config.models;
+    let source = ommatix_adapter_vision::OnnxDetectorSource {
+        manifest_path: m.detector_manifest.clone().into(),
+        manifest_sha256: m.detector_manifest_sha256.clone(),
+        runtime_path: m.onnxruntime_path.clone().into(),
+        runtime_sha256: m.onnxruntime_sha256.clone(),
+    };
+    Ok(Box::new(
+        ommatix_adapter_vision::OnnxVisionDetector::load(&source)
+            .context("[models] the detector was refused")?,
+    ))
+}
+
+#[cfg(not(feature = "onnx"))]
+fn onnx_detector(_: &Config) -> Result<Box<dyn VisionDetector>> {
+    bail!(
+        "[models] detector_manifest is set but this build has no ONNX detector; rebuild with \
+         `--features onnx`"
+    )
+}
+
+fn recognizer(config: &Config) -> Result<Box<dyn TextRecognizer>> {
+    match config.models.ocr {
+        OcrKind::None => Ok(Box::new(NullTextRecognizer)),
+        OcrKind::Winrt => winrt_recognizer(&config.models.ocr_language),
+    }
+}
+
+#[cfg(all(windows, feature = "winrt-ocr"))]
+fn winrt_recognizer(language: &str) -> Result<Box<dyn TextRecognizer>> {
+    Ok(Box::new(
+        ommatix_adapter_vision::WinRtTextRecognizer::new(language)
+            .context("[models] ocr = \"winrt\" is unavailable")?,
+    ))
+}
+
+#[cfg(not(all(windows, feature = "winrt-ocr")))]
+fn winrt_recognizer(_: &str) -> Result<Box<dyn TextRecognizer>> {
+    bail!(
+        "[models] ocr = \"winrt\" but this build has no Windows OCR; rebuild on Windows with \
+         `--features winrt-ocr`"
+    )
 }
 
 fn theme(kind: ThemeKind) -> Theme {
@@ -338,6 +403,58 @@ mod tests {
                 &Config::default()
             )
             .contains("cannot read")
+        );
+    }
+
+    const DIGEST: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+    fn with_detector() -> Config {
+        Config::parse(&format!(
+            "[models]\ndetector_manifest = \"no/such/manifest.json\"\n\
+             detector_manifest_sha256 = \"{DIGEST}\"\n\
+             onnxruntime_path = \"no/such/onnxruntime.dll\"\nonnxruntime_sha256 = \"{DIGEST}\"\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_configured_detector_that_cannot_be_verified_stops_the_engine() {
+        // Refused before the image directory is even opened, and never replaced by the
+        // flat-region detector.
+        let message = error(
+            "serve --source images --images no/such/dir",
+            &with_detector(),
+        );
+        let expected = if cfg!(feature = "onnx") {
+            "the detector was refused"
+        } else {
+            "--features onnx"
+        };
+        assert!(message.contains(expected), "{message}");
+    }
+
+    #[test]
+    fn a_configured_ocr_that_is_unavailable_stops_the_engine() {
+        // A language that is never installed, so the outcome is the same on every build.
+        let config = Config::parse("[models]\nocr = \"winrt\"\nocr_language = \"tlh\"\n").unwrap();
+        let message = error("serve --source images --images no/such/dir", &config);
+        let expected = if cfg!(all(windows, feature = "winrt-ocr")) {
+            "unavailable"
+        } else {
+            "--features winrt-ocr"
+        };
+        assert!(message.contains(expected), "{message}");
+    }
+
+    #[test]
+    fn the_simulator_ignores_models_and_says_so() {
+        let wired = build(&args("serve"), &with_detector()).unwrap();
+        assert!(!wired.engine.engine_metrics().models_loaded);
+        assert!(
+            wired
+                .notes
+                .iter()
+                .any(|n| n.contains("[models] is not used"))
         );
     }
 
