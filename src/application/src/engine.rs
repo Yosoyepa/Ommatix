@@ -4,8 +4,8 @@
 //! cache), Algorithm 3B (identity registry) and the snapshot store.
 //!
 //! - [`observe`]: capture → region plan → detect/recognise/read the accessibility tree only
-//!   in the planned regions → reconcile and fuse → resolve icons → track → stage and
-//!   commit. A failed stage publishes nothing.
+//!   in the planned regions (concurrently, ADR-0019) → reconcile and fuse → resolve icons →
+//!   track → stage and commit. A failed stage publishes nothing.
 //! - [`icons`]: Algorithm 3A on icon-like controls of the planned regions.
 //! - [`view`]: the agent's view of the published snapshot (query filter, value redaction,
 //!   pagination with a cursor bound to the snapshot).
@@ -89,6 +89,10 @@ pub struct EngineConfig {
     pub icons: Option<IconResolverConfig>,
     /// The settle window of effect verification.
     pub verify: VerifyParams,
+    /// Whether detection, text recognition and the accessibility read of one observation
+    /// run concurrently (SDD §2.7, ADR-0019). The evidence is the same either way; off, the
+    /// stages run one after the other.
+    pub concurrent_stages: bool,
 }
 
 impl EngineConfig {
@@ -100,6 +104,7 @@ impl EngineConfig {
             association: AssociationPolicy::default(),
             icons: None,
             verify: VerifyParams::default(),
+            concurrent_stages: true,
         }
     }
 }

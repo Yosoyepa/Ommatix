@@ -6,6 +6,12 @@
 //! evidence outside them is kept. A failed stage publishes nothing, keeps the planned
 //! tiles pending and blocks actions.
 //!
+//! The detector, the recogniser and the accessibility provider read the same frame and do
+//! not depend on each other, so an observation runs them concurrently on scoped threads
+//! (SDD §2.7, ADR-0019) and joins them before anything is fused: the coordinator stays the
+//! single writer, and the results are collected by stage, never by arrival order, so the
+//! evidence is the same as when they ran one after the other.
+//!
 //! Accessibility evidence (ADR-0017) is reconciled with the detector's boxes before the
 //! text is fused: an element absorbs the detector boxes that are the same control, its
 //! role and name win (`label_source: accessibility`), and OCR words still go to the most
@@ -31,10 +37,10 @@ use ommatix_domain::incremental::{BgraFrame, Evidence, RegionPlan, Work, plan_re
 
 use super::accessibility::accessible_control;
 use super::icons::{self, IconLabel, Scope};
-use super::{Engine, EngineConfig};
+use super::{Engine, EngineConfig, Ports};
 use crate::PortError;
 use crate::contract::{ErrorCode, LabelSource, StageTimings, ToolError};
-use crate::ports::Clock;
+use crate::ports::{AccessibilityProvider, Clock, TextRecognizer, VisionDetector};
 
 /// Raw evidence of the last committed observation, clipped to its frame and sorted.
 #[derive(Debug, Clone, Default)]
@@ -404,13 +410,47 @@ fn fuse_and_track(
     })
 }
 
-/// Fresh evidence of the planned regions and when detection and recognition ended.
+/// Fresh evidence of the planned regions and how long each perception stage took.
 struct Inferred {
     evidence: EvidenceSet,
-    t_detect: Duration,
-    t_recognize: Duration,
+    /// Each stage's own duration. With concurrent stages they overlap, so they do not add up
+    /// to the wall-clock time of the observation (`StageTimings::total`).
+    detect: Duration,
+    recognize: Duration,
+    accessibility: Duration,
     /// The accessibility read ended on its budget.
     truncated: bool,
+}
+
+/// What a perception stage returned and how long it ran on the injected clock.
+struct Timed<T> {
+    result: Result<T, PortError>,
+    took: Duration,
+}
+
+fn timed<T>(clock: &dyn Clock, stage: impl FnOnce() -> Result<T, PortError>) -> Timed<T> {
+    let start = clock.now();
+    let result = stage();
+    Timed {
+        result,
+        took: clock.now().saturating_sub(start),
+    }
+}
+
+/// The result of a stage that did not run: nothing, in no time.
+fn idle<T: Default>() -> Timed<T> {
+    Timed {
+        result: Ok(T::default()),
+        took: Duration::ZERO,
+    }
+}
+
+/// Waits for a stage thread. A panic of the stage goes on unwinding in the caller, exactly
+/// as it would have when the stages ran one after the other.
+fn joined<T>(handle: std::thread::ScopedJoinHandle<'_, Timed<T>>) -> Timed<T> {
+    handle
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
 }
 
 /// `regions` and `extra` as one sorted list without duplicates.
@@ -471,8 +511,9 @@ impl Engine {
         let read_regions = self.accessibility_regions(&plan.work, &regions, &bounds);
         let Ok(Inferred {
             evidence: fresh,
-            t_detect,
-            t_recognize,
+            detect,
+            recognize,
+            accessibility,
             truncated,
         }) = self.infer(&frame, &regions, &read_regions)
         else {
@@ -507,9 +548,9 @@ impl Engine {
         let timings = StageTimings {
             capture: span(t0, t_capture),
             plan: span(t_capture, t_plan),
-            detect: span(t_plan, t_detect),
-            recognize: span(t_detect, t_recognize),
-            accessibility: span(t_recognize, t_access),
+            detect,
+            recognize,
+            accessibility,
             fuse: span(t_access, tracked.fused_at),
             track: span(tracked.fused_at, t_track),
             total: span(t0, t_track),
@@ -584,43 +625,94 @@ impl Engine {
     /// inside `read_regions` (the plan and the gaps of an earlier truncated read); no
     /// region, no inference. Accessibility elements outside `read_regions` or off screen
     /// are dropped, whatever the provider returned.
+    ///
+    /// The three stages read the same frame and do not depend on each other, so they run
+    /// concurrently (SDD §2.7, ADR-0019) unless `concurrent_stages` is off: each on its own
+    /// thread, joined here, where the single writer fuses what they found. Their results
+    /// are collected by stage, never by arrival, so the evidence is the same in both modes.
+    /// When one stage fails the others are still waited for, and the failure reported is
+    /// the first in the order detect, recognise, accessibility.
     fn infer(
         &mut self,
         frame: &BgraFrame,
         regions: &[BBox],
         read_regions: &[BBox],
     ) -> Result<Inferred, PortError> {
-        let mut controls = Vec::new();
-        let mut words = Vec::new();
-        let mut t_detect = self.ports.clock.now();
-        let mut t_recognize = t_detect;
-        if !regions.is_empty() {
-            controls = self.ports.detector.detect(frame, regions)?;
-            t_detect = self.ports.clock.now();
-            words = self.ports.recognizer.recognize(frame, regions)?;
-            t_recognize = self.ports.clock.now();
-        }
-        let mut accessible = Vec::new();
-        let mut truncated = false;
-        if !read_regions.is_empty() {
-            let read = self.ports.accessibility.snapshot(read_regions)?;
-            truncated = read.truncated;
-            accessible = read
-                .elements
-                .iter()
-                .filter(|e| read_regions.iter().any(|r| r.overlaps(&e.bbox)))
-                .filter_map(accessible_control)
-                .collect();
-        }
+        let concurrent = self.config.concurrent_stages;
+        let Ports {
+            detector,
+            recognizer,
+            accessibility,
+            clock,
+            ..
+        } = &mut self.ports;
+        let clock: &dyn Clock = clock.as_ref();
+        let detect = |detector: &mut Box<dyn VisionDetector>| {
+            if regions.is_empty() {
+                idle()
+            } else {
+                timed(clock, || detector.detect(frame, regions))
+            }
+        };
+        let recognize = |recognizer: &mut Box<dyn TextRecognizer>| {
+            if regions.is_empty() {
+                idle()
+            } else {
+                timed(clock, || recognizer.recognize(frame, regions))
+            }
+        };
+        let read = |provider: &mut Box<dyn AccessibilityProvider>| {
+            if read_regions.is_empty() {
+                idle()
+            } else {
+                timed(clock, || provider.snapshot(read_regions))
+            }
+        };
+
+        // With no region to analyse only the accessibility read has work: nothing to overlap.
+        let (controls, words, tree) = if concurrent && !regions.is_empty() {
+            std::thread::scope(|scope| {
+                let controls = scope.spawn(|| detect(detector));
+                let words = scope.spawn(|| recognize(recognizer));
+                let tree = read(accessibility);
+                (joined(controls), joined(words), tree)
+            })
+        } else {
+            // One after the other, and a failure ends the observation at once.
+            let controls = detect(detector);
+            let words = if controls.result.is_ok() {
+                recognize(recognizer)
+            } else {
+                idle()
+            };
+            let tree = if controls.result.is_ok() && words.result.is_ok() {
+                read(accessibility)
+            } else {
+                idle()
+            };
+            (controls, words, tree)
+        };
+
+        let (detect_took, recognize_took, access_took) = (controls.took, words.took, tree.took);
+        let controls = controls.result?;
+        let words = words.result?;
+        let read = tree.result?;
+        let accessible = read
+            .elements
+            .iter()
+            .filter(|e| read_regions.iter().any(|r| r.overlaps(&e.bbox)))
+            .filter_map(accessible_control)
+            .collect();
         Ok(Inferred {
             evidence: EvidenceSet {
                 controls,
                 words,
                 accessible,
             },
-            t_detect,
-            t_recognize,
-            truncated,
+            detect: detect_took,
+            recognize: recognize_took,
+            accessibility: access_took,
+            truncated: read.truncated,
         })
     }
 }

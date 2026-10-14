@@ -227,6 +227,11 @@ pub struct ElementView {
 }
 
 /// Per-stage durations of one observation. Run-dependent: MCP `_meta` only.
+///
+/// Each stage reports its own duration. Detection, text recognition and the accessibility
+/// read run concurrently (SDD §2.7, ADR-0019), so those three overlap and do not add up to
+/// `total`, which is the wall-clock time of the whole observation measured directly
+/// (chapter 09 §9.6: overlapping stages are never summed).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StageTimings {
     pub capture: Duration,
