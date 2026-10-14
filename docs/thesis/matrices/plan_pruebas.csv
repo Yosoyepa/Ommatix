@@ -42,9 +42,9 @@ UT-40,Sesión distinta,Rechazar referencias de otra sesión.,OR-42,IMPLEMENTADO_
 UT-41,Target ausente,Rechazar ID retirado/no existente.,OR-47,IMPLEMENTADO_EN_RUST_S2
 UT-42,Simulación honesta,Nunca reportar input entregado desde un mock.,OR-43,IMPLEMENTADO_EN_RUST_S2
 UT-43,Sin actuador,Rechazar modo real si no existe adaptador.,OR-44,IMPLEMENTADO_EN_RUST_S2
-IT-01,Captura DXGI,Frames reales/stride/rotación/pérdida de acceso,NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-01,Captura DXGI,Frames reales/stride/rotación/pérdida de acceso,NO_EJECUTADO,IMPLEMENTADO_PENDIENTE_EJECUCION_SUPERVISADA
 IT-02,Modelos,Detector/OCR reales y deshacer letterbox,NO_EJECUTADO,PENDIENTE_PRODUCTO
-IT-03,Actuador,Conteo SendInput y permisos/foco,NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-03,Actuador,Conteo SendInput y permisos/foco,NO_EJECUTADO,IMPLEMENTADO_PENDIENTE_EJECUCION_SUPERVISADA
 IT-04,Verificación,Postcondición y timeout sin retry,NO_EJECUTADO,PENDIENTE_PRODUCTO
 IT-05,Idempotencia,"request_id, conflicto y caída ambigua",NO_EJECUTADO,PENDIENTE_PRODUCTO
 IT-06,Telemetría,Redacción y desglose temporal,NO_EJECUTADO,PENDIENTE_PRODUCTO

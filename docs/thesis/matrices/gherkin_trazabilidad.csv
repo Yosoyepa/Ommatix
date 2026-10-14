@@ -27,7 +27,7 @@ BDD-25,RF-11,CT-10,features/05_mcp.feature,Coordenadas no admitidas,EJECUTADO_SO
 BDD-26,RF-10,CT-02,features/05_mcp.feature,Truncamiento explícito,EJECUTADO_SOBRE_CONTRATO_S2
 BDD-27,RF-12,UT-42,features/06_accion_segura.feature,Dry-run,EJECUTADO_SOBRE_CONTRATO_S2
 BDD-28,RF-11,SEC-05,features/06_accion_segura.feature,Foco incorrecto,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-29,RF-13,IT-04,features/06_accion_segura.feature,Verificación indeterminada,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-30,RF-14,IT-05,features/06_accion_segura.feature,Solicitud repetida,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
-BDD-31,RF-16,SEC-03,features/06_accion_segura.feature,Instrucción dentro de la pantalla,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
+BDD-29,RF-13,IT-04,features/06_accion_segura.feature,Verificación indeterminada,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-30,RF-14,IT-05,features/06_accion_segura.feature,Solicitud repetida,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-31,RF-16,SEC-03,features/06_accion_segura.feature,Instrucción dentro de la pantalla,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-32,RF-16,SEC-02,features/06_accion_segura.feature,Parada del operador,PENDIENTE_STEP_DEFINITIONS_Y_EJECUCION
