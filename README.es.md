@@ -98,6 +98,18 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   50 ms; nunca reenvía la entrada), así que 2 de 2 clics entregados dieron `effect_observed`,
   y el primer frame DXGI de cada sesión ya muestra el escritorio. IT-04 se ejecutó en parte:
   con un plazo de 0 ms, un clic entregado es `indeterminate` y nunca se reintenta.
+- **S4, protocolo de aceptación reducido** ([informe](docs/thesis/S4_ACEPTACION_REDUCIDA.md)):
+  20 corridas de extremo a extremo puntuadas, sólo con clics, por MCP
+  (`tools/s4/e2e_driver.py`) y con captura y entrada reales. La aplicación de prueba propia
+  (`tools/s4/testapp`, `egui`, estado sólo en memoria) pasó 9 de 10 corridas y el Bloc de
+  notas (abrir y cerrar el menú Editar), 10 de 10. Ningún falso éxito en 92 clics con
+  `effect_observed`, comprobados con el título de la ventana y con UI Automation (a qué
+  control llegó el clic). El actuador `SendInput` atestigua ahora la aplicación UWP
+  hospedada (`calculatorapp.exe`) y no `ApplicationFrameHost.exe`. La Calculadora no
+  puntuó: el OCR de Windows no lee sus botones de un glifo, y su única etiqueta utilizable
+  pertenecía a una caja centrada en otro botón. Ningún flujo escribe: `type` necesita un
+  rol de entrada confirmado, que el detector de una clase nunca da. E2E-01 y PERF-02 se
+  ejecutaron en parte; queda el protocolo de 450 corridas.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
@@ -133,7 +145,8 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   sobre `notepad.exe`; falta: un detector para el producto, comprobar efectos más allá del cambio visual, un cliente MCP de terceros y el resto de
   corridas supervisadas
 - [ ] **S4, aceptación:** 450 corridas de extremo a extremo en aplicaciones controladas,
-  benchmarks, soak e informe de aceptación
+  benchmarks, soak e informe de aceptación. Se ejecutó un protocolo reducido sólo con clics
+  (20 corridas puntuadas en dos aplicaciones; E2E-01 y PERF-02 en parte)
 
 ## Inicio rápido
 

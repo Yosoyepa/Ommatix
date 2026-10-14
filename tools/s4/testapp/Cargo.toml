@@ -1,0 +1,37 @@
+# The controlled test application of the S4 reduced acceptance protocol
+# (docs/thesis/S4_ACEPTACION_REDUCIDA.md). A standalone crate, not a member of the Ommatix
+# workspace: it is never linked into the engine, and its lockfile is its own.
+[package]
+name = "ommatix-testapp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "UNLICENSED"
+publish = false
+description = "Disposable, in-memory GUI with large Spanish labels for Ommatix end-to-end runs."
+
+[[bin]]
+name = "ommatix-testapp"
+path = "src/main.rs"
+
+[dependencies]
+# MIT OR Apache-2.0. No persistence feature: the state lives in memory only and is lost
+# when the window closes. AccessKit stays on (it exposes the widgets to UI Automation).
+eframe = { version = "0.36", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+[profile.release]
+codegen-units = 1
+
+# An empty workspace table: this crate is its own workspace root.
+[workspace]

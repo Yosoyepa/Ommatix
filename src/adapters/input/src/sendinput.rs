@@ -170,6 +170,58 @@ pub(crate) fn exe_name_utf16(path: &[u16]) -> Option<String> {
     exe_name(&String::from_utf16(path).ok()?)
 }
 
+/// The window class of the frame that `ApplicationFrameHost.exe` draws around a hosted
+/// (UWP) application, such as the Windows 11 Calculator.
+pub(crate) const FRAME_HOST_CLASS: &str = "ApplicationFrameWindow";
+/// The executable that owns those frames, lowercase.
+pub(crate) const FRAME_HOST_EXE: &str = "applicationframehost.exe";
+/// The window class of the hosted application's content, a child of the frame owned by
+/// the application's own process (`CalculatorApp.exe`).
+pub(crate) const HOSTED_CONTENT_CLASS: &str = "Windows.UI.Core.CoreWindow";
+
+/// Whether a top-level window is an application frame host: both its class and its
+/// owner's executable name (from [`exe_name`]) must match. Any other top-level window
+/// stands for its own process.
+pub(crate) fn is_frame_host(class: &str, owner_exe: Option<&str>) -> bool {
+    class == FRAME_HOST_CLASS && owner_exe == Some(FRAME_HOST_EXE)
+}
+
+/// What the adapter reads about a top-level window to decide which application it
+/// shows, in process ids and window relations (no window text).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TopLevel {
+    /// The process owning the top-level window.
+    pub owner: u32,
+    /// Whether it is an application frame host ([`is_frame_host`]).
+    pub frame_host: bool,
+    /// For a frame host, the process owning its hosted content child, if it has one.
+    pub hosted: Option<u32>,
+}
+
+/// The application a top-level window shows: its own process, or, for a frame host, the
+/// process of its hosted content. A frame without hosted content (a suspended or
+/// minimised application whose content window has left the frame) shows no application:
+/// the frame host itself is never attested, because allowing it would allow every hosted
+/// application at once.
+pub(crate) fn shown_application(top: TopLevel) -> Option<u32> {
+    if top.frame_host {
+        top.hosted.filter(|&hosted| hosted != top.owner)
+    } else {
+        Some(top.owner)
+    }
+}
+
+/// The application that receives a click at a point whose top-level window is `top`.
+/// Inside a frame host only the hosted content (or a window inside it) belongs to the
+/// application; the frame's own windows (title bar, caption buttons, input sink) belong to
+/// no application, so a point on them is refused.
+pub(crate) fn point_application(top: TopLevel, point_in_hosted_content: bool) -> Option<u32> {
+    if top.frame_host && !point_in_hosted_content {
+        return None;
+    }
+    shown_application(top)
+}
+
 /// User Interface Privilege Isolation: input reaches only processes at our integrity
 /// level or below. `SendInput` drops the rest silently and still counts them as inserted,
 /// so a higher foreground process is refused before anything is sent. Arguments are the
@@ -415,6 +467,80 @@ mod tests {
         let wide: Vec<u16> = r"C:\Apps\Ünïcode.exe".encode_utf16().collect();
         assert_eq!(exe_name_utf16(&wide).as_deref(), Some("ünïcode.exe"));
         assert_eq!(exe_name_utf16(&[0xD800]), None, "lone surrogate");
+    }
+
+    #[test]
+    fn only_the_application_frame_host_is_resolved() {
+        assert!(is_frame_host(
+            "ApplicationFrameWindow",
+            Some("applicationframehost.exe")
+        ));
+        // explorer.exe also owns windows of that class: they are not resolved.
+        assert!(!is_frame_host(
+            "ApplicationFrameWindow",
+            Some("explorer.exe")
+        ));
+        assert!(!is_frame_host("ApplicationFrameWindow", None));
+        assert!(!is_frame_host("Notepad", Some("applicationframehost.exe")));
+        assert!(!is_frame_host(
+            "applicationframewindow",
+            Some("applicationframehost.exe")
+        ));
+    }
+
+    /// Regression (S4): the Windows 11 Calculator's foreground window belongs to
+    /// `ApplicationFrameHost.exe`, so the actuator attested the frame host instead of the
+    /// calculator, and only allowlisting the frame host (every hosted app) would let it act.
+    #[test]
+    fn a_frame_host_window_attests_the_hosted_application() {
+        const HOST: u32 = 10;
+        const CALC: u32 = 20;
+        let frame = TopLevel {
+            owner: HOST,
+            frame_host: true,
+            hosted: Some(CALC),
+        };
+        assert_eq!(shown_application(frame), Some(CALC));
+        // No hosted content (suspended or minimised): no application, never the host.
+        assert_eq!(
+            shown_application(TopLevel {
+                hosted: None,
+                ..frame
+            }),
+            None
+        );
+        assert_eq!(
+            shown_application(TopLevel {
+                hosted: Some(HOST),
+                ..frame
+            }),
+            None
+        );
+        // An ordinary window stands for its own process, whatever its children.
+        let plain = TopLevel {
+            owner: 7,
+            frame_host: false,
+            hosted: Some(CALC),
+        };
+        assert_eq!(shown_application(plain), Some(7));
+    }
+
+    #[test]
+    fn a_point_on_the_frame_hosts_own_windows_belongs_to_no_application() {
+        let frame = TopLevel {
+            owner: 10,
+            frame_host: true,
+            hosted: Some(20),
+        };
+        assert_eq!(point_application(frame, true), Some(20));
+        // Title bar and caption buttons (minimise, maximise, close) are the host's.
+        assert_eq!(point_application(frame, false), None);
+        let plain = TopLevel {
+            owner: 7,
+            frame_host: false,
+            hosted: None,
+        };
+        assert_eq!(point_application(plain, false), Some(7));
     }
 
     #[test]
