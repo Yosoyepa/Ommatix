@@ -211,8 +211,8 @@ sin OCR, entrada en dry run y política que lo niega todo.
   ninguna captura. `images`, `screen` y `dxgi` usan todos el detector y el OCR de
   `[models]`.
 - *`unsafe` acotado*: DXGI y `SendInput` son llamadas COM y Win32. La
-  [ADR-0016](../adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (**propuesta**,
-  pendiente de aprobación del responsable) sólo permite `unsafe` en el `#[cfg(windows)] mod
+  [ADR-0016](../adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (aprobada el 14 de octubre de
+  2026) sólo permite `unsafe` en el `#[cfg(windows)] mod
   win` de los adaptadores de captura y entrada: esos crates deniegan `unsafe_code` y
   `clippy::undocumented_unsafe_blocks`, cada bloque envuelve una llamada con un comentario
   `// SAFETY:` y los punteros crudos nunca salen del módulo. El OCR usa la proyección segura
@@ -280,7 +280,7 @@ cual sea su resultado, agota el snapshot: la acción siguiente necesita una obse
 | Compuerta de acciones | Vigencia, política, allowlist, foco, parada | Vigencia del snapshot (comprobada también con una captura antes de entregar), política y la lista permitida contra la aplicación en primer plano que atestigua `SendInput`, todo comprobado de nuevo justo antes de entregar; el archivo de parada del operador (`[safety] stop_file`); el actuador comprueba además el proceso bajo el punto objetivo, el nivel de integridad y los modificadores pulsados, y en `type` el foco de teclado tras el clic que enfoca el campo. Sin ejecución supervisada todavía (SEC-02, SEC-05) | S3 (corridas supervisadas) |
 | Verificación del efecto | Postcondiciones de foco, valor, desplazamiento y cambio visual | Sólo cambio visual, con una nueva captura | S3 |
 | Telemetría | Métricas y auditoría sin texto sensible | `get_engine_metrics`; tiempos por etapa en `_meta` | S3 |
-| Plataforma | Windows 11 x64: DXGI y `SendInput` | Captura DXGI y entrada `SendInput` tras las features `dxgi` y `sendinput` (ADR-0016, propuesta), compiladas y probadas en la integración continua en Windows pero sin ejecución supervisada todavía (IT-01, IT-03, IT-07); escritorios simulado y de fixtures para las pruebas; `xcap` y `enigo` provisionales tras `screen` y `native-input` | S3 (corridas supervisadas) |
+| Plataforma | Windows 11 x64: DXGI y `SendInput` | Captura DXGI y entrada `SendInput` tras las features `dxgi` y `sendinput` (ADR-0016), compiladas y probadas en la integración continua en Windows pero sin ejecución supervisada todavía (IT-01, IT-03, IT-07); escritorios simulado y de fixtures para las pruebas; `xcap` y `enigo` provisionales tras `screen` y `native-input` | S3 (corridas supervisadas) |
 
 Los escenarios de la tesis (BDD-01..32) se quedan en [`docs/thesis/features/`](../thesis/features),
 donde los espera la matriz de trazabilidad del dossier; `src/acceptance/tests/thesis.rs`

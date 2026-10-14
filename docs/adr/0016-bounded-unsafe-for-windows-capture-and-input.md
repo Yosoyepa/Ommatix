@@ -1,8 +1,8 @@
 # 0016. Bounded unsafe for the Windows capture and input adapters
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
-- **Approval:** Pending (project owner)
+- **Approval:** Project owner, 2026-10-14
 
 ## Context
 

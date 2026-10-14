@@ -198,8 +198,7 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   match their SHA-256 or whose language is not installed stops the engine before any capture
   opens. `images`, `screen` and `dxgi` all take the `[models]` detector and OCR.
 - *Bounded `unsafe`*: DXGI and `SendInput` are COM and Win32 calls.
-  [ADR-0016](../adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (**Proposed**,
-  awaiting the owner's approval) allows `unsafe` only in the `#[cfg(windows)] mod win` of
+  [ADR-0016](../adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (accepted on 2026-10-14) allows `unsafe` only in the `#[cfg(windows)] mod win` of
   the capture and input adapters: those crates deny `unsafe_code` and
   `clippy::undocumented_unsafe_blocks`, every block wraps one call with a `// SAFETY:`
   comment, and raw pointers never leave the module. The OCR uses the safe WinRT projection
@@ -261,7 +260,7 @@ observation (`STALE_SNAPSHOT`), while journal replays still return the stored re
 | Action gate | Freshness, policy, allowlist, focus, stop | Snapshot freshness (also re-checked by a capture before delivery), policy and the allowlist against the foreground application `SendInput` attests, all checked again right before delivery; the operator's stop file (`[safety] stop_file`); the actuator also checks the process under the target point, integrity level and held modifiers, and for `type` keyboard focus after the focusing click. Not yet run under supervision (SEC-02, SEC-05) | S3 (supervised runs) |
 | Effect verification | Focus, value, scroll and visual postconditions | Visual change by re-capture only | S3 |
 | Telemetry | Metrics and audit without sensitive text | `get_engine_metrics`; stage timings in `_meta` | S3 |
-| Platform | Windows 11 x64: DXGI and `SendInput` | DXGI capture and `SendInput` input behind the `dxgi` and `sendinput` features (ADR-0016, proposed), built and tested in CI on Windows but not yet run under supervision (IT-01, IT-03, IT-07); simulated and fixture desktops for tests; interim `xcap` and `enigo` behind `screen` and `native-input` | S3 (supervised runs) |
+| Platform | Windows 11 x64: DXGI and `SendInput` | DXGI capture and `SendInput` input behind the `dxgi` and `sendinput` features (ADR-0016), built and tested in CI on Windows but not yet run under supervision (IT-01, IT-03, IT-07); simulated and fixture desktops for tests; interim `xcap` and `enigo` behind `screen` and `native-input` | S3 (supervised runs) |
 
 The thesis scenarios (BDD-01..32) stay in [`docs/thesis/features/`](../thesis/features),
 where the dossier's traceability matrix expects them; `src/acceptance/tests/thesis.rs` runs

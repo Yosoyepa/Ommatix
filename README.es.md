@@ -82,8 +82,7 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   segura guiado por un manifiesto de modelo fijado por SHA-256 y el OCR de Windows, todos
   tras features de compilación opcionales. El `unsafe` que necesitan los adaptadores de
   captura y entrada lo acota la
-  [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (**propuesta**,
-  pendiente de aprobación del responsable). La integración continua los compila, revisa y
+  [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (aprobada el 14 de octubre de 2026). La integración continua los compila, revisa y
   prueba en Windows. El operador puede detener localmente la entrada real con un archivo de
   parada (`[safety] stop_file`), y `type` sólo envía sus teclas tras verificar que el foco
   de teclado está en el campo objetivo.

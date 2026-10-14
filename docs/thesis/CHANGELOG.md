@@ -1,5 +1,9 @@
 # Historial documental
 
+## 1.0.7 — 2026-10-14: aprobación de ADR-0015 y ADR-0016
+
+No cambia ningún requisito, algoritmo, contrato ni escenario. El responsable del proyecto aprueba el 14 de octubre de 2026 la [ADR-0015](../adr/0015-mcp-transport-on-rmcp-wire-types.md) (transporte MCP sobre los tipos de wire de `rmcp` con un bucle de mensajes propio y acotado) y la [ADR-0016](../adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (`unsafe` acotado en los módulos Windows de captura y entrada). También autoriza el spike S0 con el detector OmniParser `icon_detect_v3` (pesos MIT) y corridas supervisadas en la máquina de referencia limitadas a `notepad.exe` con datos desechables. Las entradas 1.0.4 a 1.0.6 que las describen como propuestas reflejan su estado en ese momento.
+
 ## 1.0.6 — 2026-10-14: S3, parada del operador y foco antes de escribir
 
 No cambia ningún requisito, algoritmo, contrato ni escenario. La plantilla `plantillas/configuracion_mvp.toml` añade la clave `[safety] stop_file = ""` (vacía por defecto: sin archivo de parada), y cambia el estado de las matrices y la implementación que las respalda:

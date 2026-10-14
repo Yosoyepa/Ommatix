@@ -75,8 +75,7 @@ unless the agent and a local policy both allow them. More in the
   (`--input sendinput`), a fail-closed ONNX detector driven by a SHA-256-pinned model
   manifest and the Windows OCR, all behind opt-in build features. The `unsafe` the capture
   and input adapters need is bounded by
-  [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (**Proposed**,
-  awaiting the owner's approval). CI builds, lints and tests them on Windows. The operator
+  [ADR-0016](docs/adr/0016-bounded-unsafe-for-windows-capture-and-input.md) (accepted on 2026-10-14). CI builds, lints and tests them on Windows. The operator
   can stop live input locally with a stop file (`[safety] stop_file`), and `type` sends
   its keys only once keyboard focus is verified on the target field.
 - What is **not** done yet: no model has been selected (S0, ADR-0009), so by default the

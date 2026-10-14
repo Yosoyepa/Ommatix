@@ -118,7 +118,7 @@ Nothing MVP-related goes in the repository root except workspace configuration.
    1's explicit fallback (geometry change, budget exceeded), never a shortcut. Any new
    pipeline stage takes the region plan as input.
 3. **No `unsafe`** (`unsafe_code = "forbid"` at workspace level). Lift it only with an ADR.
-   ADR-0016 (proposed) allows it only in the `#[cfg(windows)] mod win` of the capture
+   ADR-0016 (accepted) allows it only in the `#[cfg(windows)] mod win` of the capture
    (`dxgi`) and input (`sendinput`) adapters: those crates deny `unsafe_code` and
    `clippy::undocumented_unsafe_blocks`, every block wraps one Win32/COM call with a
    `// SAFETY:` comment, and raw pointers never leave the module.
@@ -230,8 +230,8 @@ Do not bypass them with `--no-verify` unless the PR says why.
 ## 9. Decisions already made (do not re-litigate without a new ADR)
 
 See `docs/adr/README.md`. ADR-0001..0012 come from the thesis; the project owner accepted
-them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015 and ADR-0016 are proposed
-and await the owner's approval.
+them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015 and ADR-0016 were accepted
+on 2026-10-14 too.
 Highlights: Rust runtime with independent oracles (0001), MCP over stdio with explicit
 profiles (0002), conservative spatial fusion with IoC (0003), masked open-set icon cache
 (0004), persistent tracking instead of cell hashes (0005), transactional snapshots (0006),
@@ -239,5 +239,5 @@ fail-closed actuation and honest simulation (0007), Windows 11 first (0008), mod
 licences chosen in the S0 spike (0009), performance budgets subject to measurement (0010),
 modular monolith with adaptive incrementality (0011), data minimisation (0012), bilingual
 documentation (0013), the hexagonal crate layout (0014), the MCP transport on `rmcp` wire
-types with a bounded message loop (0015, proposed) and bounded `unsafe` for the Windows
-capture and input adapters (0016, proposed).
+types with a bounded message loop (0015) and bounded `unsafe` for the Windows
+capture and input adapters (0016).
