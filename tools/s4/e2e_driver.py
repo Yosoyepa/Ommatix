@@ -224,11 +224,46 @@ def pids_of(image: str) -> set[int]:
     return pids
 
 
-def activate(pid: int) -> None:
-    """Asks Windows to activate a window of `pid` (WScript.Shell.AppActivate; no input)."""
-    subprocess.run(["powershell", "-NoProfile", "-Command",
-                    f"$null = (New-Object -ComObject WScript.Shell).AppActivate({pid})"],
-                   check=False, creationflags=CREATE_NO_WINDOW, capture_output=True)
+user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+# winit's hidden event target and the input method windows belong to the same process.
+HELPER_WINDOW_MARKERS = ("Event Target", "IME", "MSCTFIME")
+
+
+def pick_main_window(windows: list[tuple[int, str, int]]) -> int | None:
+    """The main window among (handle, class name, area) tuples: the largest one that is not a
+    helper window. In the third S4 round AppActivate(pid) did not bring the test application
+    to the foreground (164 requests over 333 s), while the process also owns a helper window
+    that enumeration lists; activation therefore targets the main window explicitly."""
+    main = [w for w in windows if not any(marker in w[1] for marker in HELPER_WINDOW_MARKERS)]
+    return max(main, key=lambda w: w[2])[0] if main else None
+
+
+def main_window(pid: int) -> int | None:
+    """The main window of `pid` (see pick_main_window)."""
+    found = []
+    for hwnd in app_windows(pid):
+        rect = wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
+        found.append((hwnd, _class(hwnd), area))
+    return pick_main_window(found)
+
+
+def bring_to_front(hwnd) -> bool:
+    """Window management, not input. Attaches this thread to the input queue of the foreground
+    thread, which lets SetForegroundWindow succeed past the foreground lock, then detaches.
+    AttachThreadInput shares input state; it sends no key or mouse event. Returns whether
+    `hwnd` became the foreground window."""
+    fg_thread = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
+    me = kernel32.GetCurrentThreadId()
+    attached = bool(fg_thread) and fg_thread != me and bool(user32.AttachThreadInput(me, fg_thread, True))
+    try:
+        return bool(user32.SetForegroundWindow(hwnd))
+    finally:
+        if attached:
+            user32.AttachThreadInput(me, fg_thread, False)
 
 
 CALC_DISPLAY_PS = r"""
@@ -628,7 +663,8 @@ class Protocol:
 
     def wait_foreground(self, pid: int | None) -> tuple[bool, int]:
         """Windows refuses the foreground to a background process while the user is active
-        (ForegroundLockTimeout); activation is requested every 2 s (no input is sent)."""
+        (ForegroundLockTimeout); the main window is brought to the front every 2 s (window
+        management only: no input is sent)."""
         deadline = time.monotonic() + self.args.foreground_wait
         requests = 0
         last = 0.0
@@ -645,9 +681,11 @@ class Protocol:
                 last = time.monotonic()
                 requests += 1
                 if self.notepad is not None:
-                    user32.SetForegroundWindow(self.notepad["hwnd"])  # that window only
+                    bring_to_front(self.notepad["hwnd"])  # that window only
                 else:
-                    activate(pid)
+                    target = main_window(pid)
+                    if target is not None:
+                        bring_to_front(target)
         return False, requests
 
     def close(self, pid: int | None) -> None:
