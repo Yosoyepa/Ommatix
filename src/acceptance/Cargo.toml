@@ -1,6 +1,6 @@
 [package]
 name = "ommatix-acceptance"
-description = "Executable Gherkin specification of the Ommatix MVP, driven through the MCP adapter like a real agent."
+description = "Executable Gherkin specification of the Ommatix MVP: the thesis scenarios, driven through the MCP adapter like a real agent where they talk about one."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,20 +9,14 @@ repository.workspace = true
 publish.workspace = true
 
 [dev-dependencies]
-ommatix-adapter-capture = { workspace = true }
-ommatix-adapter-input = { workspace = true }
 ommatix-adapter-mcp = { workspace = true }
 ommatix-adapter-sim = { workspace = true }
-ommatix-adapter-vision = { workspace = true }
 ommatix-application = { workspace = true }
 ommatix-domain = { workspace = true }
 cucumber = { workspace = true }
 futures = { workspace = true }
+jsonschema = { workspace = true }
 serde_json = { workspace = true }
-
-[[test]]
-name = "acceptance"
-harness = false
 
 [[test]]
 name = "thesis"

@@ -2174,11 +2174,9 @@ version = "0.1.0"
 dependencies = [
  "cucumber",
  "futures",
- "ommatix-adapter-capture",
- "ommatix-adapter-input",
+ "jsonschema",
  "ommatix-adapter-mcp",
  "ommatix-adapter-sim",
- "ommatix-adapter-vision",
  "ommatix-application",
  "ommatix-domain",
  "serde_json",
