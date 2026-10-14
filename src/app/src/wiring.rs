@@ -204,7 +204,8 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
         && (config.models.has_detector() || config.models.ocr != OcrKind::None)
     {
         notes.push(
-            "[models] is not used with --source sim: the simulated desktop brings its own              detector and recogniser"
+            "[models] is not used with --source sim: the simulated desktop brings its own \
+             detector and recogniser"
                 .to_owned(),
         );
     }
@@ -259,7 +260,8 @@ fn icon_note(icons: Option<&IconResolverConfig>) -> String {
         .filter(|p| p.context == icons.context)
         .count();
     format!(
-        "[cache] {total} curated icon prototypes, {in_context} for context {:?}; the          thresholds are the operator's, not calibrated by this build",
+        "[cache] {total} curated icon prototypes, {in_context} for context {:?}; the \
+         thresholds are the operator's, not calibrated by this build",
         icons.context
     )
 }
@@ -646,6 +648,30 @@ mod tests {
                 .notes
                 .iter()
                 .any(|n| n.contains("[models] is not used"))
+        );
+        // Notes are wrapped in source with `\` continuations, never with raw spaces.
+        for note in &wired.notes {
+            assert!(!note.contains("  "), "{note:?}");
+        }
+    }
+
+    #[test]
+    fn the_icon_note_reads_as_one_sentence() {
+        use ommatix_domain::appearance::{CachePolicy, IconCache};
+
+        let icons = IconResolverConfig {
+            cache: IconCache::new(),
+            policy: CachePolicy::new(0.1, 0.1).unwrap(),
+            tau: 3,
+            context: "notepad.exe".to_owned(),
+        };
+        for note in [icon_note(None), icon_note(Some(&icons))] {
+            assert!(!note.contains("  "), "{note:?}");
+        }
+        assert_eq!(
+            icon_note(Some(&icons)),
+            "[cache] 0 curated icon prototypes, 0 for context \"notepad.exe\"; the thresholds \
+             are the operator's, not calibrated by this build"
         );
     }
 
