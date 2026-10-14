@@ -60,10 +60,10 @@ CT-08,Legacy opt-in,Handshake únicamente en perfil legacy,NO_EJECUTADO,IMPLEMEN
 CT-09,Tools/errors,Listado y separación error herramienta/protocolo,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
 CT-10,Tamaño,"64 KiB entrada/salida, inputs inválidos",NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
 SEC-01,Política local,Agente no puede habilitarse,NO_EJECUTADO,PENDIENTE_PRODUCTO
-SEC-02,Parada,Detener nuevas inyecciones,NO_EJECUTADO,PENDIENTE_PRODUCTO
+SEC-02,Parada,Detener nuevas inyecciones,NO_EJECUTADO,IMPLEMENTADO_PENDIENTE_EJECUCION_SUPERVISADA
 SEC-03,Prompt injection visual,OCR no cambia permisos,NO_EJECUTADO,PENDIENTE_PRODUCTO
 SEC-04,Exfiltración,Sin screenshots ni secretos por defecto,NO_EJECUTADO,PENDIENTE_PRODUCTO
-SEC-05,Precheck de acción,Foco/ventana/frescura y carreras,NO_EJECUTADO,PENDIENTE_PRODUCTO
+SEC-05,Precheck de acción,Foco/ventana/frescura y carreras,NO_EJECUTADO,IMPLEMENTADO_PENDIENTE_EJECUCION_SUPERVISADA
 SEC-06,Modelo/caché,"Hashes, licencia, corrupción y cache poisoning",NO_EJECUTADO,PENDIENTE_PRODUCTO
 E2E-01,Formulario local,Valores dummy y confirmación observable,NO_EJECUTADO,PENDIENTE_PRODUCTO
 E2E-02,Editor,Escritura y guardado de archivo temporal,NO_EJECUTADO,PENDIENTE_PRODUCTO

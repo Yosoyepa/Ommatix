@@ -1,5 +1,21 @@
 # Historial documental
 
+## 1.0.6 — 2026-10-14: S3, parada del operador y foco antes de escribir
+
+No cambia ningún requisito, algoritmo, contrato ni escenario. La plantilla `plantillas/configuracion_mvp.toml` añade la clave `[safety] stop_file = ""` (vacía por defecto: sin archivo de parada), y cambia el estado de las matrices y la implementación que las respalda:
+
+- BDD-32 y BDD-28 pasan a `EJECUTADO_SOBRE_CONTRATO_S3_DOBLE` en `matrices/gherkin_trazabilidad.csv`. Se ejecutan con `src/acceptance/tests/thesis.rs` a través del motor y del adaptador MCP sobre `LiveDouble`, el doble del actuador real que no envía nada al sistema operativo.
+  - BDD-32: la política es la del producto (`ConfigPolicy` con un `stop_file` en un directorio temporal). Una secuencia autorizada entrega una primera acción (`input_delivered`); el operador crea el archivo de parada; la acción siguiente se rechaza con `POLICY_DENIED` (`next_step: operator_review`, `retryable: false`) sin ningún evento nuevo, y repetir el `request_id` de la primera sigue devolviendo `input_delivered`: lo ya entregado se informa como fue, sin deshacer ni reescribir nada.
+  - BDD-28: otra aplicación (fuera de la lista permitida) pasa a primer plano después de que la compuerta atestigua la aplicación permitida y antes de escribir. El motor vuelve a atestiguar la aplicación en primer plano justo antes de entregar, la encuentra cambiada y rechaza con `POLICY_DENIED` sin entregar ninguna tecla. El escenario no cubre otra ventana de la misma aplicación permitida: eso lo comprueba el actuador `SendInput` (abajo), que ninguna prueba ejecuta.
+- SEC-02 y SEC-05 pasan a `IMPLEMENTADO_PENDIENTE_EJECUCION_SUPERVISADA` en `matrices/plan_pruebas.csv`: la parada y la comprobación del foco existen y se prueban sobre dobles, pero no se han ejecutado con la entrada real en el hardware de referencia. Las demás pruebas, los requisitos RF/RNF y los riesgos no cambian de estado.
+
+Implementación de esta etapa:
+
+- Parada del operador (§8.2, §8.4): `[safety] stop_file`, relativa al archivo de configuración. Mientras el archivo existe, la política informa `stopped = true`; una ruta cuya existencia no puede comprobarse cuenta como presente. El motor lee la política en la compuerta y otra vez después de la captura de vigencia, justo antes de entregar; una acción que encuentra la parada se rechaza con `POLICY_DENIED` sin eventos y sin agotar el snapshot. La raíz de composición tiene además un `StopSwitch` en proceso con el mismo efecto. Ninguna herramienta MCP puede activar ni retirar la parada; terminar el proceso (Ctrl+C) también detiene y, sin `stop_file`, es la única parada local (una nota en stderr lo advierte).
+- Indicador de control activo (§8.2): con un actuador real y `actuation_enabled = true`, `serve` escribe en stderr una línea `ACTIVE CONTROL` con las aplicaciones permitidas y cómo detener, y una línea cada vez que la parada se activa o se retira.
+- Último vistazo antes de entregar (SDD §2.9): tras la captura de vigencia el motor vuelve a leer la política (parada, consentimiento, lista permitida) y vuelve a pedir la aplicación en primer plano; si no coincide con la atestiguada en la compuerta, `POLICY_DENIED` sin entregar nada. Queda la ventana residual entre esta comprobación y el sistema operativo (§8.3).
+- Foco antes de escribir (SDD §2.9, `type`): el actuador `SendInput` envía primero el clic que enfoca el campo y, antes de cualquier tecla, comprueba con `GetGUIThreadInfo` del hilo en primer plano que el proceso en primer plano sigue siendo el atestiguado y que la ventana con el foco de teclado es suya y es la ventana bajo el punto objetivo o una que la contiene (consulta hasta 200 ms mientras la aplicación procesa el clic). Si no, no envía ninguna tecla y falla; como el clic sí pudo entregarse, el motor informa `indeterminate` (`INDETERMINATE_EFFECT`, `next_step: reconcile_effect`), nunca "nada entregado". Las reglas son funciones puras probadas en cualquier sistema; las llamadas a Win32 siguen en el `#[cfg(windows)] mod win` con `// SAFETY:` (ADR-0016).
+
 ## 1.0.5 — 2026-10-14: S3, adaptadores de Windows (primera parte)
 
 No cambia ningún requisito, algoritmo, contrato ni escenario. Cambia el estado de las matrices y la implementación que las respalda:
