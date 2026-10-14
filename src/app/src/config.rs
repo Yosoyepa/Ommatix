@@ -65,6 +65,10 @@ pub struct EngineSection {
     pub verify_timeout_ms: u64,
     /// The wait between two verification captures inside that window.
     pub verify_poll_ms: u64,
+    /// Detection, text recognition and the accessibility read of one observation run
+    /// concurrently (SDD §2.7, ADR-0019). The evidence is the same either way; `false`
+    /// runs them one after the other, for diagnosis and for before/after measurements.
+    pub concurrent_stages: bool,
 }
 
 impl Default for EngineSection {
@@ -80,6 +84,7 @@ impl Default for EngineSection {
             max_snapshot_age_ms: 250,
             verify_timeout_ms: 500,
             verify_poll_ms: 50,
+            concurrent_stages: true,
         }
     }
 }
@@ -769,6 +774,18 @@ mod tests {
         let config =
             Config::parse("[engine]\nverify_timeout_ms = 5000\nverify_poll_ms = 1000\n").unwrap();
         assert_eq!(config.verify_params().timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn observation_stages_run_concurrently_unless_the_operator_turns_it_off() {
+        assert!(Config::default().engine.concurrent_stages);
+        let config = Config::parse(
+            "[engine]
+concurrent_stages = false
+",
+        )
+        .unwrap();
+        assert!(!config.engine.concurrent_stages);
     }
 
     #[test]
