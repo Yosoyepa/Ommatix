@@ -153,34 +153,58 @@ unless the agent sets it to false, and even then the local consent and allowlist
 Since S2b the running binary is the thesis engine. `serve` and `demo` build one `Engine`
 (`ommatix-application`) over the SDD ports and, for `serve`, the MCP adapter in front of it.
 The bootstrap prototype's use cases, its ports (`FrameSource`, `ElementDetector`,
-`InputController`), its seven coordinate-based MCP tools and its Gherkin features are retired;
-its archived decisions stay in [`docs/adr/bootstrap/`](../adr/bootstrap/README.md).
+`InputController`), its seven coordinate-based MCP tools and its acceptance suite (the
+`src/acceptance/features/` directory and `tests/acceptance.rs`) are retired. Of its domain
+modules, `ommatix-domain` keeps only the support types the interim adapters still use (the
+RGBA `Frame`, `Rect`/`Point`, `Detection`, the simulated user's `Action`, `DisplayMapping`).
+Its archived decisions stay in [`docs/adr/bootstrap/`](../adr/bootstrap/README.md). The
+[S2b review](../reviews/2026-10-14-s2b-engine-and-mcp.md) records the findings fixed before
+this stage closed, each with its regression test.
 
 **`observe_screen`** captures a frame, plans regions against the last committed base
 (Algorithm 1), hands only the planned regions to the detector and the recogniser, keeps the
-evidence outside them, fuses (Algorithm 2), tracks identities (Algorithm 3B) and stages and
-commits the snapshot. A failed stage publishes nothing, keeps the planned tiles pending and
-blocks actions. Pages are filtered by `query`, redacted unless the local policy allows values,
-and bound to their snapshot by the cursor.
+evidence outside them, fuses (Algorithm 2), resolves icons (Algorithm 3A), tracks identities
+(Algorithm 3B) and stages and commits the snapshot. A failed stage publishes nothing, keeps
+the planned tiles pending and blocks actions. Pages are filtered by `query`, redacted unless
+the local policy allows values, and bound to their snapshot by the cursor.
+
+**Icons (Algorithm 3A).** A control is an icon candidate when it is an `icon_button`, or when
+it has no inner text and its role takes no external label. Its box is cropped from the frame
+(no inner margin), converted to luma with the BT.601 weights (0.299 R + 0.587 G + 0.114 B),
+resampled to the 9×8 grid by integer block means and described with the masked gradient
+descriptor; the curated cache answers a label for the configured context only when the
+match has enough support, is close enough and beats the next different label by the margin.
+A match is labelled `curated_icon`; anything else keeps an empty label, never a guess. The
+label never changes actionability, which comes from the detector. Only candidates inside the
+planned regions are looked up again; the others keep the label of the committed snapshot.
+The resolver is off unless the operator configures prototypes and thresholds (`[cache]`),
+because the thesis calibrates them (H4); the context is configured too until S3 can identify
+the foreground application.
 
 **`execute_action`** checks the arguments, looks the `request_id` up in a bounded
 deduplication journal (FNV-1a hash of the canonical arguments, so typed text is never stored;
 same ID with other arguments is `REQUEST_CONFLICT`), then checks session, geometry epoch,
 snapshot, target, revision and actionability strictly against the published snapshot. A dry
 run (the default) is `simulated`. Live input needs the operator's policy
-(`actuation_enabled`, not stopped) **and** a live actuator; otherwise `POLICY_DENIED` with
-nothing delivered. A delivery receipt whose inserted events match the submitted ones is
+(`actuation_enabled`, not stopped), a live actuator **and** a foreground application on the
+non-empty `allowed_applications` list, as the actuator attests it; otherwise `POLICY_DENIED`
+with nothing delivered. No actuator can attest the foreground application before S3, so
+today live input is always denied. Before delivering, a freshness check captures the screen
+again: if it differs from the committed base, the action is `STALE_SNAPSHOT` and nothing is
+delivered. A delivery receipt whose inserted events match the submitted ones is
 `input_delivered`; anything else is `indeterminate`. An expected `visual_change` is verified
-by a fresh capture compared with the committed base (`effect_observed` or `indeterminate`);
-the other effects are reported `indeterminate` until S3 can check them.
+by a capture after delivery compared with the pre-delivery frame (`effect_observed` or
+`indeterminate`); the other effects are reported `indeterminate` until S3 can check them.
+Any delivery, whatever its outcome, spends the snapshot: the next action needs a new
+observation (`STALE_SNAPSHOT`), while journal replays still return the stored result.
 
 | Area | Thesis | Today | Completed in |
 |---|---|---|---|
 | Change detection, fusion, identity, snapshots | Algorithms 1, 2, 3B; transactional commit | Implemented in `ommatix-domain` and run by the `Engine` | S1–S2 (done) |
-| Icon cache | Algorithm 3A in the observation | Implemented in `ommatix-domain` (`appearance`), not yet in the observation: no detector reports text-less icons | S3 |
+| Icon cache | Algorithm 3A in the observation | Run by the `Engine` on icon candidates of the planned regions with the operator's curated prototypes; off without them; context configured, thresholds not calibrated | S3 (context), S4 (calibration) |
 | Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | Flat-colour region detector (roles `unknown`), no OCR (`NullTextRecognizer`); the simulated desktops report ground truth | S0, S3 |
 | Agent contract | Ommatix 1.0 over MCP 2026-07-28; 2025-11-25 opt-in | Implemented (CT-01..10); not yet tested against a real client | S0/S3 for the client |
-| Action gate | Freshness, policy, allowlist, focus, stop | Freshness, policy and stop; `allowed_applications` not enforced (no foreground-window evidence yet); no focus check | S3 |
+| Action gate | Freshness, policy, allowlist, focus, stop | Snapshot freshness (also re-checked by a capture before delivery), policy, stop and the allowlist, which denies live input until an actuator attests the foreground application; no focus check | S3 |
 | Effect verification | Focus, value, scroll and visual postconditions | Visual change by re-capture only | S3 |
 | Telemetry | Metrics and audit without sensitive text | `get_engine_metrics`; stage timings in `_meta` | S3 |
 | Platform | Windows 11 x64: DXGI and `SendInput` | Simulated and fixture desktops; `xcap` screen capture and `enigo` input behind build features | S3 |

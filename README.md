@@ -68,10 +68,13 @@ unless the agent and a local policy both allow them. More in the
   serves the thesis contract (`observe_screen`, `execute_action`, `get_engine_metrics`) over
   MCP 2026-07-28 ([ADR-0015](docs/adr/0015-mcp-transport-on-rmcp-wire-types.md)). Contract
   tests CT-01..10 and scenarios BDD-01..27 run in CI. `serve` and `demo` use this engine.
+  Each observation also resolves text-less icons against curated prototypes (Algorithm 3A)
+  when the operator configures them; otherwise icon labels stay `unknown`.
 - What is **not** real yet: the screen is a simulated desktop or a fixture, the detector is
-  the bootstrap's flat-colour region finder (roles `unknown`, no OCR), live input is off by
-  default and unverified on Windows, and no real MCP client has been tested. S3 brings DXGI,
-  ONNX Runtime and `SendInput`; S4 the acceptance runs. The
+  the bootstrap's flat-colour region finder (roles `unknown`, no OCR), and no real MCP client
+  has been tested. Live input is **denied**: the action gate needs an allowlisted foreground
+  application attested by the input adapter, and no adapter can attest one before S3. S3
+  brings DXGI, ONNX Runtime and `SendInput`; S4 the acceptance runs. The
   [overview](docs/architecture/overview.md#where-the-code-is-today) lists what remains.
 - First platform: **Windows 11 x64**, one monitor, DPI 100/125/150 %
   ([ADR-0008](docs/adr/0008-one-real-platform-first.md), approved 2026-10-14).
@@ -105,20 +108,60 @@ pip install -r docs/thesis/requirements-validacion.txt
 cd docs/thesis && python referencia_ejecutable/run_tests.py && python validar_paquete.py && cd -
 
 # The engine
-cargo run -- demo                       # observe and act on the simulated desktop, printed
-cargo run -- serve                      # MCP server on stdio over the simulated desktop
-cargo run -- serve --config ommatix.toml   # same, with a configuration file
+cargo run -- demo                                   # observations and a dry-run click on the simulated desktop, printed
+cargo run -- demo --observations 5 --theme dark     # more observations, another theme
+cargo run -- serve                                  # MCP server on stdio over the simulated desktop
+cargo run -- serve --config ommatix.toml            # same, with a configuration file
+cargo run -- serve --source images --images frames/ # a directory of PNG frames
+cargo run --features screen -- serve --source screen   # the primary monitor
 ```
+
+`serve` and `demo` take the same options:
+
+| Option | Values | Default |
+|---|---|---|
+| `--config PATH` | a configuration file (below) | the dossier template's values |
+| `--source` | `sim` (simulated desktop), `images` (PNG frames, flat-region detector), `screen` (primary monitor, flat-region detector; build feature `screen`) | `sim` |
+| `--images DIR` | the PNG directory for `--source images` | none (required by `images`) |
+| `--input` | `dry-run` (record, never touch the OS) or `native` (build feature `native-input`, which implies `screen`) | `[engine] mode` (`dry_run`) |
+| `--theme` | `light`, `dark`, `contrasting-wallpaper` (simulated desktop only) | `light` |
+| `--session-id ID` | 1–64 visible ASCII characters, for reproducible output | derived from the start time and the process ID |
+| `--legacy` | also serve the legacy MCP profile 2025-11-25 (like `[mcp] legacy_enabled = true`) | off |
+| `--observations N` (`demo` only) | 1–20 | 3 |
+
+`--input native` (or `[engine] mode = "native"`) is refused before any adapter opens unless
+the source is `screen`, `[safety] actuation_enabled = true` and the build has
+`native-input`. Even then every action is a dry run unless the agent sets `dry_run: false`,
+and the engine's gate also requires the foreground application, as the input adapter
+attests it, to be in `[safety] allowed_applications`. The interim input adapter cannot
+attest it, so live input is `POLICY_DENIED` until S3.
 
 The configuration file has the shape of
 [`docs/thesis/plantillas/configuracion_mvp.toml`](docs/thesis/plantillas/configuracion_mvp.toml)
-(`[engine]`, `[mcp]`, `[safety]`, …); without one, the thesis defaults apply. Sources: the
-simulated desktop (`sim`, default), a directory of PNG frames (`images`) or the live screen
-(`screen`, build feature `screen`). Input is `dry-run` (default) or `native` (build feature
-`native-input`), and `native` also needs the `screen` source and `actuation_enabled = true`
-under `[safety]`. Even then every action is a dry run unless the agent sets `dry_run: false`.
-The legacy MCP profile 2025-11-25 is served only with `[mcp] legacy_enabled = true` or the
-matching CLI flag.
+(`[engine]`, `[mcp]`, `[safety]`, `[models]`, `[cache]`; at most 64 KiB); without one, the
+template's values apply, which deny actuation and redact values. No CLI flag loosens
+`[safety]`. The file is checked strictly:
+
+- **Refused** (the server does not start): unknown sections or keys; out-of-range values
+  (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024, `full_refresh_area_ratio`
+  in (0, 1], `max_snapshot_age_ms` ≥ 1, `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
+  blank `allowed_applications` entries); and values this build cannot honour: a `platform`
+  other than `windows`, a `snapshot_policy` other than `strict`, a `profile` other than
+  `2026-07-28` (the legacy profile is enabled with `legacy_enabled`), a `transport` other than
+  `stdio`, `allow_destructive = true`, `allow_screenshots_to_client = true`, any `[models]`
+  path or hash, and `[cache] persist = true`.
+- **Accepted but not enforced** (a note on stderr at startup): `max_snapshot_age_ms` (every
+  page reports its `age_ms` instead), and `actuation_enabled = true` with an input adapter
+  that is not live.
+
+`[cache]` may also turn on the icon resolver (Algorithm 3A) with five keys that go together:
+`prototypes` (a JSON-lines file, relative to the configuration file, one
+`{"label", "context", "grid"}` per line, where `grid` is the 9×8 greyscale crop as 72 values),
+`context` (the application the prototypes apply to; until S3 identifies the foreground
+application, the operator names it), `gradient_tau` (1–255), `max_distance` and `min_margin`
+(0–1). None has a default, because the thesis calibrates them on its corpus (H4); any of them
+without the others is refused, and so is the whole file on any invalid line or more than
+`max_entries` prototypes. Without them the startup note says that icon labels stay unknown.
 
 The MCP server exposes three tools, with the dossier's JSON schemas:
 
@@ -165,7 +208,7 @@ map onto the crates:
 | MCP Adapter | `ommatix-adapter-mcp` |
 | Observation Coordinator, Policy & Action Gate | `Engine` in `ommatix-application` |
 | Spatial Fusion, Temporal Registry | `ommatix-domain` (`fusion`, `identity`), driven by the `Engine` |
-| Icon Resolver | `ommatix-domain` (`appearance`); joins the `Engine`'s observation with the S3 models |
+| Icon Resolver | `ommatix-domain` (`appearance`), run by the `Engine` on text-less controls of the planned regions with the operator's curated prototypes |
 | Capture Provider | `ommatix-adapter-capture` (`FrameCapturer`) |
 | Perception Provider | `ommatix-adapter-vision` (`VisionDetector`, `TextRecognizer`) |
 | OS Actuator | `ommatix-adapter-input` (`OsActuator`) |
@@ -196,4 +239,5 @@ Contribution rules, for humans and AI agents alike, are in [AGENTS.md](AGENTS.md
 - [Architecture decision records](docs/adr/README.md)
 - [Diagrams](docs/diagrams/README.md)
 - [Glossary / Glosario](docs/glossary.md)
-- [Bootstrap MVP code review](docs/reviews/2026-10-14-mvp-review.md)
+- Code reviews: [bootstrap MVP](docs/reviews/2026-10-14-mvp-review.md),
+  [S2b engine and MCP adapter](docs/reviews/2026-10-14-s2b-engine-and-mcp.md)

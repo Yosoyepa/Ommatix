@@ -25,7 +25,8 @@ flowchart TD
   DET --> EVI[Evidence: keep outside regions,<br/>replace inside]
   OCR --> EVI
   EVI --> FUS[Spatial fusion, Algorithm 2]
-  FUS --> REG[Identity registry, Algorithm 3B]
+  FUS --> ICO[Icon labels, Algorithm 3A<br/>text-less controls of the planned regions,<br/>curated prototypes of the configured context;<br/>others keep their previous label]
+  ICO --> REG[Identity registry, Algorithm 3B]
   REG --> STAGE[Stage candidate snapshot]
   STAGE --> COMMIT[Commit: snapshot sN published]
   COMMIT --> FIRST[First page: filter by query,<br/>redact values per PolicyStore,<br/>cursor bound to sN]
@@ -45,29 +46,35 @@ flowchart TD
   ARGS -->|yes| J{journal:<br/>request_id + FNV-1a hash}
   J -->|same id, same hash| REPLAY[stored result, replayed]
   J -->|same id, other hash| CONF[rejected: REQUEST_CONFLICT]
-  J -->|new| GATE{snapshot published and<br/>not degraded; session, epoch,<br/>snapshot, target, revision,<br/>actionability match?}
+  J -->|new| GATE{snapshot published, not degraded<br/>and not spent; session, epoch,<br/>snapshot, target, revision,<br/>actionability match?}
   GATE -->|no| REJ2[rejected: STALE_SNAPSHOT,<br/>STALE_TARGET, EPOCH_MISMATCH, ...]
   GATE -->|yes| DRY{dry_run?<br/>default true}
   DRY -->|yes| SIM[simulated]
   DRY -->|no| POL{PolicyStore: actuation enabled,<br/>not stopped; OsActuator live?}
   POL -->|no| DEN[rejected: POLICY_DENIED<br/>nothing delivered]
-  POL -->|yes| DEL[OsActuator.deliver]
+  POL -->|yes| ALLOW{OsActuator attests a foreground<br/>application on allowed_applications?<br/>none can before S3}
+  ALLOW -->|no| DEN
+  ALLOW -->|yes| FRESH{FrameCapturer.capture:<br/>still the committed base?}
+  FRESH -->|no| STALE[rejected: STALE_SNAPSHOT<br/>nothing delivered]
+  FRESH -->|yes| DEL[OsActuator.deliver<br/>spends the snapshot]
   DEL --> RCPT{receipt: every submitted<br/>event inserted?}
   RCPT -->|no or error| IND[indeterminate, do not retry]
   RCPT -->|yes| EFF{expected_effect}
   EFF -->|none| DLV[input_delivered]
-  EFF -->|visual_change| RECAP[FrameCapturer.capture<br/>compare with committed base]
+  EFF -->|visual_change| RECAP[FrameCapturer.capture<br/>compare with the pre-delivery frame]
   RECAP -->|changed| EO[effect_observed]
   RECAP -->|unchanged| IND
   EFF -->|focus, value, scroll| IND
 ```
 
 The result of every new request that passes the argument checks is recorded in the journal
-under its hash; the typed text itself is never stored. `get_engine_metrics` reads the
+under its hash; the typed text itself is never stored. Any delivery, whatever its outcome,
+spends the snapshot: the next action needs a new observation. `get_engine_metrics` reads the
 counters (observations, rejected and delivered actions, pending regions) and reports whether
 models are loaded.
 
 El resultado de cada petición nueva que pasa la comprobación de argumentos se guarda en el
-diario bajo su hash, nunca el texto tecleado.
+diario bajo su hash, nunca el texto tecleado. Cualquier entrega, sea cual sea su resultado,
+agota el snapshot: la acción siguiente necesita una observación nueva.
 `get_engine_metrics` lee los contadores (observaciones, acciones rechazadas y entregadas,
 regiones pendientes) e informa si hay modelos cargados.

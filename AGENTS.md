@@ -23,10 +23,13 @@ adds an entry to `docs/thesis/CHANGELOG.md`.
 chapter 06). Since S2b, `serve` and `demo` run the `Engine` of `ommatix-application` over the
 SDD ports and serve the Ommatix 1.0 contract (`observe_screen`, `execute_action`,
 `get_engine_metrics`) over MCP; the bootstrap prototype's use cases, ports, seven MCP tools
-and acceptance features are retired. Some bootstrap pieces remain as interim adapters until
-S3 replaces them (the flat-region detector, `xcap` capture, `enigo` input): do not extend
-them, and never put coordinates on the wire. The prototype's decisions are archived in
-`docs/adr/bootstrap/`.
+and acceptance suite are retired, and `ommatix-domain` keeps only the bootstrap support types
+the interim adapters use. Some bootstrap pieces remain as interim adapters until S3 replaces
+them (the flat-region detector, `xcap` capture, `enigo` input): do not extend them, and never
+put coordinates on the wire. The prototype's decisions are archived in `docs/adr/bootstrap/`.
+The icon cache (Algorithm 3A) runs in the observation only with the operator's curated
+prototypes and thresholds; never give those thresholds defaults (the thesis calibrates them)
+and never let an icon label change actionability.
 
 ## 2. Language policy (English / Español)
 
@@ -127,9 +130,13 @@ Nothing MVP-related goes in the repository root except workspace configuration.
    delivery, `input_delivered` never claims an effect, and an uncertain effect is
    `indeterminate`, never an automatic retry. Live input needs the `native-input` build
    feature, the native input and the screen source, `actuation_enabled = true` in the
-   operator's configuration and `dry_run: false` from the agent; it is off by default.
-   `allowed_applications` is not enforced before S3 (there is no foreground-window evidence
-   yet), so do not describe it as a safeguard.
+   operator's configuration, `dry_run: false` from the agent **and** a foreground
+   application on `allowed_applications` as the actuator attests it
+   (`OsActuator::foreground_application`); it is off by default. No actuator can attest the
+   foreground application before S3, so live input is always denied today: do not weaken
+   that check to make it work. Before delivering, the engine re-captures the screen and
+   refuses (`STALE_SNAPSHOT`) if it differs from the committed base; any delivery spends the
+   snapshot until the next observation.
 7. **Privacy** (ADR-0012). No screenshots or screen values in logs by default; text on screen
    never changes permissions. Never commit screen captures, recorded sessions, datasets
    (`captures/`, `datasets/` are git-ignored) or model weights. Use synthetic frames in

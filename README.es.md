@@ -73,11 +73,15 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   `get_engine_metrics`) por MCP 2026-07-28
   ([ADR-0015](docs/adr/0015-mcp-transport-on-rmcp-wire-types.md)). Las pruebas de contrato
   CT-01..10 y los escenarios BDD-01..27 corren en la integración continua. `serve` y `demo`
-  usan este motor.
+  usan este motor. Cada observación resuelve además los íconos sin texto con prototipos
+  curados (algoritmo 3A) cuando el operador los configura; si no, sus etiquetas quedan
+  `unknown`.
 - Lo que **todavía no** es real: la pantalla es un escritorio simulado o un fixture, el
   detector es el buscador de regiones de color plano del arranque (roles `unknown`, sin OCR),
-  la entrada real está apagada por defecto y sin verificar en Windows, y no se ha probado un
-  cliente MCP real. S3 trae DXGI, ONNX Runtime y `SendInput`; S4, las corridas de aceptación.
+  y no se ha probado un cliente MCP real. La entrada real se **deniega**: la compuerta exige
+  una aplicación en primer plano de la lista permitida, atestiguada por el adaptador de
+  entrada, y ningún adaptador puede atestiguarla antes de S3. S3 trae DXGI, ONNX Runtime y
+  `SendInput`; S4, las corridas de aceptación.
   La [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo
   que falta.
 - Primera plataforma: **Windows 11 x64**, un monitor, DPI de 100/125/150 %
@@ -113,20 +117,63 @@ pip install -r docs/thesis/requirements-validacion.txt
 cd docs/thesis && python referencia_ejecutable/run_tests.py && python validar_paquete.py && cd -
 
 # El motor
-cargo run -- demo                       # observa y actúa sobre el escritorio simulado, impreso
-cargo run -- serve                      # servidor MCP por stdio sobre el escritorio simulado
-cargo run -- serve --config ommatix.toml   # lo mismo, con un archivo de configuración
+cargo run -- demo                                   # observaciones y un clic en dry run sobre el escritorio simulado, impresos
+cargo run -- demo --observations 5 --theme dark     # más observaciones, otro tema
+cargo run -- serve                                  # servidor MCP por stdio sobre el escritorio simulado
+cargo run -- serve --config ommatix.toml            # lo mismo, con un archivo de configuración
+cargo run -- serve --source images --images frames/ # un directorio de frames PNG
+cargo run --features screen -- serve --source screen   # el monitor principal
 ```
+
+`serve` y `demo` aceptan las mismas opciones:
+
+| Opción | Valores | Por defecto |
+|---|---|---|
+| `--config RUTA` | un archivo de configuración (abajo) | los valores de la plantilla del dossier |
+| `--source` | `sim` (escritorio simulado), `images` (frames PNG, detector de regiones planas), `screen` (monitor principal, detector de regiones planas; feature `screen`) | `sim` |
+| `--images DIR` | el directorio de PNG para `--source images` | ninguno (`images` lo exige) |
+| `--input` | `dry-run` (registra, nunca toca el SO) o `native` (feature `native-input`, que implica `screen`) | `[engine] mode` (`dry_run`) |
+| `--theme` | `light`, `dark`, `contrasting-wallpaper` (sólo el escritorio simulado) | `light` |
+| `--session-id ID` | de 1 a 64 caracteres ASCII visibles, para una salida reproducible | derivado de la hora de inicio y del ID del proceso |
+| `--legacy` | sirve además el perfil MCP legacy 2025-11-25 (como `[mcp] legacy_enabled = true`) | apagado |
+| `--observations N` (sólo `demo`) | 1–20 | 3 |
+
+`--input native` (o `[engine] mode = "native"`) se rechaza antes de abrir ningún adaptador
+salvo que la fuente sea `screen`, `[safety] actuation_enabled = true` y el binario tenga
+`native-input`. Aun así, cada acción es un dry run salvo que el agente envíe
+`dry_run: false`, y la compuerta del motor exige además que la aplicación en primer plano,
+tal como la atestigua el adaptador de entrada, esté en `[safety] allowed_applications`. El
+adaptador de entrada provisional no puede atestiguarla, así que la entrada real es
+`POLICY_DENIED` hasta S3.
 
 El archivo de configuración tiene la forma de
 [`docs/thesis/plantillas/configuracion_mvp.toml`](docs/thesis/plantillas/configuracion_mvp.toml)
-(`[engine]`, `[mcp]`, `[safety]`, …); sin él se aplican los valores iniciales de la tesis.
-Fuentes: el escritorio simulado (`sim`, por defecto), un directorio de frames PNG (`images`) o
-la pantalla real (`screen`, feature de compilación `screen`). La entrada es `dry-run` (por
-defecto) o `native` (feature `native-input`), y `native` exige además la fuente `screen` y
-`actuation_enabled = true` en `[safety]`. Aun así, cada acción es un dry run salvo que el
-agente envíe `dry_run: false`. El perfil MCP legacy 2025-11-25 sólo se sirve con
-`[mcp] legacy_enabled = true` o la opción equivalente de la línea de órdenes.
+(`[engine]`, `[mcp]`, `[safety]`, `[models]`, `[cache]`; 64 KiB como máximo); sin él se
+aplican los valores de la plantilla, que niegan la actuación y ocultan los valores. Ninguna
+opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de forma estricta:
+
+- **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
+  rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
+  `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `max_message_bytes`
+  4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`); y valores que
+  este binario no puede cumplir: un `platform` distinto de `windows`, un `snapshot_policy`
+  distinto de `strict`, un `profile` distinto de `2026-07-28` (el perfil legacy se habilita
+  con `legacy_enabled`), un `transport` distinto de `stdio`, `allow_destructive = true`,
+  `allow_screenshots_to_client = true`, cualquier ruta o hash en `[models]` y
+  `[cache] persist = true`.
+- **Se acepta pero no se aplica** (una nota en stderr al arrancar): `max_snapshot_age_ms`
+  (cada página informa su `age_ms`) y `actuation_enabled = true` con un adaptador de entrada
+  que no es real.
+
+`[cache]` puede además encender el resolvedor de íconos (algoritmo 3A) con cinco claves que
+van juntas: `prototypes` (un archivo JSON lines, relativo al archivo de configuración, con un
+`{"label", "context", "grid"}` por línea, donde `grid` es el recorte 9×8 en escala de grises
+como 72 valores), `context` (la aplicación a la que valen los prototipos; hasta que S3
+identifique la aplicación en primer plano, la nombra el operador), `gradient_tau` (1–255),
+`max_distance` y `min_margin` (0–1). Ninguna tiene valor por defecto, porque la tesis los
+calibra en su corpus (H4); cualquiera de ellas sin las demás se rechaza, y también el archivo
+entero ante una línea inválida o más de `max_entries` prototipos. Sin ellas, la nota de
+arranque dice que las etiquetas de los íconos quedan desconocidas.
 
 El servidor MCP expone tres herramientas, con los schemas JSON del dossier:
 
@@ -174,7 +221,7 @@ Cómo se reparten los componentes del SDD del dossier
 | MCP Adapter | `ommatix-adapter-mcp` |
 | Observation Coordinator, Policy & Action Gate | `Engine` en `ommatix-application` |
 | Spatial Fusion, Temporal Registry | `ommatix-domain` (`fusion`, `identity`), dirigidos por el `Engine` |
-| Icon Resolver | `ommatix-domain` (`appearance`); entra en la observación del `Engine` con los modelos de S3 |
+| Icon Resolver | `ommatix-domain` (`appearance`), ejecutado por el `Engine` sobre los controles sin texto de las regiones planificadas con los prototipos curados del operador |
 | Capture Provider | `ommatix-adapter-capture` (`FrameCapturer`) |
 | Perception Provider | `ommatix-adapter-vision` (`VisionDetector`, `TextRecognizer`) |
 | OS Actuator | `ommatix-adapter-input` (`OsActuator`) |
@@ -205,4 +252,5 @@ Las reglas de contribución, para personas y agentes de IA, están en [AGENTS.md
 - [Registros de decisiones (ADR)](docs/adr/README.md)
 - [Diagramas](docs/diagrams/README.md)
 - [Glosario / Glossary](docs/glossary.md)
-- [Revisión de código del MVP del arranque](docs/reviews/2026-10-14-mvp-review.md)
+- Revisiones de código: [MVP del arranque](docs/reviews/2026-10-14-mvp-review.md),
+  [motor y adaptador MCP de S2b](docs/reviews/2026-10-14-s2b-engine-and-mcp.md)

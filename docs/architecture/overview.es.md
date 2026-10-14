@@ -159,36 +159,62 @@ schemas JSON de [`docs/thesis/contratos/`](../thesis/contratos/README.md):
 Desde S2b el binario ejecuta el motor de la tesis. `serve` y `demo` construyen un único
 `Engine` (`ommatix-application`) sobre los puertos del SDD y, en `serve`, el adaptador MCP
 delante. Se retiran los casos de uso del prototipo del arranque, sus puertos (`FrameSource`,
-`ElementDetector`, `InputController`), sus siete herramientas MCP con coordenadas y sus
-features Gherkin; sus decisiones archivadas siguen en
-[`docs/adr/bootstrap/`](../adr/bootstrap/README.md).
+`ElementDetector`, `InputController`), sus siete herramientas MCP con coordenadas y su suite
+de aceptación (el directorio `src/acceptance/features/` y `tests/acceptance.rs`). De sus
+módulos de dominio, `ommatix-domain` conserva sólo los tipos de apoyo que todavía usan los
+adaptadores provisionales (el `Frame` RGBA, `Rect`/`Point`, `Detection`, la `Action` del
+usuario simulado y `DisplayMapping`). Sus decisiones archivadas siguen en
+[`docs/adr/bootstrap/`](../adr/bootstrap/README.md). La
+[revisión de S2b](../reviews/2026-10-14-s2b-engine-and-mcp.md) registra los hallazgos
+corregidos antes de cerrar la etapa, cada uno con su prueba de regresión.
 
 **`observe_screen`** captura un frame, planifica regiones contra la última base confirmada
 (algoritmo 1), entrega al detector y al reconocedor sólo las regiones planificadas, conserva
-la evidencia fuera de ellas, fusiona (algoritmo 2), sigue las identidades (algoritmo 3B) y
-prepara y confirma el snapshot. Una etapa fallida no publica nada, deja pendientes los tiles
-planificados y bloquea las acciones. Las páginas se filtran por `query`, se redactan salvo que
-la política local permita valores y quedan atadas a su snapshot por el cursor.
+la evidencia fuera de ellas, fusiona (algoritmo 2), resuelve íconos (algoritmo 3A), sigue las
+identidades (algoritmo 3B) y prepara y confirma el snapshot. Una etapa fallida no publica
+nada, deja pendientes los tiles planificados y bloquea las acciones. Las páginas se filtran
+por `query`, se redactan salvo que la política local permita valores y quedan atadas a su
+snapshot por el cursor.
+
+**Íconos (algoritmo 3A).** Un control es candidato a ícono cuando es un `icon_button`, o
+cuando no tiene texto interior y su rol no toma una etiqueta externa. Su caja se recorta del
+frame (sin margen interior), se convierte a luma con los pesos BT.601 (0,299 R + 0,587 G +
+0,114 B), se remuestrea a la rejilla 9×8 con medias enteras por bloque y se describe con el
+descriptor de gradientes con máscara; el caché curado responde una etiqueta para el contexto
+configurado sólo cuando la coincidencia tiene soporte suficiente, está lo bastante cerca y
+supera por el margen a la siguiente etiqueta distinta. Una coincidencia se etiqueta
+`curated_icon`; cualquier otra cosa deja la etiqueta vacía, nunca una conjetura. La etiqueta
+nunca cambia la accionabilidad, que viene del detector. Sólo los candidatos dentro de las
+regiones planificadas se vuelven a consultar; los demás conservan la etiqueta del snapshot
+confirmado. El resolvedor está apagado salvo que el operador configure prototipos y umbrales
+(`[cache]`), porque la tesis los calibra (H4); el contexto también se configura hasta que S3
+pueda identificar la aplicación en primer plano.
 
 **`execute_action`** comprueba los argumentos, busca el `request_id` en un diario de
 deduplicación acotado (hash FNV-1a de los argumentos canónicos, de modo que nunca se guarda el
 texto tecleado; el mismo ID con otros argumentos es `REQUEST_CONFLICT`) y después comprueba de
 forma estricta sesión, epoch geométrico, snapshot, target, revisión y accionabilidad contra el
 snapshot publicado. Un dry run (por defecto) es `simulated`. La entrada real exige la política
-del operador (`actuation_enabled`, sin parada) **y** un actuador real; si no, `POLICY_DENIED`
-sin entregar nada. Un recibo de entrega cuyos eventos insertados coinciden con los enviados es
-`input_delivered`; cualquier otra cosa es `indeterminate`. Un `visual_change` esperado se
-verifica con una nueva captura comparada con la base confirmada (`effect_observed` o
-`indeterminate`); los demás efectos se informan `indeterminate` hasta que S3 pueda
-comprobarlos.
+del operador (`actuation_enabled`, sin parada), un actuador real **y** una aplicación en
+primer plano incluida en la lista no vacía `allowed_applications`, tal como la atestigua el
+actuador; si no, `POLICY_DENIED` sin entregar nada. Ningún actuador puede atestiguar la
+aplicación en primer plano antes de S3, así que hoy la entrada real siempre se deniega. Antes
+de entregar, una comprobación de vigencia vuelve a capturar la pantalla: si difiere de la base
+confirmada, la acción es `STALE_SNAPSHOT` y no se entrega nada. Un recibo de entrega cuyos
+eventos insertados coinciden con los enviados es `input_delivered`; cualquier otra cosa es
+`indeterminate`. Un `visual_change` esperado se verifica con una captura posterior a la
+entrega comparada con el frame previo a ella (`effect_observed` o `indeterminate`); los demás
+efectos se informan `indeterminate` hasta que S3 pueda comprobarlos. Cualquier entrega, sea
+cual sea su resultado, agota el snapshot: la acción siguiente necesita una observación nueva
+(`STALE_SNAPSHOT`), mientras que las repeticiones del diario devuelven el resultado guardado.
 
 | Área | Tesis | Hoy | Se completa en |
 |---|---|---|---|
 | Detección de cambios, fusión, identidad, snapshots | Algoritmos 1, 2 y 3B; commit transaccional | Implementados en `ommatix-domain` y ejecutados por el `Engine` | S1–S2 (hecho) |
-| Caché de íconos | Algoritmo 3A dentro de la observación | Implementado en `ommatix-domain` (`appearance`), todavía fuera de la observación: ningún detector informa íconos sin texto | S3 |
+| Caché de íconos | Algoritmo 3A dentro de la observación | El `Engine` lo ejecuta sobre los candidatos a ícono de las regiones planificadas con los prototipos curados del operador; apagado sin ellos; contexto configurado, umbrales sin calibrar | S3 (contexto), S4 (calibración) |
 | Percepción | Detector y OCR en ONNX Runtime, roles según el spike S0 | Detector de regiones de color plano (roles `unknown`), sin OCR (`NullTextRecognizer`); los escritorios simulados informan la verdad de terreno | S0, S3 |
 | Contrato con el agente | Ommatix 1.0 por MCP 2026-07-28; 2025-11-25 opcional | Implementado (CT-01..10); sin probar todavía con un cliente real | S0/S3 para el cliente |
-| Compuerta de acciones | Vigencia, política, allowlist, foco, parada | Vigencia, política y parada; `allowed_applications` no se aplica (aún no hay evidencia de la ventana en primer plano); sin comprobación de foco | S3 |
+| Compuerta de acciones | Vigencia, política, allowlist, foco, parada | Vigencia del snapshot (comprobada también con una captura antes de entregar), política, parada y la lista permitida, que deniega la entrada real hasta que un actuador atestigüe la aplicación en primer plano; sin comprobación de foco | S3 |
 | Verificación del efecto | Postcondiciones de foco, valor, desplazamiento y cambio visual | Sólo cambio visual, con una nueva captura | S3 |
 | Telemetría | Métricas y auditoría sin texto sensible | `get_engine_metrics`; tiempos por etapa en `_meta` | S3 |
 | Plataforma | Windows 11 x64: DXGI y `SendInput` | Escritorios simulado y de fixtures; captura con `xcap` y entrada con `enigo` detrás de features de compilación | S3 |
