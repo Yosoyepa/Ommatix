@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 16
+PASS adrs_encontradas 17
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -93,6 +93,7 @@ PASS referencias:0013-bilingual-documentation.md []
 PASS referencias:0014-hexagonal-crate-layout.md []
 PASS referencias:0015-mcp-transport-on-rmcp-wire-types.md []
 PASS referencias:0016-bounded-unsafe-for-windows-capture-and-input.md []
+PASS referencias:0017-ui-automation-evidence-fused-with-vision.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 
@@ -119,6 +120,8 @@ PASS gherkin_id_unico:BDD-11
 PASS gherkin_estructura:BDD-11 
 PASS gherkin_id_unico:BDD-12 
 PASS gherkin_estructura:BDD-12 
+PASS gherkin_id_unico:BDD-33 
+PASS gherkin_estructura:BDD-33 
 PASS gherkin_cabecera:03_identidad.feature 
 PASS gherkin_id_unico:BDD-13 
 PASS gherkin_estructura:BDD-13 
@@ -196,4 +199,5 @@ PASS trazabilidad:BDD-29
 PASS trazabilidad:BDD-30 
 PASS trazabilidad:BDD-31 
 PASS trazabilidad:BDD-32 
+PASS trazabilidad:BDD-33 
 PASS reporte_oraculo_aprobado Se lee el informe previo; para volver a ejecutar use referencia_ejecutable/run_tests.py

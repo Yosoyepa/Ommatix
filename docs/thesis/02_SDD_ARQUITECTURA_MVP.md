@@ -22,7 +22,8 @@ La instancia está vinculada a una sesión de usuario y a un monitor/ventana per
 | Observation Coordinator | Captura, planificación de regiones y commit | SnapshotRequest → Snapshot |
 | Capture Provider | Pixels, stride, tiempos, dirty/move rects | FrameLease |
 | Perception Provider | Detector, OCR y transformaciones de imagen | Region → RawEvidence |
-| Spatial Fusion | Contención, renglones, etiquetas y relaciones | RawEvidence → Candidates |
+| Accessibility Provider | Árbol de accesibilidad de la ventana en primer plano (UI Automation); evidencia opcional que se fusiona con la visual | Region → AccessibleElement |
+| Spatial Fusion | Contención, renglones, etiquetas y relaciones; absorbe las detecciones que coinciden con un elemento accesible | RawEvidence + AccessibleElement → Candidates |
 | Icon Resolver | Recuperación contextual con rechazo | CropDescriptor → LabelEvidence |
 | Temporal Registry | IDs, revisiones y bajas | Candidates + Snapshot → Tracks |
 | Policy & Action Gate | Vigencia, permisos y precondiciones | ActionRequest → Permit/Reject |
@@ -34,9 +35,11 @@ Se propone un **monolito modular**, no una colección de microservicios. Los fra
 
 ## 2.4 Puertos y adaptadores
 
-La lógica core no depende directamente de DXGI, ONNX ni MCP. Los puertos `FrameCapturer`, `VisionDetector`, `TextRecognizer`, `OsActuator`, `Clock` y `PolicyStore` permiten sustituir adaptadores por fixtures deterministas. Los resultados deben incluir procedencia, frame/region de origen y calidad de evidencia.
+La lógica core no depende directamente de DXGI, ONNX ni MCP. Los puertos `FrameCapturer`, `VisionDetector`, `TextRecognizer`, `AccessibilityProvider`, `OsActuator`, `Clock` y `PolicyStore` permiten sustituir adaptadores por fixtures deterministas. Los resultados deben incluir procedencia, frame/region de origen y calidad de evidencia.
 
 **Windows:** DXGI es el candidato de captura; primero se aprovechan move/dirty rects nativos y después el diferenciador propio como respaldo o verificación [S06]. El actuador candidato es SendInput, con recuento de eventos y restricciones documentadas [S07]. Las llamadas se hacen en el contexto de usuario, sin técnicas para evadir controles de seguridad.
+
+**Accesibilidad (ADR-0017):** `AccessibilityProvider` entrega los elementos de la ventana en primer plano atestiguada, dentro de las regiones planificadas (toda la ventana en un refresco completo): caja en píxeles físicos del monitor seleccionado y recortada, rol derivado del tipo de control de UI Automation (`Button`/`SplitButton` → `button`; `Edit` escribible y no contraseña → `input`; `CheckBox` → `checkbox`; `ComboBox` → `dropdown`; el resto de controles accionables → `unknown`; los demás tipos se omiten), nombre, `enabled`, `offscreen`, `password` y los patrones de acción que admite (`Invoke`, `Toggle`, `Value`, `ExpandCollapse`, `SelectionItem`, `Scroll`). Es evidencia positiva que se **fusiona** con la visual, no la sustituye: un elemento habilitado, en pantalla y con un patrón de acción es `confirmed`; las detecciones visuales que son el mismo control (IoU o IoC, Algoritmo 2) se absorben en él y su rol y su nombre ganan (`label_source: accessibility`); las demás detecciones quedan como están, salvo que pierden una accionabilidad confirmada si su centro cae sobre un elemento accesible. Nunca se lee `ValuePattern.Value`, un campo de contraseña nunca es `input` ni publica texto, y los nombres son datos no fiables. Está apagado por defecto (`NoAccessibility`); su etapa se mide aparte (`accessibility` en `_meta`).
 
 **Inferencia:** ONNX Runtime detrás de un puerto; CPU es baseline, DirectML una opción inicial de Windows y WinML una evolución evaluable. DirectML tiene restricciones de concurrencia por sesión y de configuración que el adaptador debe respetar [S09–S10]. Los modelos/pesos se eligen en el spike S0; ninguna tabla de roles se inventa a partir del nombre “YOLO”. Un detector binario interactuable/no-interactuable no se convierte automáticamente en detector de inputs, dropdowns y checkboxes.
 

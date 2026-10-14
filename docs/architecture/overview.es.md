@@ -38,7 +38,7 @@ y el [capítulo 08 de la tesis](../thesis/08_SEGURIDAD_Y_PRIVACIDAD.md).
 
 ## Componentes
 
-El SDD define once componentes ([diagrama](../diagrams/components.md)).
+El SDD define doce componentes ([diagrama](../diagrams/components.md)).
 [ADR-0014](../adr/0014-hexagonal-crate-layout.md) los ubica en crates:
 
 | Componente | Responsabilidad | Contrato | Crate |
@@ -47,7 +47,8 @@ El SDD define once componentes ([diagrama](../diagrams/components.md)).
 | Observation Coordinator | Captura, planificación de regiones y commit | SnapshotRequest → Snapshot | `ommatix-application` (`Engine::observe_screen`) |
 | Capture Provider | Píxeles, stride, tiempos, rectángulos dirty y move | FrameLease | `ommatix-adapter-capture` |
 | Perception Provider | Detector, OCR y transformaciones de imagen | Region → RawEvidence | `ommatix-adapter-vision` |
-| Spatial Fusion | Contención, renglones, etiquetas y relaciones | RawEvidence → Candidates | `ommatix-domain` |
+| Accessibility Provider | El árbol de UI Automation de la ventana en primer plano; evidencia opcional fusionada con la visual | Region → AccessibleElement | `ommatix-adapter-accessibility` |
+| Spatial Fusion | Contención, renglones, etiquetas y relaciones; absorbe las detecciones que coinciden con un elemento accesible | RawEvidence + AccessibleElement → Candidates | `ommatix-domain` |
 | Icon Resolver | Recuperación contextual con rechazo | CropDescriptor → LabelEvidence | `ommatix-domain` |
 | Temporal Registry | IDs, revisiones y bajas | Candidates + Snapshot → Tracks | `ommatix-domain` |
 | Policy & Action Gate | Vigencia, permisos y precondiciones | ActionRequest → Permit o Reject | `ommatix-application` (`Engine::execute_action`) |
@@ -56,7 +57,7 @@ El SDD define once componentes ([diagrama](../diagrams/components.md)).
 | Telemetry | Métricas y auditoría sin texto sensible | Eventos y spans | `get_engine_metrics` y tiempos por etapa en el `_meta` de MCP (parcial; S3) |
 
 El núcleo sólo llega al exterior mediante los puertos `FrameCapturer`, `VisionDetector`,
-`TextRecognizer`, `OsActuator`, `Clock` y `PolicyStore`, de modo que cada adaptador puede
+`TextRecognizer`, `AccessibilityProvider`, `OsActuator`, `Clock` y `PolicyStore`, de modo que cada adaptador puede
 sustituirse por un fixture determinista. En Windows 11
 ([ADR-0008](../adr/0008-one-real-platform-first.md)) la captura usa DXGI Desktop Duplication
 y la entrada usa `SendInput`. La inferencia corre en ONNX Runtime, con CPU como baseline y
@@ -209,6 +210,18 @@ sin OCR, entrada en dry run y política que lo niega todo.
   (`detector_threads` hilos intra-op) o, con la feature `directml`, en DirectML con una
   `DirectML.dll` fijada, ejecución secuencial, sin patrón de memoria y sin recurrir a la
   CPU; el manifiesto enumera los proveedores con los que se validó el modelo.
+- *Accesibilidad* (`uia`, `[models] accessibility = "uia"`,
+  [ADR-0017](../adr/0017-ui-automation-evidence-fused-with-vision.md)): el árbol de UI Automation
+  de la ventana en primer plano que atestigua el actuador (el marco de `ApplicationFrameHost`
+  se resuelve a su aplicación hospedada), leído una vez por observación dentro de las regiones
+  planificadas, acotado por elementos, profundidad y tiempo, con el crate seguro
+  `uiautomation` (sin `unsafe` propio; el `clippy.toml` del adaptador prohíbe las llamadas de
+  entrada y de patrones del crate). Es evidencia, no un reemplazo: un elemento habilitado, en
+  pantalla y con un patrón de acción es `confirmed` con su rol y su nombre (`label_source:
+  accessibility`), las cajas del detector que son el mismo control se funden con él y una caja
+  centrada sobre otro control accesible deja de estar confirmada. Nunca lee el valor de un
+  campo y un campo de contraseña no es una entrada. Sólo con `dxgi` o `screen`; apagado por
+  defecto.
 - *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` para exactamente
   `ocr_language`, nunca otro idioma, sin inventar confianzas; el texto reconocido nunca se
   registra.
@@ -291,7 +304,7 @@ cual sea su resultado, agota el snapshot: la acción siguiente necesita una obse
 | Telemetría | Métricas y auditoría sin texto sensible | `get_engine_metrics`; tiempos por etapa en `_meta` | S3 |
 | Plataforma | Windows 11 x64: DXGI y `SendInput` | Captura DXGI y entrada `SendInput` tras las features `dxgi` y `sendinput` (ADR-0016), compiladas y probadas en la integración continua en Windows ejecutadas en parte de forma supervisada ([corridas de S3](../thesis/S3_CORRIDAS_SUPERVISADAS.md): IT-01, IT-03 e IT-04, ocho clics reales sobre `notepad.exe` en dos corridas; el primer frame DXGI ya muestra el escritorio en vivo; IT-07 sin ejecutar) y en el protocolo S4 reducido (118 clics reales en la aplicación de prueba propia, el Bloc de notas y la Calculadora; `SendInput` atestigua la aplicación UWP hospedada, no `ApplicationFrameHost.exe`); escritorios simulado y de fixtures para las pruebas; `xcap` y `enigo` provisionales tras `screen` y `native-input` | S3 (corridas supervisadas) |
 
-Los escenarios de la tesis (BDD-01..32) se quedan en [`docs/thesis/features/`](../thesis/features),
+Los escenarios de la tesis (BDD-01..33) se quedan en [`docs/thesis/features/`](../thesis/features),
 donde los espera la matriz de trazabilidad del dossier; `src/acceptance/tests/thesis.rs`
 los ejecuta todos: BDD-01..10 y BDD-13..21 sobre el núcleo del dominio, BDD-11, 12 y 22..27
 a través del motor y del adaptador MCP sobre los escritorios simulado y de fixtures, y

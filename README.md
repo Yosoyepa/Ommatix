@@ -28,10 +28,10 @@ engineering and research dossier, in Spanish, is the baseline of this repository
 |---|---|
 | Technical audit, thesis framework, SDD, requirements (RF-01..18, RNF-01..10) | [chapters 00–03](docs/thesis/README.md) |
 | Algorithms: incremental perception, spatial fusion, icon cache, temporal identity | [chapter 04](docs/thesis/04_ALGORITMOS_CORE.md) |
-| TDD plan (76 planned tests), integration plan S0–S4 and definition of done | [chapters 05–06](docs/thesis/05_TDD_PLAN_Y_MATRIZ.md) |
+| TDD plan (77 planned tests), integration plan S0–S4 and definition of done | [chapters 05–06](docs/thesis/05_TDD_PLAN_Y_MATRIZ.md) |
 | MCP contract, errors, JSON schemas and examples | [chapter 07](docs/thesis/07_CONTRATOS_MCP_Y_ERRORES.md), [`contratos/`](docs/thesis/contratos/README.md) |
 | Security, evaluation protocol, runbook, references | chapters 08–12 |
-| 32 Gherkin scenarios (BDD-01..32) and traceability matrices | [`features/`](docs/thesis/features), [`matrices/`](docs/thesis/matrices) |
+| 33 Gherkin scenarios (BDD-01..33) and traceability matrices | [`features/`](docs/thesis/features), [`matrices/`](docs/thesis/matrices) |
 | Python reference oracle (48 tests) and package validator | [`referencia_ejecutable/`](docs/thesis/referencia_ejecutable) |
 | Architecture decisions ADR-0001..0016, in English | [`docs/adr/`](docs/adr/README.md) |
 
@@ -67,7 +67,7 @@ unless the agent and a local policy both allow them. More in the
 - `ommatix-application` runs it as one engine behind the SDD ports, and `ommatix-adapter-mcp`
   serves the thesis contract (`observe_screen`, `execute_action`, `get_engine_metrics`) over
   MCP 2026-07-28 ([ADR-0015](docs/adr/0015-mcp-transport-on-rmcp-wire-types.md)). Contract
-  tests CT-01..10 and scenarios BDD-01..32 run in CI (BDD-28..32 over a test double of
+  tests CT-01..10 and scenarios BDD-01..33 run in CI (BDD-28..32 over a test double of
   the live actuator). `serve` and `demo` use this engine. Each observation also resolves text-less icons against curated prototypes (Algorithm 3A) when the operator
   configures them; otherwise icon labels stay `unknown`.
 - **S3, first part (Windows adapters):** DXGI Desktop Duplication capture (`--source dxgi`,
@@ -168,6 +168,7 @@ Build features, all off by default:
 | `onnx` | the ONNX detector of `[models]`; ONNX Runtime is loaded at run time from the library the operator pins, nothing is downloaded at build time | any |
 | `directml` | `[models] detector_execution_provider = "directml"`: the detector on DirectML (implies `onnx`); needs an ONNX Runtime build with DirectML and a pinned `DirectML.dll` | Windows |
 | `winrt-ocr` | `[models] ocr = "winrt"`: the OCR built into Windows | Windows |
+| `uia` | `[models] accessibility = "uia"`: the foreground window's UI Automation tree as evidence fused with the visual path ([ADR-0017](docs/adr/0017-ui-automation-evidence-fused-with-vision.md)); needs `--source dxgi` or `screen` | Windows |
 
 `serve` and `demo` take the same options:
 
@@ -287,6 +288,7 @@ src/                       Cargo workspace (modular monolith, ADR-0014)
 │                                                appearance, identity, snapshot
 ├── application/           ommatix-application   SDD ports, the Engine use case, contract types
 ├── adapters/
+│   ├── accessibility/     ommatix-adapter-accessibility  AccessibilityProvider: UI Automation (feature `uia`)
 │   ├── capture/           ommatix-adapter-capture  FrameCapturer: scripted, PNG frames, screen, DXGI
 │   ├── vision/            ommatix-adapter-vision   VisionDetector, TextRecognizer (flat-region, ONNX, Windows OCR)
 │   ├── input/             ommatix-adapter-input    OsActuator: dry run, native input, SendInput
@@ -316,6 +318,7 @@ map onto the crates:
 | Icon Resolver | `ommatix-domain` (`appearance`), run by the `Engine` on text-less controls of the planned regions with the operator's curated prototypes |
 | Capture Provider | `ommatix-adapter-capture` (`FrameCapturer`) |
 | Perception Provider | `ommatix-adapter-vision` (`VisionDetector`, `TextRecognizer`) |
+| Accessibility Provider | `ommatix-adapter-accessibility` (`AccessibilityProvider`; optional, off by default) |
 | OS Actuator | `ommatix-adapter-input` (`OsActuator`) |
 | Effect Verifier | the `Engine`'s re-capture after delivery (visual change only); partial, completed in S3 |
 | Telemetry | stage timings in MCP `_meta`; partial, completed in S3 |
@@ -333,8 +336,8 @@ git config core.hooksPath .githooks     # once: fmt + clippy + tests before comm
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                  # unit, integration and Gherkin acceptance tests
-cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr --all-targets -- -D warnings   # on Windows
-cargo test -p ommatix --features dxgi,sendinput,onnx,winrt-ocr                                  # on Windows
+cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia --all-targets -- -D warnings   # on Windows
+cargo test -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia                              # on Windows
 ```
 
 No test sends real input: the `SendInput` actuator is tested through its pure helpers only.

@@ -29,7 +29,10 @@ them (the flat-region detector, `xcap` capture, `enigo` input): do not extend th
 put coordinates on the wire. The prototype's decisions are archived in `docs/adr/bootstrap/`.
 The icon cache (Algorithm 3A) runs in the observation only with the operator's curated
 prototypes and thresholds; never give those thresholds defaults (the thesis calibrates them)
-and never let an icon label change actionability.
+and never let an icon label change actionability. Accessibility evidence (ADR-0017, UI
+Automation, `[models] accessibility`) is fused with the visual path and never replaces it: it
+confirms an element only when it is enabled, on screen and has an action pattern, it never
+reads a field's value, and its names are untrusted data like OCR text.
 
 ## 2. Language policy (English / Español)
 
@@ -71,8 +74,8 @@ compiler-enforced boundary.
 | `ommatix-acceptance` | anything, as dev-dependencies only (test crate, never linked into the binary) |
 
 - Ports follow the SDD (thesis chapter 02 §2.4): `FrameCapturer`, `VisionDetector`,
-  `TextRecognizer`, `OsActuator`, `Clock`, `PolicyStore`. A new external capability is a
-  **port trait in `application/src/ports.rs`** plus a **new adapter crate** under
+  `TextRecognizer`, `AccessibilityProvider`, `OsActuator`, `Clock`, `PolicyStore`. A new
+  external capability is a **port trait in `application/src/ports.rs`** plus a **new adapter crate** under
   `src/adapters/`. Driving adapters (MCP) call the `Engine` directly; there are no inbound
   port traits.
 - A pure-computation crate in the domain (an R*-tree, Unicode normalisation) is added to the
@@ -172,7 +175,7 @@ cargo clippy --workspace --all-targets -- -D warnings  # lint (CI-blocking)
 cargo test --workspace                                 # unit + integration + Gherkin (CI-blocking)
 cargo run -- demo                                      # smoke test: the engine on the simulated desktop
 cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings  # when touching capture/input
-cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr --all-targets -- -D warnings  # on Windows (CI job `windows`)
+cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia --all-targets -- -D warnings  # on Windows (CI job `windows`)
 cargo test -p ommatix-adapter-capture --features dxgi -- --ignored                   # manual: one DXGI frame, never saved
 ```
 
@@ -230,8 +233,8 @@ Do not bypass them with `--no-verify` unless the PR says why.
 ## 9. Decisions already made (do not re-litigate without a new ADR)
 
 See `docs/adr/README.md`. ADR-0001..0012 come from the thesis; the project owner accepted
-them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015 and ADR-0016 were accepted
-on 2026-10-14 too.
+them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015, ADR-0016 and ADR-0017 were
+accepted on 2026-10-14 too.
 Highlights: Rust runtime with independent oracles (0001), MCP over stdio with explicit
 profiles (0002), conservative spatial fusion with IoC (0003), masked open-set icon cache
 (0004), persistent tracking instead of cell hashes (0005), transactional snapshots (0006),
@@ -239,5 +242,6 @@ fail-closed actuation and honest simulation (0007), Windows 11 first (0008), mod
 licences chosen in the S0 spike (0009), performance budgets subject to measurement (0010),
 modular monolith with adaptive incrementality (0011), data minimisation (0012), bilingual
 documentation (0013), the hexagonal crate layout (0014), the MCP transport on `rmcp` wire
-types with a bounded message loop (0015) and bounded `unsafe` for the Windows
-capture and input adapters (0016).
+types with a bounded message loop (0015), bounded `unsafe` for the Windows
+capture and input adapters (0016) and UI Automation evidence fused with the visual path,
+with no `unsafe` of our own (0017).

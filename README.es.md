@@ -31,10 +31,10 @@ mediante MCP*. Su dossier de ingeniería e investigación es la línea base de e
 |---|---|
 | Auditoría técnica, marco de tesis, SDD, requisitos (RF-01..18, RNF-01..10) | [capítulos 00–03](docs/thesis/README.md) |
 | Algoritmos: percepción incremental, fusión espacial, caché de íconos, identidad temporal | [capítulo 04](docs/thesis/04_ALGORITMOS_CORE.md) |
-| Plan TDD (76 pruebas planificadas), plan de integración S0–S4 y definición de terminado | [capítulos 05–06](docs/thesis/05_TDD_PLAN_Y_MATRIZ.md) |
+| Plan TDD (77 pruebas planificadas), plan de integración S0–S4 y definición de terminado | [capítulos 05–06](docs/thesis/05_TDD_PLAN_Y_MATRIZ.md) |
 | Contrato MCP, errores, schemas JSON y ejemplos | [capítulo 07](docs/thesis/07_CONTRATOS_MCP_Y_ERRORES.md), [`contratos/`](docs/thesis/contratos/README.md) |
 | Seguridad, protocolo de evaluación, runbook, referencias | capítulos 08–12 |
-| 32 escenarios Gherkin (BDD-01..32) y matrices de trazabilidad | [`features/`](docs/thesis/features), [`matrices/`](docs/thesis/matrices) |
+| 33 escenarios Gherkin (BDD-01..33) y matrices de trazabilidad | [`features/`](docs/thesis/features), [`matrices/`](docs/thesis/matrices) |
 | Oráculo de referencia en Python (48 pruebas) y validador del paquete | [`referencia_ejecutable/`](docs/thesis/referencia_ejecutable) |
 | Decisiones de arquitectura ADR-0001..0016, en inglés con resumen en español | [`docs/adr/`](docs/adr/README.md) |
 
@@ -72,7 +72,7 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   `ommatix-adapter-mcp` sirve el contrato de la tesis (`observe_screen`, `execute_action`,
   `get_engine_metrics`) por MCP 2026-07-28
   ([ADR-0015](docs/adr/0015-mcp-transport-on-rmcp-wire-types.md)). Las pruebas de contrato
-  CT-01..10 y los escenarios BDD-01..32 corren en la integración continua
+  CT-01..10 y los escenarios BDD-01..33 corren en la integración continua
   (BDD-28..32 sobre un doble de prueba del actuador real). `serve` y `demo` usan este motor.
   Cada observación resuelve además los íconos sin texto con prototipos curados (algoritmo 3A)
   cuando el operador los configura; si no, sus etiquetas quedan `unknown`.
@@ -179,6 +179,7 @@ Features de compilación, todas apagadas por defecto:
 | `onnx` | el detector ONNX de `[models]`; ONNX Runtime se carga al ejecutar desde la biblioteca que fija el operador, nada se descarga al compilar | cualquiera |
 | `directml` | `[models] detector_execution_provider = "directml"`: el detector sobre DirectML (implica `onnx`); necesita una compilación de ONNX Runtime con DirectML y una `DirectML.dll` fijada | Windows |
 | `winrt-ocr` | `[models] ocr = "winrt"`: el OCR incluido en Windows | Windows |
+| `uia` | `[models] accessibility = "uia"`: el árbol de UI Automation de la ventana en primer plano, como evidencia fusionada con la visual ([ADR-0017](docs/adr/0017-ui-automation-evidence-fused-with-vision.md)); exige `--source dxgi` o `screen` | Windows |
 
 `serve` y `demo` aceptan las mismas opciones:
 
@@ -306,6 +307,7 @@ src/                       workspace de Cargo (monolito modular, ADR-0014)
 │                                                fusion, appearance, identity, snapshot
 ├── application/           ommatix-application   puertos del SDD, caso de uso Engine, tipos del contrato
 ├── adapters/
+│   ├── accessibility/     ommatix-adapter-accessibility  AccessibilityProvider: UI Automation (feature `uia`)
 │   ├── capture/           ommatix-adapter-capture  FrameCapturer: guion, frames PNG, pantalla, DXGI
 │   ├── vision/            ommatix-adapter-vision   VisionDetector, TextRecognizer (color plano, ONNX, OCR de Windows)
 │   ├── input/             ommatix-adapter-input    OsActuator: dry run, entrada nativa, SendInput
@@ -335,6 +337,7 @@ Cómo se reparten los componentes del SDD del dossier
 | Icon Resolver | `ommatix-domain` (`appearance`), ejecutado por el `Engine` sobre los controles sin texto de las regiones planificadas con los prototipos curados del operador |
 | Capture Provider | `ommatix-adapter-capture` (`FrameCapturer`) |
 | Perception Provider | `ommatix-adapter-vision` (`VisionDetector`, `TextRecognizer`) |
+| Accessibility Provider | `ommatix-adapter-accessibility` (`AccessibilityProvider`; opcional, apagado por defecto) |
 | OS Actuator | `ommatix-adapter-input` (`OsActuator`) |
 | Effect Verifier | la nueva captura del `Engine` tras la entrega (sólo el cambio visual); parcial, se completa en S3 |
 | Telemetry | tiempos por etapa en el `_meta` de MCP; parcial, se completa en S3 |
@@ -352,8 +355,8 @@ git config core.hooksPath .githooks     # una vez: fmt + clippy + tests antes de
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                  # tests unitarios, de integración y Gherkin
-cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr --all-targets -- -D warnings   # en Windows
-cargo test -p ommatix --features dxgi,sendinput,onnx,winrt-ocr                                  # en Windows
+cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia --all-targets -- -D warnings   # en Windows
+cargo test -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia                              # en Windows
 ```
 
 Ninguna prueba envía entrada real: el actuador `SendInput` sólo se prueba con sus funciones

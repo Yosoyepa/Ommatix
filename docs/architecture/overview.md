@@ -37,7 +37,7 @@ MVP opens no network port; MCP runs over stdio. See [context](../diagrams/contex
 
 ## Components
 
-The SDD defines eleven components ([diagram](../diagrams/components.md)).
+The SDD defines twelve components ([diagram](../diagrams/components.md)).
 [ADR-0014](../adr/0014-hexagonal-crate-layout.md) places them in crates:
 
 | Component | Responsibility | Contract | Crate |
@@ -46,7 +46,8 @@ The SDD defines eleven components ([diagram](../diagrams/components.md)).
 | Observation Coordinator | Capture, region planning and commit | SnapshotRequest → Snapshot | `ommatix-application` (`Engine::observe_screen`) |
 | Capture Provider | Pixels, stride, timing, dirty and move rectangles | FrameLease | `ommatix-adapter-capture` |
 | Perception Provider | Detector, OCR and image transforms | Region → RawEvidence | `ommatix-adapter-vision` |
-| Spatial Fusion | Containment, lines, labels and relations | RawEvidence → Candidates | `ommatix-domain` |
+| Accessibility Provider | The foreground window's UI Automation tree; optional evidence fused with the visual path | Region → AccessibleElement | `ommatix-adapter-accessibility` |
+| Spatial Fusion | Containment, lines, labels and relations; absorbs detections that match an accessible element | RawEvidence + AccessibleElement → Candidates | `ommatix-domain` |
 | Icon Resolver | Contextual lookup with rejection | CropDescriptor → LabelEvidence | `ommatix-domain` |
 | Temporal Registry | IDs, revisions and retirement | Candidates + Snapshot → Tracks | `ommatix-domain` |
 | Policy & Action Gate | Freshness, permissions and preconditions | ActionRequest → Permit or Reject | `ommatix-application` (`Engine::execute_action`) |
@@ -55,7 +56,7 @@ The SDD defines eleven components ([diagram](../diagrams/components.md)).
 | Telemetry | Metrics and audit without sensitive text | Events and spans | `get_engine_metrics` and stage timings in MCP `_meta` (partial; S3) |
 
 The core reaches the outside world only through the ports `FrameCapturer`, `VisionDetector`,
-`TextRecognizer`, `OsActuator`, `Clock` and `PolicyStore`, so every adapter can be replaced by
+`TextRecognizer`, `AccessibilityProvider`, `OsActuator`, `Clock` and `PolicyStore`, so every adapter can be replaced by
 a deterministic fixture. On Windows 11 ([ADR-0008](../adr/0008-one-real-platform-first.md)),
 capture uses DXGI Desktop Duplication and input uses `SendInput`. Inference runs on ONNX
 Runtime, with the CPU as the baseline and DirectML as an option; the models are chosen in the
@@ -198,6 +199,17 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   with the `directml` feature, on DirectML with a pinned `DirectML.dll`, sequential
   execution, no memory pattern and no CPU fallback; the manifest lists the providers the
   model was validated on.
+- *Accessibility* (`uia`, `[models] accessibility = "uia"`,
+  [ADR-0017](../adr/0017-ui-automation-evidence-fused-with-vision.md)): the UI Automation tree
+  of the foreground window the actuator attests (the `ApplicationFrameHost` frame resolves to
+  its hosted app), read once per observation inside the planned regions, bounded by elements,
+  depth and time, through the safe `uiautomation` crate (no `unsafe` of our own; the crate's
+  input and pattern calls are forbidden by the adapter's `clippy.toml`). Evidence, not a
+  replacement: an enabled, on-screen element with an action pattern is `confirmed` with its
+  role and name (`label_source: accessibility`), the detector boxes that are the same control
+  merge into it, and a box centred on another accessible control stops being confirmed. It
+  never reads a field's value, and a password field is no input. Allowed only with `dxgi` or
+  `screen`; off by default.
 - *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` for exactly
   `ocr_language`, never another language, without invented confidences; recognised text is
   never logged.

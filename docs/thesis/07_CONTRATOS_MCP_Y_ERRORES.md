@@ -22,7 +22,7 @@ Input: query opcional (256 caracteres), limit de 1 a 200, cursor opaco e include
 
 Se exige snapshot completo como capacidad MVP. El modo delta se difiere hasta tener base/expiración y bajas explícitas. La paginación permanece en el mismo snapshot; si expira, se rechaza el cursor y se solicita reobservación. Query sólo prioriza/filtra la vista, no borra entidades del registro interno. Se informa truncamiento para que el agente no asuma que ve todos los controles.
 
-Roles unknown, valores null y etiquetas desconocidas son resultados válidos. `text_kind` distingue contenido de valor/placeholder sólo con evidencia. El agente no debe inferir accionabilidad de que el elemento tenga ID. La política puede redactar contenidos incluso si el cliente solicita include_values.
+La procedencia de la etiqueta (`label_source`) puede ser `accessibility` cuando el motor tiene activada la evidencia de UI Automation (ADR-0017): el rol y el nombre vienen de la aplicación, y la accionabilidad `confirmed` sigue exigiendo un elemento habilitado, en pantalla y con un patrón de acción; el valor `accessibility` ya figuraba en el enum y no cambia ningún schema. Los tiempos por etapa, incluida `accessibility_us`, van sólo en `_meta`, no en `structuredContent`. Roles unknown, valores null y etiquetas desconocidas son resultados válidos. `text_kind` distingue contenido de valor/placeholder sólo con evidencia. El agente no debe inferir accionabilidad de que el elemento tenga ID. La política puede redactar contenidos incluso si el cliente solicita include_values.
 
 ## 7.4 execute_action
 
