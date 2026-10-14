@@ -681,3 +681,109 @@ El registro no contiene nombres, valores ni texto de pantalla. Una lectura que f
 ### Estado de las pruebas y verificación
 
 `python -m unittest discover -s tools/s4 -p "test_*.py"`: 81 pruebas correctas (62 anteriores y 19 nuevas); las nuevas sin el cambio del cliente dan 16 fallos o errores. Las demás verificaciones, en la revisión.
+
+## Sexta ronda (diagnóstico): una corrida de sólo lectura sobre el menú «Editar» del Bloc de notas
+
+**Fecha:** 14 de octubre de 2026. Rama `docs/s4-sixth-round-diagnostic`, desde `main` (`7c15817`, fusión de #13). No cambia ningún código ni el cliente. Se usó el cliente comprometido (`tools/s4/e2e_driver.py`, SHA-256 **`6dad0dc349510027f1642df666f4d5c7495bcb73d2e9a4e87c58903e0a8e2a77`**, comprobado justo antes de la invocación), el binario de `main` (`target/release/ommatix.exe`, SHA-256 **`11a3d7921cbe1582739a068714435ea380eb1e70fc460fe82b00c0a410aca9da`**) y la configuración en float16 (`s4r6-live.toml`, SHA-256 `b6e9e8e8c9cec2324fa218645de1843bce58148c2cefe384f32956f76fe4e74c`). Autorización del responsable: una corrida del flujo del menú con el registro de diagnóstico, con dos solicitudes reales como máximo y sin nada más. El responsable estuvo presente y no usó el equipo durante la corrida.
+
+**Resultado:** una corrida de diagnóstico, no puntuada. Dos solicitudes reales, las dos entregadas y ninguna rechazada; cuaderno de 399 a 401. E2E-02 y E2E-03 siguen `NO_EJECUTADO`. El registro **no respalda** ni la explicación (a) ni la (b) del hallazgo 1 tal como estaban formuladas: el identificador de «Editar» no cambia al expandirse, y la consulta de UI Automation por posición no devuelve «Editar» ni antes ni después del clic. Ver §4.
+
+### 1. Verificación previa a la entrada en vivo
+
+- `cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia` sobre `main`: correcto, sin avisos.
+- `cargo fmt --all --check` y `cargo clippy --workspace --all-targets -- -D warnings`: correctos.
+- `cargo test --workspace`: 351 pasadas, 0 fallidas, 1 ignorada.
+- `python -m unittest discover -s tools/s4 -p "test_*.py"`: 81 pruebas correctas.
+- Configuración: copia de `s4r5-live.toml` con dos líneas cambiadas. `detector_manifest` apunta a `models\manifest.rnf05.json` y `detector_manifest_sha256` es `f8b04be9…7fe47`, comprobado en disco antes de la corrida. El resto no cambia (DirectML, `accessibility = "uia"`, OCR de Windows en es-ES, `stop_file` y lista de aplicaciones).
+- Cuaderno en 399 (`--round-start 399`), `stop.flag` ausente y ningún proceso `ommatix.exe`.
+- Escritorio: dos ventanas del Bloc de notas, ambas minimizadas (`showCmd` 2). Su colocación se guardó antes de la corrida con un auxiliar fuera del repositorio que sólo gestiona ventanas, y coincide con la de la quinta ronda. Tres procesos `notepad.exe` (PID 8960, 23164 y 40380).
+
+### 2. Ejecución en vivo
+
+Una sola invocación, sin envoltorios ni cambios en el cliente:
+
+`python tools/s4/e2e_driver.py --exe <ommatix.exe> --config <s4r6-live.toml> --app notepad --mode run --runs 1 --max-live 2 --ledger <ledger.txt> --round-start 399 --results <s4r6.diagnostic.jsonl>`
+
+La salida estándar y la de error van a `s4r6-diagnostic.log`. Código de salida del cliente y del servidor: 0.
+
+| Solicitud | Qué era | Estado del motor | Entregada | `action_verification` (ms) | `action_total` (ms) |
+|---|---|---|---|---|---|
+| 1 | clic en «Editar» (abrir el menú) | `effect_observed` (`visual_change`) | sí | 113,7 | 122,3 |
+| 2 | clic de restauración en «Editar» (cerrar el menú) | `effect_observed` | sí | 67,4 | 94,6 |
+
+- **Cuaderno:** 399 → 401. Cupo de la ronda: 2 de 400. Contadores del motor: entregadas +2, rechazadas +0.
+- **Cliente:** `success` falso. Fallo: «paso 1: el control bajo el cursor no es el elemento hallado antes del clic». `grounding_wrong` 2 y `engine_false_success` 2, porque el anclaje por posición falló en las dos solicitudes, que el motor informó como `effect_observed`. No hubo reintento ni entrada adicional.
+- **Menú «Editar»** (UI Automation, por nombre, estado ExpandCollapse): **Colapsado** al empezar; **Expandido** tras la solicitud 1; **Colapsado** tras la solicitud 2, en la primera lectura.
+- **Inactividad del propietario al empezar:** 258,8 s.
+
+### 3. Registro de diagnóstico (`menu_diagnostic`, sin nombres)
+
+Hubo un registro, del clic 1. Las cadenas son las del centro de «Editar» antes del clic (`before`) y las del cursor después del clic (`after`, leída 735 ms después de la respuesta del motor). Las dos son idénticas:
+
+| Fila | Tipo de control | AutomationId | Clase | Estado ExpandCollapse | Mismo RuntimeId que «Editar» |
+|---|---|---|---|---|---|
+| 0 | Pane | (vacío) | `Microsoft.UI.Content.DesktopChildSiteBridge` | (ninguno) | no |
+| 1 | Window | (vacío) | `Notepad` | (ninguno) | no |
+| 2 | Pane | (vacío) | `#32769` | (ninguno) | no |
+
+«Editar» no aparece en ninguna fila de ninguna de las dos cadenas.
+
+Identidad de «Editar» (campos `identity` y `menu_restore.identity`; el valor del RuntimeId no se transcribe, sólo se compara):
+
+| Momento | Tipo de control | AutomationId | RuntimeId | Candidatos |
+|---|---|---|---|---|
+| Antes del clic 1 (menú Colapsado) | MenuItem | `Edit` | valor A | 1 |
+| Antes de la solicitud 2 (menú Expandido) | MenuItem | `Edit` | valor A, igual | 1 |
+
+### 4. Conclusión
+
+- **(a) El identificador cambia al expandirse: refutada en esta corrida.** La explicación predice que «Editar» aparece tras el clic con un RuntimeId distinto. No aparece en ninguna cadena, y con el menú Expandido UI Automation encuentra el mismo elemento (tipo `MenuItem`, `AutomationId` `Edit`) y el mismo RuntimeId que antes del clic.
+- **(b) El clic llegó a otro control: no respaldada.** Sólo se cumple la mitad: ninguna fila tras el clic es «Editar». La otra mitad no se cumple: el estado de «Editar» pasó a Expandido y después a Colapsado. En este flujo no se envió ninguna otra entrada, así que sólo un clic sobre ese elemento puede producir esas transiciones.
+- **Lo que el registro sí muestra: la consulta por posición no devuelve el elemento.** Antes y después del clic, UI Automation devuelve la isla XAML en el centro de «Editar» y bajo el cursor. El anclaje «el elemento bajo el cursor o su padre» no puede confirmar «Editar» con esa consulta, sea cual sea el destino real del clic, y esa cadena explica el fallo de anclaje de las dos solicitudes. La quinta ronda sólo registró el booleano, así que es la primera vez que se ve la cadena.
+- **Veredicto: inconcluso sobre el punto exacto que recibió el clic.** Es concluyente en dos cosas: el identificador no cambia al expandirse, y la consulta por posición no puede confirmar «Editar» en este Bloc de notas. El cambio de estado del propio «Editar», que es lo único que cambió, es coherente con que los dos clics lo activaran.
+- **Consecuencia para el recuento de falsos éxitos.** Según este registro, los dos `effect_observed` del motor coinciden con los cambios de estado del menú. Los falsos éxitos que cuenta el cliente proceden del anclaje por posición, que no puede confirmar este elemento. No se ha demostrado un falso éxito del motor. El fallo quedó cerrado como se diseñó: sin reintento ni entradas adicionales.
+
+### 5. Totales y seguridad
+
+| Serie | Corridas puntuadas | Solicitudes reales | Entregadas | Estados del motor |
+|---|---|---|---|---|
+| Diagnóstico E2E-03 (no puntuado) | 0 | 2 | 2 | `effect_observed` 2 |
+| Ronda | 0 | 2 de 400 | 2 | rechazos 0 |
+
+- **Archivo de parada:** ausente antes y después. El cliente no lo creó, porque una corrida fallida no llega a tres.
+- **Procesos:** ningún `ommatix.exe` en ejecución al terminar. Los procesos de Python son los mismos 44 de antes de la corrida, sin ninguno nuevo. Los del Bloc de notas no cambiaron (PID 8960, 23164 y 40380): ninguno se inició ni se cerró.
+- **Ventanas del propietario:** ambas, minimizadas y con la colocación guardada. La verificación coincidió antes y después de la restauración explícita, hecha con el auxiliar fuera del repositorio (sólo colocación, sin texto ni entradas). Al terminar, el cliente volvió a minimizar la ventana que había usado, como hace con una ventana que estaba minimizada.
+- **Menú «Editar» al terminar:** Colapsado en las dos ventanas, según una lectura de UI Automation sólo de lectura.
+- **Entradas de origen desconocido:** el registro de inicio marca 258,8 s de inactividad, coherente con la última entrada del propietario antes de la solicitud. El registro no muestra otra entrada, aunque no puede descartar del todo las que no dejan rastro.
+- **Capturas y texto de pantalla:** ninguno guardado. El registro contiene estados, códigos, contadores, tiempos, tipos de control, `AutomationId`, nombres de clase y booleanos. Ningún nombre ni valor.
+
+### 6. Latencias (`_meta`; valores crudos de una corrida no puntuada)
+
+| Acción | `action_total` | `action_verification` | `action_freshness` | `action_delivery` | `action_gate` | Cliente (rtt) |
+|---|---|---|---|---|---|---|
+| Clic «Editar» (abrir) | 122,3 | 113,7 | 5,6 | 2,4 | 0,6 | 122,7 |
+| Restauración (cerrar) | 94,6 | 67,4 | 25,1 | 1,8 | 0,3 | 94,9 |
+
+Observaciones (`total` / `detect` / `accessibility`, ms): 257,8 / 84,7 / 250,9; 228,7 / 81,3 / 215,8; y 28,8 / 0 / 0, en la que no hubo reanálisis (ni detección, ni OCR, ni accesibilidad). RNF-05 no se evalúa con una corrida no puntuada.
+
+### 7. Hallazgos
+
+| # | Severidad | Estado tras la sexta ronda |
+|---|---|---|
+| 1 | Mayor, seguridad | Abierto. La explicación (a) queda refutada y (b) no tiene respaldo; la consulta por posición no devuelve «Editar». Decisión del responsable (§9.1). |
+| 2 | Mayor, cliente, seguridad | Resuelto en el cliente (1.0.23) y ejercitado en vivo por primera vez: el cierre se ancla por identidad, la discrepancia quedó registrada y no hubo reintento. |
+| 3 | Mayor, cliente | Sin cambio: el paso «Estándar» no se ejecutó en esta ronda. |
+| 4 | Menor, motor | Sin cambio. Esta vez el cierre devolvió `effect_observed` y el menú se leyó Colapsado en la primera lectura; en la quinta ronda devolvió `indeterminate`. |
+
+### 8. Estado en la matriz
+
+Sin cambio. Esta corrida no es puntuada: `docs/thesis/matrices/plan_pruebas.csv` no cambia, E2E-02 y E2E-03 siguen `NO_EJECUTADO` y E2E-01 mantiene `EJECUTADO_SUPERVISADO_PARCIAL`.
+
+### 9. Qué queda y cómo reanudar
+
+1. **Responsable (hallazgo 1), decisión previa a cualquier otra corrida de E2E-03.** Con la regla actual, «Editar» no puede confirmarse por posición en este Bloc de notas, así que la serie puntuada no puede empezar. Hay dos caminos: (i) mantener la regla, y E2E-03 queda sin ejecutar; (ii) que el propio elemento dé fe del clic, leyendo su RuntimeId tras el clic desde su árbol de UI Automation y exigiendo que su estado ExpandCollapse sea el esperado. (ii) cambia la regla de anclaje para este control: necesita una especificación escrita, una prueba que falle sin ella y una ronda nueva con cambio de hash del cliente. **Recomendación:** (ii) sólo con esa especificación; mientras tanto, (i).
+2. **Cliente:** sin cambios en esta ronda. La regla de anclaje y el cliente se quedan como están.
+3. **Cuaderno:** 401. La siguiente ronda usa `--round-start 401`.
+4. **Ninguna solicitud en vivo más** sin una nueva autorización del responsable.
+
+**Ejecución.** Las únicas entradas de la corrida fueron las dos del cliente. Guardar y restaurar la colocación de las ventanas es gestión de ventanas, sin entradas, y las lecturas de UI Automation posteriores son de sólo lectura.

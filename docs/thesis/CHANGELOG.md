@@ -1,5 +1,13 @@
 # Historial documental
 
+## 1.0.24 — 2026-10-14: S4, sexta ronda (diagnóstico del menú «Editar»; una corrida no puntuada)
+
+No cambia ningún requisito, algoritmo, contrato, escenario, código de Rust ni del cliente. Se ejecutó en vivo una vez el cliente comprometido en 1.0.23 (`tools/s4/e2e_driver.py`, SHA-256 `6dad0dc3…8e2a77`) con el binario de `main` (`11a3d792…aca9da`) y el manifiesto float16 de RNF-05: una corrida de E2E-03 con dos solicitudes reales (cuaderno 399 → 401), sin puntuar. El detalle está en la sección «Sexta ronda» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), y los hallazgos, en la [revisión de la quinta ronda](../reviews/2026-10-14-s4-fifth-round.md).
+
+- **Hallazgo 1 (diagnóstico):** el identificador de «Editar» no cambia al expandirse, así que la explicación (a) queda refutada en esta corrida. El registro no respalda la (b). La consulta de UI Automation por posición no devuelve «Editar» ni antes ni después del clic, de modo que el anclaje por posición no puede confirmar este control. La decisión la toma el responsable.
+- **Hallazgo 2:** ejercitado en vivo por primera vez; el cierre del menú se ancla por identidad, y la discrepancia quedó registrada sin reintento.
+- **Matrices:** sin cambio.
+
 ## 1.0.23 — 2026-10-14: S4, correcciones del cliente tras la quinta ronda (rama `fix/s4-driver-grounding`)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust. Cambia el cliente de la aceptación (`tools/s4/e2e_driver.py`, SHA-256 `6dad0dc3…8e2a77`, antes `98f0ae08…1967e5`) y sus pruebas, que usan un motor y una cadena de accesibilidad falsos: no se ejecutó nada en vivo ni se envió entrada. El informe está en la sección «Preparación de la sexta ronda» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md) y los hallazgos, en la [revisión de la quinta ronda](../reviews/2026-10-14-s4-fifth-round.md).
