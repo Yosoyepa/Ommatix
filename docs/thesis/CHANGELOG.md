@@ -1,5 +1,18 @@
 # Historial documental
 
+## 1.0.19 — 2026-10-14: S4, cuarta ronda (correcciones de la tercera ronda)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código de las crates de Rust (el código es el de 1.0.18, `e9e5b2d`). Documenta la cuarta ronda del protocolo reducido, que repite E2E-01, E2E-02 y E2E-03 con las correcciones de 1.0.18. El informe está en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), sección «Cuarta ronda: correcciones de la ronda 3», y la revisión en [`../reviews/2026-10-14-s4-fourth-round.md`](../reviews/2026-10-14-s4-fourth-round.md).
+
+- **Autorización:** la del responsable del proyecto del 14 de octubre de 2026: repetir el protocolo reducido completo, sin uso del equipo durante la ejecución, retirar `stop.flag` una sola vez al inicio y un límite de 400 solicitudes reales por ronda.
+- **E2E-01 (aplicación de prueba, con escritura):** 10 de 10 corridas puntuadas. 80 clics y 10 escrituras de `prueba 123` verificados por el título de la ventana; 0 teclas perdidas y 0 falsos éxitos. Una solicitud rechazada con `STALE_SNAPSHOT` (nada entregado) y repetida con éxito.
+- **E2E-02 (Calculadora):** sin puntuar. En el modo Científica no hay control de borrado confirmado tras «Es igual a» (piloto: 4 clics entregados y verificados), así que la corrida falla cerrada. El cambio a modo Estándar se intentó con un único clic de navegación: se entregó, pero el control bajo el cursor no quedó confirmado como el pedido. La serie se abandonó sin repetir el clic.
+- **E2E-03 (Bloc de notas):** no ejecutada. Se detuvo antes de cualquier entrada en el Bloc de notas por ese desajuste sin explicar, que la autorización trata como cuestión de seguridad.
+- **Cliente:** `tools/s4/e2e_driver.py` sin cambios (SHA-256 `2af90bf3…a283`). Se ejecutó con un envoltorio fuera del repositorio que fija el límite por ronda y registra los tiempos de acción (`io.ommatix/action_timings`), por dos defectos del cliente registrados en la revisión.
+- **Matrices:** `matrices/plan_pruebas.csv` sin cambio de estado; la justificación está en el informe. RNF-05 sigue sin cumplirse (p95 de la observación incremental: 430 ms).
+- **Cuaderno de solicitudes:** de 291 a 396 (105 en esta ronda, de un máximo de 400 por ronda).
+- **Hallazgos abiertos:** el límite acumulativo y los tiempos de acción del cliente; el control de borrado de la Calculadora en modo Científica (decisión del responsable); el anclaje del clic de navegación de la Calculadora; los eventos de entrada sin origen (sin evidencia en esta ronda). Detalle en la revisión.
+
 ## 1.0.18 — 2026-10-14: S4, correcciones de la tercera ronda (hallazgos 2, 3, 4 y 6)
 
 Corrige en código los hallazgos 2 y 6 de [`../reviews/2026-10-14-s4-third-round.md`](../reviews/2026-10-14-s4-third-round.md) y en el cliente los hallazgos 3 y 4. No cambia ningún requisito, esquema de contrato ni escenario Gherkin; precisa el comportamiento del motor ante una lectura de accesibilidad acotada (SDD §2.4, evidencia de accesibilidad). La [ADR-0017](../adr/0017-ui-automation-evidence-fused-with-vision.md) está aceptada y no se modifica: es una corrección dentro de su intención y se registra aquí y en la revisión.

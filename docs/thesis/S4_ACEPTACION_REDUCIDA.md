@@ -382,3 +382,136 @@ Las correcciones de 1.0.18 se probaron con dobles, sin entrada real: no se han m
 - **Medir en vivo la relectura de accesibilidad** (hallazgo 2, corregido con dobles): cuántas observaciones vuelven a leer el árbol y cuánto cuesta en aplicaciones con árboles grandes. Una ventana que siempre se trunca se lee entera en cada observación.
 - **Identificar el origen de los eventos de entrada** sin acción (§3) y confirmar que nadie usa el equipo durante las corridas.
 - **Para reanudar:** el responsable retira `stop.flag`; después, un sondeo sin entrada, un piloto y la serie puntuada.
+
+## Cuarta ronda: correcciones de la ronda 3
+
+**Fecha:** 14 de octubre de 2026. **Autorización:** el responsable autorizó el mismo día repetir el protocolo reducido completo (aplicación de prueba, Calculadora y Bloc de notas) con las correcciones de [CHANGELOG 1.0.18](CHANGELOG.md), sin uso del equipo durante la ejecución, con la retirada de `stop.flag` una sola vez al inicio de la ronda, sin capturas ni texto de pantalla guardados y con un límite de 400 solicitudes reales **por ronda**, con el cuaderno continuando desde 291. **Resultado en una línea:** E2E-01 pasó 10 de 10 corridas puntuadas, con los 80 clics y las 10 escrituras verificados por el título de la ventana y 0 teclas perdidas. E2E-02 no se puntuó: en el modo Científica no hay control de borrado tras «Es igual a», y el cambio a modo Estándar no se pudo completar de forma verificable (el único clic de navegación no quedó confirmado sobre el control pedido), así que la serie se abandonó. E2E-03 no se ejecutó: se detuvo antes de cualquier entrada en el Bloc de notas, por ese mismo desajuste sin explicar. Esta ronda no cierra RF-18, RNF-03 ni RNF-05, ni ninguna casilla DoD (capítulo 06 §6.7).
+
+Todas las cifras son **mediciones [V]**. No se guardó ningún frame ni texto de pantalla (ADR-0012); los registros contienen estados, códigos, recuentos, tiempos y booleanos. Del Bloc de notas no se leyó ni registró texto.
+
+### 1. Cambios frente a la tercera ronda
+
+| Aspecto | Tercera ronda | Cuarta ronda |
+|---|---|---|
+| Binario | `dxgi,sendinput,directml,winrt-ocr,uia`, `ommatix.exe` SHA-256 `97a03896…98ec72` | mismas características, `rustc 1.99.0`, desde `e9e5b2d` (correcciones 2, 3, 4 y 6). `ommatix.exe` SHA-256 `2c07e447…ee2c01` |
+| Aplicación de prueba | SHA-256 `09ccf30d…c9bf` | igual (el mismo binario) |
+| Cliente | `e2e_driver.py` SHA-256 `0d0fe263…87736e` (versión confirmada tras la tercera ronda) | `e2e_driver.py` SHA-256 `2af90bf3…a283`, **sin cambios** en el archivo; se ejecutó mediante `s4r4_run.py` (§2) |
+| Configuración | `ecc7c5f7…2eac5` | igual, SHA-256 `ecc7c5f7…2eac5`: `s4r4-live.toml` es una copia de `s4r3-live.toml`, idéntica a `s4r2-live.toml` |
+| Cuaderno de solicitudes | 160 → 291 de 400 | 291 → 396 (105 solicitudes en esta ronda, de 400 por ronda) |
+
+### 2. Decisiones de ejecución (para revisar)
+
+1. **Límite por ronda.** `LIVE_CAP` de `e2e_driver.py` cuenta el cuaderno completo. Con el cuaderno en 291 sólo quedaban 109 solicitudes, y el protocolo necesita unas 190. El responsable indicó que el límite de 400 se reinicia por ronda y que el cuaderno continúa desde 291. El archivo del cliente no cambió: `s4r4_run.py` fija `LIVE_CAP` en 291 + 400 = 691 sobre el cuaderno, de modo que esta ronda tiene 400 solicitudes y el cuaderno sigue en cifras acumuladas. Defecto registrado en la [revisión de la cuarta ronda](../reviews/2026-10-14-s4-fourth-round.md) (hallazgo 1).
+2. **Tiempos de acción.** El cliente sólo lee `io.ommatix/timings`; los tiempos de `execute_action` están en `io.ommatix/action_timings` (corrección 6 de la tercera ronda). `s4r4_run.py` los añade a `stages_ms` con el prefijo `action_`. Hallazgo 2 de la revisión.
+3. **`stop.flag`.** Se retiró una vez, al inicio, como autorizó el responsable. Era un archivo de 0 bytes creado por el cliente tras el tercer fallo de E2E-02 en la tercera ronda. No se creó ninguno en esta ronda.
+4. **Asistente del cambio de modo.** Para la Calculadora se usó un asistente de un solo uso (`s4r4_calc_standard.py`, SHA-256 `7f148352…6d68e`) que reutiliza las primitivas del cliente: el clic de navegación y el de «Estándar» pasan por la puerta del motor, cada uno en su propia llamada, y el segundo sólo se envía si el primero se entregó y quedó anclado al control pedido. Ver §5.1.
+5. **Scripts fuera del repositorio.** `s4r4_run.py` (SHA-256 `9ec27312…9e6a12`), `s4r4_calc_probe.py` (SHA-256 `f4bb378c…bcd1c5`, sólo lectura) y `analyze_s4r4.py` están en el directorio de ejecución, no en el repositorio.
+
+### 3. Sondeos y pilotos (excluidos de la puntuación)
+
+- **Sondeo de la aplicación de prueba** (`--mode probe`, sin entrada): los nueve objetivos aparecen una vez cada uno, confirmados por accesibilidad (ocho botones y `Campo de texto`, `input`).
+- **Sondeo de la Calculadora** (`s4r4_calc_probe.py`, sin `execute_action`): modo Científica, con «Alternar grados» y «Notación científica» presentes; «Abrir navegación» confirmado como botón; «Borrar» confirmado en el estado inicial.
+- **Piloto de E2E-01** (excluido): 9 de 9 pasos entregados y verificados, con la escritura incluida; anclaje 9 de 9.
+- **Piloto de E2E-02** (excluido): 4 clics entregados y verificados, con anclaje 4 de 4. En el paso 5, tras «Es igual a», ningún control de borrado (`Borrar`, `Borrar todo` o `Borrar entrada`) estaba confirmado: `alternatives_present` vacío. La corrida falló cerrada, sin entrada adicional. **Es el caso que la autorización prevé**: no hay control de borrado tras «=» en modo Científica.
+
+### 4. E2E-01, aplicación de prueba (10 corridas puntuadas, reinicio entre corridas)
+
+Flujo: `Sumar` ×3, `Reiniciar`, `Activar` ×2, `Siguiente` y `Anterior` (8 clics), y después `type` de `prueba 123` en `Campo de texto` con `expected_effect: visual_change`. Verificación por el título de la ventana (SO) tras cada paso y por anclaje de UI Automation.
+
+| Medida | Valor |
+|---|---|
+| Corridas con éxito | **10 de 10** (IC 95 % de Wilson: 0,72–1,00) |
+| Pasos / solicitudes reales / entregas | 90 / 91 / 90 (80 clics y 10 escrituras) |
+| `effect_observed` / `indeterminate` / rechazos | 90 / 0 / 1 (`STALE_SNAPSHOT` en la corrida 7, sin entrega, repetido con éxito) |
+| Comprobación por título (SO) | 80 de 80 clics; 10 de 10 escrituras |
+| Teclas perdidas | **0** |
+| Anclaje UIA (el control bajo el cursor es el pedido) | 90 de 90 |
+| Falsos éxitos | **0** |
+| Activación | 1 solicitud por corrida; primer plano en 0,37–0,42 s |
+| Duración por corrida | mediana 9,4 s, p95 9,9 s (con reinicio) |
+
+### 5. E2E-02, Calculadora (sin puntuar)
+
+#### 5.1 Lo que ocurrió
+
+- En modo Científica, el piloto falló cerrado en el paso 5 (§3). Sin control de borrado tras «=», el paso final no puede cumplirse tal como está especificado. Es el hallazgo de la tercera ronda, reproducido con el cliente de 1.0.18.
+- Se aplicó la contingencia que prevé la autorización: cambiar a modo Estándar con clics por la puerta del motor, elegidos por nombre exacto (primero el botón de navegación, después «Estándar»).
+- **Un único intento.** El clic sobre «Abrir navegación» se entregó y el motor informó `effect_observed` (cambio visual). Sin embargo, la comprobación posterior al clic por UI Automation **no confirmó** el control pedido: el control bajo el cursor no se llamaba «Abrir navegación». No se envió el clic sobre «Estándar» ni se repitió el de navegación.
+- El asistente se detuvo por un error propio de contabilidad: su registro de resultados no inicializaba claves que el cliente incrementa. El fallo ocurrió después del clic entregado y antes de cualquier otro; el asistente cerró la Calculadora que lanzó. No es un defecto del motor ni del cliente.
+- La causa más probable es que el botón de navegación cambie de nombre al abrirse el panel, y que la comprobación compare nombres después del clic. **No está verificado**: comprobarlo exige otro clic de navegación, y la regla de seguridad no lo permite sin una decisión del responsable. Queda como hallazgo 4 de la revisión.
+- Por la regla de la autorización («si no es posible con seguridad, abortar la serie e informar»), **E2E-02 se abandona**: 0 corridas puntuadas. Tampoco se verificó en qué modo quedó la Calculadora tras el intento.
+
+#### 5.2 Totales de E2E-02
+
+| Medida | Valor |
+|---|---|
+| Corridas puntuadas | 0 (serie abandonada) |
+| Piloto | 4 clics entregados, `effect_observed` 4, anclaje 4 de 4; fallo en el paso 5 |
+| Contingencia | 1 clic entregado (navegación), anclaje **no** confirmado; 0 clics sobre «Estándar» |
+
+### 6. E2E-03, Bloc de notas (no ejecutada)
+
+No se envió ninguna entrada al Bloc de notas: ni piloto ni serie. La razón es que el desajuste de anclaje del clic de navegación de la Calculadora no está explicado, y la autorización prohíbe continuar si la causa es de seguridad. Un clic que podría haber llegado a otro control del Bloc de notas (con pestañas y ventanas del responsable) entra en ese caso. Las dos ventanas del Bloc de notas siguen minimizadas (`showCmd` 2) y sus tres procesos son los de antes; `notepad_placement_final_r4.json` (sólo posiciones, sin títulos) lo registra. Como E2E-03 no se ejecutó, el cliente no tocó esa ventana.
+
+### 7. Totales y seguridad
+
+- **Solicitudes `dry_run: false`: 105** (de 291 a 396): pilotos 13 (9 y 4), serie puntuada de E2E-01 91 (90 entregas y 1 rechazo `STALE_SNAPSHOT`) y contingencia de la Calculadora 1. **Entregas: 104.** **Rechazos sin entrega: 1.** `POLICY_DENIED`: 0. Ningún `scroll`, ninguna escritura fuera de `Campo de texto`, ningún clic en pestañas, botones de ventana ni elementos de menú.
+- **Falsos éxitos en las corridas puntuadas: 0 de 90** `effect_observed`. Fuera de la puntuación, el clic de navegación de la contingencia fue un `effect_observed` con anclaje no confirmado, que el criterio del cliente contaría como falso éxito candidato. Hallazgo 4 de la revisión.
+- **Teclas perdidas: 0** de 10 escrituras. **Parada:** no se creó `stop.flag` en la ronda.
+- **Entrada sin origen:** el tiempo sin entrada al inicio de cada corrida puntuada fue de 16,8 s en la primera y de 2,1–2,3 s en las demás, coherente con el último clic del propio cliente. El registro no ve la entrada entre corridas, así que no es concluyente.
+- **Estado final del escritorio:** la aplicación de prueba y la Calculadora, cerradas (sólo los procesos lanzados aquí); ningún proceso de `ommatix` en ejecución. El Bloc de notas, sin tocar, con sus dos ventanas minimizadas.
+
+### 8. Latencias (`_meta` y cliente, E2E-01)
+
+Mediana, p95 y máximo, en milisegundos, de las 101 observaciones de las corridas puntuadas (todas con inferencia).
+
+| Etapa de `observe_screen` | Mediana | p95 | Máximo |
+|---|---|---|---|
+| `total` | 312,8 | 429,9 | 622,3 |
+| `detect` | 221,7 | 332,3 | 334,0 |
+| `accessibility` | 65,1 | 82,3 | 390,5 |
+| `recognize` | 9,7 | 15,2 | 55,8 |
+| `capture` | 3,9 | 7,8 | 14,7 |
+| `plan` | 2,2 | 2,7 | 2,8 |
+| `track` | 0,4 | 0,6 | 0,9 |
+| `fuse` | 0,1 | 0,1 | 0,1 |
+
+| Etapa de `execute_action` (`io.ommatix/action_timings`, n = 91) | Mediana | p95 | Máximo |
+|---|---|---|---|
+| `total` | 82,8 | 112,3 | 117,0 |
+| `verification` | 58,0 | 65,1 | 71,6 |
+| `freshness` | 19,4 | 27,2 | 29,8 |
+| `delivery` | 2,0 | 11,2 | 13,3 |
+| `focus` (0 en los clics; sólo `type` espera el foco) | 0,0 | 14,3 | 17,2 |
+| `gate` | 0,2 | 0,5 | 1,1 |
+
+- Ida y vuelta en el cliente, clics entregados: mediana 81,4 y p95 89,8 (n = 80). Escrituras: 112,7 y 117,0 (n = 10).
+- **RNF-05 (incremental, p95 ≤ 150 ms) no se cumple:** el p95 de `total` es 430 ms.
+
+### 9. Hallazgos
+
+Detalle, resolución y pruebas en la [revisión de la cuarta ronda](../reviews/2026-10-14-s4-fourth-round.md).
+
+1. **Cliente: límite acumulativo** (§2.1). Abierto. Evitado con el envoltorio, sin cambiar el archivo.
+2. **Cliente: tiempos de acción no leídos** (§2.2). Abierto. Evitado con el envoltorio.
+3. **Calculadora: sin control de borrado tras «=» en modo Científica** (§3 y §5). Abierto: decisión del responsable (modo Estándar, otra tecla final u otro orden).
+4. **Calculadora: el clic de navegación no quedó anclado** (§5.1). Abierto. Hipótesis sin verificar: el nombre del botón cambia al abrirse el panel. Propuesta: identificar ese control por `AutomationId` cuando cambia de nombre al activarse, con una prueba de regresión.
+5. **Asistente de contingencia: error propio de contabilidad** (§5.1). No se corrigió ni se volvió a usar en esta ronda; debe corregirse antes de cualquier reutilización. No afecta al motor ni al cliente.
+6. **Eventos de entrada sin origen** (hallazgo 5 de la tercera ronda). Sin evidencia nueva en esta ronda (§7).
+7. **Recibo de `SendInput`** (hallazgo 5 de la primera ronda): abierto, sin cambio.
+
+### 10. Estado en la matriz
+
+`matrices/plan_pruebas.csv` **sin cambios**, con esta justificación por fila:
+
+- **E2E-01** (formulario local con valores dummy): `EJECUTADO_SUPERVISADO_PARCIAL`, sin cambio. Esta ronda repite la prueba (10 de 10, escritura de `prueba 123`, sin falsos éxitos), pero sigue siendo parcial: una tarea, un DPI y un tema.
+- **E2E-02** (editor con escritura y guardado) y **E2E-03** (explorador de archivos): `PENDIENTE_PRODUCTO`, sin cambio. Las pruebas de S4 con la Calculadora y el Bloc de notas no son esas pruebas de la matriz, y esta ronda no ejecutó ninguna de ellas.
+- **PERF-02** (percepción): `EJECUTADO_SUPERVISADO_PARCIAL`, sin cambio. Se volvió a medir la latencia incremental en vivo (n = 101), sin ampliar el alcance.
+- **RF-18, RNF-03 y RNF-05**: sin cambio. RNF-05 no se cumple (p95 de 430 ms).
+
+### 11. Qué queda y cómo reanudar
+
+- **Decisión del responsable (Calculadora):** el modo para E2E-02 (Estándar, u otra tecla final) y si el clic de navegación debe identificarse por `AutomationId`. Sin eso, E2E-02 no puede puntuar.
+- **Decisión del responsable (Bloc de notas):** si E2E-03 se ejecuta en la próxima ronda, con el responsable presente y después de revisar el hallazgo 4.
+- **Cliente:** corregir `LIVE_CAP` (límite por ronda) y leer `io.ommatix/action_timings`, con prueba de regresión y el cambio de hash documentado. No se ha hecho en esta ronda.
+- **Reanudar:** no hace falta retirar `stop.flag`, porque no existe. Antes de una nueva corrida en vivo: un sondeo sin entrada, un piloto y la serie puntuada.

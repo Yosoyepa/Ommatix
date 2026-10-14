@@ -116,7 +116,12 @@ unless the agent and a local policy both allow them. More in the
   because its final "Borrar" key is not exposed after "=" in scientific mode; the Notepad pilots
   did not show the Edit menu reliably and were not scored. Two findings remain open: a partial
   accessibility read is not re-read on incremental observations, and the client's Notepad menu
-  step is neither verified nor cleaned up after a failure.
+  step is neither verified nor cleaned up after a failure. A fourth round
+  ([CHANGELOG 1.0.19](docs/thesis/CHANGELOG.md)) repeated the test application with the fixes of
+  1.0.18: 10 of 10 scored runs again, with the action stage timings recorded in `_meta`. The
+  Calculator was in scientific mode, with no clear key after "=", and its switch to standard mode
+  was not completed safely: its first navigation click was not confirmed on the requested control,
+  so the series was aborted. The Notepad series did not run, pending the owner's decision.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML,
@@ -152,7 +157,7 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
   and the acceptance report. A reduced, click-only protocol ran (20 scored runs in two
   applications; E2E-01 and PERF-02 in part; with UI Automation and two-phase `type`, the test
-  application passed 10 of 10 typing runs, and the Calculator and Notepad flows did not
+  application passed 10 of 10 typing runs in two rounds, and the Calculator and Notepad flows did not
   complete)
 
 ## Quick start

@@ -128,7 +128,12 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   mostraron el menú «Editar» de forma fiable y no se puntuaron. Quedan dos hallazgos abiertos:
   una lectura parcial de accesibilidad que no se vuelve a leer en observaciones incrementales,
   y el paso del menú del Bloc de notas en el cliente, que no se verifica ni se limpia tras un
-  fallo.
+  fallo. Una cuarta ronda ([CHANGELOG 1.0.19](docs/thesis/CHANGELOG.md)) repitió la aplicación de
+  prueba con las correcciones de 1.0.18: de nuevo 10 de 10 corridas puntuadas, con los tiempos de
+  las etapas de acción registrados en `_meta`. La Calculadora estaba en modo científico, sin tecla
+  de borrado tras «=», y su cambio a modo estándar no se completó de forma segura: su primer clic de
+  navegación no quedó confirmado sobre el control pedido, así que la serie se abandonó. La serie del
+  Bloc de notas no se ejecutó, a la espera de la decisión del responsable.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
@@ -166,7 +171,7 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
 - [ ] **S4, aceptación:** 450 corridas de extremo a extremo en aplicaciones controladas,
   benchmarks, soak e informe de aceptación. Se ejecutó un protocolo reducido sólo con clics
   (20 corridas puntuadas en dos aplicaciones; E2E-01 y PERF-02 en parte; con UI Automation y
-  `type` en dos fases, la aplicación de prueba pasó 10 de 10 corridas de escritura, y la
+  `type` en dos fases, la aplicación de prueba pasó 10 de 10 corridas de escritura en dos rondas, y la
   Calculadora y el Bloc de notas no se completaron)
 
 ## Inicio rápido

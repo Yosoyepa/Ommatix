@@ -26,8 +26,9 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | S4, segunda ronda con accesibilidad (rama `feat/uia-evidence`, #11): sondeos sin entrada que confirman por nombre de UI Automation los controles de la aplicación de prueba (`Campo de texto` como `input`), las teclas de la Calculadora y `Editar`; 36 entregas reales, 36 de 36 sobre el control pedido; la escritura de E2E-01 pierde el texto en 3 de 4 intentos (`type` verifica el foco a nivel de ventana: hallazgo abierto); serie puntuada 0 de 3; E2E-02 y E2E-03 no ejecutadas; el archivo de parada queda creado para decisión del responsable. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Segunda ronda con accesibilidad» (CHANGELOG 1.0.15) y revisión en [`reviews/2026-10-14-s4-uia-acceptance.md`](reviews/2026-10-14-s4-uia-acceptance.md) | Abierto |
 | — | S4, tercera ronda (rama `feat/uia-evidence`, #11): `type` en dos fases (ADR-0018) en vivo. E2E-01, 10 de 10 corridas puntuadas, con la escritura verificada por el título y 0 teclas perdidas; E2E-02, 0 de 3 (no hay «Borrar» tras «=» en la Calculadora); E2E-03 no puntuada (dos pilotos sin menú fiable). El cliente activa la ventana principal con `AttachThreadInput` (`AppActivate` no llevó la aplicación al primer plano). Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Tercera ronda» (CHANGELOG 1.0.17) y revisión en [`reviews/2026-10-14-s4-third-round.md`](reviews/2026-10-14-s4-third-round.md) | Abierto |
 | — | S4, correcciones de la tercera ronda (rama `feat/uia-evidence`, #11, CHANGELOG 1.0.18): el proveedor de accesibilidad declara una lectura truncada y el motor la repite en la observación siguiente sin confiar en lo que falta; `execute_action` informa los tiempos de sus etapas en `_meta`; el cliente elige el control de borrado de la Calculadora por nombre y comprueba y restaura el menú «Editar» del Bloc de notas por UI Automation. Probado con dobles, sin medir en vivo; el responsable repite E2E-02 y E2E-03 | Abierto |
+| — | S4, cuarta ronda (rama `feat/uia-evidence`, #11, CHANGELOG 1.0.19): repetición del protocolo con las correcciones de 1.0.18. E2E-01, 10 de 10 corridas puntuadas (escritura verificada por el título, 0 teclas perdidas, 0 falsos éxitos, tiempos de acción en `_meta`); E2E-02 abandonada: sin control de borrado tras «=» en modo Científica, y el clic de navegación de la contingencia no quedó anclado al control pedido; E2E-03 no ejecutada por ese desajuste. Cliente sin cambios, con un envoltorio fuera del repositorio para el límite por ronda y los tiempos de acción. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Cuarta ronda» (CHANGELOG 1.0.19) y revisión en [`reviews/2026-10-14-s4-fourth-round.md`](reviews/2026-10-14-s4-fourth-round.md) | Abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.17)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.19)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
@@ -43,6 +44,12 @@ su paso final tal como está especificado (no hay un botón «Borrar» tras «Es
 Calculadora), así que su serie se detuvo tras tres fallos, y E2E-03 no se puntúa tras dos
 pilotos que no produjeron de forma fiable el menú «Editar». El archivo de parada lo creó el
 cliente y lo retira el responsable.
+La cuarta ronda (1.0.19) repite el protocolo con las correcciones de 1.0.18: E2E-01 pasa 10 de 10
+corridas puntuadas, con 0 teclas perdidas y 0 falsos éxitos. E2E-02 no se puntúa: la Calculadora
+sigue en modo Científica, sin control de borrado tras «Es igual a»; el cambio a modo Estándar no se
+completó, porque el clic de navegación de la contingencia no quedó anclado al control pedido, y la
+serie se abandonó. E2E-03 no se ejecutó por ese mismo desajuste. El archivo de parada no existe: se
+retiró una vez al inicio, como autorizó el responsable, y no se creó otro.
 
 ## Cómo está el código
 
@@ -210,8 +217,9 @@ cliente y lo retira el responsable.
      código, probado con dobles y, en la tercera ronda (1.0.17), en vivo sobre la aplicación de
      prueba (10 de 10 corridas, sin teclas perdidas). Quedan abiertos: la lectura parcial de
      accesibilidad en el motor, el paso «Borrar» de la Calculadora (decisión del responsable), el
-     menú del Bloc de notas y el origen de los eventos de entrada sin acción. Reanudar sólo
-     cuando el responsable retire `stop.flag`. La lectura manual del árbol de la aplicación de prueba es la prueba `#[ignore]`
+     menú del Bloc de notas y el origen de los eventos de entrada sin acción. Reanudar cuando el
+     responsable decida el modo de la Calculadora y revise el anclaje del clic de navegación (cuarta
+     ronda, 1.0.19); `stop.flag` ya no existe. La lectura manual del árbol de la aplicación de prueba es la prueba `#[ignore]`
      `reads_the_tree_of_the_s4_test_application` del adaptador (arranca
      `tools/s4/testapp`, lee sólo ese proceso, imprime recuentos por rol y cierra el proceso
      que lanzó; no envía entrada).
