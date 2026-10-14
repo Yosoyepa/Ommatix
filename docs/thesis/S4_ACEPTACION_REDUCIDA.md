@@ -642,3 +642,42 @@ Observaciones del piloto: `total` 493,6, 370,1 y 25,5; `detect` 259,7, 121,6 y 0
 4. **Cuaderno:** 399. Cada ronda usa su propio `--round-start`.
 
 **Ejecución.** El cliente se usó sin cambios y sin envoltorios; cada invocación en vivo comprobó antes el SHA-256 del cliente y el valor del cuaderno. Las colocaciones de las ventanas del propietario se guardaron y restauraron con un auxiliar fuera del repositorio que sólo gestiona ventanas.
+
+## Preparación de la sexta ronda: el cliente ancla el cierre del menú, registra por qué un paso no halla objetivo y diagnostica el menú «Editar»
+
+**Fecha:** 14 de octubre de 2026. Rama `fix/s4-driver-grounding`, sobre `main` tras la fusión de #12 (`9a2aea8`). Sólo cambian el cliente (`tools/s4/e2e_driver.py`, SHA-256 **`6dad0dc349510027f1642df666f4d5c7495bcb73d2e9a4e87c58903e0a8e2a77`**, antes `98f0ae08…1967e5`) y sus pruebas; no cambia ninguna crate de Rust, ni se ejecutó nada en vivo: las pruebas usan un motor falso y una cadena de accesibilidad falsa, y no envían entrada. Detalle en la [revisión](../reviews/2026-10-14-s4-fifth-round.md), secciones «Resolution» y «Preparation for the sixth round».
+
+### Qué cambió
+
+| Hallazgo (quinta ronda, §6) | Cambio en el cliente | Prueba que falla sin el cambio |
+|---|---|---|
+| 2 | `restore_click` (el cierre del menú) ancla por identidad como los clics de `steps()`: antes del clic, UI Automation debe hallar exactamente un «Editar» en la ventana en primer plano (si no, no hay clic); después, el elemento bajo el cursor o su padre debe ser ese. Una discrepancia queda en `menu_restore.grounded` (falso), cuenta como `grounding_wrong` (y como `engine_false_success` si el motor informó `effect_observed`) y no va seguida de ningún reintento ni de más entrada. Se registra además `state_polls`, las lecturas del estado del menú hasta verlo Colapsado | `RestoreGroundingTest`: «Editar» no es el elemento bajo el cursor tras el clic de cierre → se informa, un solo clic; ninguno, varios, ilegible o sin identificador → ningún clic |
+| 3 | Cada paso registra en `targets` cuántos candidatos tiene su etiqueta, cuántos están confirmados, sus roles, su aptitud para actuar y el origen de la etiqueta, sin nombres. Si el paso se detiene, `stopped_by` dice cuál fue la condición (`zero_candidates`, `several_candidates`, `not_confirmed`) y `uia` cuenta lo que UI Automation ve en la ventana bajo los mismos nombres (número en pantalla, fuera de pantalla y tipos de control; nunca nombres). `--calc-standard` lo vuelca en `targets` de su registro | `TargetRecordTest`: cero candidatos y dos candidatos producen registros distintos, y un candidato no confirmado, un tercero |
+| 1 (preparación) | El paso del menú del Bloc de notas escribe `menu_diagnostic`: antes y después del clic, el elemento bajo el centro del objetivo y hasta 4 ancestros, con tipo de control, `AutomationId`, nombre de clase, estado de ExpandCollapse y si su `RuntimeId` es el visto antes del clic (sólo el booleano), más `after_ms`, el retardo de la lectura posterior. No cambia la puntuación ni relaja el anclaje | `MenuDiagnosticTest`: con identificadores que cambian al expandirse el menú se registran los cambios, la puntuación es idéntica con la lectura disponible, ilegible o con error, y el anclaje sigue fallando |
+
+El hallazgo 4 (el cierre del menú `indeterminate`) se analizó desde el código y no es un defecto demostrado del motor: ver la revisión. El conflicto del protocolo entre el archivo de parada tras tres corridas fallidas y la regla de que una serie abortada por una causa propia deja correr la siguiente **no se cambió**: la revisión expone las dos opciones para el responsable.
+
+### Decisiones del responsable (14 de octubre de 2026)
+
+- **(a)** Las corridas de S4 usan desde ahora el manifiesto de la red en float16 de RNF-05 (`plantillas/model_manifest.rnf05.json`, sólo DirectML; [S0_RESULTADOS §10](S0_RESULTADOS.md)). El manifiesto float32 deja de usarse en S4, así que ninguna medición de rondas anteriores se mezcla con la de la sexta. Hay que tenerlo presente: con una aplicación que repinta de forma continua el float16 retrasa la lectura de accesibilidad (§10.5).
+- **(b)** La enumeración de ventanas de ADR-0017 **no se cambia** para llegar a la meta de dos regiones de RNF-05. Por tanto RNF-05 sigue **sin cumplirse por unos 3 ms con dos regiones** (p95 153,0 ms frente a 150 ms; S0 §10.6).
+- **(c)** El responsable estará presente para **un clic de diagnóstico, de sólo lectura, sobre «Editar» en el Bloc de notas** (hallazgo 1), después de fusionar este PR. No lo ejecutó el agente que preparó el cliente.
+
+### Cómo se usa el registro en ese clic
+
+Invocación (sólo con el responsable presente, el cliente de este hash comprobado antes, el cuaderno en 399 y `--round-start 399`):
+
+`python tools/s4/e2e_driver.py --exe <ommatix.exe> --config <configuración en vivo> --app notepad --mode run --runs 1 --max-live 2 --ledger <cuaderno> --round-start 399 --results <JSONL>`
+
+Gasta **dos** solicitudes reales: el clic de diagnóstico sobre «Editar» (abre el menú) y el clic que lo cierra (el segundo paso del flujo, o la restauración si el primero falló). **No usar `--max-live 1`:** la restauración llegaría al límite y crearía `stop.flag`. La parada la crea el cliente y la retira sólo el responsable.
+
+El registro de la corrida (`menu_diagnostic`, también en la salida estándar como evento `menu_diagnostic`) contiene, para el clic de abrir, `before` y `after`: hasta cinco filas (`depth` 0 es el elemento bajo el punto) con `control_type`, `automation_id`, `class_name`, `expand_state` y `same_runtime_id`, y `after_ms`. Con él se distinguen las dos explicaciones del hallazgo 1:
+
+- **(a) El identificador cambia al expandirse:** tras el clic, la fila 0 sigue siendo `MenuItem` con `AutomationId` `Edit`, `expand_state` `Expanded` y `same_runtime_id` falso (o la fila 1, el padre). El clic llegó a «Editar»; falta especificar otra regla para un elemento cuyo identificador cambia, y probarla, antes de cambiar el anclaje.
+- **(b) El clic llegó a otro control:** la fila 0 tras el clic es de otro tipo o de otro `AutomationId`, ninguna fila es «Editar», y el estado de ExpandCollapse de «Editar» no pasa a `Expanded`. El anclaje funciona como debe y el fallo está en el punto del clic.
+
+El registro no contiene nombres, valores ni texto de pantalla. Una lectura que falla queda como `null` y no cambia el resultado de la corrida. La corrida sigue puntuándose como siempre: con el identificador cambiado, `grounding_wrong` es 1 y es la **observación**, no una corrida de la serie.
+
+### Estado de las pruebas y verificación
+
+`python -m unittest discover -s tools/s4 -p "test_*.py"`: 81 pruebas correctas (62 anteriores y 19 nuevas); las nuevas sin el cambio del cliente dan 16 fallos o errores. Las demás verificaciones, en la revisión.

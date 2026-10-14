@@ -119,6 +119,11 @@ class NotepadMenuTest(unittest.TestCase):
         self.assertTrue(all(s[1] is driver.NOT_BY_OCR for s in flow["steps"]))
 
 
+# The `Editar` menu bar item as UI Automation reports it: one on-screen MenuItem.
+EDITAR_ROW = {"runtime_id": "5.1", "automation_id": "Edit", "control_type": "MenuItem",
+              "offscreen": False}
+
+
 class FakeNotepad(driver.Protocol):
     """A Protocol with no server, no windows and no input: it records what the restore does."""
 
@@ -131,15 +136,28 @@ class FakeNotepad(driver.Protocol):
         self.has_target = target
         self.clicks = []
         self.stops = []
+        self.ident_rows = [dict(EDITAR_ROW)]  # what UI Automation finds under the name
+        self.chain = [dict(EDITAR_ROW)]  # what is under the cursor after the click
+        self.identify_calls = []
 
     def menu_state(self, hwnd):
         return self.states[0] if len(self.states) == 1 else self.states.pop(0)
+
+    def current_hwnd(self):
+        return 77
+
+    def identify(self, hwnd, label, control_types):
+        self.identify_calls.append((hwnd, label, control_types))
+        return self.ident_rows
+
+    def cursor_chain(self):
+        return self.chain
 
     def soft_foreground_ok(self):
         return self.foreground_ok
 
     def observe(self):
-        elements = [element("Editar")] if self.has_target else []
+        elements = [element("Editar", role="unknown")] if self.has_target else []
         snap = {"session_id": "s", "snapshot_id": "s1", "geometry_epoch": 1}
         return snap, elements, {}
 
@@ -164,8 +182,9 @@ class RestoreMenuTest(unittest.TestCase):
         closed, record = self.restore(proto)
         self.assertTrue(closed)
         self.assertEqual(proto.clicks, ["Editar"])
-        self.assertEqual(record, {"state_before": "Expanded", "clicked": True,
-                                  "state_after": "Collapsed"})
+        self.assertEqual({k: record[k] for k in ("state_before", "clicked", "state_after")},
+                         {"state_before": "Expanded", "clicked": True,
+                          "state_after": "Collapsed"})
 
     def test_a_collapsed_or_unreadable_menu_is_left_alone(self):
         for state in ("Collapsed", None):
@@ -695,6 +714,290 @@ class CalcModeTest(unittest.TestCase):
         self.assertEqual(driver.parse_calc_mode("0\t\t3"), (None, 3))
         for bad in ("", "1\tEstándar", "2\tx\t0", "1\tx\tmany"):
             self.assertIsNone(driver.parse_calc_mode(bad), bad)
+
+
+# ---- S4 fifth-round findings 1 to 3 --------------------------------------------------------------
+
+
+class RestoreGroundingTest(QuietTest):
+    """Fifth round, finding 2: `restore_click` had no UI Automation identity grounding. Like every
+    other click of the client it is grounded before and after, and a mismatch is reported and
+    never followed by another input."""
+
+    def restore(self, proto):
+        res = {"run": 1, "observations": []}
+        closed = proto.restore_menu(res, 1)
+        return closed, res, res["menu_restore"]
+
+    def test_a_restore_click_that_reaches_another_element_is_reported_and_not_retried(self):
+        proto = FakeNotepad(["Expanded"])
+        # After the click the cursor is over something else: not Editar.
+        proto.chain = [{"runtime_id": "9.9", "automation_id": "Other", "control_type": "Button",
+                        "offscreen": False}]
+        _, res, record = self.restore(proto)
+        self.assertEqual(proto.clicks, ["Editar"], "one click, nothing more")
+        self.assertIs(record["grounded"], False)
+        self.assertEqual(res["grounding_wrong"], 1)
+        self.assertEqual(res["engine_false_success"], 1, "the engine said effect_observed")
+        self.assertEqual(proto.stops, [])
+
+    def test_a_grounded_restore_click_is_recorded_as_grounded(self):
+        proto = FakeNotepad(["Expanded"])
+        closed, res, record = self.restore(proto)
+        self.assertTrue(closed)
+        self.assertIs(record["grounded"], True)
+        self.assertEqual(record["identity"]["status"], "ok")
+        self.assertEqual(record["identity"]["automation_id"], "Edit")
+        self.assertEqual((res.get("grounding_wrong", 0), res.get("engine_false_success", 0)),
+                         (0, 0))
+
+    def test_the_identity_is_looked_up_in_the_foreground_window_by_name_and_role_types(self):
+        proto = FakeNotepad(["Expanded"])
+        self.restore(proto)
+        self.assertEqual(proto.identify_calls,
+                         [(77, "Editar", driver.ROLE_CONTROL_TYPES["unknown"])])
+
+    def test_no_single_identifiable_editar_means_no_restore_click(self):
+        twin = dict(EDITAR_ROW, runtime_id="5.9")
+        for rows, status in (([EDITAR_ROW, twin], "ambiguous"), ([], "not_found"),
+                             (None, "unreadable"),
+                             ([dict(EDITAR_ROW, runtime_id="", automation_id="")],
+                              "unidentifiable")):
+            proto = FakeNotepad(["Expanded"])
+            proto.ident_rows = rows
+            closed, _, record = self.restore(proto)
+            self.assertFalse(closed, status)
+            self.assertEqual(proto.clicks, [], status)
+            self.assertFalse(record["clicked"], status)
+            self.assertEqual(record["identity"]["status"], status)
+
+    def test_the_polls_until_the_menu_reads_closed_are_recorded(self):
+        proto = FakeNotepad(["Expanded"], closes=False)
+        _, _, record = self.restore(proto)
+        self.assertEqual(record["state_polls"], 8)
+        proto = FakeNotepad(["Expanded", "Expanded"])
+        _, _, record = self.restore(proto)
+        self.assertEqual(record["state_polls"], 1)
+
+
+class TargetRecordTest(QuietTest):
+    """Fifth round, finding 3: `--calc-standard` stopped at `Estándar` with 'not found or not
+    confirmed' and did not say which. The step now records, for each target label, how many
+    candidates there were, their control types (never names) and the condition that stopped it."""
+
+    def stopped(self, **kwargs):
+        desk = FakeCalculator(self.tmp, **kwargs)
+        summary = desk.calc_standard()
+        return desk, summary, summary["targets"][-1]
+
+    def test_zero_candidates_and_two_candidates_produce_distinct_records(self):
+        _, _, zero = self.stopped(std_count=0)
+        _, _, two = self.stopped(std_count=2)
+        self.assertEqual((zero["candidates"], zero["stopped_by"]), (0, "zero_candidates"))
+        self.assertEqual((two["candidates"], two["stopped_by"]), (2, "several_candidates"))
+        self.assertEqual(zero["roles"], {})
+        self.assertEqual(two["roles"], {"unknown": 2})
+        self.assertEqual(two["uia"], {"candidates": 2, "offscreen": 0,
+                                      "control_types": ["ListItem"]})
+        self.assertEqual(zero["uia"], {"candidates": 0, "offscreen": 0, "control_types": []})
+        self.assertNotEqual(zero, two)
+
+    def test_one_candidate_that_is_not_confirmed_is_a_third_condition(self):
+        desk = FakeCalculator(self.tmp)
+        original = desk.observe
+
+        def observe():
+            snap, elements, obs = original()
+            return snap, [dict(e, actionability="unknown") if e["label"] == "Estándar" else e
+                          for e in elements], obs
+
+        desk.observe = observe
+        summary = desk.calc_standard()
+        record = summary["targets"][-1]
+        self.assertEqual(record["stopped_by"], "not_confirmed")
+        self.assertEqual((record["candidates"], record["confirmed"]), (1, 0))
+        self.assertEqual(record["actionability"], {"unknown": 1})
+        self.assertEqual(record["uia"]["control_types"], ["ListItem"])
+        self.assertIn("not found or not confirmed", summary["failure"])
+        self.assertEqual(desk.clicks, ["Abrir navegación"], "no second click")
+
+    def test_each_target_label_has_its_record_and_a_successful_one_has_no_stop(self):
+        desk, summary, last = self.stopped()
+        self.assertTrue(summary["switched"])
+        self.assertEqual([t["step"] for t in summary["targets"]], [1, 2])
+        self.assertEqual([t["stopped_by"] for t in summary["targets"]], [None, None])
+        self.assertEqual([t["candidates"] for t in summary["targets"]], [1, 1])
+        self.assertEqual(summary["targets"][0]["roles"], {"button": 1})
+        self.assertNotIn("uia", last, "no UI Automation read on the path that proceeds")
+        self.assertEqual(len(desk.identify_calls), 2, "only the two grounding lookups")
+
+    def test_the_records_hold_no_label_or_name(self):
+        for kwargs in ({"std_count": 0}, {"std_count": 2}, {}):
+            _, summary, _ = self.stopped(**kwargs)
+            text = json.dumps(summary["targets"], ensure_ascii=False)
+            for name in ("Estándar", "Abrir navegación", "Cerrar navegación"):
+                self.assertNotIn(name, text)
+
+    def test_a_uia_read_that_fails_does_not_hide_the_stop(self):
+        desk = FakeCalculator(self.tmp, std_count=0)
+        original = desk.identify
+
+        def identify(hwnd, label, control_types):
+            if len(control_types) > 5:  # the diagnosis; the grounding lookups use role types
+                raise OSError("powershell is gone")
+            return original(hwnd, label, control_types)
+
+        desk.identify = identify
+        record = desk.calc_standard()["targets"][-1]
+        self.assertEqual((record["stopped_by"], record["uia"]), ("zero_candidates", None))
+
+
+class FakeNotepadRun(FakeCalculator):
+    """The Edit menu on a fake Notepad: each click toggles it, and when `ids_change` the menu bar
+    item gets a new RuntimeId once it expands (the cause finding 1 suspects)."""
+
+    def __init__(self, tmp, ids_change=True, diag_error=None):
+        super().__init__(tmp)
+        self.args.app = "notepad"
+        self.flow = driver.notepad_flow()
+        self.menu = "Collapsed"
+        self.ids_change = ids_change
+        self.diag_error = diag_error  # None, "unreadable" or "raises"
+        self.order = []
+
+    def controls(self):
+        rid = "5.2" if self.menu == "Expanded" and self.ids_change else "5.1"
+        return [control("Editar", "unknown", "edit", rid, "Edit", "MenuItem")]
+
+    def call(self, tool, args):
+        self.order.append("click")
+        out = super().call(tool, args)
+        self.menu = "Expanded" if self.menu == "Collapsed" else "Collapsed"
+        return out
+
+    def menu_state(self, hwnd):
+        return self.menu
+
+    def cursor_chain(self):
+        return self.diag_rows()
+
+    def diag_rows(self):
+        now = self.controls()[0]
+        return [{"runtime_id": now["rid"], "automation_id": "Edit", "control_type": "MenuItem",
+                 "class_name": "MenuBarItem", "expand_state": self.menu, "offscreen": False},
+                {"runtime_id": "5.0", "automation_id": "MenuBar", "control_type": "MenuBar",
+                 "class_name": "MenuBar", "expand_state": "", "offscreen": False}]
+
+    def diag_at_element(self, hwnd, label, control_types):
+        self.order.append("diag_before")
+        if self.diag_error == "raises":
+            raise OSError("powershell is gone")
+        return None if self.diag_error == "unreadable" else self.diag_rows()
+
+    def diag_at_cursor(self):
+        self.order.append("diag_after")
+        if self.diag_error == "raises":
+            raise OSError("powershell is gone")
+        return None if self.diag_error == "unreadable" else self.diag_rows()
+
+
+SCORING_KEYS = ("success", "failure", "steps", "actions_requested", "delivered",
+                "effect_observed", "indeterminate", "rejected", "independent_checks",
+                "independent_failed", "engine_false_success", "grounding_wrong", "grounding",
+                "identity")
+
+
+class MenuDiagnosticTest(QuietTest):
+    """Fifth round, finding 1 (preparation): a read-only record of what is under the target
+    point before and after the click, to tell a menu whose identifiers change on expansion from a
+    click that reached another control. It changes neither the scoring nor the identity check."""
+
+    def run_flow(self, **kwargs):
+        desk = FakeNotepadRun(self.tmp, **kwargs)
+        res = driver.new_result("E2E-03", 1)
+        snap, elements, _ = desk.observe()
+        desk.steps(res, snap, elements, 77, 4242)
+        return desk, res
+
+    def test_identifiers_that_change_on_expansion_are_recorded_before_and_after(self):
+        _, res = self.run_flow()
+        record = res["menu_diagnostic"][0]
+        before, after = record["before"], record["after"]
+        self.assertEqual((record["step"], len(before), len(after)), (1, 2, 2))
+        self.assertEqual(
+            before[0],
+            {"depth": 0, "control_type": "MenuItem", "automation_id": "Edit",
+             "class_name": "MenuBarItem", "expand_state": "Collapsed", "same_runtime_id": True})
+        self.assertEqual(
+            after[0],
+            {"depth": 0, "control_type": "MenuItem", "automation_id": "Edit",
+             "class_name": "MenuBarItem", "expand_state": "Expanded", "same_runtime_id": False})
+        self.assertEqual([row["same_runtime_id"] for row in after], [False, False])
+        self.assertEqual(after[1]["control_type"], "MenuBar")
+        self.assertGreaterEqual(record["after_ms"], 0, "the delay of the read is recorded")
+
+    def test_it_is_read_before_the_click_and_after_it_and_sends_nothing(self):
+        desk, _ = self.run_flow()
+        self.assertEqual(desk.order, ["diag_before", "click", "diag_after"])
+        self.assertEqual(desk.clicks, ["Editar"])
+
+    def test_a_menu_whose_identifiers_do_not_change_records_the_same_runtime_id(self):
+        _, res = self.run_flow(ids_change=False)
+        for step in res["menu_diagnostic"]:
+            self.assertTrue(step["before"][0]["same_runtime_id"])
+            self.assertTrue(step["after"][0]["same_runtime_id"])
+        self.assertEqual([r["after"][0]["expand_state"] for r in res["menu_diagnostic"]],
+                         ["Expanded", "Collapsed"])
+        self.assertTrue(res["success"])
+
+    def test_the_diagnostic_does_not_change_how_a_run_is_scored(self):
+        for kwargs in ({"ids_change": True}, {"ids_change": False}):
+            scored = []
+            for error in (None, "unreadable", "raises"):
+                _, res = self.run_flow(diag_error=error, **kwargs)
+                scored.append({k: res[k] for k in SCORING_KEYS})
+            self.assertEqual(scored[0], scored[1], kwargs)
+            self.assertEqual(scored[0], scored[2], kwargs)
+
+    def test_the_identity_check_is_not_relaxed_when_the_identifiers_change(self):
+        desk, res = self.run_flow()
+        self.assertEqual(desk.clicks, ["Editar"], "the run ended after the first click")
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
+        self.assertIn("not the element", res["failure"])
+
+    def test_an_unreadable_diagnostic_is_recorded_as_unreadable_not_as_a_failure(self):
+        for error in ("unreadable", "raises"):
+            _, res = self.run_flow(ids_change=False, diag_error=error)
+            self.assertTrue(res["success"], error)
+            self.assertEqual([(r["before"], r["after"]) for r in res["menu_diagnostic"]],
+                             [(None, None)] * 2, error)
+
+    def test_only_the_notepad_menu_step_has_it(self):
+        desk = FakeCalculator(self.tmp)
+        desk.flow = driver.single_click_flow("Abrir navegación")
+        res = driver.new_result("MODE", 0)
+        snap, elements, _ = desk.observe()
+        desk.steps(res, snap, elements, 77, 4242)
+        self.assertNotIn("menu_diagnostic", res)
+
+    def test_the_record_holds_no_name_and_the_scripts_read_none(self):
+        _, res = self.run_flow(ids_change=False)
+        self.assertNotIn("Editar", json.dumps(res["menu_diagnostic"], ensure_ascii=False))
+        for script in (driver.UIA_DIAG_AT_ELEMENT_PS, driver.UIA_DIAG_AT_POINT_PS):
+            self.assertNotIn("Current.Name", script)
+            self.assertNotIn("ValuePattern", script)
+            self.assertNotIn("TextPattern", script)
+
+    def test_diagnostic_rows_are_parsed_and_recorded_without_the_runtime_ids(self):
+        rows = driver.parse_diag_rows(
+            "5.1\tEdit\tControlType.MenuItem\tMenuBarItem\tCollapsed\n5.0\t\tMenuBar\t\t\nbroken\n")
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["control_type"], "MenuItem")
+        recorded = driver.diag_record(rows, "5.1")
+        self.assertEqual([r["same_runtime_id"] for r in recorded], [True, False])
+        self.assertTrue(all("runtime_id" not in r for r in recorded))
+        self.assertEqual(len(driver.diag_record(rows * 4, "5.1")), 5, "an element + 4 ancestors")
+        self.assertFalse(driver.diag_record(rows, "")[0]["same_runtime_id"])
 
 
 if __name__ == "__main__":
