@@ -3,7 +3,8 @@
 ADR-0001 to ADR-0012 come from the thesis dossier ([`docs/thesis/`](../thesis/README.md)),
 translated into English; each keeps its original Spanish text in `## Resumen (ES)`. The
 project owner accepted all twelve on 2026-10-14. ADR-0013 and ADR-0014 record decisions the
-owner made when the repository was bootstrapped.
+owner made when the repository was bootstrapped. ADR-0015 records how S2b serves the MCP
+contract and awaits the owner's approval.
 
 | # | Title | Status |
 |---|---|---|
@@ -21,6 +22,7 @@ owner made when the repository was bootstrapped.
 | [0012](0012-data-minimisation-and-evidence-traceability.md) | Data minimisation and evidence traceability | Accepted (2026-10-14) |
 | [0013](0013-bilingual-documentation.md) | Bilingual documentation (EN/ES) | Accepted |
 | [0014](0014-hexagonal-crate-layout.md) | Hexagonal crate layout for the modular monolith | Accepted |
+| [0015](0015-mcp-transport-on-rmcp-wire-types.md) | MCP transport on rmcp wire types with a bounded message loop | Proposed |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They
@@ -43,5 +45,6 @@ an ADR exists in that catalogue.
 
 ADR-0001 a ADR-0012 son las de la tesis, traducidas al inglés y con su texto original en
 español. El responsable del proyecto aprobó las doce el 14 de octubre de 2026. ADR-0013 y ADR-0014 recogen las
-decisiones del arranque: documentación bilingüe y crates hexagonales. Las ADR del arranque se
-archivan en `bootstrap/` como B0001–B0012.
+decisiones del arranque: documentación bilingüe y crates hexagonales. ADR-0015, propuesta en
+S2b y pendiente de aprobación, sirve MCP con los tipos de wire de `rmcp` y un bucle de mensajes
+propio y acotado. Las ADR del arranque se archivan en `bootstrap/` como B0001–B0012.
