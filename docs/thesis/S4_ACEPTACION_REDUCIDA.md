@@ -532,3 +532,113 @@ Detalle, resolución y pruebas en la [revisión de la cuarta ronda](../reviews/2
 **Sin comprobar en vivo.** Las dos señales del modo (el nombre del encabezado `Header` y los controles propios de Científica) y el tipo de control de «Estándar» (el rol `unknown` admite `ListItem`, `MenuItem`, `RadioButton`, `TabItem` y otros) se tomaron de la documentación de la aplicación y de los sondeos de las rondas 3 y 4, y no se han leído en vivo. Si el encabezado no se lee, el paso termina sin ningún clic. Que la Calculadora conserve el modo tras cerrarla con `taskkill` tampoco está comprobado: lo comprobará el piloto de E2E-02, que falla cerrado si no existe un control de borrado.
 
 **Para la quinta ronda:** `--round-start` con el valor del cuaderno (396), un sondeo sin entrada, `--calc-standard`, el piloto y la serie de E2E-02, y después E2E-03 con el responsable presente. Los comandos de §9 y de la segunda ronda necesitan `--round-start`.
+
+## Quinta ronda: E2E-02 no se ejecutó y E2E-03 se detuvo por un hallazgo de seguridad en el piloto
+
+**Fecha:** 14 de octubre de 2026. Rama `feat/uia-evidence` (PR #11), desde `e8f443c`. Se ejecutó el cliente tal como está comprometido (`tools/s4/e2e_driver.py`, SHA-256 `98f0ae08…1967e5`, comprobado antes de cada invocación en vivo), sin envoltorios, con la configuración `s4r5-live.toml` (copia de la de la cuarta ronda, SHA-256 `ecc7c5f7…2eac5`) y el binario `ommatix.exe` de la cuarta ronda (`2c07e447…ee2c01`). Autorización del responsable: E2E-02 y E2E-03, diez corridas puntuadas cada una, sin presencia del responsable en el equipo.
+
+**Resultado:** cero corridas puntuadas. El cambio de modo a Estándar se detuvo en el paso «Estándar» sin segundo clic, así que E2E-02 no se ejecutó. El piloto de E2E-03 (excluido de la puntuación) tuvo un clic en «Editar» sin anclaje confirmado tras el clic: según la regla de seguridad, la serie de diez corridas no se ejecutó. El archivo de parada no existió en ningún momento, y la ventana del propietario quedó con su colocación original.
+
+### 1. Verificación previa a la ejecución en vivo
+
+Antes de cualquier entrada real:
+
+- `cargo fmt --all --check`: correcto.
+- `cargo clippy --workspace --all-targets -- -D warnings`: correcto.
+- `cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia --all-targets -- -D warnings`: correcto.
+- `cargo test --workspace`: 337 pruebas pasadas, 0 fallidas, 1 ignorada.
+- `cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia`: el binario ya estaba al día.
+- `python -m unittest discover -s tools/s4 -p "test_*.py"`: 62 pruebas correctas.
+
+Al terminar la ronda: `referencia_ejecutable/run_tests.py`, 48 de 48 correctas; `validar_paquete.py`, 210 comprobaciones y 0 fallidas. Los archivos de `referencia_ejecutable/resultados/` cambiaron sólo en la marca de tiempo, las cadenas de Python y de plataforma, una duración y la versión de jsonschema; se restauraron con `git restore`.
+
+### 2. Ejecución en vivo
+
+| Paso | Invocación (resumen) | Solicitudes reales | Resultado |
+|---|---|---|---|
+| Cambio de modo | `--app calculator --mode run --calc-standard --max-live 4 --round-start 396` | 1 | Detenido en el paso «Estándar»; sin segundo clic |
+| E2E-02, piloto y serie | no se ejecutaron | 0 | Sin cambio a Estándar (§3.2) |
+| E2E-03, piloto (excluido) | `--app notepad --mode run --runs 1 --max-live 4 --round-start 396` | 2 | Clic en «Editar» sin anclaje tras el clic; cierre del menú sin anclaje por identidad (§3.3 y §3.4) |
+| E2E-03, serie | no se ejecutó | 0 | Regla de seguridad (§3.3) |
+
+El cupo de la ronda era de 400 solicitudes desde 396. Se usaron 3: el cuaderno pasó de 396 a 399.
+
+### 3. Resultados
+
+#### 3.1 Cambio de modo (`--calc-standard`)
+
+- Modo al empezar: `other`, es decir, no Estándar. Si hubiera sido Estándar, el paso no habría hecho ningún clic.
+- Clic 1, «Abrir navegación» (la etiqueta exacta del conmutador): entregado, `effect_observed`. Antes del clic, un candidato (`AutomationId` `TogglePaneButton`, tipo `Button`); después del clic, el elemento bajo el cursor coincidió: anclaje confirmado. Es la primera confirmación en vivo del anclaje por identidad de 1.0.20.
+- Paso 2, «Estándar»: `target label not found or not confirmed`. No hubo segundo clic. El modo no se volvió a leer (`mode_after` nulo). El paso cerró la Calculadora que había iniciado.
+- El registro no dice si había cero candidatos, varios, o uno que no se confirmó (hallazgo 3).
+
+La Calculadora no cambió a Estándar, y su modo final no se volvió a leer.
+
+#### 3.2 E2E-02, Calculadora: no ejecutada
+
+Sin Estándar no hubo piloto ni serie, según la regla del responsable. El hallazgo 3 de la cuarta ronda (sin control de borrado tras «Es igual a» en Científica) sigue abierto; esta ronda no lo ha podido comprobar.
+
+#### 3.3 E2E-03, Bloc de notas: piloto con hallazgo de seguridad; serie no ejecutada
+
+- **Ventanas:** dos ventanas del propietario, ambas minimizadas (`showCmd` 2 y 2). Antes del piloto se guardó su colocación (sólo posiciones, con un auxiliar fuera del repositorio que no lee texto ni envía entradas) y después se restauró; la verificación coincide. Al terminar, el cliente volvió a minimizar la ventana que había usado, como hace con una ventana que estaba minimizada.
+- **Clic 1, «Editar» (abrir):** antes del clic, un candidato (`AutomationId` `Edit`, tipo `MenuItem`). Entregado, `effect_observed`. UI Automation lee el menú en estado Expandido.
+- **Anclaje después del clic: no confirmado.** Ni el elemento bajo el cursor ni su padre tienen el mismo `RuntimeId` ni el mismo `AutomationId` que el elemento encontrado antes del clic. El cliente marcó `grounding_wrong` y contó un `engine_false_success` = 1, y la corrida se detuvo sin más entradas.
+- **Clic 2, cierre del menú (ruta de restauración):** entregado; el motor lo informó `indeterminate` con `INDETERMINATE_EFFECT` (verificación de 509,6 ms). Después UI Automation lee el menú Colapsado. No hubo reintento.
+
+**Decisión.** El efecto que confirma UI Automation (menú Expandido) es el esperado, así que el clic probablemente llegó a «Editar». Pero el anclaje posterior al clic no se confirmó, y el motor informó `effect_observed` en un clic que no quedó anclado. El cliente lo cuenta como falso éxito y el responsable lo trata como hecho de seguridad. Un hecho de seguridad no permite continuar con la serie siguiente, así que las diez corridas puntuadas de E2E-03 no se ejecutaron.
+
+**Causa no verificada.** Hay dos explicaciones: (a) una falsa alarma del anclaje, por ejemplo porque el `RuntimeId` del elemento cambia al expandirse el menú; (b) un clic que no llegó a «Editar» y que el motor informó como efecto. Los datos de esta ronda no permiten distinguirlas, y ninguna está comprobada.
+
+#### 3.4 La ruta de cierre del menú no ancla por identidad
+
+El cierre del menú no pasa por el anclaje de `steps()`. `restore_menu` busca «Editar» por su etiqueta entre los elementos observados y envía `restore_click` sin comprobar UI Automation antes ni después del clic. El resto de clics del cliente sí se anclan (hallazgo 2).
+
+### 4. Totales y seguridad
+
+| Serie | Corridas puntuadas | Éxitos | Falsos éxitos | Solicitudes reales | Entregadas | Estados del motor |
+|---|---|---|---|---|---|---|
+| Cambio de modo | — | — | — | 1 | 1 | `effect_observed` 1 |
+| E2E-02 | 0 | — | — | 0 | 0 | — |
+| E2E-03, piloto (excluido) | 1 (excluida) | 0 | 1 (regla del cliente) | 2 | 2 | `effect_observed` 1; `indeterminate` 1 |
+| E2E-03, serie | 0 | — | — | 0 | 0 | — |
+| Ronda | 0 | 0 | 0 puntuados | 3 de 400 | 3 | rechazos 0 |
+
+- **Archivo de parada:** ausente durante toda la ronda. El cliente no lo creó: ningún intento llegó a tres corridas fallidas seguidas.
+- **Entradas de origen desconocido:** ninguna en el registro. `user_idle_s_at_start` del piloto fue 43,4 s, lo que coincide con el último clic del cliente, el de navegación.
+- **Capturas y texto de pantalla:** no se guardó ninguno. Los registros contienen estados, códigos, contadores, tiempos e identificadores de elemento (`AutomationId`, tipo de control). Las etiquetas son las fijas del protocolo.
+- **Escritorio al terminar:** tres procesos Notepad (PID 8960, 23164 y 40380); ningún proceso de la Calculadora ni de `ommatix`; las dos ventanas del propietario minimizadas y con la colocación restaurada.
+
+### 5. Latencias (`_meta`)
+
+Sin series puntuadas no hay medianas ni percentiles: son tres acciones y tres observaciones, así que se registran tal cual, en milisegundos.
+
+| Acción | `action_total` | `action_verification` | `action_freshness` | `action_delivery` | `action_gate` | Cliente (rtt) |
+|---|---|---|---|---|---|---|
+| Navegación (cambio de modo) | 87,2 | 58,2 | 26,7 | 2,0 | 0,2 | 87,5 |
+| «Editar» (piloto) | 79,5 | 58,5 | 18,8 | 1,9 | 0,3 | 79,8 |
+| Cierre del menú (restauración) | 537,8 | 509,6 | 26,4 | 1,6 | 0,3 | 538,1 |
+
+Observaciones del piloto: `total` 493,6, 370,1 y 25,5; `detect` 259,7, 121,6 y 0; `accessibility` 182,7, 185,5 y 0. RNF-05 no se evalúa con estos datos.
+
+### 6. Hallazgos
+
+| # | Severidad | Hallazgo | Estado y siguiente paso |
+|---|---|---|---|
+| 1 | Mayor, seguridad | Piloto de E2E-03: el anclaje tras el clic en «Editar» no se confirmó y el motor informó `effect_observed`. Causa no verificada (§3.3). | Abierto. Decisión del responsable: una lectura de sólo observación del menú expandido exige un clic en «Editar» con el responsable presente; otro criterio para un elemento cuyo identificador cambia al expandirse exige especificación y prueba antes de cambiar el código. |
+| 2 | Mayor, cliente, seguridad | `restore_click` no ancla por identidad (§3.4). | Abierto. Corrección propuesta: el mismo anclaje que `steps()`, antes y después del clic, con una prueba que falle sin él. No se cambió el código: el cliente está fijado a `98f0ae08…1967e5` durante la ronda. |
+| 3 | Mayor, cliente | `--calc-standard` no distingue cero candidatos, varios o un objetivo no confirmado para «Estándar» (§3.1). | Abierto. Propuesta: registrar el número de candidatos y sus tipos de control, sin nombres, con una prueba. Ver el panel con el conmutador pulsado exige un clic con el responsable presente. |
+| 4 | Menor, motor | El cierre del menú devolvió `indeterminate` (`INDETERMINATE_EFFECT`, verificación de 509,6 ms), aunque UI Automation lo leyó Colapsado después. | Abierto. Sin propuesta todavía: la verificación de cambio visual no confirmó el cierre, y no se conoce la causa. |
+| 5 | Observación | El anclaje del conmutador «Abrir navegación» se confirmó tras el clic (un candidato, `TogglePaneButton`). Es la primera confirmación en vivo del anclaje de 1.0.20 para ese control. | No prueba el anclaje de «Editar» (hallazgo 1). Se mantiene el seguimiento del hallazgo 4 de la cuarta ronda, en lo que toca al conmutador. |
+
+### 7. Estado en la matriz
+
+`docs/thesis/matrices/plan_pruebas.csv` no cambia. E2E-02 y E2E-03 siguen en `NO_EJECUTADO`: no hay serie puntuada de ninguna de las dos. La confirmación del anclaje en el conmutador no basta para cambiar ningún estado. E2E-01 mantiene `EJECUTADO_SUPERVISADO_PARCIAL`, sin cambios en esta ronda.
+
+### 8. Qué queda y cómo reanudar
+
+1. **Responsable:** decidir el hallazgo 1 y, si procede, autorizar la observación con su presencia. Hasta entonces no se ejecuta ninguna corrida puntuada de E2E-03.
+2. **Responsable:** decidir el hallazgo 3 (qué registro necesita el paso de Estándar) y cómo llegar a Estándar si el anclaje actual no lo permite. Cambiar de modo a mano queda fuera del protocolo.
+3. **Cliente, en una ronda nueva con cambio de hash:** el hallazgo 2 y, si se aprueba, el hallazgo 3, cada uno con su prueba de regresión que falle sin el cambio.
+4. **Cuaderno:** 399. Cada ronda usa su propio `--round-start`.
+
+**Ejecución.** El cliente se usó sin cambios y sin envoltorios; cada invocación en vivo comprobó antes el SHA-256 del cliente y el valor del cuaderno. Las colocaciones de las ventanas del propietario se guardaron y restauraron con un auxiliar fuera del repositorio que sólo gestiona ventanas.

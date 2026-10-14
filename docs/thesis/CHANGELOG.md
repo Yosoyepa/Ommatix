@@ -1,5 +1,18 @@
 # Historial documental
 
+## 1.0.21 — 2026-10-14: S4, quinta ronda (E2E-02 no ejecutada; E2E-03 detenida por un hallazgo de seguridad en el piloto)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust ni del cliente. Se ejecutó en vivo el cliente comprometido en 1.0.20 (`tools/s4/e2e_driver.py`, SHA-256 `98f0ae08…1967e5`) con el binario de la cuarta ronda (`2c07e447…ee2c01`). El detalle está en la sección «Quinta ronda» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), y los hallazgos, en la [revisión de la quinta ronda](../reviews/2026-10-14-s4-fifth-round.md).
+
+- **Cambio de modo (`--calc-standard`), una ejecución:** el clic de navegación quedó anclado (un candidato, `TogglePaneButton`). El paso «Estándar» no encontró un objetivo confirmado y se detuvo sin segundo clic. La Calculadora no cambió a Estándar.
+- **E2E-02:** no ejecutada, porque el modo no cambió.
+- **E2E-03, piloto (excluido):** el clic en «Editar» tuvo efecto (menú expandido por UI Automation), pero su anclaje tras el clic no se confirmó y el motor informó `effect_observed`, un falso éxito según el cliente. El cierre del menú no tuvo anclaje por identidad. Por tratarse de un hecho de seguridad, la serie de diez corridas puntuadas no se ejecutó.
+- **Cupo y parada:** 3 solicitudes reales del cupo de 400 (cuaderno de 396 a 399). El archivo de parada no existió en ningún momento.
+- **Ventanas del propietario:** colocación guardada antes del piloto y restaurada y verificada después.
+- **Pruebas:** `cargo fmt`, `clippy` (workspace y funciones de Windows) y `cargo test --workspace` (337 pasadas); las 62 pruebas del cliente, el oráculo (48) y el paquete (210 comprobaciones), correctos.
+- **Hallazgos abiertos:** 1, clic en «Editar» sin anclaje tras el clic (seguridad, causa no verificada); 2, la ruta de cierre del menú no ancla por identidad; 3, `--calc-standard` no distingue las causas del paso «Estándar»; 4, cierre del menú `indeterminate` aunque UI Automation lo leyó colapsado.
+- **Matrices:** sin cambio.
+
 ## 1.0.20 — 2026-10-14: S4, preparación de la quinta ronda (cliente)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni código de las crates de Rust. Corrige en el cliente `tools/s4/e2e_driver.py` (SHA-256 `98f0ae08…1967e5`) los hallazgos 1, 2, 4 y 5 de la [revisión de la cuarta ronda](../reviews/2026-10-14-s4-fourth-round.md) y añade el cambio de modo de la Calculadora. No se ejecutó nada en vivo: las pruebas usan un escritorio simulado y no envían entrada. El detalle está en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), «Preparación de la quinta ronda».
