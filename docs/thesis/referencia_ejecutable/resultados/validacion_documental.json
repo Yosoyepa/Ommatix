@@ -1,7 +1,7 @@
 {
-  "timestamp_utc": "2026-10-14T17:05:04.624482+00:00",
+  "timestamp_utc": "2026-10-14T22:05:43.987958+00:00",
   "python": "3.12.2",
-  "jsonschema_version": "4.25.1",
+  "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
   "counts": {
     "schemas": 7,
@@ -14,9 +14,9 @@
     "requirements": 28,
     "planned_tests": 77,
     "references": 24,
-    "adrs": 18
+    "adrs": 19
   },
-  "checks_run": 210,
+  "checks_run": 211,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -348,7 +348,7 @@
     {
       "check": "adrs_encontradas",
       "passed": true,
-      "detail": "18"
+      "detail": "19"
     },
     {
       "check": "referencias:00_AUDITORIA_TECNICA.md",
@@ -502,6 +502,11 @@
     },
     {
       "check": "referencias:0018-two-phase-type-with-element-level-focus-confirmation.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0019-concurrent-observation-stages.md",
       "passed": true,
       "detail": "[]"
     },
