@@ -1,38 +1,28 @@
 //! # ommatix-application
 //!
-//! The application hexagon. It defines the **ports** the outside world must implement
-//! ([`FrameSource`], [`ElementDetector`], [`InputController`], [`Clock`]) and the **use
-//! cases** that drive the domain:
+//! The application hexagon. It defines the **driven ports** of the SDD (thesis chapter 02
+//! §2.4) that the outside world implements ([`FrameCapturer`], [`VisionDetector`],
+//! [`TextRecognizer`], [`OsActuator`], [`Clock`], [`PolicyStore`]), the Ommatix 1.0 tool
+//! contract as plain types ([`contract`]) and the one use case that drives the domain:
 //!
-//! - [`PerceptionEngine`]: capture, diff, detect only what changed, keep the scene.
-//! - [`Observer`]: after an action, perceive until the screen settles.
-//! - [`ActuationService`]: validate an agent's action against the screen, then perform it.
-//! - [`AgentSession`]: the three wired together for a driving adapter.
+//! - [`Engine`]: `observe_screen` (capture, plan the dirty regions, detect and recognise
+//!   only those, fuse, track and commit a snapshot transactionally), `execute_action`
+//!   (deduplicate, validate against the published snapshot and the local policy, dry run
+//!   by default, deliver and verify honestly) and `get_engine_metrics`.
 //!
-//! It knows nothing about screens, files, MCP or JSON.
+//! It knows nothing about screens, files, MCP or JSON, and reads time only through the
+//! [`Clock`] port.
 
-mod actuation;
 mod clock;
 pub mod contract;
 mod engine;
 mod error;
-mod observe;
-mod perception;
 pub mod ports;
-mod screen_model;
-mod session;
 
-pub use actuation::{
-    ActionReceipt, ActuationError, ActuationPolicy, ActuationService, ClickTarget,
-};
 pub use clock::ManualClock;
-pub use engine::{Engine, EngineConfig, Ports};
-pub use error::{AppError, PortError, error_chain};
-pub use observe::{MAX_SETTLE_TIMEOUT, Observation, ObserveError, Observer, SettlePolicy};
-pub use perception::{PerceptionConfig, PerceptionEngine, PerceptionReport, Timings};
+pub use engine::{Engine, EngineConfig, JOURNAL_CAPACITY, Ports};
+pub use error::{PortError, error_chain};
 pub use ports::{
-    CapturedFrame, Clock, DeliveryReceipt, ElementDetector, FrameCapturer, FrameSource,
-    InputController, LocalPolicy, OsActuator, PolicyStore, TextRecognizer, VisionDetector,
+    CapturedFrame, Clock, DeliveryReceipt, FrameCapturer, LocalPolicy, OsActuator, PolicyStore,
+    TextRecognizer, VisionDetector,
 };
-pub use screen_model::ScreenModel;
-pub use session::{ActionOutcome, AgentSession};

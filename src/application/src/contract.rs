@@ -105,6 +105,57 @@ pub struct ToolError {
     pub next_step: NextStep,
 }
 
+impl ErrorCode {
+    /// Whether repeating the same call may succeed (chapter 07 §7.7). Never a licence to
+    /// resend an action blindly: actions are deduplicated by `request_id`.
+    pub const fn retryable(self) -> bool {
+        matches!(self, Self::CaptureUnavailable | Self::InferenceFailed)
+    }
+
+    /// What the agent should do after this error.
+    pub const fn next_step(self) -> NextStep {
+        match self {
+            Self::StaleSnapshot
+            | Self::StaleTarget
+            | Self::TargetNotFound
+            | Self::SessionMismatch
+            | Self::EpochMismatch
+            | Self::AmbiguousTarget
+            | Self::NotActionable
+            | Self::CaptureUnavailable
+            | Self::InferenceFailed => NextStep::ObserveAgain,
+            Self::PolicyDenied | Self::PermissionDenied | Self::RequestConflict => {
+                NextStep::OperatorReview
+            }
+            Self::UnsupportedGeometry | Self::Cancelled => NextStep::Stop,
+            Self::IndeterminateEffect => NextStep::ReconcileEffect,
+            Self::LimitExceeded => NextStep::ReduceRequest,
+        }
+    }
+}
+
+impl ToolError {
+    /// An error with the `retryable` flag and `next_step` of its code. The message is cut
+    /// to [`limits::MAX_MESSAGE_CHARS`] characters; it must never carry screen content.
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        let mut message = message.into();
+        truncate_chars(&mut message, limits::MAX_MESSAGE_CHARS);
+        Self {
+            code,
+            message,
+            retryable: code.retryable(),
+            next_step: code.next_step(),
+        }
+    }
+}
+
+/// Cuts `text` to at most `max` characters, on a character boundary.
+pub(crate) fn truncate_chars(text: &mut String, max: usize) {
+    if let Some((cut, _)) = text.char_indices().nth(max) {
+        text.truncate(cut);
+    }
+}
+
 impl fmt::Display for ToolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self.code.as_str(), self.message)
@@ -339,4 +390,46 @@ pub struct EngineMetrics {
     pub pending_regions: u64,
     pub models_loaded: bool,
     pub timings_source: TimingsSource,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_error_takes_retryable_and_next_step_from_its_code() {
+        use ErrorCode::*;
+        let table = [
+            (StaleSnapshot, false, NextStep::ObserveAgain),
+            (StaleTarget, false, NextStep::ObserveAgain),
+            (TargetNotFound, false, NextStep::ObserveAgain),
+            (SessionMismatch, false, NextStep::ObserveAgain),
+            (EpochMismatch, false, NextStep::ObserveAgain),
+            (AmbiguousTarget, false, NextStep::ObserveAgain),
+            (NotActionable, false, NextStep::ObserveAgain),
+            (PolicyDenied, false, NextStep::OperatorReview),
+            (PermissionDenied, false, NextStep::OperatorReview),
+            (CaptureUnavailable, true, NextStep::ObserveAgain),
+            (InferenceFailed, true, NextStep::ObserveAgain),
+            (UnsupportedGeometry, false, NextStep::Stop),
+            (IndeterminateEffect, false, NextStep::ReconcileEffect),
+            (RequestConflict, false, NextStep::OperatorReview),
+            (Cancelled, false, NextStep::Stop),
+            (LimitExceeded, false, NextStep::ReduceRequest),
+        ];
+        for (code, retryable, next_step) in table {
+            let e = ToolError::new(code, "m");
+            assert_eq!(
+                (e.retryable, e.next_step),
+                (retryable, next_step),
+                "{code:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_error_message_is_cut_on_a_char_boundary() {
+        let e = ToolError::new(ErrorCode::Cancelled, "é".repeat(300));
+        assert_eq!(e.message.chars().count(), limits::MAX_MESSAGE_CHARS);
+    }
 }
