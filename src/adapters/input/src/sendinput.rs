@@ -3,7 +3,7 @@
 //! This module holds the platform-neutral part, safe Rust that is unit-tested on every OS:
 //! normalising virtual-desktop points for `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK`,
 //! building an action's event batch, extracting the executable name of a process image
-//! path and the integrity and modifier checks. The Win32 calls live in the
+//! path and the integrity, modifier and keyboard-focus checks. The Win32 calls live in the
 //! `#[cfg(windows)]` submodule `win`, the only place where this crate allows `unsafe`
 //! (ADR-0016).
 //!
@@ -82,9 +82,10 @@ pub(crate) fn normalise((x, y): (i32, i32), screen: VirtualScreen) -> Option<(i3
     ))
 }
 
-/// The events of `kind` at normalised point `at`, injected in one `SendInput` call: a
-/// move, then a click (move, press, release), a click that focuses the validated field
-/// followed by a press and a release per UTF-16 unit, or one wheel notch per step.
+/// The events of `kind` at normalised point `at`: a move, then a click (press, release), a
+/// click that focuses the validated field followed by a press and a release per UTF-16
+/// unit, or one wheel notch per step. A click or a scroll is injected in one `SendInput`
+/// call; `type` is split by [`split_keys`] so that its keys wait for the focus check.
 pub(crate) fn batch(kind: &ActionKind, (dx, dy): (i32, i32)) -> Vec<Event> {
     let mut events = vec![Event::MoveTo { dx, dy }];
     match kind {
@@ -108,6 +109,53 @@ pub(crate) fn batch(kind: &ActionKind, (dx, dy): (i32, i32)) -> Vec<Event> {
         }
     }
     events
+}
+
+/// Splits a batch before its first key event: the pointer events (the move and, for
+/// `type`, the click that focuses the field) and the key events, which `type` sends only
+/// once keyboard focus is verified (SDD §2.9). The second half is empty for a click or a
+/// scroll.
+pub(crate) fn split_keys(mut events: Vec<Event>) -> (Vec<Event>, Vec<Event>) {
+    let first_key = events
+        .iter()
+        .position(|e| matches!(e, Event::Unicode { .. }))
+        .unwrap_or(events.len());
+    let keys = events.split_off(first_key);
+    (events, keys)
+}
+
+/// What the adapter reads about keyboard focus after the click that focuses a `type`
+/// target, in process ids and window relations (no window text, no handles).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FocusFacts {
+    /// The foreground process attested to the engine and checked before the click.
+    pub attested: u32,
+    /// The foreground process now.
+    pub foreground: Option<u32>,
+    /// The process owning the window with keyboard focus (`GUITHREADINFO::hwndFocus` of
+    /// the foreground thread); `None` when no window has it.
+    pub focus_owner: Option<u32>,
+    /// Whether the focused window is the window at the target point or one of its
+    /// ancestors (it contains the point).
+    pub focus_holds_target: bool,
+}
+
+/// Why keys must not be sent after the focusing click, or `None` when keyboard focus is
+/// on the target field of the attested application.
+pub(crate) fn focus_problem(facts: FocusFacts) -> Option<&'static str> {
+    if facts.foreground != Some(facts.attested) {
+        return Some("the foreground application changed after the click");
+    }
+    let Some(owner) = facts.focus_owner else {
+        return Some("no window has keyboard focus after the click");
+    };
+    if owner != facts.attested {
+        return Some("keyboard focus belongs to another application");
+    }
+    if !facts.focus_holds_target {
+        return Some("keyboard focus is not on the target field");
+    }
+    None
 }
 
 /// The executable file name of a process image path, lowercase (`notepad.exe`), as the
@@ -273,6 +321,86 @@ mod tests {
             (0, 0),
         );
         assert_eq!(&down[1..], &[Event::Wheel(-120)]);
+    }
+
+    #[test]
+    fn typing_splits_before_the_first_key_and_other_actions_have_no_keys() {
+        let typing = batch(&ActionKind::Type { text: "ab".into() }, (5, 6));
+        let (pointer, keys) = split_keys(typing.clone());
+        assert_eq!(
+            pointer,
+            vec![
+                Event::MoveTo { dx: 5, dy: 6 },
+                Event::LeftDown,
+                Event::LeftUp
+            ]
+        );
+        assert_eq!(keys.len(), 4);
+        assert!(keys.iter().all(|e| matches!(e, Event::Unicode { .. })));
+        assert_eq!([pointer, keys].concat(), typing);
+        for other in [
+            ActionKind::Click,
+            ActionKind::Scroll {
+                direction: ScrollDirection::Down,
+                steps: 2,
+            },
+        ] {
+            let events = batch(&other, (0, 0));
+            assert_eq!(split_keys(events.clone()), (events, Vec::new()));
+        }
+    }
+
+    #[test]
+    fn keys_are_sent_only_with_focus_on_the_target_of_the_attested_application() {
+        const APP: u32 = 41;
+        let ok = FocusFacts {
+            attested: APP,
+            foreground: Some(APP),
+            focus_owner: Some(APP),
+            focus_holds_target: true,
+        };
+        assert_eq!(focus_problem(ok), None);
+        let cases = [
+            (
+                FocusFacts {
+                    foreground: Some(7),
+                    ..ok
+                },
+                "foreground application changed",
+            ),
+            (
+                FocusFacts {
+                    foreground: None,
+                    ..ok
+                },
+                "foreground application changed",
+            ),
+            (
+                FocusFacts {
+                    focus_owner: None,
+                    ..ok
+                },
+                "no window has keyboard focus",
+            ),
+            (
+                FocusFacts {
+                    focus_owner: Some(7),
+                    ..ok
+                },
+                "another application",
+            ),
+            (
+                FocusFacts {
+                    focus_holds_target: false,
+                    ..ok
+                },
+                "not on the target field",
+            ),
+        ];
+        for (facts, expected) in cases {
+            let problem = focus_problem(facts).unwrap_or_default();
+            assert!(problem.contains(expected), "{facts:?}: {problem}");
+        }
     }
 
     #[test]

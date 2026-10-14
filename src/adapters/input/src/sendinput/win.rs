@@ -3,6 +3,7 @@
 //! just returned) and states why that is sound; raw pointers never leave this module.
 
 use std::sync::{Mutex, PoisonError};
+use std::time::Duration;
 
 use ommatix_application::contract::ValidatedAction;
 use ommatix_application::{DeliveryReceipt, OsActuator, PortError};
@@ -27,14 +28,15 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GA_ROOT, GetAncestor, GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId,
-    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WindowFromPoint,
+    GA_ROOT, GUITHREADINFO, GetAncestor, GetForegroundWindow, GetGUIThreadInfo, GetSystemMetrics,
+    GetWindowThreadProcessId, IsChild, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, WindowFromPoint,
 };
 use windows::core::PWSTR;
 
 use super::{
-    ADAPTER, Event, MUST_BE_UP, VirtualScreen, batch, exe_name_utf16, first_held, integrity_allows,
-    normalise,
+    ADAPTER, Event, FocusFacts, MUST_BE_UP, VirtualScreen, batch, exe_name_utf16, first_held,
+    focus_problem, integrity_allows, normalise, split_keys,
 };
 use crate::aim::frame_pixel;
 
@@ -42,6 +44,11 @@ type MappingSource = Box<dyn Fn() -> Result<DisplayMapping, PortError> + Send + 
 
 /// Longest process image path read, in UTF-16 units (the extended-length path limit).
 const MAX_PATH_UNITS: usize = 32_768;
+
+/// How often, and how many times, `type` reads keyboard focus while the application
+/// handles the focusing click (input is processed asynchronously): at most 200 ms.
+const FOCUS_POLL: Duration = Duration::from_millis(10);
+const FOCUS_POLLS: u32 = 20;
 
 fn refuse(message: impl Into<String>) -> PortError {
     PortError::new(ADAPTER, message)
@@ -101,13 +108,56 @@ fn foreground_process() -> Option<u32> {
     window_process(unsafe { GetForegroundWindow() })
 }
 
-/// The process whose top-level window is at virtual-desktop pixel `(x, y)`.
-fn process_at((x, y): (i32, i32)) -> Option<u32> {
+/// The window at virtual-desktop pixel `(x, y)` (the deepest visible child there).
+fn window_at((x, y): (i32, i32)) -> Option<HWND> {
     // SAFETY: takes a POINT by value; returns a window handle value or null.
     let hwnd = unsafe { WindowFromPoint(POINT { x, y }) };
-    if hwnd.is_invalid() {
-        return None;
+    (!hwnd.is_invalid()).then_some(hwnd)
+}
+
+/// What [`focus_problem`] needs, read now: the foreground process, and the window with
+/// keyboard focus in the foreground thread, its process and whether it is the window at
+/// `desktop` or one of its ancestors.
+fn focus_facts(attested: u32, desktop: (i32, i32)) -> FocusFacts {
+    // SAFETY: no arguments; returns a window handle value (null when none is active).
+    let foreground = unsafe { GetForegroundWindow() };
+    let mut facts = FocusFacts {
+        attested,
+        foreground: window_process(foreground),
+        focus_owner: None,
+        focus_holds_target: false,
+    };
+    if foreground.is_invalid() {
+        return facts;
     }
+    // SAFETY: `foreground` is passed by value (a stale handle returns 0); no out-pointer.
+    let thread = unsafe { GetWindowThreadProcessId(foreground, None) };
+    if thread == 0 {
+        return facts;
+    }
+    let mut info = GUITHREADINFO {
+        cbSize: u32::try_from(size_of::<GUITHREADINFO>()).unwrap_or(u32::MAX),
+        ..GUITHREADINFO::default()
+    };
+    // SAFETY: `info` is a local GUITHREADINFO whose `cbSize` is its size, as the call
+    // requires; the pointer is valid for the call and not kept.
+    if unsafe { GetGUIThreadInfo(thread, &raw mut info) }.is_err() {
+        return facts;
+    }
+    let focus = info.hwndFocus;
+    facts.focus_owner = window_process(focus);
+    if let (Some(target), Some(_)) = (window_at(desktop), facts.focus_owner) {
+        // SAFETY: two window handle values by value; a stale one makes the call return
+        // false, which fails the check.
+        let contains = unsafe { IsChild(focus, target) }.as_bool();
+        facts.focus_holds_target = focus == target || contains;
+    }
+    facts
+}
+
+/// The process whose top-level window is at virtual-desktop pixel `(x, y)`.
+fn process_at(desktop: (i32, i32)) -> Option<u32> {
+    let hwnd = window_at(desktop)?;
     // SAFETY: `hwnd` is passed by value; a stale handle yields null, handled below.
     let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
     window_process(if root.is_invalid() { hwnd } else { root })
@@ -259,9 +309,15 @@ fn to_input(event: Event) -> INPUT {
 ///   `SendInput` still counted it as inserted);
 /// - no modifier key or mouse button may be held down.
 ///
-/// Each action is one `SendInput` call: the receipt's `submitted` is the batch length and
-/// `inserted` what `SendInput` returned (it stops at the first event it cannot insert).
-/// Nothing is retried.
+/// `type` verifies keyboard focus between its focusing click and its keys (SDD §2.9):
+/// after the click, the foreground process must still be the attested one and the window
+/// with keyboard focus must belong to it and be the window at the target point (or contain
+/// it). Otherwise no key is sent and `deliver` fails; the click was sent, so the engine
+/// reports the action as `indeterminate`, never as not delivered.
+///
+/// A click or a scroll is one `SendInput` call; `type` is two, the click and the keys. The
+/// receipt's `submitted` is the batch length and `inserted` what `SendInput` returned (it
+/// stops at the first event it cannot insert). Nothing is retried.
 pub struct SendInputActuator {
     mapping: MappingSource,
     /// The integrity RID of this process.
@@ -297,8 +353,9 @@ impl SendInputActuator {
         })
     }
 
-    /// Every check that must pass before the batch is sent.
-    fn preflight(&self, desktop: (i32, i32)) -> Result<(), PortError> {
+    /// Every check that must pass before the batch is sent; returns the foreground
+    /// process it checked.
+    fn preflight(&self, desktop: (i32, i32)) -> Result<u32, PortError> {
         let attested = self
             .attested
             .lock()
@@ -333,8 +390,42 @@ impl SendInputActuator {
         if let Some(key) = held_key() {
             return Err(refuse(format!("{key} is held down; nothing was sent")));
         }
+        Ok(foreground)
+    }
+
+    /// Waits, briefly, for the focusing click to give keyboard focus to the target field
+    /// of `attested`; fails with the last problem found.
+    fn await_focus(attested: u32, desktop: (i32, i32)) -> Result<(), PortError> {
+        let mut problem = None;
+        for _ in 0..FOCUS_POLLS {
+            problem = focus_problem(focus_facts(attested, desktop));
+            if problem.is_none() {
+                break;
+            }
+            std::thread::sleep(FOCUS_POLL);
+        }
+        if let Some(problem) = problem {
+            return Err(refuse(format!("{problem}; the click was sent, no key was")));
+        }
+        if let Some(key) = held_key() {
+            return Err(refuse(format!(
+                "{key} is held down; the click was sent, no key was"
+            )));
+        }
         Ok(())
     }
+}
+
+/// Sends `events` in one `SendInput` call; returns how many the OS inserted.
+fn send(events: Vec<Event>) -> u32 {
+    if events.is_empty() {
+        return 0;
+    }
+    let inputs: Vec<INPUT> = events.into_iter().map(to_input).collect();
+    let size = i32::try_from(size_of::<INPUT>()).unwrap_or(i32::MAX);
+    // SAFETY: `inputs` is a slice of fully initialised INPUT values whose union member
+    // matches their `type`, and `size` is the size of one INPUT, as SendInput requires.
+    unsafe { SendInput(&inputs, size) }
 }
 
 impl OsActuator for SendInputActuator {
@@ -363,13 +454,16 @@ impl OsActuator for SendInputActuator {
             virtual_screen().ok_or_else(|| refuse("cannot read the virtual desktop's size"))?;
         let at = normalise(desktop, screen)
             .ok_or_else(|| refuse("the action point is outside the virtual desktop"))?;
-        self.preflight(desktop)?;
-        let inputs: Vec<INPUT> = batch(action.kind(), at).into_iter().map(to_input).collect();
-        let submitted = u32::try_from(inputs.len()).unwrap_or(u32::MAX);
-        let size = i32::try_from(size_of::<INPUT>()).unwrap_or(i32::MAX);
-        // SAFETY: `inputs` is a slice of fully initialised INPUT values whose union member
-        // matches their `type`, and `size` is the size of one INPUT, as SendInput requires.
-        let inserted = unsafe { SendInput(&inputs, size) };
+        let foreground = self.preflight(desktop)?;
+        let events = batch(action.kind(), at);
+        let submitted = u32::try_from(events.len()).unwrap_or(u32::MAX);
+        let (pointer, keys) = split_keys(events);
+        let pointer_len = u32::try_from(pointer.len()).unwrap_or(u32::MAX);
+        let mut inserted = send(pointer);
+        if inserted == pointer_len && !keys.is_empty() {
+            Self::await_focus(foreground, desktop)?;
+            inserted = inserted.saturating_add(send(keys));
+        }
         Ok(DeliveryReceipt {
             submitted,
             inserted,
