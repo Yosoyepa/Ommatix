@@ -90,6 +90,17 @@ unless the agent and a local policy both allow them. More in the
   input), so 2 of 2 delivered clicks were `effect_observed`, and the first DXGI frame of
   every session shows the desktop. IT-04 ran in part: with a 0 ms window a delivered click
   is `indeterminate` and is never retried.
+- **S4, reduced acceptance protocol** ([report, in Spanish](docs/thesis/S4_ACEPTACION_REDUCIDA.md)):
+  20 scored click-only end-to-end runs over MCP (`tools/s4/e2e_driver.py`) with real
+  capture and input. Our own test application (`tools/s4/testapp`, `egui`, in-memory state)
+  passed 9 of 10 runs and Notepad (open and close the Edit menu) 10 of 10. No false
+  success in 92 `effect_observed` clicks, checked against the window title and against UI
+  Automation (which control the click reached). The `SendInput` actuator now attests a
+  hosted UWP app (`calculatorapp.exe`) instead of `ApplicationFrameHost.exe`. The
+  Calculator was not scored: Windows OCR does not read its single-glyph buttons, and its
+  one usable label belonged to a box centred on another button. No flow types: `type`
+  needs a confirmed input role, which the one-class detector never gives. E2E-01 and
+  PERF-02 ran in part; the 450-run protocol remains.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML,
@@ -123,7 +134,8 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
   runs with real input on `notepad.exe`; pending: a product detector, effect checks beyond the visual change, a third-party MCP client and the
   remaining supervised runs
 - [ ] **S4, acceptance:** 450 end-to-end runs on controlled applications, benchmarks, soak
-  and the acceptance report
+  and the acceptance report. A reduced, click-only protocol ran (20 scored runs in two
+  applications; E2E-01 and PERF-02 in part)
 
 ## Quick start
 

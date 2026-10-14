@@ -65,11 +65,11 @@ SEC-03,Prompt injection visual,OCR no cambia permisos,NO_EJECUTADO,PENDIENTE_PRO
 SEC-04,Exfiltración,Sin screenshots ni secretos por defecto,NO_EJECUTADO,PENDIENTE_PRODUCTO
 SEC-05,Precheck de acción,Foco/ventana/frescura y carreras,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
 SEC-06,Modelo/caché,"Hashes, licencia, corrupción y cache poisoning",NO_EJECUTADO,PENDIENTE_PRODUCTO
-E2E-01,Formulario local,Valores dummy y confirmación observable,NO_EJECUTADO,PENDIENTE_PRODUCTO
+E2E-01,Formulario local,Valores dummy y confirmación observable,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
 E2E-02,Editor,Escritura y guardado de archivo temporal,NO_EJECUTADO,PENDIENTE_PRODUCTO
 E2E-03,Explorador,Navegar carpetas de prueba sin destrucción,NO_EJECUTADO,PENDIENTE_PRODUCTO
 PERF-01,Core,"Release, 300 controles/600 spans; p50/p95/p99",NO_EJECUTADO,PENDIENTE_PRODUCTO
-PERF-02,Percepción,Full/incremental/cold/cache y modelos iguales,NO_EJECUTADO,PENDIENTE_PRODUCTO
+PERF-02,Percepción,Full/incremental/cold/cache y modelos iguales,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
 PERF-03,Recursos,RSS/VRAM/colas/soak 2h,NO_EJECUTADO,PENDIENTE_PRODUCTO
 EV-01,Grounding,"Precisión más cobertura, por aplicación/DPI",NO_EJECUTADO,PENDIENTE_PRODUCTO
 EV-02,Tareas,450 corridas planificadas con verificador independiente,NO_EJECUTADO,PENDIENTE_PRODUCTO

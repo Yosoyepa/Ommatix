@@ -16,17 +16,20 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | #5 | S2a: `appearance` (algoritmo 3A, caché de íconos con rechazo) e `identity` (algoritmo 3B, registro de sesión, comprobaciones de vigencia de una acción); UT-27..43; este documento | Fusionado |
 | #6 | S2b: puertos del SDD y `Engine` en `ommatix-application` (`observe_screen`, `execute_action`, `get_engine_metrics`); adaptador MCP con tipos de `rmcp` 3.5.1 y bucle acotado (ADR-0015); CT-01..10 y los 17 ejemplos del dossier; BDD-11..27 ejecutados; `serve`/`demo` con el motor nuevo y `--config`; algoritmo 3A dentro de la observación; se retira el prototipo; revisión en [`reviews/2026-10-14-s2b-engine-and-mcp.md`](reviews/2026-10-14-s2b-engine-and-mcp.md) | Fusionado |
 | #7 | S3, primera parte (rama `feat/s3-windows-adapters`, sobre S2b): captura DXGI (`--source dxgi`, `--output N`) y entrada `SendInput` (`--input sendinput`) con `unsafe` acotado (ADR-0016); detector ONNX que falla de forma segura con manifiesto y SHA-256 y OCR de Windows (`[models]`); job `windows` en la CI; parada del operador (`[safety] stop_file`) y comprobación del foco antes de escribir; BDD-28..32 ejecutados sobre un doble del actuador real | Fusionado |
-| — | Spike S0 (rama `feat/s0-omniparser-v3`): detector OmniParser `icon_detect_v3` (MIT) exportado a ONNX con `tools/s0/export_omniparser_v3.py`, manifiesto `SELECCIONADO` (`docs/thesis/plantillas/model_manifest.s0.json`), ONNX Runtime 1.28.0 en CPU, OCR de Windows es-ES; corridas supervisadas sobre `notepad.exe` sin entrada; letterbox sin ampliación; `demo --timings`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) | Abierto (#8) |
-| — | S3, corridas supervisadas (rama `feat/s3-supervised-runs`, apilada sobre #8): captura y entrada reales sobre `notepad.exe` con `tools/s3/mcp_driver.py`; SEC-01 ejecutada, IT-01/03/05 y SEC-02/05 en parte; `indeterminate` informa la entrega del actuador; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) y revisión en [`reviews/2026-10-14-s3-supervised-runs.md`](reviews/2026-10-14-s3-supervised-runs.md) | Abierto (#9) |
+| — | Spike S0 (rama `feat/s0-omniparser-v3`): detector OmniParser `icon_detect_v3` (MIT) exportado a ONNX con `tools/s0/export_omniparser_v3.py`, manifiesto `SELECCIONADO` (`docs/thesis/plantillas/model_manifest.s0.json`), ONNX Runtime 1.28.0 en CPU, OCR de Windows es-ES; corridas supervisadas sobre `notepad.exe` sin entrada; letterbox sin ampliación; `demo --timings`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) | Fusionado (#8) |
+| — | S3, corridas supervisadas (rama `feat/s3-supervised-runs`, apilada sobre #8): captura y entrada reales sobre `notepad.exe` con `tools/s3/mcp_driver.py`; SEC-01 ejecutada, IT-01/03/05 y SEC-02/05 en parte; `indeterminate` informa la entrega del actuador; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) y revisión en [`reviews/2026-10-14-s3-supervised-runs.md`](reviews/2026-10-14-s3-supervised-runs.md) | Fusionado (#9) |
 | — | S3, plazo de verificación y primer frame DXGI (rama `fix/s3-verify-settle`, apilada sobre #9): la verificación del cambio visual vuelve a capturar dentro de `[engine] verify_timeout_ms`/`verify_poll_ms` sin reenviar la entrada; el capturador DXGI ya no entrega un primer frame en blanco; `CHANGELOG.md` 1.0.10 y revisión en [`reviews/2026-10-14-s3-verify-settle-and-first-frame.md`](reviews/2026-10-14-s3-verify-settle-and-first-frame.md) | Abierto |
-| — | S3, segunda corrida supervisada (rama `feat/s3-supervised-runs`, #9, con DirectML): plazo de verificación (`effect_observed` 2 de 2) y primer frame DXGI (2 de 2 sesiones) confirmados en vivo; IT-04 ejecutada en parte con `verify_timeout_ms = 0`; paso `it04` en `tools/s3/mcp_driver.py`; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) §8 (CHANGELOG 1.0.12) | Abierto (#9) |
-| — | S0, proveedor e hilos del detector (rama `perf/s0-detector-ep`, apilada sobre `feat/s3-supervised-runs`): `[models] detector_execution_provider = "cpu" \| "directml"` (feature `directml`, `DirectML.dll` fijada, sin vuelta a la CPU) y `detector_threads`; manifiesto S0 con `"cpu,directml"`; DirectML equivalente a la CPU; agrupar regiones se midió y se descartó porque cambia las detecciones; `tools/s0/synthetic_frames.py` y el ejemplo `s0_probe`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §9 (CHANGELOG 1.0.11) | Sin PR |
+| — | S3, segunda corrida supervisada (rama `feat/s3-supervised-runs`, #9, con DirectML): plazo de verificación (`effect_observed` 2 de 2) y primer frame DXGI (2 de 2 sesiones) confirmados en vivo; IT-04 ejecutada en parte con `verify_timeout_ms = 0`; paso `it04` en `tools/s3/mcp_driver.py`; informe en [`thesis/S3_CORRIDAS_SUPERVISADAS.md`](thesis/S3_CORRIDAS_SUPERVISADAS.md) §8 (CHANGELOG 1.0.12) | Fusionado (#9) |
+| — | S0, proveedor e hilos del detector (rama `perf/s0-detector-ep`, apilada sobre `feat/s3-supervised-runs`): `[models] detector_execution_provider = "cpu" \| "directml"` (feature `directml`, `DirectML.dll` fijada, sin vuelta a la CPU) y `detector_threads`; manifiesto S0 con `"cpu,directml"`; DirectML equivalente a la CPU; agrupar regiones se midió y se descartó porque cambia las detecciones; `tools/s0/synthetic_frames.py` y el ejemplo `s0_probe`; informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §9 (CHANGELOG 1.0.11) | Fusionado (con #9) |
+| — | S4, protocolo de aceptación reducido (rama `feat/s4-reduced-e2e`): 20 corridas E2E puntuadas sólo con clics, con `tools/s4/e2e_driver.py` y la aplicación de prueba `tools/s4/testapp` (`eframe`/`egui`, crate independiente). Aplicación de prueba, 9 de 10; Bloc de notas (menú `Editar`), 10 de 10; Calculadora no puntuada. 0 falsos éxitos según el título y el anclaje por UI Automation. El actuador `SendInput` atestigua la aplicación hospedada en vez de `ApplicationFrameHost.exe`. E2E-01 y PERF-02 en parte. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) (CHANGELOG 1.0.13) y revisión en [`reviews/2026-10-14-s4-reduced-acceptance.md`](reviews/2026-10-14-s4-reduced-acceptance.md) | Abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.12)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.13)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
 en parte, IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ejecutado.
+El protocolo S4 reducido (1.0.13) ejecuta en parte E2E-01 y PERF-02, con 20 corridas sólo
+con clics. No son las 450 del protocolo (EV-02), y RF-18, RNF-03 y RNF-05 siguen pendientes.
 
 ## Cómo está el código
 
@@ -150,7 +153,12 @@ en parte, IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se
   confirmado en vivo (2 de 2 sesiones, 1.0.12); no hay OCR por defecto; OR-44 espera "actuación no implementada" y el
   motor responde `POLICY_DENIED` sin entregar nada; el contexto del caché de íconos lo fija
   el operador y sus umbrales no están calibrados; no se ha probado un cliente MCP real
-  (capítulo 07 §7.1).
+  (capítulo 07 §7.1). Del protocolo S4 reducido (`thesis/S4_ACEPTACION_REDUCIDA.md`):
+  ningún flujo puede escribir, porque `type` exige un `Role::Input` confirmado y el detector
+  da `unknown`; el OCR de Windows no lee los botones de un glifo (la Calculadora no es
+  direccionable por etiqueta); y una etiqueta puede pertenecer a una caja centrada en otro
+  control (en la Calculadora, 4 de 4 clics del piloto cayeron en x²). `effect_observed` sólo
+  afirma un cambio visual, así que no detecta ese error.
 
 ## Qué sigue
 
@@ -176,7 +184,14 @@ en parte, IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se
      diccionario.
    - Elegir el cliente MCP real con el que se prueba la conformidad (capítulo 07 §7.1).
    - Elegir las aplicaciones de prueba controladas (para `allowed_applications`, las
-     corridas IT y la evaluación de S4).
+     corridas IT y la evaluación de S4). Hay una aplicación de prueba propia
+     (`tools/s4/testapp`). Para las 450 corridas faltan las familias "editor con escritura y
+     guardado" y "explorador de archivos", y una Calculadora direccionable o su sustitución.
+   - Decidir si se añade un adaptador de evidencia de UI Automation (roadmap v1.1,
+     capítulo 06 §6.8; puerto, ADR y escenario nuevos) que aporte roles (`input`),
+     `label_source: accessibility` y rectángulos reales, para permitir `type` sin relajar la
+     regla y corregir anclajes como el de la Calculadora, o si se usa un detector con clases
+     de rol.
 3. **Corridas supervisadas en el hardware de referencia**, con el operador presente y una
    aplicación de prueba en `allowed_applications`. S0 ejecutó en parte IT-01 e IT-02 sin
    entrada; S3 (`thesis/S3_CORRIDAS_SUPERVISADAS.md`, cliente `tools/s3/mcp_driver.py`)
