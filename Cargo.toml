@@ -37,9 +37,13 @@ futures = "0.3"
 clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 jsonschema = { version = "0.58", default-features = false }
+# `load-dynamic`: nothing is downloaded or linked at build time; the operator pins the
+# ONNX Runtime library by SHA-256. rc.13 keeps the workspace MSRV (rc.14 needs 1.92).
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic"] }
 rmcp = { version = "3.5", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
 toml = "1"
