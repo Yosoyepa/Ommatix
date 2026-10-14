@@ -19,10 +19,13 @@ code and the dossier disagree, the dossier wins unless an ADR changes it. A chan
 requirement, an algorithm, the contract or a scenario updates the dossier in the same PR and
 adds an entry to `docs/thesis/CHANGELOG.md`.
 
-**`src/` still holds the bootstrap prototype**, which is being realigned with the thesis in
-stages S0–S4 (thesis chapter 06). Do not extend behaviour that only the prototype has (the
-flat-region detector, hashed cells, the seven bootstrap MCP tools, coordinates on the wire);
-new work implements the thesis. The prototype's decisions are archived in
+**`src/` implements the thesis engine**, realigned with the dossier in stages S0–S4 (thesis
+chapter 06). Since S2b, `serve` and `demo` run the `Engine` of `ommatix-application` over the
+SDD ports and serve the Ommatix 1.0 contract (`observe_screen`, `execute_action`,
+`get_engine_metrics`) over MCP; the bootstrap prototype's use cases, ports, seven MCP tools
+and acceptance features are retired. Some bootstrap pieces remain as interim adapters until
+S3 replaces them (the flat-region detector, `xcap` capture, `enigo` input): do not extend
+them, and never put coordinates on the wire. The prototype's decisions are archived in
 `docs/adr/bootstrap/`.
 
 ## 2. Language policy (English / Español)
@@ -67,8 +70,8 @@ compiler-enforced boundary.
 - Ports follow the SDD (thesis chapter 02 §2.4): `FrameCapturer`, `VisionDetector`,
   `TextRecognizer`, `OsActuator`, `Clock`, `PolicyStore`. A new external capability is a
   **port trait in `application/src/ports.rs`** plus a **new adapter crate** under
-  `src/adapters/`. The prototype's `FrameSource`, `ElementDetector` and `InputController`
-  are renamed or replaced as S1 and S3 reach them.
+  `src/adapters/`. Driving adapters (MCP) call the `Engine` directly; there are no inbound
+  port traits.
 - A pure-computation crate in the domain (an R*-tree, Unicode normalisation) is added to the
   table above by the PR that first needs it.
 - Do not create a crate for something that has no second implementation in sight; add a
@@ -94,9 +97,9 @@ compiler-enforced boundary.
 | An architectural decision | `docs/adr/NNNN-title.md` (copy `0000-template.md`) |
 | A diagram | `docs/diagrams/*.md` as Mermaid |
 | A code review | `docs/reviews/YYYY-MM-DD-topic.md`: finding → resolution → regression test |
-| Executable acceptance scenarios | Thesis scenarios stay in `docs/thesis/features/` (the validator traces them there); their steps go in `src/acceptance/tests/thesis.rs`, and the PR that adds them adds the scenario to its `IMPLEMENTED` list. The prototype's own scenarios are in `src/acceptance/features/` with steps in `tests/acceptance.rs` |
+| Executable acceptance scenarios | Thesis scenarios stay in `docs/thesis/features/` (the validator traces them there); their steps go in `src/acceptance/tests/thesis.rs`, and the PR that adds them adds the scenario to its `IMPLEMENTED` list. There is no other feature directory |
 | Unit tests | next to the code (`#[cfg(test)] mod tests`); a test that implements a planned test carries its ID (`ut_13_failed_commit_keeps_pending_dirty`) |
-| Cross-crate / end-to-end tests | `src/<crate>/tests/` |
+| Cross-crate / end-to-end tests | `src/<crate>/tests/` (the MCP contract tests CT-xx live in `src/adapters/mcp/tests/`) |
 
 Nothing MVP-related goes in the repository root except workspace configuration.
 
@@ -122,12 +125,15 @@ Nothing MVP-related goes in the repository root except workspace configuration.
    otherwise and the local policy allows it. Never make a live actuator the default and
    never bypass the action gate. Report what happened and no more: `simulated` never claims
    delivery, `input_delivered` never claims an effect, and an uncertain effect is
-   `indeterminate`, never an automatic retry. In the prototype, live input needs the
-   `native-input` build feature, `--input native` and `--source screen`.
+   `indeterminate`, never an automatic retry. Live input needs the `native-input` build
+   feature, the native input and the screen source, `actuation_enabled = true` in the
+   operator's configuration and `dry_run: false` from the agent; it is off by default.
+   `allowed_applications` is not enforced before S3 (there is no foreground-window evidence
+   yet), so do not describe it as a safeguard.
 7. **Privacy** (ADR-0012). No screenshots or screen values in logs by default; text on screen
    never changes permissions. Never commit screen captures, recorded sessions, datasets
    (`captures/`, `datasets/` are git-ignored) or model weights. Use synthetic frames in
-   tests: `SimulatedDesktop` or `ommatix_adapter_sim::scripted_session(theme)`.
+   tests: `SimulatedDesktop`, `FixtureDesktop` or `ommatix_adapter_sim::scripted_session(theme)`.
 8. **Latency is measured, not promised** (ADR-0010). Do not add a dependency or an
    allocation on the hot path without measuring it; report per-stage timings in PRs that
    touch it. A budget is a target until it is measured on the reference hardware.
@@ -147,7 +153,7 @@ Nothing MVP-related goes in the repository root except workspace configuration.
 cargo fmt --all                                        # format
 cargo clippy --workspace --all-targets -- -D warnings  # lint (CI-blocking)
 cargo test --workspace                                 # unit + integration + Gherkin (CI-blocking)
-cargo run -- demo                                      # smoke test of the prototype pipeline
+cargo run -- demo                                      # smoke test: the engine on the simulated desktop
 cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings  # when touching capture/input
 ```
 
@@ -172,8 +178,8 @@ done is in thesis chapter 06 §6.7; its boxes stay unchecked until the evidence 
 ### Toolchain
 
 Rust stable (see `rust-toolchain.toml`, MSRV in `Cargo.toml`) and Python 3.11 or later for
-the thesis checks. The first target platform is Windows 11 x64 (ADR-0008). The prototype's
-`screen` and `native-input` features on Linux need: `libwayland-dev libpipewire-0.3-dev
+the thesis checks. The first target platform is Windows 11 x64 (ADR-0008). The interim
+`screen` and `native-input` features (`xcap`, `enigo`) on Linux need: `libwayland-dev libpipewire-0.3-dev
 libgbm-dev libegl1-mesa-dev libxcb1-dev libxrandr-dev libdbus-1-dev clang`.
 
 ## 7. Git workflow
@@ -200,11 +206,13 @@ Do not bypass them with `--no-verify` unless the PR says why.
 ## 9. Decisions already made (do not re-litigate without a new ADR)
 
 See `docs/adr/README.md`. ADR-0001..0012 come from the thesis; the project owner accepted
-them on 2026-10-14. ADR-0013 and 0014 are accepted too.
+them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015 is proposed and awaits the
+owner's approval.
 Highlights: Rust runtime with independent oracles (0001), MCP over stdio with explicit
 profiles (0002), conservative spatial fusion with IoC (0003), masked open-set icon cache
 (0004), persistent tracking instead of cell hashes (0005), transactional snapshots (0006),
 fail-closed actuation and honest simulation (0007), Windows 11 first (0008), models and
 licences chosen in the S0 spike (0009), performance budgets subject to measurement (0010),
 modular monolith with adaptive incrementality (0011), data minimisation (0012), bilingual
-documentation (0013) and the hexagonal crate layout (0014).
+documentation (0013), the hexagonal crate layout (0014) and the MCP transport on `rmcp` wire
+types with a bounded message loop (0015).

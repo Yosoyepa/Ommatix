@@ -36,7 +36,7 @@ mediante MCP*. Su dossier de ingeniería e investigación es la línea base de e
 | Seguridad, protocolo de evaluación, runbook, referencias | capítulos 08–12 |
 | 32 escenarios Gherkin (BDD-01..32) y matrices de trazabilidad | [`features/`](docs/thesis/features), [`matrices/`](docs/thesis/matrices) |
 | Oráculo de referencia en Python (48 pruebas) y validador del paquete | [`referencia_ejecutable/`](docs/thesis/referencia_ejecutable) |
-| Decisiones de arquitectura ADR-0001..0014, en inglés con resumen en español | [`docs/adr/`](docs/adr/README.md) |
+| Decisiones de arquitectura ADR-0001..0015, en inglés con resumen en español | [`docs/adr/`](docs/adr/README.md) |
 
 ## Cómo funciona
 
@@ -64,15 +64,22 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
 
 - `docs/thesis/` contiene el dossier consolidado. Su oráculo (48/48) y su validador corren en
   la integración continua.
-- `src/` contiene un prototipo escrito al arrancar el repositorio, antes de consolidar el
-  dossier. Comparte la arquitectura (Rust, crates hexagonales, MCP por stdio, dry-run por
-  defecto, reloj inyectado) pero no el pipeline: tiene un detector de color plano sin OCR,
-  celdas con hash, una escena mutable y siete herramientas MCP que devuelven coordenadas.
-  Las etapas de abajo lo reemplazan. La
-  [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla las
-  diferencias.
-- El núcleo de la tesis de S1 (algoritmos 1 y 2, staging y commit) está en `ommatix-domain`,
-  probado con los casos del oráculo pero aún sin uso en el pipeline en ejecución.
+- `ommatix-domain` contiene el núcleo de la tesis: algoritmo 1 (diff exacto por tiles, plan
+  de regiones, cierre halo), algoritmo 2 (fusión espacial), algoritmo 3A (caché de íconos con
+  rechazo), algoritmo 3B (registro de identidad, comprobaciones de vigencia) y snapshots
+  transaccionales, probado con los casos del oráculo (UT-01..43).
+- `ommatix-application` lo ejecuta como un único motor detrás de los puertos del SDD, y
+  `ommatix-adapter-mcp` sirve el contrato de la tesis (`observe_screen`, `execute_action`,
+  `get_engine_metrics`) por MCP 2026-07-28
+  ([ADR-0015](docs/adr/0015-mcp-transport-on-rmcp-wire-types.md)). Las pruebas de contrato
+  CT-01..10 y los escenarios BDD-01..27 corren en la integración continua. `serve` y `demo`
+  usan este motor.
+- Lo que **todavía no** es real: la pantalla es un escritorio simulado o un fixture, el
+  detector es el buscador de regiones de color plano del arranque (roles `unknown`, sin OCR),
+  la entrada real está apagada por defecto y sin verificar en Windows, y no se ha probado un
+  cliente MCP real. S3 trae DXGI, ONNX Runtime y `SendInput`; S4, las corridas de aceptación.
+  La [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo
+  que falta.
 - Primera plataforma: **Windows 11 x64**, un monitor, DPI de 100/125/150 %
   ([ADR-0008](docs/adr/0008-one-real-platform-first.md), aprobada el 14-oct-2026).
 
@@ -85,11 +92,10 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
   proveedor de ejecución, captura DXGI con stride, compatibilidad del cliente MCP
 - [x] **S1, core geométrico e incremental:** diff exacto por tiles, cierre halo, agrupación
   de renglones, propiedad del texto, staging y commit (UT-01..26, BDD-01..10) en
-  `ommatix-domain`; pruebas del oráculo portadas a Rust. Se conectan al pipeline en
-  ejecución en S2–S3
-- [ ] **S2, identidad, caché y contrato:** registro temporal con tombstones, caché de íconos,
-  contrato MCP con `rmcp`, dry run honesto (UT-27..43, CT). Hecho: el caché de íconos y el
-  registro de identidad en `ommatix-domain` (UT-27..43); pendiente: el contrato MCP
+  `ommatix-domain`; pruebas del oráculo portadas a Rust
+- [x] **S2, identidad, caché y contrato:** registro temporal con tombstones, caché de íconos
+  (UT-27..43, S2a); el motor, los puertos del SDD y el contrato MCP con `rmcp` con dry run
+  honesto (CT-01..10, BDD-11..27, S2b)
 - [ ] **S3, adaptadores reales y bucle de acción en Windows 11:** DXGI, ONNX Runtime,
   `SendInput`, política, parada y verificación del efecto; se retiran los adaptadores de
   macOS y X11 del arranque
@@ -106,39 +112,80 @@ comprobaciones de la tesis.
 pip install -r docs/thesis/requirements-validacion.txt
 cd docs/thesis && python referencia_ejecutable/run_tests.py && python validar_paquete.py && cd -
 
-# Prototipo del arranque
-cargo run -- demo                       # sesión de escritorio con guion, una línea por frame
-cargo run -- serve --source sim         # servidor MCP sobre un escritorio simulado interactivo
-cargo run --features screen -- serve --source screen   # pantalla real, entrada en dry-run
+# El motor
+cargo run -- demo                       # observa y actúa sobre el escritorio simulado, impreso
+cargo run -- serve                      # servidor MCP por stdio sobre el escritorio simulado
+cargo run -- serve --config ommatix.toml   # lo mismo, con un archivo de configuración
 ```
 
-La entrada del prototipo es dry-run salvo que se compile con `native-input` y se arranque con
-`--source screen --input native`. Sus herramientas MCP (`perceive`, `list_elements`,
-`element_at`, `elements_in_rect`, `click`, `type_text`, `press_key`) son el contrato del
-arranque; S2 las reemplaza por el contrato de la tesis: `observe_screen`, `execute_action` y
-`get_engine_metrics`.
+El archivo de configuración tiene la forma de
+[`docs/thesis/plantillas/configuracion_mvp.toml`](docs/thesis/plantillas/configuracion_mvp.toml)
+(`[engine]`, `[mcp]`, `[safety]`, …); sin él se aplican los valores iniciales de la tesis.
+Fuentes: el escritorio simulado (`sim`, por defecto), un directorio de frames PNG (`images`) o
+la pantalla real (`screen`, feature de compilación `screen`). La entrada es `dry-run` (por
+defecto) o `native` (feature `native-input`), y `native` exige además la fuente `screen` y
+`actuation_enabled = true` en `[safety]`. Aun así, cada acción es un dry run salvo que el
+agente envíe `dry_run: false`. El perfil MCP legacy 2025-11-25 sólo se sirve con
+`[mcp] legacy_enabled = true` o la opción equivalente de la línea de órdenes.
+
+El servidor MCP expone tres herramientas, con los schemas JSON del dossier:
+
+| Herramienta | Hace |
+|---|---|
+| `observe_screen` | Observa la pantalla y devuelve una página del snapshot nuevo: `session_id`, `snapshot_id`, `geometry_epoch`, elementos con `target_id`, `revision`, rol, etiqueta y accionabilidad, nunca coordenadas; `query`, `limit` y un `cursor` atado al snapshot |
+| `execute_action` | `click`, `type` o `scroll` sobre un `target_id` en una revisión esperada; dry run por defecto; devuelve `simulated`, `rejected`, `input_delivered`, `effect_observed` o `indeterminate` |
+| `get_engine_metrics` | Modo, observaciones, acciones rechazadas y entregadas, regiones pendientes, si hay modelos cargados |
+
+Los errores del dominio vuelven como resultados de herramienta con `isError: true`, un
+`code`, `retryable` y un `next_step`; los tiempos por etapa viajan en el `_meta` del resultado,
+bajo `io.ommatix/timings`.
 
 ## Estructura del repositorio
 
 ```text
 src/                       workspace de Cargo (monolito modular, ADR-0014)
-├── domain/                ommatix-domain        núcleo puro, sin I/O
-├── application/           ommatix-application   casos de uso y traits de los puertos
+├── domain/                ommatix-domain        núcleo de la tesis, sin I/O: incremental,
+│                                                fusion, appearance, identity, snapshot
+├── application/           ommatix-application   puertos del SDD, caso de uso Engine, tipos del contrato
 ├── adapters/
-│   ├── capture/           ommatix-adapter-capture  captura de frames
-│   ├── vision/            ommatix-adapter-vision   detección (y OCR, desde S3)
-│   ├── input/             ommatix-adapter-input    entrada del SO
-│   ├── sim/               ommatix-adapter-sim      escritorio simulado para fixtures deterministas
-│   └── mcp/               ommatix-adapter-mcp      servidor MCP por stdio (adaptador conductor)
-├── app/                   ommatix               raíz de composición y binario CLI
-└── acceptance/            ommatix-acceptance    escenarios Gherkin ejecutables
+│   ├── capture/           ommatix-adapter-capture  FrameCapturer: guion, frames PNG, pantalla
+│   ├── vision/            ommatix-adapter-vision   VisionDetector, TextRecognizer (modelos en S3)
+│   ├── input/             ommatix-adapter-input    OsActuator: dry run, entrada nativa
+│   ├── sim/               ommatix-adapter-sim      escritorios simulado y de fixtures (los cuatro
+│   │                                               puertos de píxeles y entrada) para pruebas deterministas
+│   └── mcp/               ommatix-adapter-mcp      servidor MCP por stdio (adaptador conductor),
+│                                                   CT-01..10 en tests/
+├── app/                   ommatix               raíz de composición y binario CLI (serve, demo)
+└── acceptance/            ommatix-acceptance    ejecuta los escenarios de la tesis (tests/thesis.rs)
 docs/
-├── thesis/                el dossier de la tesis: capítulos, contratos, matrices, oráculo
+├── thesis/                el dossier: capítulos 00–12 en su raíz, contratos/, features/,
+│                          matrices/, plantillas/, diagramas/, fuentes/, oráculo
 ├── adr/                   registros de decisiones (los del arranque en adr/bootstrap/)
 ├── architecture/          visión general (EN/ES)
-├── diagrams/              diagramas Mermaid
+├── diagrams/              diagramas Mermaid, etiquetas en inglés
 └── reviews/               revisiones de código: hallazgo, corrección, prueba de regresión
 ```
+
+Cómo se reparten los componentes del SDD del dossier
+([capítulo 02 §2.3](docs/thesis/02_SDD_ARQUITECTURA_MVP.md)) entre los crates:
+
+| Componente del SDD | Dónde |
+|---|---|
+| MCP Adapter | `ommatix-adapter-mcp` |
+| Observation Coordinator, Policy & Action Gate | `Engine` en `ommatix-application` |
+| Spatial Fusion, Temporal Registry | `ommatix-domain` (`fusion`, `identity`), dirigidos por el `Engine` |
+| Icon Resolver | `ommatix-domain` (`appearance`); entra en la observación del `Engine` con los modelos de S3 |
+| Capture Provider | `ommatix-adapter-capture` (`FrameCapturer`) |
+| Perception Provider | `ommatix-adapter-vision` (`VisionDetector`, `TextRecognizer`) |
+| OS Actuator | `ommatix-adapter-input` (`OsActuator`) |
+| Effect Verifier | la nueva captura del `Engine` tras la entrega; parcial, se completa en S3 |
+| Telemetry | tiempos por etapa en el `_meta` de MCP; parcial, se completa en S3 |
+
+Y cómo se reparte el paquete del dossier en el repositorio: capítulos, contratos, matrices,
+plantillas (`plantillas/`: configuración y puertos), features, diagramas y oráculo están en
+`docs/thesis/`; sus ADR, en `docs/adr/` en inglés; la edición de lectura (PDF y Word), el
+manifiesto y la conversación original [F0] se conservan fuera del repositorio
+([CHANGELOG 1.0.1](docs/thesis/CHANGELOG.md)).
 
 ## Desarrollo
 

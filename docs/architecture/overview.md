@@ -43,16 +43,16 @@ The SDD defines eleven components ([diagram](../diagrams/components.md)).
 | Component | Responsibility | Contract | Crate |
 |---|---|---|---|
 | MCP Adapter | Validate and route calls; describe the tools | Versioned tool inputs and outputs | `ommatix-adapter-mcp` |
-| Observation Coordinator | Capture, region planning and commit | SnapshotRequest → Snapshot | `ommatix-application` |
+| Observation Coordinator | Capture, region planning and commit | SnapshotRequest → Snapshot | `ommatix-application` (`Engine::observe_screen`) |
 | Capture Provider | Pixels, stride, timing, dirty and move rectangles | FrameLease | `ommatix-adapter-capture` |
 | Perception Provider | Detector, OCR and image transforms | Region → RawEvidence | `ommatix-adapter-vision` |
 | Spatial Fusion | Containment, lines, labels and relations | RawEvidence → Candidates | `ommatix-domain` |
 | Icon Resolver | Contextual lookup with rejection | CropDescriptor → LabelEvidence | `ommatix-domain` |
 | Temporal Registry | IDs, revisions and retirement | Candidates + Snapshot → Tracks | `ommatix-domain` |
-| Policy & Action Gate | Freshness, permissions and preconditions | ActionRequest → Permit or Reject | `ommatix-application` |
+| Policy & Action Gate | Freshness, permissions and preconditions | ActionRequest → Permit or Reject | `ommatix-application` (`Engine::execute_action`) |
 | OS Actuator | Event injection and delivery count | ValidatedAction → DeliveryReceipt | `ommatix-adapter-input` |
-| Effect Verifier | Check an expected effect, or report uncertainty | Before and after → Verification | `ommatix-application` |
-| Telemetry | Metrics and audit without sensitive text | Events and spans | Port in `ommatix-application`, plus an adapter |
+| Effect Verifier | Check an expected effect, or report uncertainty | Before and after → Verification | `ommatix-application`: re-capture after delivery (partial; S3) |
+| Telemetry | Metrics and audit without sensitive text | Events and spans | `get_engine_metrics` and stage timings in MCP `_meta` (partial; S3) |
 
 The core reaches the outside world only through the ports `FrameCapturer`, `VisionDetector`,
 `TextRecognizer`, `OsActuator`, `Clock` and `PolicyStore`, so every adapter can be replaced by
@@ -120,14 +120,22 @@ unless the agent sets it to false, and even then the local consent and allowlist
 [Thesis chapter 07](../thesis/07_CONTRATOS_MCP_Y_ERRORES.md) and the JSON schemas in
 [`docs/thesis/contratos/`](../thesis/contratos/README.md) define it:
 
-- **Profiles:** MCP 2026-07-28 through the `rmcp` SDK (`server/discover`, no `initialize`,
-  version and capabilities in `_meta`); 2025-11-25 is opt-in
-  ([ADR-0002](../adr/0002-mcp-stdio-with-explicit-profiles.md)).
+- **Profiles:** MCP 2026-07-28 (`server/discover`, no `initialize`, version and capabilities
+  in `_meta`); 2025-11-25 is opt-in
+  ([ADR-0002](../adr/0002-mcp-stdio-with-explicit-profiles.md)). A connection locks onto
+  the profile of its first selecting request and never mixes the two rule sets.
+- **Transport:** `rmcp` 3.5.1 wire types with the adapter's own bounded message loop, because
+  `rmcp`'s service loop has no size limit, closes the connection on early notifications, lets
+  profiles mix and drops unparsable input silently
+  ([ADR-0015](../adr/0015-mcp-transport-on-rmcp-wire-types.md)).
 - **Tools:** `observe_screen` (query, paging, no coordinates), `execute_action` (`click`,
-  `type`, `scroll`) and `get_engine_metrics`.
+  `type`, `scroll`) and `get_engine_metrics`, described with the dossier's schemas.
 - **Errors** carry a code (`STALE_SNAPSHOT`, `STALE_TARGET`, `AMBIGUOUS_TARGET`,
-  `POLICY_DENIED`, `REQUEST_CONFLICT` and others) and a `next_step` such as `observe_again` or
-  `operator_review`. Messages are limited to 64 KiB.
+  `POLICY_DENIED`, `REQUEST_CONFLICT` and others), `retryable` and a `next_step` such as
+  `observe_again` or `operator_review`; they are tool results with `isError: true`.
+  Malformed messages, unknown methods or tools and schema-invalid arguments (`-32602`) are
+  JSON-RPC errors. Messages are limited to 64 KiB in both directions. Stage timings go in
+  the result's `_meta` (`io.ommatix/timings`), never in `structuredContent`.
 
 ## Quality attributes
 
@@ -142,29 +150,42 @@ unless the agent sets it to false, and even then the local consent and allowlist
 
 ## Where the code is today
 
-Most of the code in `src/` was written while the repository was bootstrapped, before the
-thesis was consolidated. It already follows the crate layout, the injected clock, stdout
-reserved for MCP and dry-run input by default, but not the thesis pipeline.
+Since S2b the running binary is the thesis engine. `serve` and `demo` build one `Engine`
+(`ommatix-application`) over the SDD ports and, for `serve`, the MCP adapter in front of it.
+The bootstrap prototype's use cases, its ports (`FrameSource`, `ElementDetector`,
+`InputController`), its seven coordinate-based MCP tools and its Gherkin features are retired;
+its archived decisions stay in [`docs/adr/bootstrap/`](../adr/bootstrap/README.md).
 
-S1 added the thesis core to `ommatix-domain`, next to the prototype: `incremental`
-(Algorithm 1: exact tile diff, region plan, halo closure, full-refresh fallback), `snapshot`
-(staging and atomic commit, pending dirty tiles, degraded state) and `fusion` (Algorithm 2:
-IoC ownership, reading order, external labels, abstention, actionability). They are tested
-(UT-01..26, BDD-01..10) but not wired into the running pipeline yet; that happens when S2
-and S3 replace the prototype's use case and adapters.
+**`observe_screen`** captures a frame, plans regions against the last committed base
+(Algorithm 1), hands only the planned regions to the detector and the recogniser, keeps the
+evidence outside them, fuses (Algorithm 2), tracks identities (Algorithm 3B) and stages and
+commits the snapshot. A failed stage publishes nothing, keeps the planned tiles pending and
+blocks actions. Pages are filtered by `query`, redacted unless the local policy allows values,
+and bound to their snapshot by the cursor.
 
-| Area | Thesis | Prototype in `src/` | Replaced in |
+**`execute_action`** checks the arguments, looks the `request_id` up in a bounded
+deduplication journal (FNV-1a hash of the canonical arguments, so typed text is never stored;
+same ID with other arguments is `REQUEST_CONFLICT`), then checks session, geometry epoch,
+snapshot, target, revision and actionability strictly against the published snapshot. A dry
+run (the default) is `simulated`. Live input needs the operator's policy
+(`actuation_enabled`, not stopped) **and** a live actuator; otherwise `POLICY_DENIED` with
+nothing delivered. A delivery receipt whose inserted events match the submitted ones is
+`input_delivered`; anything else is `indeterminate`. An expected `visual_change` is verified
+by a fresh capture compared with the committed base (`effect_observed` or `indeterminate`);
+the other effects are reported `indeterminate` until S3 can check them.
+
+| Area | Thesis | Today | Completed in |
 |---|---|---|---|
-| Change detection | Exact 64×64 tiles against the committed base, halo closure with budget | Hashed 32 px cells against the previous frame, context-margin expansion | Core in S1; wired in S2–S3 |
-| Fusion | IoC ownership, reading order, external labels with abstention | None (no text) | Core in S1; wired in S3 with OCR |
-| Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | Flat-colour region detector, no text, every element a `blob` | S0, S3 |
-| State | Immutable snapshots, staging, atomic commit, geometry epoch | One mutable scene | Core in S1; wired in S2 |
-| Identity | Session IDs, revisions, tombstones, one-to-one matching with abstention | Monotonic IDs matched by IoU | Core in S2 (`identity`, `appearance`); wired with the contract |
-| Agent contract | `observe_screen`, `execute_action`, `get_engine_metrics`; no coordinates | Seven tools that expose coordinates; MCP 2025-06-18 | S2 |
-| Platform | Windows 11 x64: DXGI and `SendInput` | `xcap` and `enigo` on macOS, Linux X11 and Windows at 100 % | S3 |
+| Change detection, fusion, identity, snapshots | Algorithms 1, 2, 3B; transactional commit | Implemented in `ommatix-domain` and run by the `Engine` | S1–S2 (done) |
+| Icon cache | Algorithm 3A in the observation | Implemented in `ommatix-domain` (`appearance`), not yet in the observation: no detector reports text-less icons | S3 |
+| Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | Flat-colour region detector (roles `unknown`), no OCR (`NullTextRecognizer`); the simulated desktops report ground truth | S0, S3 |
+| Agent contract | Ommatix 1.0 over MCP 2026-07-28; 2025-11-25 opt-in | Implemented (CT-01..10); not yet tested against a real client | S0/S3 for the client |
+| Action gate | Freshness, policy, allowlist, focus, stop | Freshness, policy and stop; `allowed_applications` not enforced (no foreground-window evidence yet); no focus check | S3 |
+| Effect verification | Focus, value, scroll and visual postconditions | Visual change by re-capture only | S3 |
+| Telemetry | Metrics and audit without sensitive text | `get_engine_metrics`; stage timings in `_meta` | S3 |
+| Platform | Windows 11 x64: DXGI and `SendInput` | Simulated and fixture desktops; `xcap` screen capture and `enigo` input behind build features | S3 |
 
-The prototype's Gherkin features in `src/acceptance/features/` and its archived decisions in
-[`docs/adr/bootstrap/`](../adr/bootstrap/README.md) describe it until it is replaced. The
-thesis scenarios (BDD-01..32) stay in [`docs/thesis/features/`](../thesis/features), where the
-dossier's traceability matrix expects them; `src/acceptance/tests/thesis.rs` runs the ones
-each stage makes executable (BDD-01..10 since S1).
+The thesis scenarios (BDD-01..32) stay in [`docs/thesis/features/`](../thesis/features),
+where the dossier's traceability matrix expects them; `src/acceptance/tests/thesis.rs` runs
+BDD-01..27: BDD-01..10 and BDD-13..21 on the domain core, BDD-11, 12 and 22..27 through the
+engine and the MCP adapter over the simulated and fixture desktops. BDD-28..32 wait for S3.
