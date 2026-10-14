@@ -28,6 +28,15 @@ pub trait ElementDetector: Send + Sync {
     fn name(&self) -> &'static str;
 
     fn detect(&self, frame: &Frame, region: Rect) -> Result<Vec<Detection>, PortError>;
+
+    /// How far, in pixels, the detector's grouping reaches: things at most this far apart
+    /// may be reported as one element (glyphs grouped into words). The engine re-analyses
+    /// every element within this distance of a changed region together with it, so the
+    /// result never depends on what changed before. Elements touching a region (0 px) are
+    /// always re-analysed.
+    fn context_margin(&self) -> u32 {
+        0
+    }
 }
 
 /// Performs input on the desktop (mouse, keyboard).

@@ -1,9 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
-use crate::{
-    Detection, DomainError, Element, ElementId, Point, Rect, SpatialIndex, merge_overlapping,
-};
+use crate::{Detection, DomainError, Element, ElementId, Point, Rect, SpatialIndex, merge_nearby};
 
 /// What changed in the scene after applying one frame's detections.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -127,24 +125,34 @@ impl Scene {
 
     /// Turns changed areas into the regions that must be re-analysed.
     ///
-    /// Every element a region touches is absorbed whole, so detectors see complete
-    /// elements, **except** elements that strictly contain the region (a window around a
-    /// changed button): they cannot have changed as a whole and stay untouched. Growing and
-    /// merging overlapping regions repeat until nothing changes, which guarantees that
-    /// every element intersecting an output region is either inside it or strictly
-    /// contains it. Output is sorted.
-    pub fn expand_regions(&self, regions: &[Rect]) -> Vec<Rect> {
-        let mut out = merge_overlapping(regions.to_vec());
+    /// `margin` is how far the detector's grouping reaches (its context margin, declared
+    /// by the application's `ElementDetector` port): an element at most `margin` pixels
+    /// from a region (touching it, at 0) could be reported together with what is inside
+    /// it, so it is re-analysed too.
+    ///
+    /// Every element within reach of a region is absorbed whole, so detectors see complete
+    /// elements, **except** elements that enclose the region, i.e. hold it in their interior
+    /// without sharing an edge (a window around a changed button): their outline did not
+    /// change, so neither did their bounds. Growing and merging regions within `margin` of
+    /// each other repeat until nothing changes, which guarantees that every element within
+    /// `margin` of an output region is either inside it or encloses it. Output is sorted.
+    pub fn expand_regions(&self, regions: &[Rect], margin: u32) -> Vec<Rect> {
+        let reach = margin.saturating_add(1);
+        let mut out = merge_nearby(regions.to_vec(), margin);
         loop {
             let mut grown = false;
             for region in &mut out {
                 loop {
                     let absorb: Vec<Rect> = self
                         .index
-                        .query_rect(region)
+                        .query_rect(&region.inflate(reach))
                         .into_iter()
                         .map(|id| self.elements[&id].bounds)
-                        .filter(|b| !region.contains_rect(b) && !strictly_contains(b, region))
+                        .filter(|b| {
+                            b.gap(region) <= margin
+                                && !region.contains_rect(b)
+                                && !encloses(b, region)
+                        })
                         .collect();
                     if absorb.is_empty() {
                         break;
@@ -156,7 +164,7 @@ impl Scene {
                 }
             }
             let count = out.len();
-            out = merge_overlapping(out);
+            out = merge_nearby(out, margin);
             if !grown && out.len() == count {
                 return out;
             }
@@ -267,8 +275,13 @@ impl Scene {
     }
 }
 
-fn strictly_contains(outer: &Rect, inner: &Rect) -> bool {
-    outer != inner && outer.contains_rect(inner)
+/// `inner` lies in the interior of `outer`: inside it and sharing none of its edges, so
+/// `outer`'s outermost rows and columns are not part of `inner`.
+fn encloses(outer: &Rect, inner: &Rect) -> bool {
+    outer.x < inner.x
+        && outer.y < inner.y
+        && inner.right() < outer.right()
+        && inner.bottom() < outer.bottom()
 }
 
 #[cfg(test)]
@@ -353,7 +366,7 @@ mod tests {
     fn expand_regions_covers_touched_elements_and_merges() {
         let mut s = scene();
         s.apply(1, &[Rect::new(0, 0, 200, 200)], &[blob(10, 10, 100, 20)]);
-        let out = s.expand_regions(&[Rect::new(0, 0, 16, 16), Rect::new(96, 16, 16, 16)]);
+        let out = s.expand_regions(&[Rect::new(0, 0, 16, 16), Rect::new(96, 16, 16, 16)], 0);
         assert_eq!(out, vec![Rect::new(0, 0, 112, 32)]);
     }
 
@@ -364,7 +377,7 @@ mod tests {
         let c = blob(2, 50, 18, 40);
         s.apply(1, &[Rect::new(0, 0, 200, 200)], &[a, c]);
         // A small change inside A; growing to A would cut C if expansion stopped there.
-        let out = s.expand_regions(&[Rect::new(2, 2, 62, 62)]);
+        let out = s.expand_regions(&[Rect::new(2, 2, 62, 62)], 0);
         assert_eq!(out, vec![Rect::new(2, 2, 62, 88)]);
         assert!(out[0].contains_rect(&c.bounds));
     }
@@ -376,7 +389,7 @@ mod tests {
         let button = blob(100, 100, 80, 30);
         s.apply(1, &[Rect::new(0, 0, 1100, 800)], &[window, button]);
 
-        let regions = s.expand_regions(&[Rect::new(96, 96, 32, 32)]);
+        let regions = s.expand_regions(&[Rect::new(96, 96, 32, 32)], 3);
         assert_eq!(
             regions,
             vec![Rect::new(96, 96, 84, 34)],
@@ -389,8 +402,46 @@ mod tests {
         assert_eq!(s.len(), 2);
     }
 
-    /// After expansion, every element intersecting a region is inside it or strictly
-    /// contains it, on arbitrary scenes.
+    /// Verification N2: a container whose edge lies in the changed area may have moved that
+    /// edge, so it is re-analysed; only a container holding the change in its interior is
+    /// left alone.
+    #[test]
+    fn containers_sharing_an_edge_with_the_change_are_re_detected() {
+        let mut s = scene();
+        let panel = blob(64, 64, 384, 256);
+        s.apply(1, &[Rect::new(0, 0, 640, 480)], &[panel]);
+        // The panel's bottom half turned into background: the change lies inside its old
+        // bounds, but on its left, right and bottom edges.
+        assert_eq!(
+            s.expand_regions(&[Rect::new(64, 192, 384, 128)], 0),
+            vec![panel.bounds]
+        );
+        let inside = Rect::new(96, 96, 32, 32);
+        assert_eq!(s.expand_regions(&[inside], 0), vec![inside]);
+    }
+
+    /// Verification N5: an element the detector could group with something in the region
+    /// (a glyph 2 px away) is re-analysed with it, and so is an element touching it.
+    #[test]
+    fn elements_within_the_detector_margin_are_absorbed() {
+        let mut s = scene();
+        let near = blob(88, 200, 6, 12); // ends 2 px before the changed cell
+        let touching = blob(128, 200, 6, 12); // starts on the cell's right edge
+        s.apply(1, &[Rect::new(0, 0, 320, 320)], &[near, touching]);
+        let cell = Rect::new(96, 192, 32, 32);
+        assert_eq!(
+            s.expand_regions(&[cell], 0),
+            vec![Rect::new(96, 192, 38, 32)],
+            "touching only"
+        );
+        assert_eq!(
+            s.expand_regions(&[cell], 3),
+            vec![Rect::new(88, 192, 46, 32)]
+        );
+    }
+
+    /// After expansion, every element within the margin of a region is inside it or
+    /// encloses it, and regions are farther apart than the margin, on arbitrary scenes.
     #[test]
     fn expansion_invariant_holds_on_random_scenes() {
         let mut rng = 0x9e37_79b9_7f4a_7c15u64;
@@ -409,18 +460,21 @@ mod tests {
             let changes: Vec<Rect> = (0..5)
                 .map(|_| Rect::new(next(500), next(500), 1 + next(64), 1 + next(64)))
                 .collect();
-            let regions = s.expand_regions(&changes);
+            let margin = round % 4;
+            let regions = s.expand_regions(&changes, margin);
             for r in &regions {
-                for e in s.elements_in(r) {
-                    assert!(
-                        r.contains_rect(&e.bounds) || strictly_contains(&e.bounds, r),
-                        "round {round}: {e:?} cut by {r:?}"
-                    );
+                for e in s.elements() {
+                    if e.bounds.gap(r) <= margin {
+                        assert!(
+                            r.contains_rect(&e.bounds) || encloses(&e.bounds, r),
+                            "round {round}: {e:?} cut by {r:?}"
+                        );
+                    }
                 }
             }
             for (i, a) in regions.iter().enumerate() {
                 for b in &regions[i + 1..] {
-                    assert!(!a.intersects(b), "regions overlap");
+                    assert!(a.gap(b) > margin, "regions within the margin");
                 }
             }
             for c in &changes {

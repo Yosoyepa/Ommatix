@@ -5,6 +5,7 @@
 //! region growing over the flat colours GUIs are drawn with (ADR-0010). Learned
 //! detectors (OCR, widget classifiers) are future adapters behind the same port.
 
+mod border;
 mod flat_region;
 mod forest;
 mod grouping;

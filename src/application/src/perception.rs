@@ -149,7 +149,7 @@ impl PerceptionEngine {
             vec![screen]
         } else {
             self.scene
-                .expand_regions(&pending.change().regions)
+                .expand_regions(&pending.change().regions, self.detector.context_margin())
                 .into_iter()
                 .map(|r| r.clip(&screen))
                 .filter(|r| !r.is_empty())

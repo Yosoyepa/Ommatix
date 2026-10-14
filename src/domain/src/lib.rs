@@ -22,7 +22,6 @@ mod grid;
 mod region;
 mod scene;
 mod spatial_index;
-mod union_find;
 
 pub use action::{Action, Key, MouseButton};
 pub use change::{ChangeTracker, FrameChange, PendingChange};
@@ -32,6 +31,6 @@ pub use error::DomainError;
 pub use frame::Frame;
 pub use geometry::{Point, Rect};
 pub use grid::{CellCoord, GridSignature, GridSpec};
-pub use region::{merge_dirty_cells, merge_overlapping};
+pub use region::{merge_dirty_cells, merge_nearby};
 pub use scene::{Scene, SceneDelta};
 pub use spatial_index::SpatialIndex;

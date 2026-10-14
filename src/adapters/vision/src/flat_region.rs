@@ -1,8 +1,9 @@
 use ommatix_application::{ElementDetector, PortError};
 use ommatix_domain::{Detection, ElementKind, Frame, Rect};
 
+use crate::border::FrameBorder;
 use crate::grouping::{drop_nested_duplicates, merge_glyphs};
-use crate::segment::{Segment, distance, segments};
+use crate::segment::{Segment, segments};
 
 const NAME: &str = "flat-region";
 
@@ -40,8 +41,10 @@ impl Default for FlatRegionConfig {
 ///    `tolerance` (union-find, near-linear in the area).
 /// 2. **Background**: a region is background when it blends into the pixels just
 ///    outside the analysed area (it is the backdrop, or a container around the area), or
-///    when it touches the frame border and looks like the region that covers most of
-///    that border (the wallpaper, a maximised window).
+///    when it reaches the frame's own border on a flat stretch covering at least half of
+///    a screen edge, or has the colour of such a stretch: the wallpaper, a maximised or
+///    snapped window, a taskbar, a dock. Stretches are measured on the whole frame border,
+///    so the answer does not depend on the analysed area.
 /// 3. **Group**: drop noise, drop boxes that merely repeat a bigger box, and group
 ///    glyph-sized boxes into words.
 ///
@@ -68,6 +71,11 @@ impl ElementDetector for FlatRegionDetector {
         NAME
     }
 
+    /// Glyphs up to `merge_gap` apart are grouped into one word.
+    fn context_margin(&self) -> u32 {
+        self.config.merge_gap
+    }
+
     fn detect(&self, frame: &Frame, region: Rect) -> Result<Vec<Detection>, PortError> {
         let area = region.clip(&frame.bounds());
         if area.is_empty() {
@@ -80,11 +88,10 @@ impl ElementDetector for FlatRegionDetector {
             ));
         }
         let c = &self.config;
-        let segments = segments(frame, area, c.tolerance);
-        let backdrop = dominant_border_colour(&segments);
-        let boxes = segments
+        let border = FrameBorder::new(frame, c.tolerance);
+        let boxes = segments(frame, area, c.tolerance, &border)
             .iter()
-            .filter(|s| s.pixels >= c.min_pixels && !is_background(s, backdrop, c.tolerance))
+            .filter(|s| s.pixels >= c.min_pixels && !is_background(s, &border, c.tolerance))
             .map(|s| s.bounds)
             .collect();
         let boxes = drop_nested_duplicates(boxes, c.nested_inset);
@@ -100,25 +107,10 @@ impl ElementDetector for FlatRegionDetector {
     }
 }
 
-/// Mean colour of the segment covering most of the frame's own border, if the area
-/// reaches it (ties go to the segment found first).
-fn dominant_border_colour(segments: &[Segment]) -> Option<[u8; 3]> {
-    segments
-        .iter()
-        .filter(|s| s.frame_border_pixels > 0)
-        .reduce(|best, s| {
-            if s.frame_border_pixels > best.frame_border_pixels {
-                s
-            } else {
-                best
-            }
-        })
-        .map(|s| s.mean)
-}
-
-fn is_background(s: &Segment, backdrop: Option<[u8; 3]>, tolerance: u8) -> bool {
+fn is_background(s: &Segment, border: &FrameBorder, tolerance: u8) -> bool {
     s.continues_outside
-        || (s.frame_border_pixels > 0 && backdrop.is_some_and(|b| distance(s.mean, b) <= tolerance))
+        || s.on_border_surface
+        || (s.touches_frame_border && border.has_surface_colour(s.mean, tolerance))
 }
 
 #[cfg(test)]
