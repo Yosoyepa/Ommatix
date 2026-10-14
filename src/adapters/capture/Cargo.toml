@@ -1,0 +1,28 @@
+[package]
+name = "ommatix-adapter-capture"
+description = "Ommatix driven adapters for the FrameSource port: synthetic scripts, PNG sequences and live screen capture."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[features]
+default = ["images"]
+## Read frames from a directory of PNG files.
+images = ["dep:image"]
+## Live screen capture through `xcap` (needs platform libraries, see README).
+screen = ["dep:xcap"]
+
+[dependencies]
+ommatix-application = { workspace = true }
+ommatix-domain = { workspace = true }
+image = { workspace = true, optional = true }
+xcap = { workspace = true, optional = true }
+
+[dev-dependencies]
+image = { workspace = true }
+
+[lints]
+workspace = true

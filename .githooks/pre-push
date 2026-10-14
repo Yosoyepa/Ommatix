@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+# Ommatix pre-push: full test suite.
+set -eu
+echo "ommatix pre-push: cargo test --workspace"
+cargo test --workspace --quiet

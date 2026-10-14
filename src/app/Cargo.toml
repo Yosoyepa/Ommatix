@@ -1,0 +1,29 @@
+[package]
+name = "ommatix"
+description = "Ommatix: Spatial Indexing and Incremental Perception for GUI Agents. Composition root and CLI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ommatix"
+path = "src/main.rs"
+
+[features]
+default = []
+## Enable live screen capture (`--source screen`).
+screen = ["ommatix-adapter-capture/screen"]
+
+[dependencies]
+ommatix-adapter-capture = { workspace = true }
+ommatix-adapter-mcp = { workspace = true }
+ommatix-adapter-vision = { workspace = true }
+ommatix-application = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+
+[lints]
+workspace = true
