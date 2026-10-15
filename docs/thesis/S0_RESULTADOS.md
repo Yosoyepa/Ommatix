@@ -503,3 +503,164 @@ Milisegundos. El peor p95 del núcleo, por corrida, fue de 5,27 a 5,40 ms en la 
 5. **Condiciones que no coinciden con la sesión B:** dos monitores conectados (la sesión pide uno; sólo se captura el principal) y notificaciones activadas. Se dejaron como estaban; los números las incluyen.
 
 **Reproducir.** Desde la raíz del repositorio, con los dos ejecutables compilados (`S4_INSTALACION_Y_REVERSION.md` §3): `python tools/perf/soak.py --config %LOCALAPPDATA%\Ommatix\ommatix.rnf05.directml.toml --minutes 120 --out soak-120.json`. El informe bruto se guarda fuera del repositorio, con el commit y la máquina; no lleva datos de pantalla (ADR-0012). Las pruebas de la herramienta, sobre dobles: `python -m unittest discover -s tools/perf -p "test_*.py"`.
+
+## 13. INC-02: B0 frente a B1 en vivo y PERF-01 sin carga (1.0.56)
+
+**Qué se midió.** El protocolo congelado del [§9.9](09_EVALUACION_EXPERIMENTAL.md): B0 (refresco completo, `[engine] experimental_full_frame = true`) frente a B1 (incremental) sobre la aplicación de prueba propia (`tools/s4/testapp`), con el mismo binario, los mismos pesos y la misma configuración salvo esa clave, en tres casos: `incr1` (una etiqueta animada, una región), `incr2` (dos etiquetas, dos regiones) y `full` (un velo sobre toda la ventana, refresco completo). **Entrada: ninguna.** Ni el comando ni la herramienta envían entrada; la aplicación se anima sola (pidió el primer plano al arrancar) y `demo` sólo observa y ejecuta una acción en seco. El apartado 13.7 repite, sin carga, la comparación de PERF-01 que quedó pendiente en §11.5.
+
+### 13.1 Condiciones [V]
+
+| Condición | Valor |
+|---|---|
+| Commit medido | `f6d94cd00051548a0a2bdbbdb31d0e79b0ee8535` (`origin/main` tras la PR #43), árbol limpio |
+| Compilación | `cargo build --release --locked -p ommatix --features dxgi,directml,winrt-ocr,uia`; `rustc 1.99.0` (`rust-toolchain.toml`); la aplicación de prueba, `cargo build --release --locked` en `tools/s4/testapp` |
+| `ommatix.exe` (SHA-256) | `d28c89654fcd1e8fe879f7711e1ed0171617c6f3d2e2113f69d34e09c077084f` |
+| `ommatix-testapp.exe` (SHA-256) | `5050596d46bc300fdc9c31d6835af00d470dd5fb9ca12b464d1e66edec29a942` (la misma que en §12) |
+| Configuración B1 (SHA-256) | `2de6a8768374f615b947f62e8b7c9f0f41b618ccd3867b6c47e67c70530ed339` |
+| Configuración B0 (SHA-256) | `e96bbe5ab8394b56256db9f5f0592ace6c01f6a83e5e2a7409ef4b8fab885a57` |
+| Configuración de origen (SHA-256) | `94af2154c74ba93da7500c3c8273ea05654be2b0ee9293e42d560375fecd5298` (`ommatix.rnf05.directml.toml`, la misma que en §12) |
+| Manifiesto del detector (SHA-256) | `f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47` (`models\manifest.rnf05.json`, fijado por la configuración) |
+| Pesos float16 (SHA-256) | `d7a8901db0ae650616ee43f53e6ee8f57a829de54ab8daae431be77556cc0805` (fijado) |
+| Detector y OCR | ONNX Runtime 1.24.4 con DirectML 1.15.4 (`onnxruntime.dll` `e7eedec6…`, `DirectML.dll` `9c9e6d82…`), float16, entrada 1280×1280; OCR de Windows es-ES |
+| Accesibilidad | **Ninguna.** La configuración no tiene `[models] accessibility`, así que vale `none`. §10.4 y las sesiones S4 usaron `uia`; ver 13.8 |
+| Equipo | AMD Ryzen 7 5700X (8 núcleos, 16 hilos), 31,9 GiB; AMD Radeon RX 6700 XT (driver 32.0.21045.5002); Windows 11 Pro, build 26300.9550; plan «Alto rendimiento» |
+| Captura | Salida 0 (1920×1080), `--source dxgi` |
+| Animación | `--animate 30` (etiquetas que avanzan cada 30 ms, en `incr1` e `incr2`) y `--animate-flash 250` (velo cada 250 ms, en `full`): los valores por defecto de la herramienta |
+| Observaciones por proceso | 20. La primera y la segunda no entran en las estadísticas de latencia |
+| Procesos | 40 por variante y caso (240 en total), intercalados en orden rotatorio contra la misma instancia de la aplicación de prueba en cada caso y trozo; cada caso en dos trozos de 20 procesos |
+| Identificadores | Experimento `inc02-b0b1-20261015`; semilla del bootstrap 20261015; 10 000 remuestreos |
+| Fecha y hora | 15 de octubre de 2026, de 05:11 a 05:25 (hora local) |
+
+**Desviaciones del protocolo, declaradas.**
+
+- **B1 no es el archivo del operador tal cual.** Se le añade `experimental_full_frame = false` bajo `[engine]`, que es el valor que el §9.9 fija para B1 y también el valor por defecto. B0 difiere de B1 sólo en el valor de esa clave: es la única diferencia declarada.
+- **Rutas absolutas.** Las tres rutas relativas de `[models]` (manifiesto, ONNX Runtime y DirectML) se escribieron absolutas en ambas copias: una ruta relativa se resuelve respecto al archivo de configuración (`src/app/src/config.rs`), y las copias están fuera del directorio del operador. El cambio es el mismo en las dos.
+- **Ensayo previo.** Antes de medir hubo un ensayo de dos procesos por variante y caso (`inc02-ensayo-20261015`). Comprobó la orden; **se excluye** de todo lo que sigue y no se reutiliza como confirmación.
+
+### 13.2 Ejecución y clases de observación [V]
+
+Los 240 procesos terminaron `ok`: ninguno se descartó por cambio de primer plano, ninguno falló y ninguna observación tuvo error. Cada trozo tiene su identificador de corrida, y la unidad de apareamiento es el par (`run_id`, `sequence_id`).
+
+| Caso | Variante | Primera | Segunda | Cálida (clase) | Inactiva | Error |
+|---|---|---|---|---|---|---|
+| `incr1` | B0 | 40 | 40 | 720 (`full`) | 0 | 0 |
+| `incr1` | B1 | 40 | 40 | 668 (`regions`) | 52 | 0 |
+| `incr2` | B0 | 40 | 40 | 720 (`full`) | 0 | 0 |
+| `incr2` | B1 | 40 | 40 | 720 (`regions`) | 0 | 0 |
+| `full` | B0 | 40 | 40 | 720 (`full`) | 0 | 0 |
+| `full` | B1 | 40 | 40 | 66 (`full`) | 654 | 0 |
+
+B0 analiza todas las observaciones como refresco completo, por construcción (razón `experimental_baseline`). Las inactivas de B1 son las observaciones sin nada que analizar: se cuentan, no se miden, y se reportan aparte en 13.4.
+
+### 13.3 Latencia y comparación apareada [V]
+
+Milisegundos de `total` (de la captura al snapshot publicado). Intervalos de 95 % bootstrap sobre procesos (secuencias), nunca sobre fotogramas.
+
+| Caso | Variante | n cálidas | Mediana [IC 95 %] | p95 [IC 95 %] | Inferencias por observación | Elementos publicados (mediana / p95) |
+|---|---|---|---|---|---|---|
+| `incr1` | B0 | 720 | 89,5 [89,2; 89,9] | 97,5 [95,9; 98,3] | 1 | 85 / 85 |
+| `incr1` | B1 | 668 | 70,8 [70,6; 71,1] | 78,4 [76,8; 80,9] | 1 | 84 / 92 |
+| `incr2` | B0 | 720 | 89,3 [88,9; 89,6] | 96,9 [95,6; 99,1] | 1 | 85 / 86 |
+| `incr2` | B1 | 720 | 134,8 [134,7; 135,0] | 142,5 [139,4; 144,5] | 2 | 67 / 85 |
+| `full` | B0 | 720 | 100,0 [98,9; 100,8] | 109,5 [108,7; 110,6] | 1 | 80 / 84 |
+| `full` | B1 | 66 | 88,6 [87,7; 90,2] | 97,6 [96,7; 97,9] | 1 | 83 / 84 |
+
+Todas las inferencias usan una entrada de `1×3×1280×1280`. En `full`, B1 analizó sólo 66 observaciones en 37 procesos; su mediana y su p95 se apoyan en pocos valores.
+
+**Diferencia apareada por proceso (B1 − B0).** Por proceso se toma la mediana (y el p95) de las cálidas de cada variante; la diferencia es B1 menos B0 (negativa: B1 más rápida); el estimador es la media sobre procesos, con su intervalo bootstrap.
+
+| Caso | Δ de la mediana (ms) [IC 95 %] | Razón B1/B0 [IC 95 %] | Δ del p95 por proceso (ms) [IC 95 %] | Procesos |
+|---|---|---|---|---|
+| `incr1` | −18,6 [−18,9; −18,2] | 0,79 [0,79; 0,80] | −18,0 [−20,3; −15,6] | 40 |
+| `incr2` | +45,8 [45,4; 46,1] | 1,51 [1,51; 1,52] | +46,7 [43,8; 49,7] | 40 |
+| `full` | −9,9 [−11,3; −8,5] | 0,90 [0,89; 0,91] | no interpretable: 1 o 2 observaciones de B1 por proceso | 37 (3 excluidos: sin observaciones cálidas de B1) |
+
+**Control de primera observación** (120 por variante, 40 por caso): B0 91,7 ms, B1 91,8 ms; detección 80,6 y 80,7 ms. La primera observación no difiere.
+
+### 13.4 Tramos y observaciones inactivas [V]
+
+Mediana, por proceso, de cada tramo (ms) en B0 y en B1, y diferencia apareada B1 − B0 con su intervalo. Los tramos concurrentes no se suman; el total se mide directamente (§9.4), así que las medianas de tramos no suman el total.
+
+| Caso | Tramo | B0 | B1 | Δ B1 − B0 [IC 95 %] |
+|---|---|---|---|---|
+| `incr1` | captura | 2,9 | 2,9 | +0,01 [−0,03; 0,05] |
+| `incr1` | planificación | 2,1 | 2,1 | +0,01 [−0,01; 0,02] |
+| `incr1` | detección | 82,7 | 64,3 | −18,4 [−18,7; −18,2] |
+| `incr1` | OCR | 35,9 | 3,2 | −32,6 [−32,7; −32,5] |
+| `incr1` | publicación (`commit`) | 0,26 | 0,25 | −0,004 [−0,008; −0,001] |
+| `incr2` | captura | 2,9 | 3,0 | +0,06 [+0,03; +0,09] |
+| `incr2` | planificación | 2,1 | 2,1 | +0,02 [+0,01; +0,04] |
+| `incr2` | detección | 82,4 | 128,2 | +45,9 [+45,6; +46,2] |
+| `incr2` | OCR | 36,5 | 7,2 | −29,2 [−29,4; −29,1] |
+| `incr2` | publicación (`commit`) | 0,26 | 0,26 | +0,004 [+0,001; +0,008] |
+| `full` | captura | 15,9 | 7,5 | −8,2 [−9,4; −6,9] |
+| `full` | planificación | 1,8 | 0,2 | −1,6 [−1,6; −1,5] |
+| `full` | detección | 80,0 | 80,4 | +0,4 [+0,2; +0,6] |
+| `full` | OCR | 34,2 | 34,2 | +0,2 [−0,2; +0,8] |
+| `full` | publicación (`commit`) | 0,006 | 0,25 | +0,25 [+0,24; +0,26] |
+
+En `incr1` y `incr2` la fusión, el seguimiento y la respuesta difieren de B0 en menos de 0,02 ms.
+
+**Observaciones inactivas de B1 (aparte, no entran en la comparación).** `incr1`: 52 de 720 (7 %), mediana 5,2 ms, p95 5,9 ms. `incr2`: 0. `full`: 654 de 720 (91 %), mediana 14,1 ms, p95 20,1 ms.
+
+### 13.5 Acuerdo entre variantes [V]
+
+Coeficiente de Dice de los multiconjuntos de firmas de elementos, por observación apareada (mismo proceso y mismo número). **Es acuerdo entre dos variantes, no precisión** (§9.5).
+
+| Caso | Dice medio por proceso [IC 95 %] | Observaciones apareadas | Multiconjuntos idénticos |
+|---|---|---|---|
+| `incr1` | 0,968 [0,966; 0,969] | 800 | 0 (0 %) |
+| `incr2` | 0,845 [0,844; 0,847] | 800 | 0 (0 %) |
+| `full` | 0,975 [0,973; 0,976] | 800 | 377 (47 %) |
+
+En `incr1` e `incr2` el texto de la etiqueta animada (`Tic nnnn`) difiere entre dos corridas no sincronizadas, así que cada etiqueta añade una discrepancia y un multiconjunto no puede ser idéntico: la proporción de idénticos no dice nada ahí. En `full`, donde sólo cambia el velo, sí dice algo. **No hay control B0 frente a B0**, así que el desacuerdo de `incr1` mezcla la variante con la animación y no se puede separar.
+
+### 13.6 Lectura
+
+1. **Una región: B1 es más rápida.** En `incr1` la mediana baja de 89,5 a 70,8 ms (−18,6 ms, −21 %). El ahorro es del detector: con una región tarda 64 ms y con el frame completo 83 ms, aunque las dos entradas miden 1280×1280. El OCR baja de 36 a 3 ms, pero corre a la vez que la detección: en las dos variantes la detección es el camino crítico. Por qué una región cuesta menos en el detector no queda establecido: los registros no separan preprocesado, inferencia y postproceso. La hipótesis es que el frame completo se reduce antes de la entrada y el recorte no (§6), pero no está verificada.
+2. **Dos regiones: B1 es más lenta.** En `incr2` la mediana sube de 89,3 a 134,8 ms (+45,8 ms, +51 %). Cada región es una inferencia completa: 128 ms para dos, frente a 82 ms del frame completo. Con el resto de B1 casi constante (6,5 ms) y unos 64 ms por región, la igualdad con el refresco completo cae entre una y dos regiones (≈ 1,3). Es una estimación de dos puntos, no una medida con tres o más regiones. A partir de dos regiones, la incrementalidad tal como está construida no ahorra.
+3. **Refresco completo (control): no hay ventaja de B1.** Con un velo sobre toda la ventana, la detección (80 ms en ambas) y el OCR (34 ms en ambas) cuestan lo mismo. La diferencia de −9,9 ms viene de la captura (−8,2 ms) y de la planificación (−1,6 ms: B0 calcula la diferencia de teselas antes de forzar el refresco, según ADR-0024, y B1 decide por área en 0,25 ms). Ninguna se debe al algoritmo incremental. Además B1 sólo analizó 66 observaciones, las que siguieron a un cambio del velo, así que no es una muestra al azar de las de B0. Por qué la captura de B0 espera más no queda establecido.
+4. **Acuerdo y calidad.** Con dos regiones B1 publica una mediana de 67 elementos frente a 85 de B0: 717 de sus 720 observaciones tienen entre 66 y 69. Con una región la mediana baja de 85 a 84. El registro no guarda cajas, así que no dice qué elementos faltan. El mecanismo está en el código: `merged` (`src/application/src/engine/observe.rs`, líneas 78 a 112) descarta todo control o palabra cuya caja solape una región replanificada, incluido su halo, y sólo conserva lo que la detección del recorte encuentra dentro. Si el recorte no reproduce lo que el frame completo detecta (§10.2), se pierden elementos. Esto no es una medida de precisión, y no se puede atribuir sin las cajas: es el primer punto que hay que investigar antes de llamar equivalente a B1.
+5. **Qué ahorra B1 y qué no.** Ahorra cuando cambia una región, que es el caso de la prueba más sencillo. No ahorra con dos o más regiones en este modelo y esta GPU. Ahorra en las observaciones sin cambio (unos 5 ms, sin detector), pero esas no entran en la comparación de latencia (§9.9, límite 4). La captura, la publicación y la fusión no cambian. B0 paga unos 2 ms de planificación que un refresco de producción por área no paga (punto 3): B0 es una línea de base de experimento, no un modo de producción (ADR-0024).
+6. **RNF-05: sin cambio de estado.** En esta condición (sin accesibilidad, con el manifiesto float16 de §10), el p95 incremental con dos regiones es de 142,5 ms [IC 95 %: 139,4; 144,5] y con una región de 78,4 ms: ambos quedan por debajo de la meta de 150 ms. **No se declara RNF-05 cumplido.** Esta condición no es la de §10, donde con accesibilidad `uia` el p95 de dos regiones fue de 153,0 ms; la accesibilidad forma parte del camino de producto (ADR-0017), y el estado del requisito lo fija el responsable (decisión del 15 de octubre de 2026, [capítulo 03](03_ESPECIFICACION_REQUISITOS.md) RNF-05).
+
+### 13.7 PERF-01 sin carga: `114a020` frente a `f6d94cd` [V]
+
+Cierra en parte el pendiente de §11.5. Tres bloques ABBA (A = `114a020`, antes de #39; B = `f6d94cd`, `main` actual), seis pares: cada bloque es A, B, B, A, y el par 1 es (A, B) y el par 2 es (B, A). Cada corrida es `core_latency` en `--release` (10 000 muestras por situación en el núcleo, 2 000 en `observe_screen`, 200 de calentamiento). `114a020` se midió en un árbol de trabajo temporal, en su propio directorio de compilación. El fichero `core_latency.rs` es el mismo en los dos commits, y el toolchain también. Cada informe registra su commit y un árbol limpio: A `114a020aa27504d87e4d2d1b955ff386da675069`, B `f6d94cd00051548a0a2bdbbdb31d0e79b0ee8535`. Carga de CPU medida antes de cada corrida: entre 2 % y 29 % (media 12 %); ningún `cargo`, `rustc` ni `ommatix` en marcha. Cada corrida duró unos 100 s, de 05:29 a 05:49.
+
+Milisegundos. Mediana de las seis corridas de cada binario (A → B) y diferencia apareada B − A, media de los seis pares, con el intervalo bootstrap sobre pares (seis unidades: un intervalo orientativo) y el número de pares con diferencia positiva.
+
+| Situación | Capa | p50 (A → B) | Δ p50 [IC 95 %] (pares > 0) | p95 (A → B) | Δ p95 [IC 95 %] (pares > 0) |
+|---|---|---|---|---|---|
+| Primera observación | núcleo | 1,482 → 1,534 | +0,053 [+0,051; +0,057] (6/6) | 1,629 → 1,695 | +0,067 [+0,051; +0,085] (6/6) |
+| En caliente, sin cambios | núcleo | 2,835 → 2,885 | +0,047 [+0,037; +0,057] (6/6) | 3,075 → 3,149 | +0,088 [+0,051; +0,131] (6/6) |
+| En caliente, una región | núcleo | 3,093 → 3,116 | +0,019 [−0,005; +0,041] (5/6) | 3,468 → 3,462 | −0,027 [−0,105; +0,041] (2/6) |
+| Primera observación | `observe_screen` | 1,721 → 1,807 | +0,086 [+0,082; +0,092] (6/6) | 1,960 → 2,062 | +0,103 [+0,085; +0,126] (6/6) |
+| En caliente, sin cambios | `observe_screen` | 3,075 → 3,151 | +0,071 [+0,058; +0,091] (6/6) | 3,398 → 3,474 | +0,004 [−0,208; +0,157] (5/6) |
+| En caliente, una región | `observe_screen` | 3,336 → 3,389 | +0,058 [+0,030; +0,086] (6/6) | 3,771 → 3,771 | −0,001 [−0,113; +0,116] (3/6) |
+
+**Lectura.**
+
+- **El desplazamiento de p95 no persiste en esta medición.** El de +0,2 a +0,35 ms bajo carga no aparece: la mayor diferencia de p95 en caliente es +0,09 ms (núcleo, sin cambios), y con una región es −0,03 ms en el núcleo y 0,00 ms en `observe_screen`. Los p95 de una misma corrida varían entre 0,1 y 0,2 ms, por eso la comparación es apareada.
+- **Persiste un desplazamiento pequeño de la mediana**: entre +0,05 y +0,09 ms (2 a 5 %) en la primera observación y en las observaciones sin cambio, con los seis pares en el mismo sentido. El p50 de `observe_screen` en caliente sube 1,6 a 2,5 %, no el 9 % que se vio bajo carga.
+- **RNF-04 se cumple con holgura**: el p95 más alto de las situaciones es 3,8 ms, frente a 10 ms.
+- **La causa no está atribuida.** El residuo es de 50 a 90 µs. Seis pares no distinguen efectos menores de una décima de milisegundo; una comparación de `49ec349` (antes de #41) con `f6d94cd`, o un perfil de muestreo, lo cerraría.
+
+### 13.8 Límites
+
+1. Un equipo, una aplicación sintética (dos etiquetas que cambian, un velo), una GPU y un modelo float16. No es la pantalla de un usuario ni la distribución de aplicaciones reales.
+2. **Sin accesibilidad.** La configuración de origen no tiene `[models] accessibility = "uia"`. §10.4 y las sesiones S4 la usaron; la comparación con §10.4 no es directa por esa razón. Ver 13.9.
+3. En `full`, B1 tiene una o dos observaciones cálidas por proceso: sus medianas y su p95 por proceso no son estables, y la diferencia de `full` no es una ventaja demostrada.
+4. Los intervalos son de procesos (secuencias), nunca de fotogramas. No se publica el p95 por proceso de `full`, y no se publica p99: el número de muestras por proceso no alcanza para colas.
+5. El acuerdo es entre dos variantes que observan pantallas que no coinciden en el tiempo; no es precisión, y no hay control B0 frente a B0.
+6. El registro de observación no guarda cajas, así que no se puede atribuir qué elementos faltan en `incr2`.
+7. El ensayo previo queda fuera de todas las cifras.
+8. Por diseño del protocolo, las observaciones inactivas de B1 no entran en la latencia; su coste se reporta aparte (13.4).
+
+### 13.9 Pendiente y decisiones para el responsable
+
+1. **Repetir B0 y B1 con `[models] accessibility = "uia"`** en ambas copias (sólo esa línea cambia), para comparar con §10.4 y decidir si la configuración de RNF-05 debe llevarla. Es una corrida de unos 20 minutos, con un identificador de experimento nuevo.
+2. **Investigar la pérdida de elementos con dos regiones** (13.6, punto 4). Hacen falta cajas o identificadores de los elementos en el registro de observación; hoy sólo hay firmas.
+3. **Control B0 frente a B0**, para separar el acuerdo de la variante del efecto de la animación.
+4. **Explicar la captura de `full`** (13.6, punto 3) y **atribuir el residuo de PERF-01** (13.7).
+5. **Cosmético:** los registros de observación inactiva escriben `region_area_px` como `-0.0`. No altera ninguna estadística; conviene corregirlo al emitir el registro.

@@ -99,4 +99,18 @@ La diferencia apareada se calcula por proceso: la mediana de `total` de las obse
 
 El acuerdo se calcula por observación apareada (mismo proceso y mismo número): el coeficiente de Dice de los multiconjuntos de firmas de elementos, que vale 1 cuando las dos detecciones coinciden y 0 cuando no comparten ningún elemento. Si los dos conjuntos están vacíos, la observación no se mide. Se informan la media por proceso con su intervalo bootstrap y la proporción de observaciones con multiconjuntos idénticos. Se llama acuerdo (`agreement_dice`), no precisión.
 
-**Límites.** (1) Es un experimento en vivo: la animación avanza con el tiempo, así que dos procesos apareados ven pantallas parecidas, no idénticas, y el acuerdo depende de ese ritmo. (2) Que B0 y B1 coincidan no prueba que ninguna sea correcta (§9.5). (3) La UIA de cada proceso es viva, no un replay. (4) Las observaciones inactivas de B1 no entran en la comparación de latencia; se reportan aparte. (5) Esta sección describe el protocolo; no contiene resultados. La medición la programa el coordinador, con el protocolo congelado y el cupo del responsable.
+**Límites.** (1) Es un experimento en vivo: la animación avanza con el tiempo, así que dos procesos apareados ven pantallas parecidas, no idénticas, y el acuerdo depende de ese ritmo. (2) Que B0 y B1 coincidan no prueba que ninguna sea correcta (§9.5). (3) La UIA de cada proceso es viva, no un replay. (4) Las observaciones inactivas de B1 no entran en la comparación de latencia; se reportan aparte. (5) Esta sección describe el protocolo; sus resultados de la primera ejecución están en el apartado 9.9.1, que no altera el protocolo. La medición la programa el coordinador, con el protocolo congelado y el cupo del responsable.
+
+### 9.9.1 Resultados de la primera ejecución (1.0.56)
+
+Ejecutada el 15 de octubre de 2026 con el protocolo de esta sección, sin cambios: identificador `inc02-b0b1-20261015`, 40 procesos por variante y caso, 20 observaciones por proceso, aplicación de prueba sin entrada. Las desviaciones declaradas (B1 con la clave explícita en `false`, rutas absolutas en ambas copias) están en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §13.1, con las condiciones, las cifras completas y los límites.
+
+- **Una región (`incr1`):** B1 es más rápida. Δ = −18,6 ms [IC 95 %: −18,9; −18,2] (razón 0,79). El ahorro es del detector.
+- **Dos regiones (`incr2`):** B1 es más lenta. Δ = +45,8 ms [IC 95 %: +45,4; +46,1] (razón 1,51): cada región es una inferencia completa de 1280×1280.
+- **Refresco completo (`full`, control):** la detección y el OCR cuestan lo mismo en ambas variantes. La diferencia de −9,9 ms está en la captura y en la planificación; no es una ventaja de B1, y el control es débil porque B1 sólo analizó 66 observaciones.
+- **Acuerdo (coeficiente de Dice; acuerdo, no precisión):** 0,97 con una región y en refresco completo; 0,85 con dos regiones. Con dos regiones, B1 publica una mediana de 67 elementos frente a 85 de B0; el registro no dice cuáles faltan.
+- **Observaciones inactivas de B1 (aparte):** 52 en `incr1`, 0 en `incr2` y 654 en `full`.
+- **Errores y exclusiones:** ninguno. Los 240 procesos terminaron completos.
+- **PERF-01 sin carga (§13.7):** el desplazamiento de p95 de 0,2 a 0,35 ms no se reproduce; persiste una mediana de 0,05 a 0,09 ms mayor, sin atribuir.
+
+La configuración de origen no tiene `[models] accessibility = "uia"`, así que estas cifras son sin accesibilidad. Quedan para el responsable la repetición con `uia` y la investigación de los elementos que faltan con dos regiones (§13.9). RNF-05 no cambia de estado. PERF-02 no cambia en `plan_pruebas.csv`: sigue faltando el caso de caché y la igualdad de modelos.
