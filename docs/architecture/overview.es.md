@@ -115,7 +115,7 @@ DirectML como opción; los modelos se eligen en el spike S0
 [Diagrama de secuencia](../diagrams/action-sequence.md). `execute_action` nombra la sesión,
 el snapshot, el epoch geométrico, el objetivo y su revisión esperada. El motor valida el
 schema, deduplica el `request_id`, aplica la política local, comprueba que snapshot, revisión
-y epoch estén vigentes, confirma ventana, foco y frescura, registra su intención, inyecta la
+y epoch estén vigentes, confirma ventana, foco, frescura y vigencia (ADR-0025) justo antes de cada entrada real, registra su intención, inyecta la
 entrada, comprueba la entrega y busca el efecto esperado.
 
 La respuesta es `simulated`, `rejected`, `input_delivered`, `effect_observed` o

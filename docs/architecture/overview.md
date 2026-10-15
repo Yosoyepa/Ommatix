@@ -112,7 +112,7 @@ S0 spike ([ADR-0009](../adr/0009-models-and-licences-decided-in-the-spike.md)).
 [Sequence diagram](../diagrams/action-sequence.md). `execute_action` names the session, the
 snapshot, the geometry epoch, the target and its expected revision. The engine validates the
 schema, deduplicates the `request_id`, applies the local policy, checks that snapshot,
-revision and epoch are current, confirms window, focus and freshness, records its intent,
+revision and epoch are current, confirms window, focus, freshness and age (ADR-0025) right before each real input, records its intent,
 injects the input, checks delivery and looks for the expected effect.
 
 The answer is one of `simulated`, `rejected`, `input_delivered`, `effect_observed` or

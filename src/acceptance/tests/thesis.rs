@@ -63,7 +63,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-10", "BDD-11", "BDD-12", "BDD-13", "BDD-14", "BDD-15", "BDD-16", "BDD-17", "BDD-18",
     "BDD-19", "BDD-20", "BDD-21", "BDD-22", "BDD-23", "BDD-24", "BDD-25", "BDD-26", "BDD-27",
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
-    "BDD-37",
+    "BDD-37", "BDD-38",
 ];
 
 #[derive(Debug, Default, World)]
@@ -2388,6 +2388,53 @@ fn no_key_is_sent_and_the_click_is_reported(e: &mut Engine) {
     );
     assert_eq!(lock_typing(&agent.typing).log.len(), log);
     assert_eq!(agent.desktop.handed_actions().len(), 1);
+}
+
+#[given("una observación de una ventana permitida")]
+fn observation_of_an_allowed_window(e: &mut Engine) {
+    let agent = e.agent.insert(Agent::modern(form_with_title()));
+    agent.observe(json!({}));
+}
+
+#[when("pasa la vigencia configurada y el agente solicita un clic de prueba sobre ella")]
+fn click_after_the_configured_window(e: &mut Engine) {
+    let agent = e.agent();
+    // One millisecond past the default window (ADR-0025): the observation is out of date.
+    agent
+        .clock
+        .advance(EngineConfig::DEFAULT_MAX_SNAPSHOT_AGE + std::time::Duration::from_millis(1));
+    let button = agent.element("Guardar");
+    let args = agent.click_args(&button, "bdd38-expired");
+    agent.target = Some(button);
+    agent.tool_result("execute_action", args);
+}
+
+#[then("se devuelve STALE_SNAPSHOT con observe_again y no se envía ningún evento")]
+fn stale_snapshot_asks_for_a_new_observation(e: &mut Engine) {
+    let agent = e.agent();
+    let result = agent.last_response()["result"].clone();
+    assert_eq!(result["isError"], true, "{result}");
+    assert_eq!(result["structuredContent"]["status"], "rejected");
+    let error = &result["structuredContent"]["error"];
+    assert_eq!(error["code"], "STALE_SNAPSHOT");
+    assert_eq!(error["retryable"], false);
+    assert_eq!(error["next_step"], "observe_again");
+    assert!(
+        agent.desktop.handed_actions().is_empty(),
+        "nothing reached the actuator"
+    );
+}
+
+#[then("una nueva observación vuelve a permitir el clic de prueba")]
+fn a_new_observation_allows_the_click_again(e: &mut Engine) {
+    let agent = e.agent();
+    agent.observe(json!({}));
+    let button = agent.element("Guardar");
+    let args = agent.click_args(&button, "bdd38-fresh");
+    agent.target = Some(button);
+    let result = agent.tool_result("execute_action", args);
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(result["structuredContent"]["status"], "simulated");
 }
 
 fn main() {

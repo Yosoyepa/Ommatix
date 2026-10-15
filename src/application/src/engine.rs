@@ -75,6 +75,12 @@ impl Default for VerifyParams {
     }
 }
 
+/// Whether `since` lies more than `max` before `now`, both on the injected clock. The bound
+/// is inclusive: an age of exactly `max` is still within it (ADR-0025).
+fn aged_out(now: Duration, since: Duration, max: Duration) -> bool {
+    now.saturating_sub(since) > max
+}
+
 /// Engine parameters; the defaults are the thesis's initial values
 /// (`plantillas/configuracion_mvp.toml`).
 #[derive(Debug, Clone, PartialEq)]
@@ -93,9 +99,18 @@ pub struct EngineConfig {
     /// run concurrently (SDD §2.7, ADR-0019). The evidence is the same either way; off, the
     /// stages run one after the other.
     pub concurrent_stages: bool,
+    /// How old, on the injected [`Clock`], the capture of the published snapshot and the
+    /// accessibility read that confirms a target may be when an action is authorised
+    /// (ADR-0025). Checked at the gate and again before every real input.
+    pub max_snapshot_age: Duration,
 }
 
 impl EngineConfig {
+    /// `[engine] max_snapshot_age_ms` of the dossier template (ADR-0025). Wider than the
+    /// first 250 ms: an agent acts seconds after it observes, and the freshness capture
+    /// before each delivery still compares the screen with the snapshot.
+    pub const DEFAULT_MAX_SNAPSHOT_AGE: Duration = Duration::from_millis(10_000);
+
     pub fn new(session_id: impl Into<String>) -> Self {
         Self {
             session_id: session_id.into(),
@@ -105,6 +120,7 @@ impl EngineConfig {
             icons: None,
             verify: VerifyParams::default(),
             concurrent_stages: true,
+            max_snapshot_age: Self::DEFAULT_MAX_SNAPSHOT_AGE,
         }
     }
 }

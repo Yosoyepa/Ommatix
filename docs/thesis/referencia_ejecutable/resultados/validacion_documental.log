@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 23
+PASS adrs_encontradas 24
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -100,6 +100,7 @@ PASS referencias:0020-operator-scope-on-windows.md []
 PASS referencias:0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md []
 PASS referencias:0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md []
 PASS referencias:0023-licence-and-reduced-mvp-scope.md []
+PASS referencias:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 
@@ -180,6 +181,8 @@ PASS gherkin_id_unico:BDD-36
 PASS gherkin_estructura:BDD-36 
 PASS gherkin_id_unico:BDD-37 
 PASS gherkin_estructura:BDD-37 
+PASS gherkin_id_unico:BDD-38 
+PASS gherkin_estructura:BDD-38 
 PASS escenarios_matriz_completos 
 PASS trazabilidad:BDD-01 
 PASS trazabilidad:BDD-02 
@@ -218,6 +221,7 @@ PASS trazabilidad:BDD-34
 PASS trazabilidad:BDD-35 
 PASS trazabilidad:BDD-36 
 PASS trazabilidad:BDD-37 
+PASS trazabilidad:BDD-38 
 PASS doc01_pruebas_existen:RF-01 []
 PASS doc01_adr_existen:RF-01 ADR-0008; ADR-0016
 PASS doc01_propietario:RF-01 
@@ -259,7 +263,7 @@ PASS doc01_adr_existen:RF-10 ADR-0002; ADR-0006
 PASS doc01_propietario:RF-10 
 PASS doc01_evidencia_existe:RF-10 []
 PASS doc01_pruebas_existen:RF-11 []
-PASS doc01_adr_existen:RF-11 ADR-0006; ADR-0007; ADR-0020
+PASS doc01_adr_existen:RF-11 ADR-0006; ADR-0007; ADR-0020; ADR-0025
 PASS doc01_propietario:RF-11 
 PASS doc01_evidencia_existe:RF-11 []
 PASS doc01_pruebas_existen:RF-12 []
@@ -367,6 +371,7 @@ PASS doc01_adr_pruebas:0020-operator-scope-on-windows.md []
 PASS doc01_adr_pruebas:0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md []
 PASS doc01_adr_pruebas:0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md []
 PASS doc01_adr_pruebas:0023-licence-and-reduced-mvp-scope.md []
+PASS doc01_adr_pruebas:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
 PASS doc01_prueba_enlazada:UT-01 
 PASS doc01_prueba_enlazada:UT-02 
 PASS doc01_prueba_enlazada:UT-03 
@@ -412,6 +417,15 @@ PASS doc01_prueba_enlazada:UT-42
 PASS doc01_prueba_enlazada:UT-43 
 PASS doc01_prueba_enlazada:UT-44 
 PASS doc01_prueba_enlazada:UT-45 
+PASS doc01_prueba_enlazada:UT-46 
+PASS doc01_prueba_enlazada:UT-47 
+PASS doc01_prueba_enlazada:UT-48 
+PASS doc01_prueba_enlazada:UT-49 
+PASS doc01_prueba_enlazada:UT-50 
+PASS doc01_prueba_enlazada:UT-51 
+PASS doc01_prueba_enlazada:UT-52 
+PASS doc01_prueba_enlazada:UT-53 
+PASS doc01_prueba_enlazada:UT-54 
 PASS doc01_prueba_enlazada:IT-01 
 PASS doc01_prueba_enlazada:IT-02 
 PASS doc01_prueba_enlazada:IT-03 

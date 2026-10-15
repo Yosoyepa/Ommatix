@@ -267,6 +267,7 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
     engine_config.plan = config.plan_params();
     engine_config.verify = config.verify_params();
     engine_config.concurrent_stages = config.engine.concurrent_stages;
+    engine_config.max_snapshot_age = config.max_snapshot_age();
     engine_config.icons = icons;
     let engine = Engine::new(
         engine_config,
@@ -298,8 +299,7 @@ fn startup_notes(
     live: bool,
 ) -> Vec<String> {
     let access = config.models.accessibility;
-    let mut notes = config.notes();
-    notes.push(icon_note(icons));
+    let mut notes = vec![icon_note(icons)];
     if source != SourceKind::Sim && config.models.has_detector() {
         let m = &config.models;
         notes.push(format!(
@@ -822,12 +822,6 @@ accessibility = \"uia\"
             .observe_screen(&ObserveRequest::default())
             .expect("the simulator observes");
         assert_eq!(page.total_elements, 3);
-        assert!(
-            wired
-                .notes
-                .iter()
-                .any(|n| n.contains("max_snapshot_age_ms"))
-        );
         assert!(
             wired
                 .notes

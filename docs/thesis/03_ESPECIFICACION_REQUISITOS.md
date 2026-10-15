@@ -48,7 +48,7 @@ Snapshot completo versionado; orden estable, paginación, límites y expiración
 
 ### RF-11. Acción segura
 
-Validar sesión/snapshot/revisión, política, ventana/foco y frescura. Trazabilidad: UT-38..UT-43. Hito: S2/S3.
+Validar sesión/snapshot/revisión, política, ventana/foco y frescura. Vigencia (ADR-0025): la captura del snapshot y la lectura de accesibilidad que confirma el objetivo no pueden tener más de `[engine] max_snapshot_age_ms` (10 000 ms por defecto), medidos en el reloj inyectado; la comprobación se hace en la puerta, también en simulación, y justo antes de cada entrada real, sin reutilizar lecturas antiguas al publicar un snapshot nuevo. Vencido el plazo, `STALE_SNAPSHOT` y observar de nuevo, sin reanclar ni enviar entrada. Trazabilidad: UT-38..UT-43 y UT-46..UT-54; BDD-38. Hito: S2/S3.
 
 ### RF-12. Actuación real
 

@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-15T06:58:38.221063+00:00",
+  "timestamp_utc": "2026-10-15T07:15:44.865963+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -10,13 +10,13 @@
     "invalid_examples": 8,
     "jsonl_messages": 13,
     "feature_files": 6,
-    "gherkin_scenarios": 37,
+    "gherkin_scenarios": 38,
     "requirements": 28,
-    "planned_tests": 80,
+    "planned_tests": 89,
     "references": 24,
-    "adrs": 23
+    "adrs": 24
   },
-  "checks_run": 453,
+  "checks_run": 467,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -348,7 +348,7 @@
     {
       "check": "adrs_encontradas",
       "passed": true,
-      "detail": "23"
+      "detail": "24"
     },
     {
       "check": "referencias:00_AUDITORIA_TECNICA.md",
@@ -527,6 +527,11 @@
     },
     {
       "check": "referencias:0023-licence-and-reduced-mvp-scope.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0025-bound-authorisations-by-snapshot-and-evidence-age.md",
       "passed": true,
       "detail": "[]"
     },
@@ -931,6 +936,16 @@
       "detail": ""
     },
     {
+      "check": "gherkin_id_unico:BDD-38",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-38",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "check": "escenarios_matriz_completos",
       "passed": true,
       "detail": ""
@@ -1117,6 +1132,11 @@
     },
     {
       "check": "trazabilidad:BDD-37",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-38",
       "passed": true,
       "detail": ""
     },
@@ -1328,7 +1348,7 @@
     {
       "check": "doc01_adr_existen:RF-11",
       "passed": true,
-      "detail": "ADR-0006; ADR-0007; ADR-0020"
+      "detail": "ADR-0006; ADR-0007; ADR-0020; ADR-0025"
     },
     {
       "check": "doc01_propietario:RF-11",
@@ -1866,6 +1886,11 @@
       "detail": "[]"
     },
     {
+      "check": "doc01_adr_pruebas:0025-bound-authorisations-by-snapshot-and-evidence-age.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
       "check": "doc01_prueba_enlazada:UT-01",
       "passed": true,
       "detail": ""
@@ -2087,6 +2112,51 @@
     },
     {
       "check": "doc01_prueba_enlazada:UT-45",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:UT-46",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:UT-47",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:UT-48",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:UT-49",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:UT-50",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:UT-51",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:UT-52",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:UT-53",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:UT-54",
       "passed": true,
       "detail": ""
     },

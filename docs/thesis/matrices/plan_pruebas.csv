@@ -44,6 +44,15 @@ UT-42,Simulación honesta,Nunca reportar input entregado desde un mock.,OR-43,IM
 UT-43,Sin actuador,Rechazar modo real si no existe adaptador.,OR-44,IMPLEMENTADO_EN_RUST_S2
 UT-44,Evidencia de accesibilidad,"La accesibilidad aporta rol y etiqueta, no inventa acciones y absorbe detecciones visuales sin sustituirlas.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
 UT-45,Alcance de ventana,"La política local acota una aplicación permitida a las clases de ventana que lista y, si hay una, a la ventana registrada: el escritorio, la barra de tareas y una ventana no registrada se rechazan, en la puerta y justo antes de entregar.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
+UT-46,Vigencia en el umbral,"Con la ventana configurada, una acción dentro del plazo, también en el límite, se acepta; una posterior se rechaza con STALE_SNAPSHOT y observar de nuevo, en simulación y en vivo. El límite es inclusivo.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
+UT-47,Simulación con vigencia,"La simulación rechaza un snapshot caducado con la misma respuesta que la ruta real y nunca afirma entrega.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
+UT-48,Caducidad antes de entregar (snapshot),"Si el snapshot caduca entre la validación y la entrega, la comprobación justo antes del clic lo rechaza y no se envía ningún evento.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
+UT-49,Caducidad antes de entregar (evidencia),"Si la evidencia de accesibilidad reutilizada caduca entre la validación y la entrega, con el snapshot todavía vigente, no se envía ningún evento.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
+UT-50,Publicación sin renovación,"Una publicación que no relee la accesibilidad no renueva la lectura antigua; la siguiente observación relee sólo la región caducada y la acción vuelve a ser posible.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
+UT-51,Lectura de accesibilidad tardía,"Una lectura que tarda más que la ventana consume la ventana desde la captura, no desde la publicación.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
+UT-52,Caducidad entre clic de enfoque y teclas,"Si vence la vigencia después del clic de enfoque de type, no se envía ninguna tecla: el resultado es indeterminate con el clic reportado, sin reintento.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
+UT-53,Cambio semántico sin repintado,"Un elemento que pasa a deshabilitado sin repintado no se actúa tras la ventana, y la observación siguiente lo registra como no accionable.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
+UT-54,Ventana por defecto,"La ventana por defecto son diez segundos: una observación es válida a los diez segundos y deja de serlo un milisegundo después.",PENDIENTE,IMPLEMENTADO_EN_RUST_S4
 IT-01,Captura DXGI,Frames reales/stride/rotación/pérdida de acceso,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
 IT-02,Modelos,Detector/OCR reales y deshacer letterbox,NO_EJECUTADO,EJECUTADO_PARCIAL_SPIKE_S0
 IT-03,Actuador,Conteo SendInput y permisos/foco,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
