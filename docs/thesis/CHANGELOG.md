@@ -1,5 +1,16 @@
 # Historial documental
 
+## 1.0.31 — 2026-10-14: S4, octava ronda: ninguna corrida puntuada (rama `docs/s4-eighth-round`)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust, ni el cliente (`tools/s4/e2e_driver.py`, SHA-256 `a16c53af…ae22d`, y `tools/s4/e2e_dossier.py`, SHA-256 `cd959f59…f306`). La octava ronda se ejecutó en vivo con el cupo autorizado (200 solicitudes; cuaderno 426 → 427): **una** solicitud real, el clic de navegación de S4R-02, que se entregó y se verificó. No hubo corridas puntuadas.
+
+- **S4R-02 (Calculadora):** `--calc-standard` halló el elemento «Estándar» con `AutomationId` `Standard` y tipo `ListItem`, pero su nombre no está en la lista cerrada del cliente, así que el cliente lo rechazó sin clic (`unknown_name`). Sin modo Estándar no hubo piloto ni serie.
+- **E2E-02 (editor):** el editor no llegó al primer plano maximizado en tres de cuatro intentos, y el motor no tiene etiqueta de accesibilidad para su campo en el sondeo que sí llegó. Sin piloto aprobado no hubo serie.
+- **E2E-03 (Explorador):** el sondeo no llegó al primer plano maximizado, no se observaron objetivos y no se ejecutó en vivo.
+- Al final no existen `stop.flag` ni `window.pin`, no queda ningún proceso de prueba y el Bloc de notas del propietario no se tocó.
+- **Matrices:** sin cambio. `matrices/plan_pruebas.csv` mantiene S4R-02, E2E-02 y E2E-03 en `NO_EJECUTADO` y `PENDIENTE_PRODUCTO`, porque no hay corridas puntuadas que lo justifiquen.
+- **Pendiente del responsable:** el nombre exacto del elemento Estándar (y, si procede, la lista cerrada en una ronda aparte), el diagnóstico del primer plano del editor y del Explorador, la etiqueta del campo del editor y la interpretación de la regla del piloto. Informe en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), sección «Octava ronda», y revisión en [`../reviews/2026-10-14-s4-eighth-round.md`](../reviews/2026-10-14-s4-eighth-round.md).
+
 ## 1.0.30 — 2026-10-14: el responsable aprueba la ADR-0020 (alcance del operador por ventanas)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni código. El responsable del proyecto aprueba el 14 de octubre de 2026 la [ADR-0020](../adr/0020-operator-scope-on-windows.md) (alcance del operador por ventanas: `[safety] allowed_window_classes` y `window_pin_file`, apagado por defecto), que 1.0.29 dejó propuesta. Con ella `explorer.exe` puede permitirse sólo en la ventana `CabinetWClass` que abre el cliente. El responsable autoriza también la octava ronda supervisada (S4R-02, E2E-02 y E2E-03, cupo de 200 solicitudes reales, sin usar el equipo). Se actualizan el estado de la ADR, su índice, AGENTS.md, los README y la visión general (EN y ES), el traspaso, el capítulo 08, la plantilla de configuración y el informe de S4.
