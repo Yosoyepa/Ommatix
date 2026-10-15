@@ -116,6 +116,8 @@ Metas iniciales: incremental p95 <=150 ms; full warm p95 <=700 ms. Evidencia req
 
 Medir RSS/VRAM totales, cola acotada y sin crecimiento sostenido en soak de 2 h. Evidencia requerida: PERF-03.
 
+**Umbral del responsable (15 de octubre de 2026, [CHANGELOG 1.0.62](CHANGELOG.md)).** Para el soak de 2 horas, medido sobre el proceso del motor después de los primeros 10 minutos: la pendiente por hora del conjunto de trabajo (RSS) no supera **10 MiB/h**, y la pendiente por hora del recuento de manejadores **no es positiva**. Son los valores por defecto de `tools/perf/soak.py` ([capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md)). La cota de la cola de regiones pendientes no está fijada (decisión 9 del [capítulo 06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)), y la memoria dedicada de GPU y los bytes privados se publican sin umbral. La corrida de [S0 §12](S0_RESULTADOS.md) cumple los dos criterios fijados en sus condiciones, pero ese resultado no es un veredicto sobre RNF-06: no hay cota de cola, la corrida es de `fe35d80` y no tuvo accesibilidad. El requisito no se marca como cumplido.
+
 ### RNF-07. Compatibilidad
 
 Win11 x64, monitor seleccionado y DPI 100/125/150%; rechazo explícito fuera de perfil. Evidencia requerida: IT-07.
