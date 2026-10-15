@@ -101,7 +101,9 @@ S0 spike ([ADR-0009](../adr/0009-models-and-licences-decided-in-the-spike.md)).
 6. **Track identity (Algorithm 3B).** One-to-one matching keeps each element's session ID,
    which is monotonic and never reused; the revision grows when something an action depends
    on changes; retired IDs leave tombstones. Ambiguity creates a new track instead of
-   guessing.
+   guessing. An accessibility element's UI Automation runtime ID, scoped by its process and
+   window, is part of its identity; when continuity is not proven the element gets a new ID,
+   and the reason of each retirement is recorded as a code (ADR-0026).
 7. **Commit.** Registry, index and base are published together as an immutable snapshot. If
    any step fails, nothing is published, pending dirty regions are kept and the engine is
    degraded, which blocks actions ([snapshot lifecycle](../diagrams/snapshot-state.md)). A
