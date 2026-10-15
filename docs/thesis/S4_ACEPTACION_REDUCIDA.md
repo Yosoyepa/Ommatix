@@ -1737,3 +1737,59 @@ Todas las invocaciones usaron rutas absolutas, y las corridas en vivo usaron `--
 ### 8. Ejecución
 
 Las invocaciones en vivo fueron, en este orden: la comprobación de modo de la Calculadora; el piloto y la serie de S4R-02; el sondeo del editor, el piloto de E2E-02; y el sondeo de E2E-03 con `s4r10-explorer.toml`. Cada una fue precedida por el comprobador de sólo lectura. Los registros y los resultados JSONL están en la carpeta de ejecuciones, fuera del repositorio; ninguno contiene capturas ni texto de pantalla.
+
+## Preparación de la undécima ronda: el editor deja de parpadear y el recorrido de accesibilidad lee primero la ventana en primer plano y por niveles
+
+**Fecha:** 14 de octubre de 2026. Rama `fix/s4-round10-blockers`, sobre la rama de la décima ronda (`docs/s4-tenth-round`, `1258573`), que a su vez está sobre `main` en `193e7ce`. Cambian el editor (`tools/s4/testeditor`) y el adaptador de accesibilidad (`ommatix-adapter-accessibility`, y con él el motor). **No cambian** los dos clientes (`tools/s4/e2e_driver.py`, SHA-256 `143ea45464274936e5b5eca06ade8279117d3c33cbc0b13257b74753341aee3d`; `tools/s4/e2e_dossier.py`, SHA-256 `85111edbe1b7acc113f71e88d48ba41d6c1fe485b5571f9b0c827d53d7f316df`), la compuerta de frescura del motor, la regla de confirmación ni la ADR-0017. **No se envió entrada ni ninguna solicitud real** (cuaderno 490, sin cambio). Las únicas comprobaciones sobre el sistema fueron de sólo lectura: una ventana del Explorador abierta por este trabajo sobre una carpeta temporal que creó (leída con UI Automation, cerrada por su identificador con `WM_CLOSE`, carpeta borrada) y las pruebas del editor, que ejecutan el toolkit sin ventana. Registro por hallazgo en la [revisión](../reviews/2026-10-14-s4-round10-blockers.md).
+
+Hashes (SHA-256) de lo que cambia, compilado en el árbol de trabajo de esta rama (quien ejecute la ronda recompila y registra los suyos; la información de depuración lleva rutas):
+
+- Motor: `target/release/ommatix.exe` (`cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia`) **`6e8f6fdde0027eaf9ca16946cfc31685677cb5d7129a06b1c9e324a705b4bb52`**, antes `38080631…e5d3`.
+- Editor: `ommatix-testeditor.exe` (`cargo build --release` en `tools/s4/testeditor`) **`868cadb7195e7aadf428f9ece056d638ce0f7e20ebb2eabf21706fd3f5debb9d`**, antes `32b8fadd…8f8`.
+
+### 1. E2E-02: el cursor de texto del editor parpadeaba (hallazgo 1 de la décima ronda)
+
+- **Causa (verificada en el código y en el toolkit; no en una ventana en vivo).** El motor sólo entrega si un fotograma capturado justo antes de entregar no tiene ninguna loseta sucia respecto a la base confirmada (`act.rs`, `fresh_frame`; sin tolerancia). El toolkit del editor pinta por defecto un cursor de texto que parpadea (`text_cursor.blink = true`, 0,5 s visible y 0,5 s oculto desde la última edición), y tras escribir la ventana está al frente con el campo enfocado: la pantalla cambia dos veces por segundo. Los cuatro reintentos del piloto estuvieron separados entre 0,89 y 0,91 s, casi un periodo de parpadeo, lo que es coherente con que la misma fase se repitiera (no es una prueba: las fases en vivo no se registraron). **No verificado en vivo:** no se pudo enviar entrada para encender el cursor en una ventana real.
+- **Corrección, en el editor (nuestra aplicación de prueba) y no en el motor.** `configure` fija el cursor sin parpadeo en los dos temas. La compuerta de frescura del motor no se debilita.
+- **Pruebas** (editor, 24; 21 antes): `a_focused_field_paints_the_same_frame_at_any_time` (con el campo enfocado y la ventana al frente, seis instantes en dos periodos pintan el mismo fotograma; falla con `blink = true`, comprobado), `the_toolkits_default_caret_blinks` (la premisa: el valor por defecto sí cambia el fotograma) y `the_caret_stays_on_in_both_themes` (falla con `blink = true`, comprobado). El foco se da dentro del contexto del toolkit, sin entrada del sistema.
+- **Hallazgo para el responsable y la tesis (no implementado).** Un editor real con cursor parpadeante rechazaría con `STALE_SNAPSHOT` toda acción posterior a escribir: la comprobación de frescura compara fotogramas completos y un cursor es un cambio de pocos píxeles dos veces por segundo, justo donde estará la siguiente acción. La corrección del editor propio no arregla el mundo. Opciones, todas con cambio del dossier y ADR, y todas debilitan o rodean una propiedad de seguridad (SDD §2.9), así que ninguna se toma aquí: (a) una tolerancia para losetas sucias confinadas al área del cursor del campo enfocado, que la evidencia de accesibilidad puede acotar (`keyboard_focus` da el rectángulo del elemento); (b) comparar tras enmascarar el rectángulo del elemento enfocado sólo en las acciones que siguen a un `type`; (c) una regla operativa (la velocidad de parpadeo del cursor del sistema, que algunos toolkits respetan y otros, como el de este editor, no), sin cambio del motor; (d) que el cliente reintente hasta que un fotograma coincida, lo que sólo funciona por azar con un periodo de 1 s.
+
+### 2. E2E-03: el recorrido agotaba el presupuesto antes de llegar a las migas de pan (hallazgo 2 de la décima ronda)
+
+- **No es una regla.** Leído hasta el final, el adaptador devuelve las dos migas de pan como `button` confirmados (habilitadas, con `Invoke` y `ExpandCollapse`): ni el mapa de roles, ni la prueba del patrón de acción, ni la normalización del nombre, ni la regla de confirmación son la causa.
+- **Causa (verificada por reproducción, no en la corrida en vivo).** Un solo presupuesto de 250 ms cubría toda la lectura; unos 50 ms se iban en listar las 13 ventanas de nivel superior de la sesión antes de leer nada (UI Automation cuesta unos 4 ms por ventana), y el recorrido era en profundidad, así que llegaba a las migas de pan en el elemento 83 de 118 visitados, después del panel de navegación del Explorador. Con el escritorio en reposo hacía falta un presupuesto de 200 ms para alcanzarlas (0 de 6 con 180 ms). La etapa de accesibilidad del motor duró 267 ms y 271 ms en los dos sondeos del Explorador, la firma de un recorrido que terminó por presupuesto; los registros del sondeo no dicen si la lectura fue truncada. **No verificado en vivo.**
+- **La novena ronda tampoco las veía** (hallazgo 4 de la revisión). «carpeta-a» era el elemento del panel de navegación (`ListItem`, rol `unknown`) y el nombre de la raíz, el título de la pestaña (`TabItem`, rol `unknown`). La décima ronda leyó mal esa diferencia.
+- **«Atrás» `unknown` es esperable** (hallazgo 3). En una ventana que no ha navegado, UI Automation informa el botón como deshabilitado, y un elemento deshabilitado nunca se confirma. El flujo lo pulsa en su tercer paso, tras dos navegaciones, cuando está habilitado; el sondeo, que no envía entrada, no puede mostrarlo confirmado.
+- **Corrección, en el adaptador.** El recorrido lee primero la ventana que contiene el foco de teclado, lista las demás ventanas del proceso sólo si queda presupuesto (saltando la ya leída) y visita cada ventana por niveles (`walk`, en anchura), de modo que un recorrido truncado pierde lo más profundo y no la barra de un hermano posterior. Los límites (2 000 elementos, profundidad 32, 250 ms), la evidencia y la regla de confirmación no cambian; ninguna miga de pan se confirma sin patrón de acción. El peor caso de una lectura es ahora el presupuesto más una lista de ventanas (unos 50 ms aquí) cuando la ventana enfocada gasta todo el presupuesto menos unos milisegundos, en lugar del presupuesto solo.
+- **Mediciones** (una ventana del Explorador sobre una carpeta temporal, escritorio en reposo, 16 procesadores lógicos, 13 ventanas de nivel superior, compilación `--release`, seis corridas por celda; cada celda es cuántas de seis devolvieron las dos migas de pan como botones confirmados dentro del presupuesto):
+
+  | Presupuesto | Antes | Después | Antes, 8 hilos ocupados | Después, 8 hilos ocupados |
+  |---|---|---|---|---|
+  | 80 ms | 0 de 6 | 1 de 6 | 0 de 6 | 0 de 6 |
+  | 100 ms | 0 de 6 | 6 de 6 | 0 de 6 | 6 de 6 |
+  | 140 ms | 0 de 6 | 6 de 6 | 0 de 6 | 6 de 6 |
+  | 180 ms | 0 de 6 | 6 de 6 | 0 de 6 | 6 de 6 |
+  | 200 ms | 6 de 6 | 6 de 6 | 5 de 6 | 6 de 6 |
+  | 250 ms | 6 de 6 | 6 de 6 | 6 de 6 | 6 de 6 |
+
+  La lectura completa no es más lenta: 63 elementos en 189 a 197 ms después y 193 ms antes. El margen con el presupuesto por defecto pasa de 1,25 veces (200 de 250 ms) a unas 2,5 (100 de 250 ms). Los hilos ocupados aproximan la concurrencia del motor con la captura y los dos modelos; no son la carga del motor. Es una máquina y una sesión: no son mediciones de RNF-05 (S0 §10).
+- **Pruebas** (adaptador, 11; 6 antes): cinco de `walk` (`a_walk_reads_the_chrome_before_the_content`, `a_walk_cut_by_elements_loses_the_deepest_nodes_not_a_later_sibling`, `a_walk_cut_by_time_stops_where_the_clock_runs_out`, `a_skipped_subtree_is_not_entered`, `the_depth_bound_is_reported_only_where_something_lies_below_it`); las cinco fallan con un orden en profundidad, comprobado. Manual (ignorada): `reads_the_breadcrumbs_of_a_file_explorer_window`, con `OMMATIX_EXPLORER_TITLE` y `OMMATIX_EXPLORER_CRUMBS`, que exige las migas como botones confirmados en tres lecturas.
+- **El presupuesto por defecto (250 ms) no se cambia.** Subirlo es una decisión del responsable (los límites son valores `[P]` de la ADR-0017) y alargaría la observación, de la que la accesibilidad ya es la etapa más larga.
+
+### 3. Verificación
+
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` y `cargo clippy -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia --all-targets -- -D warnings`: sin avisos.
+- `cargo test --workspace`: **447 pasadas** (442 antes), 0 fallidas y 1 ignorada. Editor: `cargo test`, 24 pasadas (21 antes), y `cargo clippy --all-targets -- -D warnings` sin avisos (una resta de `Duration` sin comprobar, ya existente en una prueba, se reescribió para que pase).
+- `python -m unittest discover -s tools/s4 -p "test_*.py"`: 258 correctas (sin cambio de los clientes).
+- Desde `docs/thesis`: `referencia_ejecutable/run_tests.py`, 48 de 48; `validar_paquete.py`, 449 comprobaciones y 0 fallidas.
+
+### Qué debe mostrar la próxima ronda en vivo
+
+- **Antes:** los SHA-256 de arriba (recompilados por quien ejecute la ronda), `stop.flag` y `window.pin` ausentes, rutas absolutas, `--round-start` propio (cuaderno 490, o 429 con 139 disponibles: decisión del responsable).
+- **E2E-02:** el piloto entrega la escritura y entrega el clic de «Guardar» (`effect_observed`), con el archivo guardado y el título en `guardado=si`, sin `STALE_SNAPSHOT`. Si aun así hubiera uno, el siguiente dato que importa es qué cambió en pantalla entre la observación y el clic, no otro reintento.
+- **E2E-03:** el sondeo muestra las migas de pan «carpeta-a» y la de la raíz como `button` confirmados y únicos, y «Atrás» como `button` con actionability `unknown` (deshabilitado sin historial: esperable, no un fallo del sondeo). Pasar al piloto sólo si las migas de pan se confirman; «Atrás» se confirma en el paso 3. Cada miga de pan es un `SplitButton` con una flecha: el piloto debe mostrar que un clic en su centro navega.
+- **Nada de esto está confirmado en vivo.**
+
+### Estado
+
+Hallazgo 1 de la décima ronda: causa verificada en el toolkit y corregida en el editor, con pruebas; **no confirmada en vivo**. Hallazgo 2: causa verificada por reproducción y corregida en el adaptador, con pruebas y mediciones; **no confirmada en vivo**. Nuevo para el responsable: la tolerancia a cursores parpadeantes en aplicaciones reales (arriba, §1). Cuaderno: 490, sin cambio. Las matrices no cambian.

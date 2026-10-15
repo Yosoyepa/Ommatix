@@ -228,7 +228,9 @@ sin OCR, entrada en dry run y política que lo niega todo.
   [ADR-0017](../adr/0017-ui-automation-evidence-fused-with-vision.md)): el árbol de UI Automation
   de la ventana en primer plano que atestigua el actuador (el marco de `ApplicationFrameHost`
   se resuelve a su aplicación hospedada), leído una vez por observación dentro de las regiones
-  planificadas, acotado por elementos, profundidad y tiempo, con el crate seguro
+  planificadas, acotado por elementos, profundidad y tiempo (primero la ventana con el foco de
+  teclado y cada ventana por niveles, de modo que un recorrido truncado pierde lo más profundo),
+  con el crate seguro
   `uiautomation` (sin `unsafe` propio; el `clippy.toml` del adaptador prohíbe las llamadas de
   entrada y de patrones del crate). Es evidencia, no un reemplazo: un elemento habilitado, en
   pantalla y con un patrón de acción es `confirmed` con su rol y su nombre (`label_source:
