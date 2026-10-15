@@ -125,6 +125,20 @@ const BUTTON_SIZE: [f32; 2] = [340.0, 110.0];
 const BUTTON_TEXT: f32 = 52.0;
 const VALUE_TEXT: f32 = 64.0;
 const HEADING_TEXT: f32 = 40.0;
+/// The vertical gaps of the tallest column at full size: the top margin, after the heading,
+/// after the value and between the three buttons.
+const GAPS: f32 = 60.0 + 30.0 + 50.0 + 2.0 * 40.0;
+/// What the tallest column needs besides its gaps (heading, value and three buttons, with
+/// egui's item spacing), rounded up so that the last button never touches the bottom edge.
+const CONTENT: f32 = 500.0;
+
+/// How much of each gap fits: 1 when the window is tall enough (100 % and 125 % on a
+/// 1920x1080 monitor, so their layout does not change), less when it is short (150 %, where
+/// the third button would fall under the taskbar), and never negative. Only the gaps shrink:
+/// labels, text sizes and button sizes stay the same, so the engine sees the same controls.
+fn gap_scale(available_height: f32) -> f32 {
+    ((available_height - CONTENT) / GAPS).clamp(0.0, 1.0)
+}
 
 /// The hidden measurement mode: how often the animated labels advance and how many there are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,18 +252,21 @@ fn section(
     heading: &str,
     value: &str,
     buttons: &[(&str, Command)],
+    gap: f32,
 ) -> Option<Command> {
     let mut pressed = None;
     ui.vertical_centered(|ui| {
         ui.label(egui::RichText::new(heading).size(HEADING_TEXT));
-        ui.add_space(30.0);
+        ui.add_space(30.0 * gap);
         ui.label(egui::RichText::new(value).size(VALUE_TEXT).strong());
-        ui.add_space(50.0);
-        for &(label, command) in buttons {
+        ui.add_space(50.0 * gap);
+        for (i, &(label, command)) in buttons.iter().enumerate() {
+            if i > 0 {
+                ui.add_space(40.0 * gap);
+            }
             if button(ui, label) {
                 pressed = Some(command);
             }
-            ui.add_space(40.0);
         }
     });
     pressed
@@ -258,10 +275,10 @@ fn section(
 /// The text field: a plain `TextEdit`. Its accessible name is set on its AccessKit node, so
 /// UI Automation reports an editable field named `Campo de texto`, and nothing is drawn for
 /// OCR. Returns whether its contents changed.
-fn text_field(ui: &mut egui::Ui, text: &mut String) -> bool {
+fn text_field(ui: &mut egui::Ui, text: &mut String, gap: f32) -> bool {
     ui.vertical_centered(|ui| {
         ui.label(egui::RichText::new("Texto").size(HEADING_TEXT));
-        ui.add_space(30.0);
+        ui.add_space(30.0 * gap);
         let edit = ui.add(
             egui::TextEdit::singleline(text)
                 .char_limit(TEXT_LIMIT)
@@ -278,7 +295,8 @@ fn text_field(ui: &mut egui::Ui, text: &mut String) -> bool {
 impl eframe::App for TestApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.add_space(60.0);
+            let gap = gap_scale(ui.available_height());
+            ui.add_space(60.0 * gap);
             let value = self.state.value_text();
             let toggle = self.state.toggle_text();
             let page = self.state.page_text();
@@ -294,12 +312,14 @@ impl eframe::App for TestApp {
                         ("Restar", Command::Subtract),
                         ("Reiniciar", Command::Reset),
                     ],
+                    gap,
                 ));
                 pressed = pressed.or(section(
                     &mut columns[1],
                     "Interruptor",
                     toggle,
                     &[("Activar", Command::Toggle)],
+                    gap,
                 ));
                 pressed = pressed.or(section(
                     &mut columns[2],
@@ -309,8 +329,9 @@ impl eframe::App for TestApp {
                         ("Siguiente", Command::Next),
                         ("Anterior", Command::Previous),
                     ],
+                    gap,
                 ));
-                text_changed = text_field(&mut columns[3], &mut self.state.text);
+                text_changed = text_field(&mut columns[3], &mut self.state.text, gap);
             });
             if let Some(command) = pressed {
                 self.state.apply(command);
@@ -346,6 +367,28 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
+    use super::gap_scale;
+
+    #[test]
+    fn the_layout_keeps_its_full_gaps_when_the_window_is_tall_enough() {
+        // 100 % and 125 % on a 1920x1080 monitor leave about 1000 and 770 points.
+        assert!((gap_scale(1000.0) - 1.0).abs() < f32::EPSILON);
+        assert!((gap_scale(770.0) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_gaps_shrink_so_the_third_button_fits_at_150_percent() {
+        // 150 %: about 625 points of client area; the column must fit in it.
+        let available = 625.0;
+        let gap = gap_scale(available);
+        assert!(gap < 1.0);
+        assert!(super::CONTENT + super::GAPS * gap <= available + 0.01);
+    }
+
+    #[test]
+    fn the_gaps_never_go_negative() {
+        assert!(gap_scale(100.0).abs() < f32::EPSILON);
+    }
     use super::*;
 
     /// The foreground and the keyboard focus are never requested through the toolkit: its window
