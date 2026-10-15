@@ -132,7 +132,7 @@ Corrección (`ommatix-adapter-vision`, `model/letterbox.rs`): la escala nunca su
 - **Precisión sin medir.** No hay corpus etiquetado. La cifra de 142 elementos `confirmed` no es precisión ni cobertura.
 - **OCR.** `Windows.Media.Ocr` sólo tiene es-ES y es-MX instalados, no informa confianza y pierde signos como `¡`.
 - **Privacidad de la corrida.** El Bloc de notas de Windows 11 restaura las pestañas de sesiones anteriores. Sus títulos estaban en pantalla y pasaron por el OCR en memoria, aunque no se guardaron ni se registran aquí. Antes de la próxima corrida conviene usar una sesión limpia del Bloc de notas.
-- **Una aplicación, un DPI (100 %) y un tema.** Quedan sin probar otros DPI (IT-07), RSS y VRAM (RNF-06), y un cliente MCP real. DirectML se mide en §9.
+- **Una aplicación, un DPI (100 %) y un tema.** Otros DPI se probaron después, el 15 de octubre de 2026 (IT-07, [S4_SESIONES_PENDIENTES.md §C.1](S4_SESIONES_PENDIENTES.md)); quedan sin probar RSS y VRAM (RNF-06), y un cliente MCP real. DirectML se mide en §9.
 
 ## 8. Decisión de S0 para este detector
 

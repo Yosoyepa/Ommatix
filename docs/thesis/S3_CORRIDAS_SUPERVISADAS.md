@@ -74,7 +74,7 @@ En B, tras una observación nueva (`s5`): el cliente creó el archivo de parada,
 ### 3.7 IT-04 e IT-07
 
 - **IT-04** (postcondición y plazo sin reintento): no se ejecutó como caso propio; provocar sin riesgo un clic que no cambie nada no era trivial. Los cuatro `indeterminate` de §3.3 son evidencia relacionada (sin reintento automático), pero de un efecto que sí ocurrió. Se ejecutó en la segunda corrida (§8.3).
-- **IT-07** (DPI 125/150 %, cambio de epoch, fuera de perfil): no se ejecutó; la máquina se usó sólo a 100 % y con un monitor capturado.
+- **IT-07** (DPI 125/150 %, cambio de epoch, fuera de perfil): no se ejecutó en estas corridas; la máquina se usó sólo a 100 % y con un monitor capturado. Se ejecutó después, el 15 de octubre de 2026 (1.0.73, [S4_SESIONES_PENDIENTES.md §C.1](S4_SESIONES_PENDIENTES.md)).
 
 ### 3.8 Latencias (CPU, 1 hilo intra-op)
 

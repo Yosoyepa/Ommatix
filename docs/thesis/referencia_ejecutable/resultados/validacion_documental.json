@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-15T17:31:09.101003+00:00",
+  "timestamp_utc": "2026-10-15T19:55:14.561478+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -2768,7 +2768,7 @@
     {
       "check": "doc01_nota_de_alcance:RNF-07",
       "passed": true,
-      "detail": "IT-07 sin ejecutar; fuera del MVP (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado c). Perfil medido: docs/thesis/plantillas/hardware_profile.s0.json; sesión preparada: docs/thesis/S4_SESIONES_PENDIENTES.md §C y tools/perf/dpi_probe.py. Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c). Rechazo fuera de perfil implementado en el motor (1.0.70, docs/adr/0031-refuse-scaling-outside-the-dpi-profile.md; BDD-54 en docs/thesis/features/05_mcp.feature; prueba a_scaling_outside_the_dpi_profile_is_refused_and_publishes_nothing en src/application/src/engine/tests.rs); IT-07 sigue sin ejecutar y la comprobación en vivo a 175 % está pendiente."
+      "detail": "IT-07 fuera del MVP (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado c), adelantada y ejecutada el 2026-10-15 (1.0.73): met_all a 100 % (96 dpi), 125 % (120 dpi) y 150 % (144 dpi) con fotograma 1920x1080, DisplayMapping identidad, 5 de 5 observaciones y los 6 botones; cambio en vivo 100 a 125 % con epoch de 1 a 2 y epoch_follows_scaling cumplido; 175 % rechazada 5 de 5 con UNSUPPORTED_GEOMETRY (flagged); un monitor, sin acciones en vivo con DPI distinto de 100 %; resultado en docs/thesis/S4_SESIONES_PENDIENTES.md §C.1 (herramienta tools/perf/dpi_probe.py). Perfil medido: docs/thesis/plantillas/hardware_profile.s0.json. Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c). Rechazo fuera de perfil implementado en el motor (1.0.70, docs/adr/0031-refuse-scaling-outside-the-dpi-profile.md; BDD-54 en docs/thesis/features/05_mcp.feature; prueba a_scaling_outside_the_dpi_profile_is_refused_and_publishes_nothing en src/application/src/engine/tests.rs); la comprobación en vivo a 175 % se hizo (flagged). Este estado no lo cambia la sesión: lo decide el responsable."
     },
     {
       "check": "reporte_oraculo_aprobado",

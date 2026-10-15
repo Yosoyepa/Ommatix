@@ -156,7 +156,7 @@ La continuación de esa ronda ([CHANGELOG 1.0.34](docs/thesis/CHANGELOG.md)) no 
   completo (p95 98 ms) y para una región (p95 102 ms), pero no, por 3 ms, para dos regiones
   (p95 153 ms), antes de INC-07, RNF-05 no se cumplía; véase el estado de arriba), así que por defecto el detector es el buscador de regiones de color
   plano del arranque (roles `unknown`) y no hay OCR salvo que el operador lo configure (el protocolo reducido corre con el detector ONNX y el OCR de Windows); no se ha probado un cliente MCP de
-  terceros; IT-02 sólo se ejecutó en parte (S0); IT-07 no se ha ejecutado y pasa al próximo corte; e IT-06, SEC-03, SEC-04
+  terceros; IT-02 sólo se ejecutó en parte (S0); IT-07 pasó al próximo corte y después se ejecutó el 15 de octubre de 2026 (DPI 100/125/150 %, cambio de epoch en vivo y rechazo a 175 %; un monitor, sin acciones en vivo fuera de 100 %; [S4_SESIONES_PENDIENTES.md §C.1](docs/thesis/S4_SESIONES_PENDIENTES.md)); e IT-06, SEC-03, SEC-04
   y SEC-06 se prueban en Rust sobre dobles de prueba y el escritorio simulado
   ([CHANGELOG 1.0.35](docs/thesis/CHANGELOG.md)), todavía no de forma supervisada con las etapas
   reales. La
@@ -431,7 +431,7 @@ tools/                     herramientas de medición y aceptación fuera del wor
 │                          E2E-02 y E2E-03 del dossier
 └── perf/                  `measure_latency.py`: latencia por etapa contra la aplicación de prueba;
                            `soak.py` (PERF-03: recursos y soak de 2 h) y `dpi_probe.py` (IT-07: DPI
-                           100/125/150 %), de sólo lectura, sin entrada, escritas y aún sin ejecutar
+                           100/125/150 %), de sólo lectura, sin entrada; IT-07 se ejecutó el 15 de octubre de 2026, REL-01 aún no
 ```
 
 Cómo se reparten los componentes del SDD del dossier

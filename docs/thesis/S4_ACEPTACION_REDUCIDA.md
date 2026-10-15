@@ -132,7 +132,7 @@ Mediana / p95 (máximo), en milisegundos. Las observaciones y acciones de una co
 
 - **Entrada de texto:** roles fiables (`input`) por accesibilidad o por un detector con clases (hallazgo 4). Sin eso no hay E2E-01 con valores dummy ni E2E-02 con escritura y guardado.
 - **Tercera familia:** el explorador de archivos con carpetas de prueba (E2E-03 de la matriz) y una Calculadora direccionable (hallazgo 3) o su sustitución por otra aplicación autorizada.
-- **DPI 125 y 150 %** (IT-07 no ejecutada) y temas claro/oscuro equilibrados.
+- **DPI 125 y 150 %** con acciones en vivo (IT-07 se ejecutó después de este informe, el 15 de octubre de 2026, sólo con observación: [S4_SESIONES_PENDIENTES.md §C.1](S4_SESIONES_PENDIENTES.md)) y temas claro/oscuro equilibrados.
 - **Verificador independiente para todas las familias:** contenido del archivo temporal, estado del formulario o carpeta mostrada. El título y el anclaje UIA de este informe son un primer paso.
 - **Planificador fijo** (agente LLM) y un cliente MCP de terceros, porque el capítulo 09 reporta aparte la evaluación E2E con planificador.
 - **Corrección del anclaje** (hallazgo 2) antes de medir el éxito en aplicaciones con cajas grandes.
