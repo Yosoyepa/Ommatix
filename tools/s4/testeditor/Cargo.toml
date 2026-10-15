@@ -1,0 +1,38 @@
+# The controlled editor of the dossier's E2E-02 (docs/thesis/S4_ACEPTACION_REDUCIDA.md,
+# "Preparación de E2E-02 y E2E-03 del dossier"). A standalone crate, not a member of the
+# Ommatix workspace: it is never linked into the engine, and its lockfile is its own. It is
+# a separate binary from `ommatix-testapp` so that RF-18 counts distinct applications.
+[package]
+name = "ommatix-testeditor"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "UNLICENSED"
+publish = false
+description = "Disposable multi-line editor that saves one file in a client-created temporary folder, for Ommatix end-to-end runs."
+
+[[bin]]
+name = "ommatix-testeditor"
+path = "src/main.rs"
+
+[dependencies]
+# MIT OR Apache-2.0, the same stack as the test application. No persistence feature.
+# AccessKit stays on (it exposes the widgets to UI Automation).
+eframe = { version = "0.36", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+[profile.release]
+codegen-units = 1
+
+# An empty workspace table: this crate is its own workspace root.
+[workspace]
