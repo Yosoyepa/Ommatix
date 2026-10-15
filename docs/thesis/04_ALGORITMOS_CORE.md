@@ -54,6 +54,19 @@ if budget_exceeded: return FULL_REFRESH
 
 La expansión no demuestra que un elemento nuevo, aún no indexado, quepa entero. Detecciones que toquen el borde del crop y relaciones incompletas disparan una ampliación o full refresh. El fallback también aplica por TTL, cambio de ventana o demasiadas regiones. El umbral inicial de área agregada del 40% y de cuatro regiones es una propuesta que se reemplazará por un modelo de coste medido.
 
+### Regla de coste adaptativa (INC-07, ADR-0030)
+
+El modelo de coste medido es, por ahora, una regla de una sola cantidad. Cada región es una inferencia completa del detector (entrada de 1280×1280), y el fotograma entero es una sola; con dos o más regiones el plan regional cuesta más inferencias que el refresco completo, y además el detector ve los recortes a otra escala que el fotograma reducido y pierde elementos ([`S0_RESULTADOS.md`](S0_RESULTADOS.md) §13.3, §13.10 y §13.11). Por eso, después de las comprobaciones de presupuesto (cierre, número máximo de regiones y fracción de área), el plan se convierte en refresco completo si tiene `adaptive_min_regions` regiones o más:
+
+```text
+if regions >= adaptive_min_regions and adaptive_min_regions > 0:
+    return FULL_REFRESH(reason = adaptive_cost)
+```
+
+La regla **sólo adelanta el respaldo que el algoritmo ya tiene**: el refresco completo es el fallback explícito de este algoritmo, y los presupuestos conservan su razón (`closure_budget`, `too_many_regions`, `area_budget`) cuando son ellos los que se disparan. No retira garantías: el conjunto de teselas sucias y pendientes es el mismo que el del plan regional, de modo que una observación fallida deja pendiente lo mismo. `adaptive_min_regions = 0` la apaga; `[engine] adaptive_min_regions` vale 2 por defecto (la configuración del producto), mientras que el planificador de referencia (`PlanParams::default`) la lleva apagada. La razón se registra como `adaptive_cost` en `io.ommatix/plan` y en el registro de investigación. La línea de base B0 (`experimental_baseline`) y la falta de base confirmada (`no_committed_base`) tienen precedencia sobre ella.
+
+**Oráculo.** La referencia ejecutable (`referencia_ejecutable/oraculo/core.py`; por ejemplo OR-12 para el cambio de época y OR-14 a OR-17 para el cierre y la fusión) cubre la diferencia de teselas, el cierre del halo y la fusión; no cubre los respaldos de `plan_regions` (número máximo de regiones, fracción de área), de modo que la regla no contradice ninguna prueba del oráculo y éste no cambia. Las pruebas de la regla están en Rust (`inc_07_*`, dominio, aplicación y configuración); no hay prueba del oráculo equivalente, y por eso no se marca ninguna UT como pasada por ella.
+
 ### Commit y reproyección
 
 El motor construye candidatos regionales sin borrar primero el estado útil. Cada caja se devuelve a píxeles físicos deshaciendo padding y escalado. Se actualiza el soporte de evidencia; se invalidan las entidades y relaciones alcanzadas, incluso si su centro no estaba dentro de R. Se hace matching temporal y publicación atómica de registro e índice.

@@ -790,7 +790,7 @@ La suma de ningún área es `-0.0` en Rust (`Iterator::sum` de `f64` arranca en 
 
 ### 13.13 Pendiente tras 1.0.57
 
-1. **INC-07 (no autorizado esta noche):** política adaptativa entre refresco completo y regional. Las evidencias que la motivan: con dos regiones B1 es más lenta (13.3, 13.11) y publica menos elementos (13.10); con accesibilidad ni siquiera una región ahorra (13.11).
+1. **INC-07 (autorizado e implementado en 1.0.65, §16):** política adaptativa entre refresco completo y regional. Las evidencias que la motivan: con dos regiones B1 es más lenta (13.3, 13.11) y publica menos elementos (13.10); con accesibilidad ni siquiera una región ahorra (13.11).
 2. Control B0 frente a B0 (acuerdo), captura de `full` y residuo de PERF-01 (13.9, puntos 3 y 4): siguen abiertos.
 3. Investigar con `uia` la pérdida de elementos (13.11, punto 5) y separar la causa de la lectura lenta de UIA (13.11, punto 3: GPU saturada frente a ventanas abiertas).
 4. El responsable decide el estado de RNF-05 (con `uia` y animación de 30 ms el p95 con dos regiones es 186,3 ms).
@@ -896,3 +896,81 @@ Hay dos colas de latencia (minutos 10 a 20 y 40 a 50) sin causa identificada: el
 5. **Latencia.** Dos colas (minutos 10 a 20 y 40 a 50) sin causa identificada.
 
 **Reproducir.** Desde la raíz del repositorio en `745caff` o posterior, con los dos ejecutables compilados (`S4_INSTALACION_Y_REVERSION.md` §3), una copia de `%LOCALAPPDATA%\Ommatix\ommatix.rnf05.directml.toml` con `accessibility = "uia"` bajo `[models]`, y la aplicación de prueba al frente de la pantalla (la herramienta no la trae al frente): `python tools/perf/soak.py --config <copia> --minutes 120 --out soak-120.json`. Desde `650ce27` la herramienta juzga los dos criterios por defecto (`criteria`). El informe bruto se guarda fuera del repositorio (ADR-0012).
+
+**Qué queda.** La repetición con `uia` sobre `main` (decisión 6 de 06 §6.7) sigue sin cifras. Para repetirla hacen falta la pantalla encendida durante toda la sesión, comprobada antes, un ensayo de un minuto que capture y después la corrida de 120 minutos sin umbral. PERF-03 mantiene el estado de 1.0.55 (`EJECUTADO_SUPERVISADO_PARCIAL`), y RNF-06 sigue sin veredicto.
+
+## 16. INC-07: política adaptativa entre refresco completo y regional, en vivo con `uia` (1.0.65)
+
+**Qué se midió.** La regla de coste de la [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md) (`[engine] adaptive_min_regions`, razón `adaptive_cost`) frente a B1 (incremental sin la regla) y B0 (refresco completo forzado), con el protocolo congelado del [§9.9](09_EVALUACION_EXPERIMENTAL.md) y la aplicación de prueba propia, en los mismos tres casos (`incr1`, `incr2`, `full`). **Entrada: ninguna.** Las tres variantes usan el mismo binario, los mismos pesos y la misma configuración; difieren sólo en dos claves de `[engine]`, declaradas con `--allow-difference`: B0 `experimental_full_frame = true`, `adaptive_min_regions = 0`; B1 `experimental_full_frame = false`, `adaptive_min_regions = 0`; AD `experimental_full_frame = false`, `adaptive_min_regions = 2`.
+
+### 16.1 Condiciones [V]
+
+| Condición | Valor |
+|---|---|
+| Identificador | `inc07-adaptive-uia-20261015`; semilla del bootstrap 20261015; 10 000 remuestreos. Un ensayo previo de un proceso por variante y un caso (`inc07-rehearsal-20261015`) comprobó la orden y el primer plano; **se excluye** de todo lo que sigue |
+| Commit | `95aba26eb35bc565622c7ce5dfdc96cdbc873fba` (rama `feat/inc07-adaptive-plan`: la regla y sus pruebas). El binario se compiló antes de reubicar la rama sobre `66ca158` y antes de quitar una aserción de una prueba de configuración; ni la reubicación ni la aserción tocan `src/` de producción, `tools/` ni `Cargo.lock` |
+| Compilación | `cargo build --release --locked -p ommatix --features dxgi,directml,winrt-ocr,uia`; `ommatix.exe` SHA-256 `f70206bd9e7937038bfa3526773652f2aefd8301b83135c56082610bce071db4` |
+| Aplicación de prueba | `5050596d46bc300fdc9c31d6835af00d470dd5fb9ca12b464d1e66edec29a942` (la misma que en §12 y §13, copiada del árbol principal) |
+| Configuraciones (SHA-256) | B0 `1e728add142a2036cf683415ddff5dce13667b4eee10ab4886dc28fe7e978a96`, B1 `41f8631822a732b04ec4d0cd88fd3def15c60e4d0463120238cac42bc2e59366`, AD `a0d0200acb5f92f7a379694193f70ff6c106f1a6e1dab78d7fb637af9a5780e2`: la configuración de §13.11 (`ommatix.rnf05.directml.toml` con `accessibility = "uia"` y rutas absolutas) más las dos claves de arriba |
+| Detector y OCR | Los de §13.1: float16, entrada 1280×1280, DirectML 1.15.4, OCR de Windows es-ES |
+| Accesibilidad | **`uia`** en las tres variantes |
+| Equipo y captura | El de §13.1 (Ryzen 7 5700X, RX 6700 XT, Windows 11 Pro 26300.9550, plan «Alto rendimiento»); salida 0 (1920×1080), `--source dxgi` |
+| Animación | `--animate 30` (etiquetas) y 250 ms (velo), como en §13.1 |
+| Procesos | 40 por variante y caso (360 en total, 20 observaciones cada uno), en seis trozos de 20 procesos, intercalados en orden rotatorio contra la misma instancia de la aplicación de prueba. 0 descartados, 0 fallidos, 0 errores |
+| Fecha | 15 de octubre de 2026, de 11:03 a 11:26 (hora local) |
+
+**Desviaciones declaradas.** (1) Hay tres variantes en lugar de dos; el apareamiento se declara por pares (`B0:B1`, `B0:AD`, `B1:AD`) y la herramienta no cambia. (2) No se muestreó la carga del equipo durante la corrida. (3) Las cifras de B0 y B1 de esta corrida no son las de §13.11: es otra corrida, con otro commit y otra hora; se comparan las tres variantes de esta corrida entre sí, nunca con las de §13.11 salvo donde se dice.
+
+### 16.2 Latencia y elementos [V]
+
+Milisegundos de `total` de las observaciones cálidas (clase `warm_full` o `warm_regions`); mediana y p95 con su intervalo bootstrap sobre procesos (se remuestrean procesos, nunca fotogramas, y se reúnen sus observaciones); p99 sin intervalo. Elementos: firmas publicadas por observación.
+
+| Caso | Variante | n cálidas | Mediana [IC 95 %] | p95 [IC 95 %] | p99 | Inferencias | Elementos (mediana / p95 / mín.) | Razón del plan |
+|---|---|---|---|---|---|---|---|---|
+| `incr1` | B0 | 720 | 113,0 [112,4; 115,1] | 135,2 [134,5; 136,2] | 141,5 | 1 | 78 / 79 / 77 | `experimental_baseline` 720 |
+| `incr1` | B1 | 720 | 122,5 [122,0; 123,0] | 135,7 [132,4; 137,7] | 153,3 | 1 (715) o 2 (5) | 77 / 78 / 71 | regiones 720 |
+| `incr1` | AD | 720 | 122,9 [122,5; 123,4] | 136,3 [133,5; 139,4] | 148,7 | 1 (720) | 77 / 78 / 75 | regiones 715; `adaptive_cost` 5 |
+| `incr2` | B0 | 720 | 114,2 [112,7; 118,3] | 138,1 [135,6; 140,0] | 148,0 | 1 | 79 / 88 / 78 | `experimental_baseline` 720 |
+| `incr2` | B1 | 720 | 165,9 [165,6; 166,2] | 186,8 [185,5; 187,6] | 198,4 | 2 | 61 / 63 / 61 | regiones 720 |
+| `incr2` | AD | 720 | 113,2 [112,4; 118,5] | 137,6 [135,6; 139,5] | 151,7 | 1 | 79 / 79 / 78 | `adaptive_cost` 720 |
+| `full` | B0 | 720 | 99,0 [97,3; 99,9] | 131,8 [126,5; 140,9] | 147,5 | 1 | 76 / 77 / 74 | `experimental_baseline` 720 |
+| `full` | B1 | 66 | 91,6 [89,9; 94,7] | 97,6 [96,9; 101,4] | 108,5 | 1 | 75 / 77 / 74 | `area_budget` 66 (y 654 inactivas) |
+| `full` | AD | 70 | 92,2 [90,0; 93,2] | 100,3 [96,8; 108,0] | 108,3 | 1 | 74 / 77 / 74 | `area_budget` 70 (y 650 inactivas) |
+
+En `full`, B1 y AD sólo analizaron 66 y 70 observaciones (las que siguieron a un cambio del velo): su mediana y su p95 se apoyan en pocos valores y no son una muestra al azar de las de B0 (igual que en §13.3).
+
+**Diferencia apareada por proceso** (mediana de `total` por proceso; TREAT − BASE; media sobre procesos con IC 95 % bootstrap sobre procesos) y acuerdo (Dice medio por proceso: acuerdo entre variantes, no precisión, §9.5):
+
+| Caso | Par (BASE:TREAT) | Δ de la mediana (ms) [IC 95 %] | Procesos | Dice [IC 95 %] |
+|---|---|---|---|---|
+| `incr1` | B0:B1 | +7,4 [+5,7; +9,0] | 40 | 0,962 [0,958; 0,965] |
+| `incr1` | B0:AD | +7,9 [+6,3; +9,4] | 40 | 0,962 [0,959; 0,965] |
+| `incr1` | B1:AD | +0,5 [−0,1; +1,0] | 40 | 0,975 [0,971; 0,979] |
+| `incr2` | B0:B1 | +50,5 [+48,8; +52,0] | 40 | 0,836 [0,831; 0,840] |
+| `incr2` | B0:AD | +1,2 [−1,1; +3,5] | 40 | 0,968 [0,963; 0,972] |
+| `incr2` | B1:AD | −49,2 [−51,3; −47,1] | 40 | 0,839 [0,836; 0,842] |
+| `full` | B0:B1 | −6,9 [−8,6; −5,3] | 37 | 0,976 [0,974; 0,978] |
+| `full` | B0:AD | −7,4 [−9,3; −5,4] | 38 | 0,976 [0,974; 0,978] |
+| `full` | B1:AD | −0,7 [−2,9; +1,5] | 35 | 0,976 [0,972; 0,981] |
+
+(En `full` los procesos son los que tienen observaciones cálidas en las dos variantes del par.)
+
+**Tramos** (mediana, por proceso, en ms; orden B0 / B1 / AD): detección, `incr2` 81,2 / 134,2 / 81,2 y `incr1` 81,2 / 71,8 / 71,7; OCR, `incr2` 37,4 / 8,4 / 37,4 y `incr1` 36,8 / 3,7 / 3,7; accesibilidad, `incr2` 107,5 / 159,4 / 107,1 y `incr1` 106,3 / 115,8 / 116,0; planificación, 2,0 en las tres. La lectura de accesibilidad de B1 con dos regiones crece (159 ms frente a 107 ms): con `uia` cada región se vuelve a leer, igual que en §13.11.
+
+### 16.3 Lectura [V]
+
+1. **Dos regiones: la regla quita el sobrecoste.** AD tiene mediana 113,2 ms y p95 137,6 ms [135,6; 139,5], frente a 165,9 ms y 186,8 ms de B1: Δ = −49,2 ms [−51,3; −47,1]. Frente a B0 (refresco completo forzado) no hay diferencia medible (+1,2 ms [−1,1; +3,5]), como se espera: en `incr2` AD **es** el refresco completo, en las 720 observaciones, con la razón `adaptive_cost` y una sola inferencia.
+2. **Elementos: AD no pierde los que B1 pierde.** Con dos regiones AD publica una mediana de 79 elementos (mínimo 78), igual que B0 (79, mínimo 78); B1 publica 61 (mínimo 61). El acuerdo con B0 sube de 0,836 (B1) a 0,968 (AD). No se comparó con una anotación: es acuerdo entre variantes (§9.5).
+3. **Una región: la regla no la toca, salvo cuando la animación produce dos a la vez.** En `incr1` AD siguió siendo regional en 715 de 720 observaciones y tomó el refresco completo en 5 (`adaptive_cost`, 0,7 %): dos regiones transitorias que B1 resolvió con dos inferencias (5 observaciones con 2 inferencias). La diferencia AD − B1 es +0,5 ms [−0,1; +1,0], sin efecto medible; su p99 baja de 153,3 a 148,7 ms.
+4. **Con `uia` una región no ahorra; aquí tampoco fue más rápida.** En `incr1` B1 y AD tardan 7,4 y 7,9 ms más que B0 [IC 95 %: +5,7; +9,0 y +6,3; +9,4]. §13.11 midió +2,4 ms [+0,8; +4,1]. Son dos corridas con el mismo signo: bajo `uia` la región única no ahorra, y esta vez tarda más. La causa no está establecida: el tramo de accesibilidad de B1 y AD es ≈ 10 ms mayor que el de B0 (116 frente a 106 ms) y la detección ahorra ≈ 10 ms, de modo que no queda ahorro. La regla de la ADR-0030 no cubre este caso; ver la ADR (alternativas) y el punto 7.
+5. **Refresco completo (control): sin diferencia entre B1 y AD** (−0,7 ms [−2,9; +1,5]); la ventaja de ≈ 7 ms frente a B0 es de la captura y de la planificación, como en §13.6 punto 3, no del algoritmo.
+6. **RNF-05 (incremental p95 ≤ 150 ms; *full warm* p95 ≤ 700 ms), leído con el protocolo del §9.9.**
+   - *Cifras.* Con AD y `uia`, el p95 de `total` es 136,3 ms [133,5; 139,4] en `incr1`, **137,6 ms [135,6; 139,5] en `incr2`** y 100,3 ms [96,8; 108,0] en el caso `full`; los p99 son 148,7, 151,7 y 108,3 ms. Los tres p95 quedan por debajo de 150 ms (y el *full warm*, muy por debajo de 700 ms). B1 con dos regiones, sin la regla, da 186,8 ms: no cumple. El p99 de `incr2` con AD (151,7 ms) queda apenas por encima de 150 ms; el requisito no fija meta para el p99.
+   - *Cómo se logra.* **AD cumple el p95 de dos regiones porque adelanta el refresco completo del Algoritmo 1; la ruta incremental con dos regiones no se ejecuta.** El texto de RNF-05 ([capítulo 03](03_ESPECIFICACION_REQUISITOS.md)) dice «incremental p95 ≤ 150 ms» y no define si «incremental» nombra el escenario (el cambio parcial de la pantalla, que son los casos `incr1` e `incr2`) o la ruta de código (el plan por regiones). Ni el capítulo 03 ni el §9.9 lo precisan. Con la lectura «escenario», la cifra del protocolo cumple; con la lectura «ruta», el requisito sigue sin cumplirse para dos regiones, como en §10.4 y §13.11.
+   - *Lo que falta aunque se lea «escenario».* PERF-02 sigue parcial: no hay caso de caché ni de igualdad de modelos (`plan_pruebas.csv`), el p99 no tiene meta, es un equipo, una aplicación sintética y un modelo, la animación de 30 ms es más exigente que la de 100 ms de §10.4 y las cifras sin `uia` de AD no se midieron en esta corrida.
+   - *Estado.* **No se cambia el estado de RNF-05** ni su fila en `requisitos_trazabilidad.csv`: la lectura de «incremental» y la aceptación las decide el responsable. Recomendación: leer el requisito como el escenario del protocolo, registrar esta cifra como evidencia y mantener la aceptación por alcance de la ADR-0023 (apartado a) hasta completar PERF-02; si el responsable exige la ruta, la aceptación por alcance sigue siendo el respaldo.
+7. **¿Activada por defecto?** Sí, con dos regiones, y la evidencia es esta: (a) en el caso en que decide (`incr2`) la regla cuesta −49,2 ms [−51,3; −47,1] frente a B1 y recupera los ≈ 18 elementos que B1 pierde (61 frente a 79); (b) en el caso de una región no cambia nada medible (+0,5 ms [−0,1; +1,0] y 5 de 720 observaciones); (c) en el control no hay diferencia; (d) no hubo errores ni procesos descartados, y AD no publica menos elementos que B0 con dos regiones. La condición de la autorización (activada por defecto sólo si la medida la sustenta) se cumple para `uia` y para esta GPU; **sin `uia`** el sobrecoste de dos regiones medido en §13.3 (+46 a +51 %) tiene el mismo mecanismo (una inferencia por región), pero esta corrida no lo repitió con la regla. Un detector más rápido sobre recortes cambiaría el umbral; es una clave de configuración. Queda abierto, y no se decide aquí, un umbral de una región cuando `uia` está activo (punto 4): `adaptive_min_regions = 1` es la configuración que el operador puede probar y que esta corrida no midió.
+
+**Límites.** Un equipo, una aplicación sintética, un modelo y la animación de 30 ms; sin carga de CPU muestreada; las cifras de `full` de B1 y AD se apoyan en 66 y 70 observaciones; los intervalos del p95 son bootstrap sobre 40 procesos; el acuerdo es con B0 (que no es la verdad); la comparación con §13.11 es indicativa, no apareada.
+
+**Reproducir.** Desde la raíz del repositorio, con los dos ejecutables compilados y tres configuraciones que difieren sólo en `[engine] experimental_full_frame` y `[engine] adaptive_min_regions` (B0 `true`/`0`; B1 `false`/`0`; AD `false`/`2`): `python tools/perf/measure_latency.py --experiment-id EXPERIMENT --variant B0=EXE,B0.toml --variant B1=EXE,B1.toml --variant AD=EXE,AD.toml --allow-difference engine.experimental_full_frame --allow-difference engine.adaptive_min_regions --paired B0:B1 --paired B0:AD --paired B1:AD --processes 20 --cases CASE --out chunk.json` por caso (`incr1`, `incr2`, `full`) y trozo, y después `--combine`. Los percentiles con intervalo, los elementos publicados y los tramos de este apartado salen de un guion de lectura del informe combinado (no forma parte del repositorio; su método es el descrito arriba).
