@@ -1528,6 +1528,11 @@ class FakeDecoyDesk(dossier.DossierProtocol):
         self.pre_chain = None
         self.centre_of = None
         self.probe_print = lambda elements: None
+        self.fg_pid = 5151  # the process of the window in front: the editor's by default
+        self.fg_reads = []  # scripted foreground reads, in order; the last one holds afterwards
+        self.fg_after_send = None  # the foreground process from the first request on, if set
+        self.minimized = False
+        self.minimized_reads = []  # scripted minimized states, in order; the last one holds
 
     # the engine
     def observe(self):
@@ -1580,6 +1585,8 @@ class FakeDecoyDesk(dossier.DossierProtocol):
                        "observed_effect": "visual_change"}
             self.delivered += 1
         self.stored[args["request_id"]] = out
+        if self.fg_after_send is not None:  # the window the operator had in front goes away
+            self.fg_pid = self.fg_after_send
         return dict(out), False, {}, 5.0
 
     def refused(self, code: str, message: str) -> dict:
@@ -1624,6 +1631,23 @@ class FakeDecoyDesk(dossier.DossierProtocol):
         if self.focus == "outside":  # the desktop: another process, no element of the editor
             return {"pid": 9999, "runtime_id": "7.8", "control_type": "Pane"}
         return {"pid": 5151, "runtime_id": DECOY_RIDS[self.focus], "control_type": "Edit"}
+
+    GUARD_POLL_S = 0.0  # the guard's wait polls at once: the tests script the reads, not the time
+
+    def foreground_pid(self):
+        if self.fg_reads:
+            self.fg_pid = self.fg_reads.pop(0)
+        return self.fg_pid
+
+    def is_minimized(self, hwnd):
+        if self.minimized_reads:
+            self.minimized = self.minimized_reads.pop(0)
+        return self.minimized
+
+    def foreground_fact(self):
+        return {"exe": "ommatix-testeditor.exe", "pid": 5151, "hwnd": 77,
+                "maximized_primary": True, "class": ""}
+
     def spawn(self, argv):
         self.spawned.append(argv)
         self.folder = Path(argv[argv.index("--folder") + 1])
@@ -1771,6 +1795,86 @@ class DecoyRunTest(QuietTest):
         self.assertFalse(res["success"])
         self.assertEqual(res["decoy"]["delivered_delta"], 2)
         self.assertIn("counted 2 deliveries", res["failure"])
+
+    def test_the_request_waits_for_the_operator_when_the_editor_lost_the_foreground(self):
+        desk = self.desk(max_live=4)
+        desk.args.operator_focus = True
+        desk.args.operator_focus_wait = 5.0
+        desk.fg_reads = [9999, 5151]  # the first guard finds another window in front; then the editor
+        messages = []
+        desk.announce = messages.append
+        res = desk.run_once(1)
+        self.assertTrue(res["success"], res["failure"])
+        self.assertEqual(res["operator_waits"], 1)
+        self.assertEqual([g["outcome"] for g in res["guard"]], ["waited"])
+        guard_messages = [m for m in messages if "does not have the foreground" in m]
+        self.assertEqual(len(guard_messages), 1, "the guard said what it waited for, once")
+        self.assertIn("OPERATOR", guard_messages[0])
+        self.assertEqual(desk.request_ids, ["s4-bdd35-r1-1", "s4-bdd35-r1-1"],
+                         "nothing went out while the window was away; the request followed the wait")
+        self.assertEqual(desk.ledger_total(), 2)
+
+    def test_a_lost_window_with_no_operator_focus_sends_nothing_and_spends_nothing(self):
+        desk = self.desk(max_live=4)
+        desk.args.operator_focus = True
+        desk.args.operator_focus_wait = 0.0  # the operator does not give the focus back in time
+        desk.fg_pid = 9999  # another window stays in front
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual((desk.actions, desk.ledger_total()), ([], 0))
+        self.assertEqual(res["operator_waits"], 1)
+        self.assertEqual([g["outcome"] for g in res["guard"]], ["lost"])
+        self.assertIn("no request", res["failure"])
+        self.assertIn("nothing was sent", res["failure"])
+
+    def test_the_operator_waits_are_counted_and_capped(self):
+        desk = self.desk(max_live=4)
+        desk.args.operator_focus = True
+        desk.args.operator_focus_wait = 5.0
+        desk.fg_reads = [9999, 5151] * 4  # the window keeps leaving and coming back
+        messages = []
+        desk.announce = messages.append
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["operator_waits"], dossier.DECOY_GUARD_WAITS)
+        guard_messages = [m for m in messages if "does not have the foreground" in m]
+        self.assertEqual(len(guard_messages), dossier.DECOY_GUARD_WAITS)
+        self.assertEqual((desk.actions, desk.ledger_total()), ([], 0), "nothing sent or spent")
+        self.assertIn("nothing was sent", res["failure"])
+
+    def test_the_repetition_is_guarded_and_not_sent_when_the_window_is_away(self):
+        desk = self.desk(max_live=4)
+        desk.fg_after_send = 9999  # another window comes in front right after the focusing click
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(desk.request_ids, ["s4-bdd35-r1-1"], "the repetition was not sent")
+        self.assertEqual(desk.ledger_total(), 1, "only the request that went out is spent")
+        self.assertEqual(res["decoy"]["status"], "indeterminate")
+        self.assertIs(res["decoy"]["repetition_sent"], False)
+        self.assertIn("repetition", res["failure"])
+
+    def test_a_minimized_editor_is_said_on_stderr_and_nothing_goes_out_until_it_is_back(self):
+        desk = self.desk(max_live=4)
+        desk.args.operator_focus = True
+        desk.args.operator_focus_wait = 5.0
+        desk.minimized_reads = [True, False]  # minimized at the first guard, back at the next read
+        messages = []
+        desk.announce = messages.append
+        res = desk.run_once(1)
+        self.assertTrue(res["success"], res["failure"])
+        self.assertEqual(res["operator_waits"], 1)
+        minimized = [m for m in messages if "minimized" in m]
+        self.assertEqual(len(minimized), 1)
+        self.assertIn("ONCE", minimized[0])
+        self.assertEqual(desk.ledger_total(), 2)
+
+    def test_each_request_records_how_long_after_the_focus_check_it_went_out(self):
+        desk = self.desk(max_live=4)
+        res = desk.run_once(1)
+        self.assertTrue(res["success"], res["failure"])
+        self.assertEqual(res["operator_waits"], 0, "the guard passed at once: nothing waited")
+        self.assertIsInstance(res["actions"][0]["since_focus_ms"], float)
+        self.assertGreaterEqual(res["actions"][0]["since_focus_ms"], 0.0)
 
     def test_a_stale_snapshot_is_retried_with_a_new_observation_and_request_id(self):
         desk = self.desk(max_live=4)

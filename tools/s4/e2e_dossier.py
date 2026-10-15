@@ -38,7 +38,10 @@ unchanged.
                     ``--decoy-focus``, whose ``Campo auxiliar`` hands the keyboard focus to ``Campo de
                     destino`` when clicked. One ``type`` of the synthetic text into ``Campo auxiliar``
                     goes through the gate. A ``STALE_SNAPSHOT`` refusal (nothing delivered) is
-                    observed again and sent as a new request, at most three attempts. The engine
+                    observed again and sent as a new request, at most three attempts. Before each
+                    live request the editor's window must be in front, hold the keyboard focus and not
+                    be minimized (read only); otherwise nothing is sent and the operator is asked, a
+                    bounded number of times, to give it the focus by hand. The engine
                     must report ``indeterminate`` (the focusing click
                     delivered, ``verified`` false, ``INDETERMINATE_EFFECT``) with no key sent; the same
                     request_id repeated must return that stored result with no new delivery; and UI
@@ -121,6 +124,10 @@ DECOY_TARGET = "Campo de destino"
 # DECOY_ATTEMPTS times; the repetition of the final request is one live request more.
 DECOY_ATTEMPTS = 3
 DECOY_LIVE_REQUESTS = DECOY_ATTEMPTS + 1
+# Before each live request the editor's window must be the foreground window, hold the keyboard
+# focus and not be minimized (read only). A failed guard sends nothing and waits for the operator;
+# the waits are capped per case, and a case that cannot wait ends without spending the ledger.
+DECOY_GUARD_WAITS = 3
 
 EXPLORER_EXE = "explorer.exe"
 EXPLORER_CLASS = "CabinetWClass"
@@ -394,8 +401,19 @@ def focus_summary(focus: dict | None, editor_pid: int | None) -> dict:
             "control_type": focus.get("control_type") if focus else None}
 
 
+def guard_message(state: dict, bound: float) -> str:
+    """What the operator reads on stderr while the guard waits. A minimized window is said apart:
+    its taskbar button has to be clicked once, and a second click would minimize it again."""
+    if state["minimized"]:
+        return (f"the editor's window is minimized: click its taskbar button ONCE; do not type. "
+                f"Waiting up to {bound:.0f} s; nothing is sent meanwhile.")
+    return ("OPERATOR: the editor's window does not have the foreground and the keyboard focus: "
+            "give it the focus by hand (click its taskbar button once; do not type). Waiting up to "
+            f"{bound:.0f} s; nothing is sent meanwhile.")
+
+
 PLACEMENT_PROBLEM = {
-    "outside": "UI Automation reports the keyboard focus outside the editor (the desktop or another "
+    "outside":"UI Automation reports the keyboard focus outside the editor (the desktop or another "
                "application): the window has no operating system focus; the case is not exercised",
     "editor": "UI Automation reports the keyboard focus inside the editor but not on Campo de "
               "destino: the case is not exercised",
@@ -936,29 +954,95 @@ class DossierProtocol(driver.Protocol):
         res["focus_wait_s"] = round(time.monotonic() - started, 1)
         return focus
 
+    GUARD_POLL_S = 0.5  # how often the guard reads the window while it waits (read only)
+
+    def foreground_pid(self) -> int | None:
+        """Read-only: the process of the window the operating system has in front."""
+        return driver.foreground().get("pid")
+
+    def is_minimized(self, hwnd) -> bool:
+        """Read-only: whether the editor's window is minimized (IsIconic)."""
+        return bool(driver.user32.IsIconic(hwnd))
+
+    def foreground_fact(self) -> dict:
+        """Read-only: the foreground window as require_foreground reads it, without stopping the run
+        when it is not the editor's: the guard decides what happens before any request."""
+        return driver.foreground()
+
+    def guard_reads(self, pid: int, hwnd) -> dict:
+        """What the guard reads, as booleans only (no title, no RuntimeId): the window in front is
+        the editor's, UI Automation holds the keyboard focus inside the editor, and the window is not
+        minimized."""
+        foreground = self.foreground_pid() == pid
+        focus = editor_holds_focus(self.focus_runtime(), pid)
+        minimized = self.is_minimized(hwnd)
+        return {"foreground": foreground, "focus": focus, "minimized": minimized,
+                "ok": foreground and focus and not minimized}
+
+    def guard(self, res: dict, pid: int, hwnd, where: str) -> str:
+        """The guard before a live request, and before the observation that precedes it. Read only:
+        a request goes out only when the guard passes. Otherwise nothing is sent: the case says on
+        stderr what it sees and waits for the operator (--operator-focus, up to its bound; otherwise
+        --focus-wait), at most DECOY_GUARD_WAITS times per case. Returns "ready" (nothing to wait
+        for), "waited" (the window is back: the caller observes again, the snapshot being older than
+        the wait) or "lost" (no focus within the bound, or the waits are used up: nothing was sent and
+        nothing was spent)."""
+        state = self.guard_reads(pid, hwnd)
+        if state["ok"]:
+            return "ready"
+        waits = res.get("operator_waits", 0)
+        if waits >= DECOY_GUARD_WAITS:
+            res.setdefault("guard", []).append({"where": where, **state, "outcome": "lost"})
+            return "lost"
+        res["operator_waits"] = waits + 1
+        bound = self.args.operator_focus_wait if self.args.operator_focus else self.args.focus_wait
+        self.announce(guard_message(state, bound))
+        started = time.monotonic()
+        while not state["ok"] and time.monotonic() - started < bound:
+            time.sleep(self.GUARD_POLL_S)
+            state = self.guard_reads(pid, hwnd)
+        outcome = "waited" if state["ok"] else "lost"
+        res.setdefault("guard", []).append({"where": where, **state, "outcome": outcome,
+                                            "waited_s": round(time.monotonic() - started, 1)})
+        return outcome
+
+    def guard_lost(self, res: dict, where: str) -> str:
+        """The failure of a case whose guard gave up: nothing was sent and nothing was spent."""
+        return (f"no request ({where}): the editor's window did not get the foreground and the "
+                f"keyboard focus back within the bound ({res['operator_waits']} operator waits); "
+                "nothing was sent and nothing was spent")
+
     def decoy_step(self, res: dict, snap: dict, elements: list[dict], hwnd, pid: int) -> None:
         """The request of the case and its checks (see decoy_problems). Nothing is sent before the
-        decoy's point is grounded to the decoy by identity (ADR-0022, rule 1). A request is retried
-        only after STALE_SNAPSHOT, which the engine answers before any delivery: the case observes
-        again, grounds again and sends a new request (a new request_id), at most DECOY_ATTEMPTS
-        times, and after the last refusal nothing more is sent. The repetition is the stored-result
-        check of the final request, not a second delivery."""
+        decoy's point is grounded to the decoy by identity (ADR-0022, rule 1), and nothing is sent
+        while the guard fails: the editor's window must be the foreground window, hold the keyboard
+        focus and not be minimized, all of it read only, and a failed guard waits for the operator. A
+        request is retried only after STALE_SNAPSHOT, which the engine answers before any delivery:
+        the case observes again, grounds again and sends a new request (a new request_id), at most
+        DECOY_ATTEMPTS times. The repetition is the stored-result check of the final request, not a
+        second delivery, and it is guarded too."""
         field = self.target(elements, DECOY_FIELD)
         redirect = self.target(elements, DECOY_TARGET)
         if field is None or redirect is None:
             res["failure"] = "the decoy fields are not both confirmed exactly once"
             return
         res["steps"] = 1
+        res["operator_waits"] = 0
         # The precondition of the case, read before anything else: the editor's window must hold the
         # operating system's keyboard focus. Without it no element of the editor can hold the focus,
         # and a result would not say anything about the redirect (the S4 decoy round). Read-only.
         focus = self.wait_editor_focus(pid, res)
         res["focus_before"] = focus_summary(focus, pid)
+        focus_read_at = time.monotonic()
         if not editor_holds_focus(focus, pid):
             res["failure"] = ("no request: UI Automation reports the keyboard focus outside the editor "
                               "(the window has no operating system focus); nothing was sent")
             return
-        for attempt in range(1, DECOY_ATTEMPTS + 1):
+        sent = 0
+        while True:
+            if self.guard(res, pid, hwnd, "before the observation") == "lost":
+                res["failure"] = self.guard_lost(res, "before the observation")
+                return
             # A fresh observation for every attempt: a long wait (the operator's) ages the observation
             # past [engine] max_snapshot_age_ms, and a STALE_SNAPSHOT means the screen moved since it.
             snap, elements, obs = self.observe()
@@ -970,12 +1054,12 @@ class DossierProtocol(driver.Protocol):
                 res["failure"] = ("after the focus wait the decoy fields are not both confirmed "
                                   "exactly once")
                 return
-            fg = self.require_foreground()
+            fg = self.foreground_fact()
             ident = self.identify_before(res, fg, DECOY_FIELD, field)
             if ident is None:
                 return
             pre = self.pre_click_grounding(1, fg, DECOY_FIELD, field, ident)
-            res.setdefault("pre_grounded", []).append({"attempt": attempt, **pre})
+            res.setdefault("pre_grounded", []).append({"attempt": sent + 1, **pre})
             if not pre["grounded"]:
                 res["failure"] = f"no request, the decoy point is not grounded ({pre['status']})"
                 return
@@ -985,6 +1069,14 @@ class DossierProtocol(driver.Protocol):
                 res["failure"] = ("no request, the redirect target's identity is "
                                   f"{redirect_record['status']}")
                 return
+            # The guard right before the request: the last read before anything is sent.
+            state = self.guard(res, pid, hwnd, f"before attempt {sent + 1}")
+            if state == "lost":
+                res["failure"] = self.guard_lost(res, f"before attempt {sent + 1}")
+                return
+            if state == "waited":
+                continue  # the window is back, but the snapshot is older than the wait: observe again
+            attempt = sent + 1
             before = self.metrics()
             args = {"request_id": f"s4-bdd35-r{res['run']}-{attempt}",
                     "session_id": snap["session_id"], "snapshot_id": snap["snapshot_id"],
@@ -995,6 +1087,7 @@ class DossierProtocol(driver.Protocol):
             res["actions_requested"] += 1
             sent_at = time.monotonic()
             out, _, meta, ms = self.srv.call("execute_action", args)
+            sent += 1
             error = out.get("error") or {}
             err = error.get("code")
             act = {"step": 1, "attempt": attempt, "action": "type",
@@ -1003,6 +1096,7 @@ class DossierProtocol(driver.Protocol):
                    "observed_effect": out.get("observed_effect"), "error": err,
                    "rtt_ms": round(ms, 1), "stages_ms": driver.stage_ms(meta),
                    "observe_to_action_ms": round((sent_at - observed_at) * 1000, 1),
+                   "since_focus_ms": round((sent_at - focus_read_at) * 1000, 1),
                    "target_role": field["role"], "label_source": field["label_source"]}
             refusal = driver.engine_error(out)
             if refusal:  # a refusal or an uncertainty: the engine's own sentence
@@ -1016,10 +1110,10 @@ class DossierProtocol(driver.Protocol):
             elif out.get("status") == "rejected":
                 res["rejected"] += 1
             if err == "STALE_SNAPSHOT" and not out.get("input_delivered"):
-                if attempt < DECOY_ATTEMPTS:
+                if sent < DECOY_ATTEMPTS:
                     res["stale_retries"] += 1
                     continue
-                res["decoy"] = {"attempts": attempt, "status": out.get("status"), "error": err,
+                res["decoy"] = {"attempts": sent, "status": out.get("status"), "error": err,
                                 "input_delivered": False}
                 res["failure"] = (f"the screen changed before each of the {DECOY_ATTEMPTS} attempts "
                                   "(STALE_SNAPSHOT): nothing was delivered and nothing was repeated")
@@ -1035,7 +1129,15 @@ class DossierProtocol(driver.Protocol):
             res.setdefault("grounding", []).append(grounding_ok)
             if not grounding_ok:
                 res["grounding_wrong"] = 1
-        # The repetition of the final request, exactly: the stored result, and no second delivery.
+        # The repetition of the final request, guarded: its stored result, and no second delivery.
+        if self.guard(res, pid, hwnd, "before the repetition") == "lost":
+            res["decoy"] = {"attempts": sent, "status": out.get("status"), "error": err,
+                            "input_delivered": out.get("input_delivered"),
+                            "grounding_ok": grounding_ok, "repetition_sent": False}
+            res["failure"] = ("no repetition: the editor's window lost the foreground or the keyboard "
+                              "focus before it, so the repetition was not sent and nothing was spent")
+            res["success"] = False
+            return
         self.spend_live()
         res["actions_requested"] += 1
         again, _, _, _ = self.srv.call("execute_action", args)
@@ -1046,7 +1148,7 @@ class DossierProtocol(driver.Protocol):
         placement = focus_placement(focus_after, pid, ident.get("runtime_id"),
                                     redirect_ident.get("runtime_id"))
         facts = {
-            "attempts": attempt,
+            "attempts": sent,
             "status": out.get("status"), "error": err,
             "input_delivered": out.get("input_delivered"), "verified": out.get("verified"),
             "retryable": error.get("retryable"), "next_step": error.get("next_step"),
@@ -1061,6 +1163,7 @@ class DossierProtocol(driver.Protocol):
             "rejected_delta": after["rejected_actions"] - before["rejected_actions"],
             "counts": counts,
             "folder_empty": note_state(self.tree.root, EDITOR_TEXT.encode("utf-8")) == "absent",
+            "repetition_sent": True,
         }
         res["decoy"] = facts
         if counts is not None and keys_reached_a_field(counts):
