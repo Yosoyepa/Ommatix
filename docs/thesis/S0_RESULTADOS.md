@@ -783,3 +783,38 @@ La suma de ningún área es `-0.0` en Rust (`Iterator::sum` de `f64` arranca en 
 2. Control B0 frente a B0 (acuerdo), captura de `full` y residuo de PERF-01 (13.9, puntos 3 y 4): siguen abiertos.
 3. Investigar con `uia` la pérdida de elementos (13.11, punto 5) y separar la causa de la lectura lenta de UIA (13.11, punto 3: GPU saturada frente a ventanas abiertas).
 4. El responsable decide el estado de RNF-05 (con `uia` y animación de 30 ms el p95 con dos regiones es 186,3 ms).
+
+## 14. PERF-03 / RNF-06 con `uia` sobre `main`: intento bloqueado (1.0.59)
+
+**Qué se pretendía.** La repetición de §12 que pidió el responsable: `soak.py --minutes 120` con `[models] accessibility = "uia"` sobre el código actual de `main` (`46402356`, árbol limpio), sin entrada y sin umbral. **No hay cifras.** Ni el ensayo de un minuto capturó la pantalla, así que la corrida de 120 minutos no empezó.
+
+**Condiciones y desviaciones [V].**
+
+| Condición | Valor |
+|---|---|
+| Commit | `46402356fcd881517fa0633796715fd594ed3cb0` (`origin/main`), árbol limpio |
+| Compilación | `cargo build --release --locked -p ommatix --features dxgi,directml,winrt-ocr,uia` y `cargo build --release --locked` en `tools/s4/testapp`; `rustc 1.99.0` |
+| `ommatix.exe` (SHA-256) | `3832e639235ca9a7150b34548db82a7fc40ef41ecc555201cc79c1be0465c00c` |
+| `ommatix-testapp.exe` (SHA-256) | `5050596d46bc300fdc9c31d6835af00d470dd5fb9ca12b464d1e66edec29a942` (la misma que §12) |
+| Configuración del operador (SHA-256) | `94af2154c74ba93da7500c3c8273ea05654be2b0ee9293e42d560375fecd5298`, sin cambios; manifiesto `f8b04be9…`, el fijado, sin cambios |
+| Copia con `uia` (SHA-256) | `bfde539ffd8a28aa3185b4e3cd6eb58a18e676ac49116ccd027b449813ce7e7c`, fuera del repositorio. Sólo difiere de la del operador en `accessibility = "uia"` bajo `[models]` y en que las tres rutas de `[models]` son absolutas |
+| **Desviación 1: auxiliar de primer plano** | `soakuia_activate.py`, fuera del repositorio, SHA-256 `5102de55589c552181dd904314a8c8a99624a50148f4da67e9976b29dea23245`. Trae al frente sólo la ventana principal del proceso `ommatix-testapp.exe` que arranca `soak.py`, con `activate_window` de `tools/s4/e2e_driver.py` **sin cambios** (SHA-256 `768e77e3aaa065c72aef4cf78ba65a41787f13df624b4f414c55813d3997202d`, igual que en `main`). Ese procedimiento usa `AttachThreadInput`, `ShowWindow`, `SetWindowPos` (sólo orden Z), `BringWindowToTop`, `SetForegroundWindow` y `SetActiveWindow`; no envía teclas ni clics. `soak.py` no se cambió y sigue comprobando el primer plano |
+| **Desviación 2** | `--foreground-wait 30` (por defecto, 15), para que la espera del auxiliar quepa en la de la herramienta |
+| Equipo | AMD Ryzen 7 5700X; Windows 11, build 26300.9550; dos monitores (la salida 0 es la principal, 1920×1080 en 0,0); escala 100 %; plan «Alto rendimiento»; protector sin programa; 44 procesos `python.exe` de otros proyectos, como en §12 |
+
+**Secuencia [V].**
+
+1. *Ensayo de un minuto sin el auxiliar* (`--minutes 1 --interval 2`): `refused` tras 15 s, con «the test application is not in the foreground and the tool does not use input to put it there». La aplicación de prueba no pasó sola al primer plano: lo tenía `orca.exe`, y desde `8551768` la aplicación no pide el primer plano. Sin entrada; el motor no arrancó.
+2. *Ensayo de un minuto con el auxiliar*: a los 0,72 s el auxiliar vio la ventana, y `attach_foreground` la trajo al frente en el primer intento (primer plano comprobado en el proceso de la aplicación de prueba; salida 0). `soak.py` pasó su comprobación, arrancó el motor (`ommatix serve --source dxgi`) y terminó `observe_errors` tras tres observaciones, las tres con `observed = false`.
+3. *Diagnóstico de sólo observación* (`soakuia_diag.py`: misma aplicación, mismo auxiliar y mismo `ommatix serve`, tres `observe_screen` por configuración): **3 de 3** respuestas `CAPTURE_UNAVAILABLE` («the screen could not be captured», reintentable) con la copia con `uia`, y **3 de 3** con la del operador (`accessibility = "none"`). El fallo no viene de la accesibilidad ni del auxiliar. El motor no registra en `stderr` el motivo dentro del adaptador de captura.
+4. *Error propio, declarado.* Un error de orden de comandos (una variable sin definir) lanzó un ensayo sin la ruta de la configuración. La herramienta lo rechazó antes de arrancar (`configuration file does not exist`) y dejó su informe en la raíz de Git (`E:\Git`), fuera del repositorio. No contiene ningún dato medido.
+
+**Hallazgo en la herramienta (no corregido).** `soak.py` anota el código de error como `page.get("code")`, pero el contrato lo devuelve en `error.code`. Por eso `error_code` queda nulo en `samples` aunque la respuesta sea `CAPTURE_UNAVAILABLE`. `tools/s3/mcp_driver.py` tiene el mismo patrón en sus mensajes de error de `observe_screen`. Su corrección, con prueba de regresión, la decide el responsable.
+
+**Causa probable (no verificada).** Según el responsable, restauró el apagado de pantalla en corriente alterna a 15 minutos hacia las 07:00, después de las corridas B0/B1. Con nadie en el equipo, la pantalla se habría apagado hacia las 07:15. DXGI no captura una pantalla apagada, y volver a «nunca» a las 07:40 no la despierta. Lo que lo apoya: las corridas B0/B1 con `uia` captaron sin fallos hasta las 06:32 (20 procesos sin fallos en cada trozo, de 06:19 a 06:32), y los fallos empiezan después. No está comprobado: la herramienta no lee el estado de la pantalla en cada observación.
+
+**Lo que se descartó [V].** La build (26300.9550) y los dos monitores son los de §12 y §13. El registro del sistema no tiene eventos de controlador de pantalla de las últimas seis horas. Las actualizaciones de Windows de las 04:03 a las 06:00 (aplicaciones de la tienda y KB5007651) son anteriores a las corridas B0/B1 que sí captaron. No se paró ningún proceso y no se intentó despertar la pantalla.
+
+**Plan de energía, en lectura [V].** A las 07:47 (hora local), el plan activo («Alto rendimiento») tenía el apagado de pantalla en corriente alterna en 0x00000384 s (900 s, 15 minutos) y en corriente continua en 0x00000258 s (600 s); el suspendido en corriente alterna era 0 (nunca). El cambio a «nunca» que el responsable comunicó a las 07:40 **no aparece** en esa lectura. Esta sección no cambia ningún ajuste.
+
+**Qué queda.** La repetición con `uia` sobre `main` (decisión 6 de 06 §6.7) sigue sin cifras. Para repetirla hacen falta la pantalla encendida durante toda la sesión, comprobada antes, un ensayo de un minuto que capture y después la corrida de 120 minutos sin umbral. PERF-03 mantiene el estado de 1.0.55 (`EJECUTADO_SUPERVISADO_PARCIAL`), y RNF-06 sigue sin veredicto.

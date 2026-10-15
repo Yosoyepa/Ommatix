@@ -1,5 +1,19 @@
 # Historial documental
 
+## 1.0.59 — 2026-10-15: PERF-03 (RNF-06), intento del soak de 120 minutos con `uia` sobre `main`: bloqueado antes de la corrida, sin cifras (rama `docs/perf03-soak-uia`)
+
+Cambia documentación. **No cambia ningún requisito, algoritmo, contrato, escenario, código de producción ni estado de las matrices.** Sin entrada de ningún tipo. No hay cifras: la captura de pantalla falló en todas las observaciones y la corrida de 120 minutos no empezó.
+
+- **Intento.** Repetición de la sesión B (§12) con `[models] accessibility = "uia"` sobre `46402356`. Condiciones, hashes y secuencia en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §14.
+- **Bloqueo.** `observe_screen` devolvió `CAPTURE_UNAVAILABLE` en todas las observaciones, con `uia` y sin accesibilidad (diagnóstico de sólo observación). Causa probable, no verificada (según el responsable): el apagado de pantalla de 15 minutos restaurado hacia las 07:00, con el equipo desatendido. El plan activo seguía en 15 minutos en corriente alterna a las 07:46. No se despertó la pantalla ni se paró ningún proceso.
+- **Desviaciones declaradas (§12).** Un auxiliar de primer plano fuera del repositorio, `soakuia_activate.py` (SHA-256 `5102de55…`), que usa `activate_window` de `tools/s4/e2e_driver.py` sin cambios (SHA-256 `768e77e3…`, igual que en `main`); `--foreground-wait 30`; y una copia de la configuración del operador con `uia` y rutas absolutas. `soak.py` no se cambió.
+- **Hallazgo.** `soak.py` deja `error_code` nulo en los errores de observación: lee `page.get("code")`, y el contrato devuelve el código en `error.code`. Sin corregir; lo decide el responsable.
+- **Declarado.** Un error de orden de comandos rechazó un ensayo antes de arrancar y dejó su informe en la raíz de Git (`E:\Git`), fuera del repositorio.
+- **Matrices.** Sin cambio. `plan_pruebas.csv`: PERF-03 sigue en `EJECUTADO_SUPERVISADO_PARCIAL` (1.0.55). RNF-06 sin veredicto.
+- **Documentación.** `S0_RESULTADOS.md` §14; `S4_SESIONES_PENDIENTES.md` (estado de la sesión B); `docs/handoff.md`.
+- **Pruebas.** `cargo fmt --all --check` sin diferencias; `cargo clippy --workspace --all-targets -- -D warnings` sin avisos; `cargo test --workspace`: 526 pasadas, 0 fallidas y 2 ignoradas (sin cambio de código). `python -m unittest discover` de `tools/perf` (92) y `tools/repro` (17), correctas. Desde `docs/thesis`: `referencia_ejecutable/run_tests.py` (48 de 48) y `validar_paquete.py` (532 comprobaciones, 0 fallidas). Se restauraron los informes del oráculo y de la validación: sólo cambiaban la fecha, el intérprete, la plataforma y la lista de ADR de las columnas de `requisitos_trazabilidad.csv`, desfasada desde 1.0.58.
+- **Pendiente.** Repetir el soak con `uia` con la pantalla encendida durante toda la sesión, tras un ensayo de un minuto que capture. El umbral de RNF-06 lo fija el responsable.
+
 ## 1.0.58 — 2026-10-15: reevaluación de la Definition of Done (§6.7) contra `origin/main` en `d2aa73b`, evidencias de `requisitos_trazabilidad.csv` y ocho decisiones pendientes del responsable (rama `docs/dod-reevaluation-2`)
 
 Cambia documentación y las columnas `evidencia` y `adr` de `requisitos_trazabilidad.csv`. **No cambia ningún requisito, algoritmo, contrato ni escenario, ni ningún estado de las matrices, ni código de producción.** No se ejecutó ninguna sesión en vivo ni se envió entrada.

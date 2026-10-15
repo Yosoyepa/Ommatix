@@ -6,7 +6,7 @@
 
 Ninguna de las tres sesiones envía entrada (ni de teclado, ni de ratón) ni usa `execute_action`. Las herramientas de `tools/perf/` observan, y están escritas para negarse a empezar si la configuración del operador pudiera entregar entrada ([`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) §5.1).
 
-**Estado (1.0.55):** la sesión B se ejecutó una vez, supervisada: una corrida de 120 minutos completa, sin entrada y sin umbral. Resultado en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §12. Siguen sin ejecutar las sesiones A (REL-01) y C (IT-07).
+**Estado (1.0.59):** la sesión B se ejecutó una vez, supervisada: una corrida de 120 minutos completa, sin entrada y sin umbral. Resultado en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §12. Un intento de repetirla con `uia` sobre `main` quedó bloqueado antes de la corrida: la captura de pantalla falló en todas las observaciones (causa probable: el apagado de pantalla; no verificada). Sin cifras (§14). Siguen sin ejecutar las sesiones A (REL-01) y C (IT-07).
 
 ## 0. Condiciones comunes
 
