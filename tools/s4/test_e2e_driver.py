@@ -2598,5 +2598,29 @@ class ActivationLadderTest(unittest.TestCase):
             self.assertNotIn(forbidden, source)
 
 
+class ServeArgvTest(unittest.TestCase):
+    """SEC-02 across a restart (chapter 08 §8.4): a live run starts the engine without a fixed
+    session id, because the engine refuses one with live input. A probe keeps its identifier."""
+
+    def test_a_live_run_takes_no_fixed_session_id_and_sends_with_sendinput(self):
+        argv = driver.serve_argv("ommatix.exe", "out", "live.toml", True, None)
+        self.assertNotIn("--session-id", argv)
+        self.assertEqual(argv[-2:], ["--input", "sendinput"])
+        self.assertEqual(argv[:2], ["ommatix.exe", "serve"])
+
+    def test_a_live_run_refuses_an_explicit_session_id_before_any_server_starts(self):
+        with self.assertRaises(driver.Abort):
+            driver.serve_argv("ommatix.exe", "out", "live.toml", True, "s4-e2e01")
+
+    def test_a_probe_keeps_the_probe_identifier_and_sends_no_input(self):
+        argv = driver.serve_argv("ommatix.exe", "out", "probe.toml", False, None)
+        self.assertEqual(argv[-2:], ["--session-id", driver.PROBE_SESSION_ID])
+        self.assertNotIn("--input", argv)
+
+    def test_a_probe_passes_the_identifier_it_was_given(self):
+        argv = driver.serve_argv("ommatix.exe", "out", "probe.toml", False, "check-1")
+        self.assertEqual(argv[-2:], ["--session-id", "check-1"])
+
+
 if __name__ == "__main__":
     unittest.main()
