@@ -153,10 +153,17 @@ Nothing MVP-related goes in the repository root except workspace configuration.
    it act live. Before delivering, the engine re-captures the screen and refuses
    (`STALE_SNAPSHOT`) if it differs from the committed base, then reads the policy and
    attests the foreground application again and refuses (`POLICY_DENIED`) on a change; any
-   delivery spends the snapshot until the next observation. The operator's stop
+   delivery spends the snapshot until the next observation. An application whose process
+   owns more than the window the operator means (`explorer.exe` also owns the desktop and
+   the taskbar) is narrowed to windows with `[safety] allowed_window_classes` and
+   `window_pin_file` (ADR-0020, **proposed**, off by default): the engine checks the
+   foreground window and the window under the point at the gate and again in the last look,
+   refuses what the actuator cannot attest, and never accepts a window title as evidence.
+   Never add `applicationframehost.exe` to any allowlist. The operator's stop
    (`[safety] stop_file`, or the in-process `StopSwitch`) belongs to the operator alone:
-   never give the agent a way to set or clear it, and never "roll back" a delivery when it
-   is engaged; delivered results keep their reported status.
+   never give the agent a way to set or clear it (the same holds for the window pin file),
+   and never "roll back" a delivery when it is engaged; delivered results keep their
+   reported status.
 7. **Privacy** (ADR-0012). No screenshots or screen values in logs by default; text on screen
    never changes permissions. Never commit screen captures, recorded sessions, datasets
    (`captures/`, `datasets/` are git-ignored) or model weights. Use synthetic frames in
@@ -242,7 +249,9 @@ Do not bypass them with `--no-verify` unless the PR says why.
 
 See `docs/adr/README.md`. ADR-0001..0012 come from the thesis; the project owner accepted
 them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015, ADR-0016, ADR-0017,
-ADR-0018 and ADR-0019 were accepted on 2026-10-14 too.
+ADR-0018 and ADR-0019 were accepted on 2026-10-14 too. ADR-0020 (the operator's scope on
+windows) is only **proposed**: the owner has not accepted it, and it must not be marked
+Accepted by anyone else.
 Highlights: Rust runtime with independent oracles (0001), MCP over stdio with explicit
 profiles (0002), conservative spatial fusion with IoC (0003), masked open-set icon cache
 (0004), persistent tracking instead of cell hashes (0005), transactional snapshots (0006),

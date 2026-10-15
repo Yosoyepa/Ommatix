@@ -8,7 +8,7 @@ Fronteras: agente / adaptador MCP; aplicación / captura/percepción; core / act
 
 ## 8.2 Controles mínimos
 
-**Consentimiento y alcance:** ejecución deshabilitada por defecto, indicador de control activo, allowlist de aplicaciones y ventana, límites de acciones y parada local. El agente no puede habilitar su propia autorización ni convertir un campo `confirmation:true` en permiso de usuario. El MVP no admite operaciones destructivas o con consecuencias externas fuera del entorno de prueba.
+**Consentimiento y alcance:** ejecución deshabilitada por defecto, indicador de control activo, allowlist de aplicaciones y ventana, límites de acciones y parada local. La parte de ventana (ADR-0020, propuesta) es opcional y está apagada por defecto: `[safety] allowed_window_classes` lista, por aplicación, las únicas clases de ventana que reciben entrada real (para `explorer.exe`, `CabinetWClass`, y no el escritorio ni la barra de tareas que el mismo proceso también posee) y `[safety] window_pin_file` registra la única ventana permitida; el motor comprueba la ventana en primer plano y la ventana bajo el punto de la acción en la puerta y de nuevo justo antes de entregar, y rechaza lo que el actuador no pueda atestiguar. El agente no puede habilitar su propia autorización ni convertir un campo `confirmation:true` en permiso de usuario. El MVP no admite operaciones destructivas o con consecuencias externas fuera del entorno de prueba.
 
 **Integridad temporal:** revisión y snapshot obligatorios, epochs geométricos, revalidación de foco/visibilidad, rechazo de targets desconocidos y no reutilización de IDs. La política no reancla por parecido. Los efectos indeterminados se reconcilian antes de otro intento.
 

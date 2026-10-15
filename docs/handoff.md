@@ -35,7 +35,8 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | S4, séptima ronda (rama `docs/s4-seventh-round`, CHANGELOG 1.0.26): piloto de E2E-03 aprobado, con el descenso por la isla en los dos clics (`MenuItem` `Edit`, 0 anclajes erróneos); nueve de diez corridas puntuadas, todas exitosas y sin falsos éxitos; la décima no se envió porque el cupo de 20 solicitudes no reservaba los reintentos tras `STALE_SNAPSHOT`; `stop.flag` creado por el cliente y sin retirar; E2E-02 no se ejecutó. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Séptima ronda» y revisión en [`reviews/2026-10-14-s4-seventh-round.md`](reviews/2026-10-14-s4-seventh-round.md) | Abierto (decisión del responsable) |
 | — | S4, continuación de la séptima ronda (rama `docs/s4-seventh-round-continuation`, CHANGELOG 1.0.27): la corrida 10 de E2E-03 pasó (2 solicitudes), y con ella la serie puntuada queda en diez de diez corridas, todas exitosas y sin falsos éxitos; `--calc-standard` no alcanzó el modo Estándar (el clic de navegación quedó anclado, pero «Estándar» no apareció en UI Automation) y E2E-02 no se ejecutó (3 solicitudes reales en la continuación; cuaderno 426, 25 de 150 de la ronda); `stop.flag` ausente. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Séptima ronda (continuación)» y revisión en [`reviews/2026-10-14-s4-seventh-round.md`](reviews/2026-10-14-s4-seventh-round.md) | Abierto (decisión del responsable) |
 | — | S4, preparación de la octava ronda (rama `fix/s4-calc-standard-and-ids`, CHANGELOG 1.0.28, sin ejecución en vivo): `--calc-standard` sondea UI Automation (3 s, sólo lectura) por el elemento con `AutomationId` `Standard`, acepta sólo los nombres `Estándar` y `Calculadora estándar`, y exige que el clic llegue a ese mismo elemento; registra `mode_after` en todo desenlace y la espera de primer plano; el registro sale en UTF-8 (cliente SHA-256 `a16c53af…ae22d`, 143 pruebas, las 30 nuevas fallan sin el cambio). Los flujos reducidos pasan a **S4R-02** (Calculadora) y **S4R-03** (Bloc de notas); la matriz añade ambos y no cambia E2E-02 ni E2E-03. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Preparación de la octava ronda» | Pendiente la ronda en vivo (cuaderno 426) |
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.27)
+| — | S4, preparación de E2E-02 (editor) y E2E-03 (Explorador) del dossier (rama `feat/e2e-editor-explorer`, CHANGELOG 1.0.29, [ADR-0020](adr/0020-operator-scope-on-windows.md) **propuesta**): editor propio `tools/s4/testeditor` (`ommatix-testeditor.exe`, guarda sólo `nota.txt` en `%TEMP%\ommatix-e2e\<id>`), cliente `tools/s4/e2e_dossier.py` y alcance por ventana (`[safety] allowed_window_classes` y `window_pin_file`, apagados por defecto) para permitir `explorer.exe` sólo en la ventana que abre el cliente; UT-45, BDD-36 y BDD-37. **Sin ejecución en vivo ni entrada.** Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md) §«Preparación de E2E-02 y E2E-03 del dossier» | Abierto (decisión del responsable) |
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.29)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
@@ -71,6 +72,8 @@ La séptima ronda (1.0.26) ejecuta en vivo el piloto de E2E-03, que pasa: el des
 La continuación de la séptima ronda (1.0.27) ejecuta la corrida 10 de E2E-03, que pasa: con ella la serie puntuada queda completa, diez de diez corridas, todas exitosas y sin falsos éxitos. `--calc-standard` no alcanzó el modo Estándar: el clic de navegación quedó anclado, pero «Estándar» no apareció en UI Automation en unos 1,5 s y el paso se detuvo sin segundo clic. Por eso E2E-02 no se ejecutó. Cuaderno 426 (25 de 150 solicitudes de la ronda); `stop.flag` ausente. Decisiones pendientes del responsable: cómo llegar al modo Estándar (con un cambio del cliente y su prueba, en una ronda aparte) y fijar el cupo de E2E-02 contando los reintentos (ver [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md), «Séptima ronda (continuación)»).
 
 La octava ronda se prepara en `fix/s4-calc-standard-and-ids` (1.0.28, sin ejecución en vivo). **Identificadores:** los flujos del protocolo reducido son **S4R-02** (Calculadora: 7 + 8 = 15 y borrar) y **S4R-03** (Bloc de notas: abrir y cerrar «Editar»); donde los informes anteriores dicen «E2E-02» o «E2E-03 del protocolo reducido», son ésos. E2E-02 (editor con escritura y guardado) y E2E-03 (explorador) del dossier siguen pendientes. **Evidencia puntuada:** la aplicación de prueba (E2E-01, parcial) y el Bloc de notas (S4R-03, diez de diez, sólo clics); falta la Calculadora (S4R-02), el editor, el explorador, otros DPI y temas y las 450 corridas, y RF-18 y la Definition of Done siguen abiertos. **Cliente:** tras el clic de navegación, `--calc-standard` sondea UI Automation por el elemento con `AutomationId` `Standard` (hipótesis no verificada en vivo) y sólo hace el segundo clic si es único, con un nombre de la lista cerrada y el mismo RuntimeId que el elemento del motor. Falta la ronda en vivo: `--calc-standard` con cupo 4 y `--round-start 426`, comprobando antes el SHA-256 `a16c53afca63e21f629140ab33951f481b75dfd113866720ab947aa8272ae22d`.
+
+La preparación de E2E-02 y E2E-03 del dossier (1.0.29, rama `feat/e2e-editor-explorer`) no ejecuta nada en vivo. Añade el alcance por ventana de la ADR-0020 (**propuesta**; el responsable no la ha aprobado y nadie más debe marcarla como aceptada), el editor propio y el cliente de las dos pruebas, con UT-45, BDD-36 y BDD-37. E2E-02 y E2E-03 de la matriz siguen `PENDIENTE_PRODUCTO`. Decisiones del responsable antes de una corrida en vivo: aprobar la ADR-0020; qué hacer si el panel de navegación del Explorador no permite bajar con un clic sencillo (el contrato no tiene doble clic); el cupo; el entorno. El sondeo (`--mode probe`) dirá qué ve el motor en el panel de navegación sin enviar entrada.
 
 ## Cómo está el código
 
@@ -173,7 +176,7 @@ La octava ronda se prepara en `fix/s4-calc-standard-and-ids` (1.0.28, sin ejecuc
   abrir la captura. `[cache]` admite un archivo JSON lines de prototipos curados con
   `context`, `gradient_tau`, `max_distance` y `min_margin`, todos juntos y sin valores por
   defecto; el archivo se rechaza entero ante cualquier error o si supera `max_entries`.
-- **Aceptación**: `src/acceptance/tests/thesis.rs` ejecuta BDD-01..33 desde
+- **Aceptación**: `src/acceptance/tests/thesis.rs` ejecuta BDD-01..37 desde
   `docs/thesis/features/` (BDD-01..10 y 13..21 sobre el núcleo; BDD-11, 12 y 22..27 a través
   del motor y del adaptador MCP; BDD-28..32 igual, sobre `LiveDouble`, un doble del actuador
   real que registra lo que recibe y no envía nada; BDD-33 añade `TreeDouble`, un doble del
@@ -181,7 +184,10 @@ La octava ronda se prepara en `fix/s4-calc-standard-and-ids` (1.0.28, sin ejecuc
   (`ommatix::policy::ConfigPolicy`, expuesta por la biblioteca del crate `ommatix`) con un
   archivo de parada en un directorio temporal. BDD-28 cubre otra aplicación que pasa a
   primer plano antes de escribir; el foco de teclado dentro de la aplicación permitida lo
-  comprueba el actuador `SendInput`, que ninguna prueba ejecuta. Se retiraron las siete herramientas del prototipo y su suite de
+  comprueba el actuador `SendInput`, que ninguna prueba ejecuta. BDD-36 y BDD-37 (ADR-0020,
+  propuesta) muestran el alcance por ventana sobre el mismo doble: el escritorio, la barra de
+  tareas y una ventana que el operador no registró (archivo `window_pin_file` del producto) se
+  rechazan con `POLICY_DENIED`. Se retiraron las siete herramientas del prototipo y su suite de
   aceptación (`src/acceptance/features/` y `tests/acceptance.rs`).
 - **Límites conocidos**: la entrada real sólo es posible con `--source dxgi --input
   sendinput` y el consentimiento del operador; en S3 se ejecutó supervisada con cuatro clics
@@ -243,7 +249,9 @@ La octava ronda se prepara en `fix/s4-calc-standard-and-ids` (1.0.28, sin ejecuc
    - Elegir las aplicaciones de prueba controladas (para `allowed_applications`, las
      corridas IT y la evaluación de S4). Hay una aplicación de prueba propia
      (`tools/s4/testapp`). Para las 450 corridas faltan las familias "editor con escritura y
-     guardado" y "explorador de archivos", y una Calculadora direccionable o su sustitución.
+     guardado" y "explorador de archivos" (preparadas, sin ejecutar, en 1.0.29: editor propio
+     `tools/s4/testeditor`, cliente `tools/s4/e2e_dossier.py` y la ADR-0020 propuesta) y una
+     Calculadora direccionable o su sustitución.
    - Evidencia de UI Automation (ADR-0017, aprobada el 2026-10-14): implementada y probada con
      dobles. Falta medir su coste en la máquina de referencia (etapa `accessibility` de
      `_meta`; el recorrido está acotado a 2 000 elementos, profundidad 32 y 250 ms, valores

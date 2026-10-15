@@ -126,6 +126,7 @@ unless the agent and a local policy both allow them. More in the
   The client was then corrected without a live run ([CHANGELOG 1.0.23](docs/thesis/CHANGELOG.md)): the menu-closing click is grounded by identity, a step records why it found no target, and the Notepad menu step records a read-only diagnostic. The owner decided that S4 runs now use the float16 detector manifest and that ADR-0017's window enumeration is not changed to reach the two-region RNF-05 target, so RNF-05 stays not met by about 3 ms.
 A seventh round ([CHANGELOG 1.0.26](docs/thesis/CHANGELOG.md)) passed the Notepad pilot, in which the island descent grounded both clicks on Edit, and scored nine of ten Notepad runs, all successful and with no false success. The tenth run was not sent: the series' budget of 20 requests did not reserve room for the retries after a stale snapshot, which two runs used. The client then created the operator's stop file; the owner later authorised removing it for this round, so the Calculator steps did not run in the first part. The continuation ([CHANGELOG 1.0.27](docs/thesis/CHANGELOG.md)) ran with the stop file absent: it ran the tenth Notepad run, which passed, so the Notepad series has ten of ten scored runs, all successful and with no false success. The Calculator's `--calc-standard` step did not reach Standard mode (its navigation click was grounded, but "Standard" did not appear in UI Automation), so E2E-02 did not run.
 The client was changed again without a live run ([CHANGELOG 1.0.28](docs/thesis/CHANGELOG.md)): after the Calculator's navigation click, `--calc-standard` polls UI Automation (read-only, three seconds) for the pane's Standard item by its AutomationId, accepts only two names, and sends the second click only if exactly one such item is found, the engine's element has that name and the click reaches that same element; the step also records the mode when it stops and its foreground wait, and writes its log in UTF-8. The reduced S4 flows now have their own identifiers, **S4R-02** (Calculator: 7 + 8 = 15 and clear) and **S4R-03** (Notepad: open and close Edit); they are not the dossier's E2E-02 (editor) and E2E-03 (file explorer), which stay pending. Scored evidence exists in two applications, the test application (E2E-01, partial) and Notepad (S4R-03, ten of ten); the Calculator has none, and the editor and explorer flows, other DPIs and themes and the 450 runs are missing, so RF-18 and the Definition of Done stay open.
+The dossier's own E2E-02 (an editor that types and saves a temporary file) and E2E-03 (a file explorer navigated without destroying anything) are prepared, not run ([CHANGELOG 1.0.29](docs/thesis/CHANGELOG.md), no live input): our own editor (`tools/s4/testeditor`, `ommatix-testeditor.exe`, which saves one file in the client's temporary folder and nowhere else), a client (`tools/s4/e2e_dossier.py`) that creates and deletes only its own temporary tree, and an operator scope on windows ([ADR-0020](docs/adr/0020-operator-scope-on-windows.md), **proposed**, off by default) that lets `explorer.exe` act only in the one File Explorer window the client opened, never on the desktop or the taskbar.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML;
@@ -253,6 +254,17 @@ already delivered keep their reported status (a replay of their `request_id` sti
 `input_delivered`); nothing is rolled back. No MCP tool can set or clear the stop. Ending
 the process (Ctrl+C) also stops it; without a `stop_file`, that is the only local stop.
 
+**Operator scope on windows** ([ADR-0020](docs/adr/0020-operator-scope-on-windows.md),
+proposed; off by default). `allowed_applications` names a process, and `explorer.exe` also
+owns the desktop and the taskbar. `[safety] allowed_window_classes = { "explorer.exe" =
+["CabinetWClass"] }` limits an application to the window classes listed, and `[safety]
+window_pin_file` names a file, written by the operator or the harness it runs, that holds
+the handle of the only window allowed. The engine checks the foreground window and the
+window under the action's point (class and handle, as the actuator attests them, never a
+title) at the gate and again right before delivery; whatever cannot be attested is refused
+with `POLICY_DENIED`. `applicationframehost.exe` is never allowed, and `serve` warns when
+`explorer.exe` is allowed with neither.
+
 The configuration file has the shape of
 [`docs/thesis/plantillas/configuracion_mvp.toml`](docs/thesis/plantillas/configuracion_mvp.toml)
 (`[engine]`, `[mcp]`, `[safety]`, `[models]`, `[cache]`; at most 64 KiB); without one, the
@@ -262,7 +274,9 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
 - **Refused** (the server does not start): unknown sections or keys; out-of-range values
   (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024, `full_refresh_area_ratio`
   in (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` a boolean (default `true`), `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
-  blank `allowed_applications` entries, a blank `stop_file`); and values this build cannot
+  blank `allowed_applications` entries, a blank `stop_file` or `window_pin_file`, an
+  `allowed_window_classes` entry that could never apply or that names the desktop, the taskbar or
+  `applicationframehost.exe`); and values this build cannot
   honour: a `platform` other than `windows`, a `snapshot_policy` other than `strict`, a `profile` other than
   `2026-07-28` (the legacy profile is enabled with `legacy_enabled`), a `transport` other than
   `stdio`, `allow_destructive = true`, `allow_screenshots_to_client = true`,
@@ -345,8 +359,10 @@ docs/
 tools/                     measurement and acceptance tools outside the workspace (never linked
 ├── s0/                    into the binary): model export (`--fp16`, `--dynamic`), synthetic frames,
 │                          operator configurations
-├── s3/, s4/               MCP drivers and the controlled test application (`s4/testapp`, with
-│                          the hidden `--animate` flags of the RNF-05 measurements)
+├── s3/, s4/               MCP drivers, the controlled test application (`s4/testapp`, with
+│                          the hidden `--animate` flags of the RNF-05 measurements) and the
+│                          editor (`s4/testeditor`) and client (`s4/e2e_dossier.py`) of the
+│                          dossier's E2E-02 and E2E-03
 └── perf/                  `measure_latency.py`: per-stage latency against the test application
 ```
 

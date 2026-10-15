@@ -138,6 +138,7 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   Después se corrigió el cliente sin ejecutar nada en vivo ([CHANGELOG 1.0.23](docs/thesis/CHANGELOG.md)): el clic que cierra el menú se ancla por identidad, un paso registra por qué no halló objetivo y el paso del menú del Bloc de notas registra un diagnóstico de sólo lectura. El responsable decidió que las corridas de S4 usen desde ahora el manifiesto del detector en float16 y que no se cambie la enumeración de ventanas de ADR-0017 para llegar a la meta de dos regiones de RNF-05, así que RNF-05 sigue sin cumplirse por unos 3 ms.
 Una séptima ronda ([CHANGELOG 1.0.26](docs/thesis/CHANGELOG.md)) pasó el piloto del Bloc de notas, en el que el descenso por la isla ancló los dos clics de «Editar», y puntuó nueve de las diez corridas del Bloc de notas, todas exitosas y sin falsos éxitos. La décima no se envió: el cupo de la serie (20 solicitudes) no reservaba solicitudes para los reintentos tras una captura obsoleta (`STALE_SNAPSHOT`), que dos corridas usaron. Después el cliente creó el archivo de parada del operador; el responsable autorizó retirarlo para esta ronda, y así se hizo. La primera parte no ejecutó los pasos de la Calculadora. La continuación ([CHANGELOG 1.0.27](docs/thesis/CHANGELOG.md)) se ejecutó con el archivo de parada ausente: pasó la décima corrida del Bloc de notas, así que la serie del Bloc de notas tiene diez de diez corridas puntuadas, todas exitosas y sin falsos éxitos. El paso `--calc-standard` de la Calculadora no alcanzó el modo Estándar (el clic de navegación quedó anclado, pero «Estándar» no apareció en UI Automation), así que E2E-02 no se ejecutó.
 El cliente se cambió de nuevo sin ejecución en vivo ([CHANGELOG 1.0.28](docs/thesis/CHANGELOG.md)): tras el clic de navegación de la Calculadora, `--calc-standard` sondea UI Automation (sólo lectura, tres segundos) por el elemento «Estándar» del panel según su `AutomationId`, acepta sólo dos nombres, y envía el segundo clic únicamente si halla exactamente uno, el elemento del motor tiene ese nombre y el clic llega a ese mismo elemento; el paso también registra el modo al detenerse y su espera de primer plano, y escribe su registro en UTF-8. Los flujos reducidos de S4 tienen ahora identificadores propios, **S4R-02** (Calculadora: 7 + 8 = 15 y borrar) y **S4R-03** (Bloc de notas: abrir y cerrar «Editar»); no son E2E-02 (editor) ni E2E-03 (explorador de archivos) del dossier, que siguen pendientes. Hay evidencia puntuada en dos aplicaciones, la aplicación de prueba (E2E-01, parcial) y el Bloc de notas (S4R-03, diez de diez); la Calculadora no tiene ninguna, y faltan los flujos de editor y explorador, otros DPI y temas y las 450 corridas, así que RF-18 y la Definition of Done siguen abiertos.
+El E2E-02 del propio dossier (un editor que escribe y guarda un archivo temporal) y su E2E-03 (un explorador de archivos que se navega sin destruir nada) están preparados, no ejecutados ([CHANGELOG 1.0.29](docs/thesis/CHANGELOG.md), sin entrada en vivo): un editor propio (`tools/s4/testeditor`, `ommatix-testeditor.exe`, que guarda un solo archivo en la carpeta temporal del cliente y en ningún otro sitio), un cliente (`tools/s4/e2e_dossier.py`) que crea y borra sólo su propio árbol temporal, y un alcance del operador por ventanas ([ADR-0020](docs/adr/0020-operator-scope-on-windows.md), **propuesta**, apagada por defecto) que deja a `explorer.exe` actuar sólo en la ventana del Explorador que abrió el cliente, nunca en el escritorio ni en la barra de tareas.
 - Lo que **todavía no** está: no hay detector aceptado para el producto (el spike S0
   seleccionó OmniParser `icon_detect_v3` para integrar y medir: una clase y precisión sin
   medir; una inferencia cuesta unos 7,5 s con un hilo de CPU, 2,6 s con ocho y 0,12 s con
@@ -271,6 +272,17 @@ archivo la retira. Las acciones ya entregadas conservan el estado informado (rep
 puede activar ni retirar la parada. Terminar el proceso (Ctrl+C) también detiene; sin
 `stop_file`, es la única parada local.
 
+**Alcance del operador por ventanas** ([ADR-0020](docs/adr/0020-operator-scope-on-windows.md),
+propuesta; apagado por defecto). `allowed_applications` nombra un proceso, y `explorer.exe`
+es también dueño del escritorio y de la barra de tareas. `[safety] allowed_window_classes =
+{ "explorer.exe" = ["CabinetWClass"] }` limita una aplicación a las clases de ventana de la
+lista, y `[safety] window_pin_file` nombra un archivo, que escribe el operador o el arnés que
+ejecuta, con el identificador de la única ventana permitida. El motor comprueba la ventana
+en primer plano y la ventana bajo el punto de la acción (clase e identificador, como los
+atestigua el actuador, nunca un título) en la puerta y otra vez justo antes de entregar; lo
+que no se pueda atestiguar se rechaza con `POLICY_DENIED`. `applicationframehost.exe` nunca se
+permite, y `serve` avisa si `explorer.exe` está permitido sin ninguna de las dos.
+
 El archivo de configuración tiene la forma de
 [`docs/thesis/plantillas/configuracion_mvp.toml`](docs/thesis/plantillas/configuracion_mvp.toml)
 (`[engine]`, `[mcp]`, `[safety]`, `[models]`, `[cache]`; 64 KiB como máximo); sin él se
@@ -281,7 +293,8 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
   rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
   `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` booleano (por defecto `true`), `max_message_bytes`
   4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`
-  en blanco); y valores que este binario no puede cumplir: un `platform` distinto de
+  o `window_pin_file` en blanco, una entrada de `allowed_window_classes` que nunca podría
+  aplicarse o que nombra el escritorio, la barra de tareas o `applicationframehost.exe`); y valores que este binario no puede cumplir: un `platform` distinto de
   `windows`, un `snapshot_policy`
   distinto de `strict`, un `profile` distinto de `2026-07-28` (el perfil legacy se habilita
   con `legacy_enabled`), un `transport` distinto de `stdio`, `allow_destructive = true`,
@@ -366,8 +379,10 @@ docs/
 tools/                     herramientas de medición y aceptación fuera del workspace (nunca
 ├── s0/                    enlazadas al binario): exportación del modelo (`--fp16`, `--dynamic`),
 │                          frames sintéticos, configuraciones del operador
-├── s3/, s4/               clientes MCP y la aplicación de prueba controlada (`s4/testapp`, con
-│                          las banderas ocultas `--animate` de las mediciones de RNF-05)
+├── s3/, s4/               clientes MCP, la aplicación de prueba controlada (`s4/testapp`, con
+│                          las banderas ocultas `--animate` de las mediciones de RNF-05) y el
+│                          editor (`s4/testeditor`) y el cliente (`s4/e2e_dossier.py`) del
+│                          E2E-02 y E2E-03 del dossier
 └── perf/                  `measure_latency.py`: latencia por etapa contra la aplicación de prueba
 ```
 

@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-15T00:06:42.507398+00:00",
+  "timestamp_utc": "2026-10-15T00:28:02.322788+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -10,13 +10,13 @@
     "invalid_examples": 8,
     "jsonl_messages": 13,
     "feature_files": 6,
-    "gherkin_scenarios": 35,
+    "gherkin_scenarios": 37,
     "requirements": 28,
-    "planned_tests": 79,
+    "planned_tests": 78,
     "references": 24,
-    "adrs": 19
+    "adrs": 20
   },
-  "checks_run": 211,
+  "checks_run": 218,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -348,7 +348,7 @@
     {
       "check": "adrs_encontradas",
       "passed": true,
-      "detail": "19"
+      "detail": "20"
     },
     {
       "check": "referencias:00_AUDITORIA_TECNICA.md",
@@ -507,6 +507,11 @@
     },
     {
       "check": "referencias:0019-concurrent-observation-stages.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0020-operator-scope-on-windows.md",
       "passed": true,
       "detail": "[]"
     },
@@ -891,6 +896,26 @@
       "detail": ""
     },
     {
+      "check": "gherkin_id_unico:BDD-36",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-36",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-37",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-37",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "check": "escenarios_matriz_completos",
       "passed": true,
       "detail": ""
@@ -1067,6 +1092,16 @@
     },
     {
       "check": "trazabilidad:BDD-35",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-36",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-37",
       "passed": true,
       "detail": ""
     },
