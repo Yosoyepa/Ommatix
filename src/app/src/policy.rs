@@ -7,12 +7,18 @@
 //! port that writes the policy. The engine reads [`PolicyStore::current`] at the gate and
 //! again right before each delivery, so the stop takes effect on the next action, even one
 //! already past the gate; it never undoes input that was already delivered.
+//!
+//! The window pin (ADR-0020) works the same way: `[safety] window_pin_file` names a file
+//! that holds the handle of the only window live input may go to. The operator (or the
+//! harness it runs) writes it; no tool and nothing on the screen can. It is read on every
+//! action, and a missing, empty or malformed file pins nothing, which allows no input.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use ommatix_application::{LocalPolicy, PolicyStore};
+use ommatix_application::{LocalPolicy, PolicyStore, WindowPin};
 
 /// An in-process stop the composition root can hold: engaged, it stops new input exactly
 /// like the stop file. Cloning shares the same switch.
@@ -39,6 +45,24 @@ fn stop_file_present(path: &Path) -> bool {
     path.try_exists().unwrap_or(true)
 }
 
+/// Longest pin file read, in bytes: a decimal window handle is at most 20 digits.
+const MAX_PIN_BYTES: u64 = 32;
+
+/// The window the pin file names now. Fails closed: a file that is missing, unreadable,
+/// longer than a handle, not valid text or not a positive decimal number pins no window.
+fn read_window_pin(path: &Path) -> WindowPin {
+    let mut text = String::new();
+    let read = std::fs::File::open(path)
+        .and_then(|file| file.take(MAX_PIN_BYTES + 1).read_to_string(&mut text));
+    if read.is_err() || text.len() as u64 > MAX_PIN_BYTES {
+        return WindowPin::Unset;
+    }
+    match text.trim().parse::<u64>() {
+        Ok(handle) if handle > 0 => WindowPin::Window(handle),
+        _ => WindowPin::Unset,
+    }
+}
+
 /// A [`PolicyStore`] fixed at startup from the configuration file, plus the operator's
 /// stop, read on every call. Nothing in the process loosens it, so the agent can never
 /// change it (thesis chapter 08).
@@ -46,6 +70,7 @@ fn stop_file_present(path: &Path) -> bool {
 pub struct ConfigPolicy {
     policy: LocalPolicy,
     stop_file: Option<PathBuf>,
+    window_pin_file: Option<PathBuf>,
     switch: StopSwitch,
     /// Whether to report the stop being engaged or cleared on stderr.
     notices: bool,
@@ -58,6 +83,7 @@ impl ConfigPolicy {
         Self {
             policy,
             stop_file: None,
+            window_pin_file: None,
             switch: StopSwitch::default(),
             notices: false,
             was_stopped: AtomicBool::new(false),
@@ -67,6 +93,14 @@ impl ConfigPolicy {
     /// Engages the stop while `path` exists.
     pub fn with_stop_file(mut self, path: impl Into<PathBuf>) -> Self {
         self.stop_file = Some(path.into());
+        self
+    }
+
+    /// Pins live input to the window whose handle `path` holds (ADR-0020). From now on the
+    /// policy carries a pin on every read, and it names no window, which allows no input,
+    /// whenever the file does not hold a handle.
+    pub fn with_window_pin_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.window_pin_file = Some(path.into());
         self
     }
 
@@ -130,6 +164,7 @@ impl PolicyStore for ConfigPolicy {
         self.notice(reason.as_deref());
         LocalPolicy {
             stopped: reason.is_some(),
+            window_pin: self.window_pin_file.as_deref().map(read_window_pin),
             ..self.policy.clone()
         }
     }
@@ -217,6 +252,84 @@ mod tests {
         for line in [engaged, stop_notice(None)] {
             assert!(!line.contains("  "), "{line:?}");
         }
+    }
+
+    #[test]
+    fn without_a_pin_file_no_window_is_pinned() {
+        let store = ConfigPolicy::new(live());
+        assert_eq!(store.current().window_pin, None);
+    }
+
+    #[test]
+    fn the_pin_follows_the_file_and_a_file_that_names_no_window_pins_nothing() {
+        let dir = temp_dir("pin");
+        let file = dir.join("window.pin");
+        let store = ConfigPolicy::new(live()).with_window_pin_file(&file);
+        // Configured but missing: a pin that names no window, which allows no input.
+        assert_eq!(store.current().window_pin, Some(WindowPin::Unset));
+
+        std::fs::write(
+            &file, b"265482
+",
+        )
+        .unwrap();
+        assert_eq!(
+            store.current().window_pin,
+            Some(WindowPin::Window(265_482)),
+            "read again on every call"
+        );
+        std::fs::write(&file, b"  18446744073709551615 ").unwrap();
+        assert_eq!(
+            store.current().window_pin,
+            Some(WindowPin::Window(u64::MAX))
+        );
+        for bad in [
+            &b""[..],
+            b"0",
+            b"-5",
+            b"0x1F",
+            b"12 34",
+            b"twelve",
+            b"18446744073709551616",
+            &[0xFF, 0xFE, 0x31][..],
+            &[b'1'; 33][..],
+        ] {
+            std::fs::write(&file, bad).unwrap();
+            assert_eq!(
+                store.current().window_pin,
+                Some(WindowPin::Unset),
+                "{bad:?}"
+            );
+        }
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(store.current().window_pin, Some(WindowPin::Unset));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_where_the_pin_file_should_be_pins_nothing() {
+        let dir = temp_dir("pin-dir");
+        let store = ConfigPolicy::new(live()).with_window_pin_file(&dir);
+        assert_eq!(store.current().window_pin, Some(WindowPin::Unset));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_pin_changes_nothing_else_in_the_policy() {
+        let dir = temp_dir("pin-else");
+        let file = dir.join("window.pin");
+        std::fs::write(&file, b"7").unwrap();
+        let current = ConfigPolicy::new(live())
+            .with_window_pin_file(&file)
+            .current();
+        assert_eq!(
+            LocalPolicy {
+                window_pin: None,
+                ..current
+            },
+            live()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 use super::*;
 
 /// The `Name` field of [`form`] as the accessibility tree reports its keyboard focus.
-fn name_field() -> AccessibleElement {
+pub(super) fn name_field() -> AccessibleElement {
     AccessibleElement {
         bbox: bx(100.0, 40.0, 300.0, 70.0),
         role: Role::Input,
@@ -21,7 +21,7 @@ fn name_field() -> AccessibleElement {
 
 /// A live rig whose actuator delivers `type` in phases and whose accessibility provider
 /// reads keyboard focus.
-fn typing_rig() -> Rig {
+pub(super) fn typing_rig() -> Rig {
     let r = rig(form());
     {
         let mut w = r.world();
@@ -33,7 +33,7 @@ fn typing_rig() -> Rig {
     r
 }
 
-fn typing(page: &ObservePage, id: &str, expected: ExpectedEffect) -> ActionRequest {
+pub(super) fn typing(page: &ObservePage, id: &str, expected: ExpectedEffect) -> ActionRequest {
     ActionRequest {
         dry_run: false,
         expected_effect: expected,

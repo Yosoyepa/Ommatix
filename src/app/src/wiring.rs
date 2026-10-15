@@ -350,14 +350,35 @@ fn input_notes(config: &Config, input: InputKind, live: bool) -> Vec<String> {
                 .to_owned(),
         );
     }
+    if live && config.safety.actuation_enabled {
+        // explorer.exe also owns the desktop and the taskbar (ADR-0020).
+        let scoped = &config.safety.allowed_window_classes;
+        if config.safety.window_pin_file.is_empty()
+            && config
+                .safety
+                .allowed_applications
+                .iter()
+                .any(|app| app == "explorer.exe" && !scoped.contains_key(app))
+        {
+            notes.push(
+                "[safety] allowed_applications lists explorer.exe without allowed_window_classes: \
+                 live input can then reach the desktop and the taskbar, which explorer.exe also \
+                 owns (ADR-0020)"
+                    .to_owned(),
+            );
+        }
+    }
     notes
 }
 
-/// The operator's policy and stop file, reporting the stop on stderr.
+/// The operator's policy, stop file and window pin file, reporting the stop on stderr.
 fn operator_policy(config: &Config) -> ConfigPolicy {
-    let policy = ConfigPolicy::new(config.local_policy()).with_stderr_notices();
-    match config.stop_file() {
-        Some(path) => policy.with_stop_file(path),
+    let mut policy = ConfigPolicy::new(config.local_policy()).with_stderr_notices();
+    if let Some(path) = config.stop_file() {
+        policy = policy.with_stop_file(path);
+    }
+    match config.window_pin_file() {
+        Some(path) => policy.with_window_pin_file(path),
         None => policy,
     }
 }
@@ -369,9 +390,22 @@ fn active_control(config: &Config) -> String {
         Some(path) => format!("create {} or press Ctrl+C", path.display()),
         None => "press Ctrl+C".to_owned(),
     };
+    let mut scope: Vec<String> = config
+        .safety
+        .allowed_window_classes
+        .iter()
+        .map(|(app, classes)| format!(" (only windows of class {} of {app})", classes.join(", ")))
+        .collect();
+    if let Some(pin) = config.window_pin_file() {
+        scope.push(format!(
+            " (only the window whose handle {} holds)",
+            pin.display()
+        ));
+    }
+    let scope = scope.concat();
     format!(
-        "ACTIVE CONTROL: live input is enabled for {}; the agent acts only with dry_run: \
-         false; to stop, {stop}",
+        "ACTIVE CONTROL: live input is enabled for {}{scope}; the agent acts only with \
+         dry_run: false; to stop, {stop}",
         config.safety.allowed_applications.join(", ")
     )
 }
@@ -821,6 +855,44 @@ accessibility = \"uia\"
         // Never shown while no live actuator exists, whatever the policy says.
         let wired = build(&args("serve"), &config).unwrap();
         assert_eq!(wired.active_control, None);
+    }
+
+    #[test]
+    fn the_active_control_indicator_names_the_window_scope() {
+        let config = Config::parse(
+            "[safety]\nallowed_applications = [\"explorer.exe\"]\n\
+             allowed_window_classes = { \"explorer.exe\" = [\"CabinetWClass\"] }\n\
+             window_pin_file = \"window.pin\"\n",
+        )
+        .unwrap();
+        let line = active_control(&config);
+        assert!(
+            line.starts_with(
+                "ACTIVE CONTROL: live input is enabled for explorer.exe (only windows of class \
+                 CabinetWClass of explorer.exe) (only the window whose handle window.pin holds); "
+            ),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn explorer_without_a_window_scope_is_flagged() {
+        let note = |toml: &str| {
+            let config = Config::parse(toml).unwrap();
+            input_notes(&config, InputKind::Sendinput, true)
+                .iter()
+                .any(|n| n.contains("desktop and the taskbar"))
+        };
+        let live =
+            "[safety]\nactuation_enabled = true\nallowed_applications = [\"explorer.exe\"]\n";
+        assert!(note(live), "explorer.exe on its own is flagged");
+        assert!(!note(&format!(
+            "{live}allowed_window_classes = {{ \"explorer.exe\" = [\"CabinetWClass\"] }}\n"
+        )));
+        assert!(!note(&format!("{live}window_pin_file = \"window.pin\"\n")));
+        assert!(!note(
+            "[safety]\nactuation_enabled = true\nallowed_applications = [\"notepad.exe\"]\n"
+        ));
     }
 
     #[test]

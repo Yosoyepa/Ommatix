@@ -4,6 +4,7 @@
 //! Driving adapters (the MCP server) do not need a port trait: they call the
 //! [`Engine`](crate::Engine) directly.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use ommatix_domain::bbox::BBox;
@@ -183,6 +184,16 @@ pub struct DeliveryReceipt {
     pub inserted: u32,
 }
 
+/// A top-level window as the actuator can attest it (ADR-0020): the class its owner
+/// registered and its handle. Never its title or any text it shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopLevelWindow {
+    /// The window class name (`CabinetWClass` for a File Explorer window).
+    pub class: String,
+    /// The window handle, as a number the operator can write in the pin file.
+    pub handle: u64,
+}
+
 /// Injects validated input into the OS (`SendInput` in S3). Implementations that do not
 /// touch the real OS report `is_live() == false` and are never handed a live action.
 pub trait OsActuator: Send {
@@ -195,6 +206,21 @@ pub trait OsActuator: Send {
     /// engine asks at the gate and again right before delivery, and sends nothing unless
     /// both answers agree.
     fn foreground_application(&self) -> Option<String> {
+        None
+    }
+
+    /// The top-level window in the foreground, as the actuator can attest it. `None` when
+    /// it cannot (the default) or there is none: an operator scope on windows
+    /// ([`LocalPolicy::window_classes`], [`LocalPolicy::window_pin`]) then denies the
+    /// action. The engine asks at the gate and again right before delivery (ADR-0020).
+    fn foreground_window(&self) -> Option<TopLevelWindow> {
+        None
+    }
+
+    /// The top-level window that receives a click at the frame pixel `point` (the
+    /// action's point), as the actuator can attest it. `None` when it cannot or there is
+    /// none (ADR-0020).
+    fn window_at(&self, _point: (f64, f64)) -> Option<TopLevelWindow> {
         None
     }
 
@@ -234,6 +260,17 @@ pub trait OsActuator: Send {
     }
 }
 
+/// The operator's pin on one window (ADR-0020): while it is configured, live input is
+/// allowed only into the window it names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowPin {
+    /// A pin is configured but names no window now (the file is missing, empty or not a
+    /// handle): no live input at all.
+    Unset,
+    /// Live input may go only to the top-level window with this handle.
+    Window(u64),
+}
+
 /// The local policy, owned by the operator and outside the agent's reach (chapter 08).
 /// Its default denies everything: no actuation, no values, no applications.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -242,6 +279,13 @@ pub struct LocalPolicy {
     /// Whether `observe_screen` may return field contents when the agent asks for them.
     pub include_values: bool,
     pub allowed_applications: Vec<String>,
+    /// Per allowed application, the only window classes live input may go to (ADR-0020):
+    /// `explorer.exe` also owns the desktop and the taskbar, so its entry lists
+    /// `CabinetWClass` alone. An application without an entry is not restricted by class.
+    /// Empty by default.
+    pub window_classes: BTreeMap<String, Vec<String>>,
+    /// The operator's pin on one window, `None` when none is configured (the default).
+    pub window_pin: Option<WindowPin>,
     /// Operator stop: no new input events while set. The engine reads it at the gate and
     /// again right before each delivery. Only the operator sets it (the composition root
     /// derives it from a local stop file or switch); nothing the agent sends reaches it.
