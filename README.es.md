@@ -167,6 +167,8 @@ La continuación de esa ronda ([CHANGELOG 1.0.34](docs/thesis/CHANGELOG.md)) no 
 
 Los bloqueos de esa ronda se corrigen sin conexión ([CHANGELOG 1.0.36](docs/thesis/CHANGELOG.md); sin solicitudes reales ni entrada): el modo Estándar de la Calculadora se lee de un encabezado que contenga «estándar» o «standard» (su nombre real aún no se conoce), un `--check-mode` de sólo lectura lee el modo sin crear nunca el archivo de parada, el editor de prueba obtiene ahora el foco de teclado de Win32 (verificado en lectura: UI Automation informa al editor, no al escritorio) y ninguna aplicación de prueba pide ya el primer plano al toolkit, porque esa petición enviaba una tecla Alt sintética (hallazgo de seguridad, corregido) y el flujo del Explorador empieza en `carpeta-b` y va miga de pan arriba, miga de pan arriba y «Atrás». Nada de esto está confirmado con el motor ni en una ejecución en vivo.
 
+Una décima ronda ([CHANGELOG 1.0.38](docs/thesis/CHANGELOG.md)) envió 61 solicitudes reales, dentro del cupo de 200. La comprobación de modo de la Calculadora leyó Estándar, y S4R-02 pasó su piloto y sus diez corridas puntuadas, sin falsos éxitos; la matriz lo registra como `EJECUTADO_SUPERVISADO_PARCIAL`, como el flujo del Bloc de notas. El sondeo del editor leyó sus elementos de accesibilidad, pero el piloto no pasó: el motor rechazó cuatro veces el clic de «Guardar» por `STALE_SNAPSHOT`, así que la serie de E2E-02 no se ejecutó. El sondeo del Explorador no halló sus objetivos de navegación como los define el flujo, así que E2E-03 no se ejecutó en vivo. Decide el responsable.
+
 ## Hoja de ruta
 
 Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):

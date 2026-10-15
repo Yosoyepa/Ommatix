@@ -1632,3 +1632,108 @@ Las invocaciones de esta continuación fueron: la comprobación de modo (dos lec
 ### Estado
 
 Hallazgos 2, 3, 9 y 11: corregidos en los clientes y probados con dobles. Hallazgo 10: causa verificada y corrección verificada en lectura (foco de UI Automation en el editor), no con el motor. Hallazgo 8: señal reescrita y probada, **causa real sin verificar** (se desconoce el nombre del encabezado). El hallazgo 1 sigue abierto. Cuaderno: 429, sin cambio. Las matrices no cambian.
+
+## Décima ronda: S4R-02 pasa su piloto y sus diez corridas puntuadas; el piloto de E2E-02 no pasa y E2E-03 no cumple la condición del flujo
+
+**Fecha:** 14 de octubre de 2026. Rama `docs/s4-tenth-round`, desde `main` en `193e7ce` (fusión de #25). **No cambia ningún código**: ni los dos clientes, ni el editor, ni el motor, ni las crates de Rust. Autorización del responsable (CHANGELOG 1.0.37): S4R-02 con la Calculadora en modo Estándar puesto a mano (no se hizo clic en ningún control de modo ni se usó `--calc-standard`), E2E-02 y E2E-03 con los clientes de 1.0.36, cupo de 200 solicitudes desde `--round-start 429`, `--operator-activation` apagado y el responsable sin usar el equipo. Regla de seguridad: un clic anclado en un control incorrecto, un falso éxito del motor o una entrada fuera del flujo o de la ventana permitida detienen todo el trabajo en vivo. **No se activó** esa parada.
+
+Hashes (SHA-256), comprobados antes de cada invocación en vivo:
+
+- Clientes: `tools/s4/e2e_driver.py` `143ea45464274936e5b5eca06ade8279117d3c33cbc0b13257b74753341aee3d`; `tools/s4/e2e_dossier.py` `85111edbe1b7acc113f71e88d48ba41d6c1fe485b5571f9b0c827d53d7f316df`.
+- Motor, de `main` con `cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia`: `target/release/ommatix.exe` `38080631602ab2a0a1e94baf8432492d95fc6ec0db0cd6eee92232b956d0e5d3` (antes `3a451211…cbb1a`; cambió con la PR #25).
+- Editor, de `main` con `cargo build --release` en `tools/s4/testeditor`: `ommatix-testeditor.exe` `32b8fadd2e97b73462043a53205247fbe4384f818119d769b829918cc2da88f8` (antes `541fc0a8…2793`).
+- Configuraciones, copias sin cambio de `s4r9-live.toml` (`0428daf8…5ec1e2`) y `s4r9-explorer.toml` (`ab6c33b5…233d7`): `s4r10-live.toml` y `s4r10-explorer.toml`, con esos mismos hashes.
+- Artefactos fijados por la configuración: manifiesto float16 `f8b04be9…fe47`, ONNX Runtime `e7eedec6…7bff40` y DirectML `9c9e6d82…e92da1`.
+
+**Resultado:**
+
+- **S4R-02 (Calculadora):** piloto aprobado y **10 de 10 corridas puntuadas** con éxito verificado por el estado del sistema; 0 falsos éxitos; 0 clics anclados en un control incorrecto.
+- **E2E-02 (editor):** el sondeo ve 6 elementos de accesibilidad, pero **el piloto no pasó**: el clic de «Guardar» fue rechazado cuatro veces por el motor con `STALE_SNAPSHOT`. Por la regla del responsable, la serie queda bloqueada: 0 corridas puntuadas.
+- **E2E-03 (Explorador):** **el sondeo no cumple la condición** (ninguna miga de pan es un candidato `button` del motor). No hubo piloto ni serie, y no se envió ninguna entrada.
+- **Cuaderno:** 429 → 490, es decir, 61 solicitudes reales de 200 (139 disponibles).
+
+### 1. Verificación previa a la entrada en vivo
+
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings` y `cargo clippy -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia --all-targets -- -D warnings`: sin avisos.
+- `cargo test --workspace`: 442 pasadas, 0 fallidas y 1 ignorada. Editor: `cargo clippy -- -D warnings` sin avisos y `cargo test`: 21 pasadas.
+- `python -m unittest discover -s tools/s4 -p "test_*.py"`: 258 correctas.
+- Desde `docs/thesis`: `referencia_ejecutable/run_tests.py`, 48 de 48; `validar_paquete.py`, 449 comprobaciones y 0 fallidas. Cuatro archivos de `referencia_ejecutable/resultados/` cambiaron sólo en la marca de tiempo, las cadenas de Python y de plataforma, una duración y el fin de línea; se restauraron con `git restore`.
+- Antes de cada invocación en vivo, un comprobador de sólo lectura, fuera del repositorio, verificó los hashes anteriores, la ausencia de `stop.flag` y de `window.pin`, el cuaderno, la ausencia de procesos de prueba y de ventanas `CabinetWClass` visibles, la carpeta temporal del cliente y las ventanas del Bloc de notas del responsable. Su base al empezar la ronda: el proceso 23164 con dos ventanas minimizadas y el 8960 sin ventana (véase el hallazgo 3).
+
+### 2. Invocaciones en vivo
+
+| Paso | Invocación (resumen) | Solicitudes | Resultado |
+|---|---|---|---|
+| S4R-02, comprobación de modo (sólo lectura) | `e2e_driver.py --app calculator --check-mode` con `s4r10-live.toml` | 0 | Salida 0: modo `standard`; encabezado «Modo de calculadora Estándar», que cumple la regla; 0 controles sólo de Científica; `already_foreground`; la Calculadora la cerró el cliente. |
+| S4R-02, piloto | `--app calculator --mode run --runs 1 --max-live 10 --round-start 429` | 5 | **Aprobado:** 5 de 5 pasos entregados y observados; comprobación del sistema 5 de 5. |
+| S4R-02, serie | `--runs 10 --first-run 2 --max-live 75` | 51 | **10 de 10 corridas** con éxito. Un `STALE_SNAPSHOT` en la corrida 3: el motor no entregó nada, el cliente reintentó y la entrega fue `effect_observed`. |
+| E2E-02, sondeo (sin entrada) | `e2e_dossier.py --app editor --mode probe --runs 1` con `s4r10-live.toml` | 0 | 6 elementos con origen de accesibilidad; «Editor de texto», `input` confirmado; «Guardar», `button` confirmado; `already_foreground`. |
+| E2E-02, piloto | `--app editor --mode run --runs 1 --max-live 8` | 5 | **No pasó:** la escritura de «prueba 123» se entregó y se verificó; «Guardar» fue rechazado cuatro veces con `STALE_SNAPSHOT` (la solicitud y tres reintentos). La corrida terminó sin guardar. Serie bloqueada. |
+| E2E-03, sondeo (sin entrada) | `e2e_dossier.py --app explorer --mode probe --runs 1` con `s4r10-explorer.toml` | 0 | **No cumple la condición** (véase 3.3). No hubo piloto ni serie. |
+
+Todas las invocaciones usaron rutas absolutas, y las corridas en vivo usaron `--round-start 429`. No se usó `--calc-standard`, ni `--operator-activation`, ni ningún envío de entrada fuera de los flujos.
+
+### 3. Resultados
+
+#### 3.1 S4R-02, Calculadora
+
+- **Señal de modo, en vivo por primera vez.** El encabezado es «Modo de calculadora Estándar»: la regla (contiene «estándar» y no hay controles sólo de Científica) lo acepta y `--check-mode` devuelve `standard`. Cierra la pregunta del hallazgo 8 de la continuación de la novena ronda para esta compilación del sistema. La Calculadora no se cambió en esta ronda.
+- **Piloto:** 5 de 5 pasos entregados y `effect_observed`; comprobación del sistema 5 de 5; activación `already_foreground`, con 0,84 s de espera hasta el primer plano.
+- **Serie:** 10 corridas, 50 pasos entregados (todos `effect_observed`), 50 de 50 comprobaciones del sistema con éxito después de cada clic; 0 falsos éxitos; `grounding_wrong` 0; `indeterminate` 0; `POLICY_DENIED` 0. Una solicitud rechazada en la corrida 3 (`STALE_SNAPSHOT`), reintentada y entregada.
+- **Latencias (`_meta`, sólo acciones entregadas):** serie (n = 50): `action_total` mediana 73,8 ms y p95 83,3 ms; `rtt` mediana 74,1 ms y p95 83,6 ms. Piloto (n = 5): `action_total` mediana 74,6 ms y p95 84,0 ms. El percentil es de rango más próximo. Son una sola sesión de 11 corridas: no son mediciones de RNF-05 (S0 §10).
+
+#### 3.2 E2E-02, editor propio
+
+- **Sondeo:** 6 elementos con origen de accesibilidad, de 63 del motor. «Editor de texto» es un `input` confirmado con origen de accesibilidad, y «Guardar» un `button` confirmado. El cliente registra `uia_focus` sólo cuando no hay evidencia de accesibilidad, así que aquí no aparece. Con esta lectura, el hallazgo 10 de la continuación de la novena ronda queda resuelto para el sondeo: el motor lee la evidencia del editor, lo que no ocurría entonces.
+- **Piloto:** la escritura de «prueba 123» (`type`, en dos fases, ADR-0018) se entregó con `effect_observed`, y la comprobación del sistema después de escribir pasó (la ventana del editor muestra diez caracteres sin guardar). El paso 2, el clic de «Guardar», fue rechazado cuatro veces por `STALE_SNAPSHOT` en el motor, sin entrada en ninguno de los cuatro intentos. La corrida terminó con `step 2: rejected (STALE_SNAPSHOT)`, sin archivo guardado. El árbol temporal se borró (1 directorio) y el editor lo cerró el cliente.
+- **Causa:** no verificada. Candidato, sin comprobar: la pantalla cambió entre la observación y el clic (por ejemplo, el cursor del campo), y el motor refusó el clic porque ya no coincidía con el snapshot.
+- **Decisión:** un piloto que no pasa, por cualquier causa, bloquea su serie. La serie de E2E-02 no se ejecutó, y el piloto no se repitió.
+
+#### 3.3 E2E-03, Explorador (sólo sondeo)
+
+- **Ventana:** la abrió el cliente (`explorer.exe /e,<carpeta-b>`), la registró por su identificador y la cerró por su identificador. El árbol temporal (2 archivos y 3 carpetas) se borró; el archivo de ventana se escribió y se borró; `window.pin` no existe al terminar.
+- **Objetivos:** «carpeta-a» y la carpeta raíz no tienen ningún elemento del motor con esa etiqueta y rol `button`; en UI Automation, cada una es un `SplitButton`. «Atrás» tiene un elemento del motor con rol `button`, pero con `actionability` `unknown`; el cliente sólo elige un objetivo confirmado. En UI Automation es un `Button` con `AutomationId` `backButton`.
+- **Condición:** la ronda sólo pasa al piloto si los tres objetivos son candidatos `button` utilizables. No se cumplió. No hubo piloto ni serie, y no se envió ninguna entrada.
+- **Diferencia con la novena ronda:** entonces el motor sí veía «carpeta-a» como elemento confirmado con zona `unknown`. **No verificado:** la causa del cambio (el estado de la ventana o el momento de la observación).
+
+#### 3.4 Totales y seguridad
+
+- **Solicitudes reales:** 61 (cuaderno 429 → 490). Entregadas: 56, todas `effect_observed`: 55 clics de la Calculadora y 1 escritura en el editor. Rechazadas: 5, todas `STALE_SNAPSHOT` (1 en la serie de S4R-02 y 4 en el piloto de E2E-02). `indeterminate`: 0. `POLICY_DENIED`: 0.
+- **Verificación por el estado del sistema:** 56 de 56 entregadas. **Falsos éxitos:** 0. **Clics anclados en un control incorrecto:** 0. **Parada de seguridad:** no se activó.
+- **Entradas:** en cada corrida de S4R-02, los clics «Siete», «Más», «Ocho», «Es igual a» y «Borrar»; y la escritura de «prueba 123» en el campo del editor propio. Ninguna otra aplicación ni ventana del responsable recibió entrada.
+- **Capturas y texto de pantalla:** ninguno guardado. Los registros contienen estados, códigos, contadores, tiempos, tipos de control, `AutomationId` y las etiquetas fijas del protocolo. El nombre del encabezado de la Calculadora aparece sólo en el registro de `--check-mode`, porque cumplió la regla (el cliente lo guarda sólo entonces).
+
+### 4. Hallazgos
+
+| # | Severidad | Hallazgo | Estado y siguiente paso |
+|---|---|---|---|
+| 1 | Mayor (E2E-02) | El piloto no pasó: «Guardar» fue rechazado cuatro veces con `STALE_SNAPSHOT`; la escritura sí se entregó y se verificó. La serie queda bloqueada. | Abierto. Causa no verificada. Decide el responsable (§7). |
+| 2 | Mayor (E2E-03) | El sondeo no halla «carpeta-a» ni la raíz como candidatos `button` del motor, y «Atrás» no está confirmado. En la novena ronda el motor sí veía «carpeta-a». | Abierto. Causa no verificada. Decide el responsable (§7). |
+| 3 | Observación (Bloc de notas del responsable) | Al empezar la ronda, el proceso 8960 no tenía ventana de nivel superior, y el 23164 tenía dos ventanas minimizadas; la novena ronda registró una ventana minimizada por proceso. Ningún cliente de esta ronda había tocado el Bloc de notas antes de esa observación, y no se actuó sobre él. | Abierto para el responsable. Causa no verificada. |
+| 4 | Observación (motor) | Un `STALE_SNAPSHOT` en un paso de la serie de S4R-02: el motor rechazó antes de entregar y el cliente reintentó con éxito. Es el comportamiento de diseño. | Sin cambio. |
+| 5 | Observación (editor) | El motor lee evidencia de accesibilidad del editor en el sondeo (6 elementos). El hallazgo 10 de la continuación de la novena ronda queda resuelto para el sondeo. | Sin cambio. |
+| 6 | Observación (Calculadora) | El nombre del encabezado en Estándar es «Modo de calculadora Estándar». Cierra la pregunta del hallazgo 8 de la continuación de la novena ronda. | Sin cambio. |
+
+### 5. Estado en la matriz
+
+`matrices/plan_pruebas.csv`: **S4R-02** pasa de `PENDIENTE_PRODUCTO` a `EJECUTADO_SUPERVISADO_PARCIAL`, con la misma lectura que S4R-03: un piloto aprobado y diez de diez corridas puntuadas sin falsos éxitos, sólo clics, una sola sesión supervisada y la Calculadora en modo Estándar puesto a mano. Queda parcial por esas mismas razones. **E2E-02** y **E2E-03** siguen `NO_EJECUTADO` y `PENDIENTE_PRODUCTO`: E2E-02 no tiene corridas puntuadas y E2E-03 no se ejecutó en vivo. `requisitos_trazabilidad.csv`, RF-18, RNF-03, RNF-05 y las casillas de la Definition of Done no cambian.
+
+### 6. Estado del escritorio, del cuaderno y de `stop.flag`
+
+- **Procesos de prueba:** ninguno al terminar. La Calculadora y el editor los cerró el cliente en cada invocación.
+- **Explorador:** una ventana, abierta y cerrada por el cliente en el sondeo. No queda ninguna ventana `CabinetWClass` visible; la ventana oculta que `explorer.exe` ya tenía no cambió.
+- **Bloc de notas del responsable:** el proceso 23164 con sus dos ventanas minimizadas, sin cambio durante la ronda; el 8960 sin ventana (hallazgo 3).
+- **Shell (`explorer.exe`):** PID 36160, sin cambio.
+- **`window.pin`:** no existe. **`stop.flag`:** ausente, y nunca se creó.
+- **Cuaderno:** 490 (61 de 200 solicitudes de la ronda; 139 disponibles).
+
+### 7. Qué decide el responsable
+
+1. **E2E-02:** cómo investigar el `STALE_SNAPSHOT` del clic «Guardar» (un diagnóstico de sólo lectura con el responsable presente, o un cambio del cliente o del editor con una prueba que falle sin él y un hash nuevo, en una ronda aparte), y si el piloto se repite después.
+2. **E2E-03:** si acepta otra identificación de las migas de pan (cambio del cliente con prueba y hash), si cambia el contrato de la navegación (dossier, con entrada en el CHANGELOG), o si pide investigar por qué el motor ya no ve «carpeta-a».
+3. **S4R-02:** si acepta `EJECUTADO_SUPERVISADO_PARCIAL` en la matriz, que esta rama propone.
+4. **Cupo:** quedan 139 solicitudes con `--round-start 429`; o una ronda nueva puede empezar en 490.
+
+### 8. Ejecución
+
+Las invocaciones en vivo fueron, en este orden: la comprobación de modo de la Calculadora; el piloto y la serie de S4R-02; el sondeo del editor, el piloto de E2E-02; y el sondeo de E2E-03 con `s4r10-explorer.toml`. Cada una fue precedida por el comprobador de sólo lectura. Los registros y los resultados JSONL están en la carpeta de ejecuciones, fuera del repositorio; ninguno contiene capturas ni texto de pantalla.
