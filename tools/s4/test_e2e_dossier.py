@@ -1447,5 +1447,28 @@ class EditorAccessibilityTest(QuietTest):
             self.assertIsNone(driver.parse_focus_owner(bad), bad)
 
 
+class DossierServeArgvTest(unittest.TestCase):
+    """The dossier's engine command follows the same rule as the reduced protocol's: a live run
+    takes no fixed session id (chapter 08 §8.4), and a probe keeps the dossier's identifier."""
+
+    def args(self, session_id):
+        return SimpleNamespace(exe="ommatix.exe", output=0, config="live.toml",
+                               session_id=session_id)
+
+    def test_a_dossier_live_run_takes_no_fixed_session_id(self):
+        argv = dossier.dossier_serve_argv(self.args(None), live=True)
+        self.assertNotIn("--session-id", argv)
+        self.assertEqual(argv[-2:], ["--input", "sendinput"])
+
+    def test_a_dossier_live_run_refuses_an_explicit_session_id(self):
+        with self.assertRaises(dossier.Abort):
+            dossier.dossier_serve_argv(self.args("s4-e2e01"), live=True)
+
+    def test_a_dossier_probe_keeps_the_dossier_identifier(self):
+        argv = dossier.dossier_serve_argv(self.args(None), live=False)
+        self.assertEqual(argv[-2:], ["--session-id", dossier.DOSSIER_PROBE_SESSION_ID])
+        self.assertNotIn("--input", argv)
+
+
 if __name__ == "__main__":
     unittest.main()

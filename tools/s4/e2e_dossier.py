@@ -74,6 +74,16 @@ NOT_BY_OCR = driver.NOT_BY_OCR
 s3 = driver.s3
 user32 = driver.user32
 
+DOSSIER_PROBE_SESSION_ID = "s4d"
+
+
+def dossier_serve_argv(args, live: bool) -> list:
+    """The engine command of a dossier run: the reduced protocol's rule (driver.serve_argv), with
+    the dossier's own probe identifier. A live run passes no fixed session id."""
+    return driver.serve_argv(args.exe, args.output, args.config, live, args.session_id,
+                             DOSSIER_PROBE_SESSION_ID)
+
+
 RUN_ROOT = "ommatix-e2e"
 RUN_ID_LIMIT = 64
 E2E_ID = {"editor": "E2E-02-plan", "explorer": "E2E-03-plan"}
@@ -823,7 +833,8 @@ def main() -> int:
     p.add_argument("--explorer-back-id", default="",
                    help="the Back button's AutomationId, once the probe has recorded it "
                         "(optional; when set the Back button must also carry it)")
-    p.add_argument("--session-id", default="s4d")
+    p.add_argument("--session-id", default=None,
+                   help="probe runs only: the engine's session identifier (a live run takes none)")
     p.add_argument("--output", type=int, default=0)
     p.add_argument("--foreground-wait", type=float, default=60.0)
     p.add_argument("--operator-activation", action="store_true",
@@ -869,10 +880,11 @@ def main() -> int:
     if pin_file is not None and pin_file.exists():
         driver.log("abort", reason="the pin file exists before the run")
         return 2
-    argv = [args.exe, "serve", "--source", "dxgi", "--output", str(args.output),
-            "--config", str(args.config), "--session-id", args.session_id]
-    if live:
-        argv += ["--input", "sendinput"]
+    try:
+        argv = dossier_serve_argv(args, live)
+    except Abort as error:
+        driver.log("abort", reason=str(error))
+        return 2
     flow = editor_flow() if args.app == "editor" else explorer_flow("(set per run)")
     driver.log("start", suite="dossier", app=args.app, mode=args.mode, runs=args.runs,
                live_input=live, config_sha256=hashlib.sha256(raw).hexdigest(),

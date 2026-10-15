@@ -1546,6 +1546,23 @@ def read_ledger(path: Path) -> int:
         return 0
 
 
+PROBE_SESSION_ID = "s4r2"
+
+
+def serve_argv(exe, output, config, live: bool, session_id: str | None,
+               probe_session_id: str = PROBE_SESSION_ID) -> list:
+    """The command that starts the engine for a run. A live run takes no fixed session id: the
+    engine refuses one with live input, because a restarted engine with the same identifier
+    would accept an earlier run's request (chapter 08 §8.4). A probe keeps its identifier."""
+    argv = [exe, "serve", "--source", "dxgi", "--output", str(output), "--config", str(config)]
+    if not live:
+        return argv + ["--session-id", session_id or probe_session_id]
+    if session_id is not None:
+        raise Abort("a live run takes no --session-id: the engine refuses a fixed identifier "
+                    "with live input; omit it")
+    return argv + ["--input", "sendinput"]
+
+
 def round_problem(live: bool, round_start: int | None, ledger_now: int) -> str | None:
     """Why a round may not start: run mode needs the ledger's value at the round's start, and
     that value must lie within the ledger and leave room under the round's cap."""
@@ -2788,7 +2805,8 @@ def main() -> int:
                         "no live request and never creates the stop file (--app calculator)")
     p.add_argument("--results", type=Path, required=True, help="JSONL file to append runs to")
     p.add_argument("--testapp-exe", default=str(HERE / "testapp" / "target" / "release" / "ommatix-testapp.exe"))
-    p.add_argument("--session-id", default="s4r2")
+    p.add_argument("--session-id", default=None,
+                   help="probe runs only: the engine's session identifier (a live run takes none)")
     p.add_argument("--output", type=int, default=0)
     p.add_argument("--foreground-wait", type=float, default=600.0)
     p.add_argument("--operator-activation", action="store_true",
@@ -2843,10 +2861,11 @@ def main() -> int:
     if live and not config.get("safety", {}).get("actuation_enabled"):
         log("abort", reason="run mode needs the live configuration")
         return 2
-    argv = [args.exe, "serve", "--source", "dxgi", "--output", str(args.output),
-            "--config", str(args.config), "--session-id", args.session_id]
-    if live:
-        argv += ["--input", "sendinput"]
+    try:
+        argv = serve_argv(args.exe, args.output, args.config, live, args.session_id)
+    except Abort as e:
+        log("abort", reason=str(e))
+        return 2
     if args.focus_click:
         log("warning", reason="--focus-click is superseded by ADR-0018 and should not be used")
     flow = testapp_flow(args.focus_click) if args.app == "testapp" else FLOWS[args.app]()
