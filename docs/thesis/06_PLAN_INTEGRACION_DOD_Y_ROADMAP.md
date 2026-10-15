@@ -51,6 +51,8 @@ Congelar configuraciones y corpus, ejecutar protocolo de 450 corridas E2E, regre
 
 Estas casillas permanecen pendientes en el dossier porque el producto no fue ejecutado. El informe local sólo acredita la parte documental y los oráculos realmente probados.
 
+**Evidencia de aplicaciones a 14 de octubre de 2026 (ninguna casilla cambia).** La casilla «éxito global y por aplicación con verificador independiente» tiene hoy evidencia puntuada en dos aplicaciones, ambas del protocolo reducido de S4: la aplicación de prueba propia (E2E-01, parcial) y el Bloc de notas (S4R-03, diez de diez corridas, sólo clics). No la tiene la Calculadora (S4R-02, sin ejecutar), ni el editor con escritura y guardado (E2E-02), ni el explorador de archivos (E2E-03); tampoco hay corridas a 125 y 150 % de DPI, con otro tema ni las 450 del diseño. Por eso la casilla sigue sin marcar.
+
 ## 6.8 Roadmap condicionado por evidencia
 
 **v1.1, accesibilidad híbrida:** fusionar UIAutomation y luego AX/AT-SPI mediante los puertos previstos. Comparar ahorro de inferencias con precisión y cobertura. No prometer “70% menos GPU” sin medir. El árbol accesible puede ser incompleto; sigue existiendo la ruta visual.
