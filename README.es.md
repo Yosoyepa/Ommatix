@@ -302,7 +302,7 @@ archivo la retira. Las acciones ya entregadas conservan el estado informado (rep
 puede activar ni retirar la parada. Terminar el proceso (Ctrl+C) también detiene; sin
 `stop_file`, es la única parada local.
 
-**Purga del operador** ([ADR-0028](docs/adr/0028-operator-purge-file.md), propuesta; apagada por
+**Purga del operador** ([ADR-0028](docs/adr/0028-operator-purge-file.md), aprobada; apagada por
 defecto). Con `[safety] purge_file = "PURGE"` (relativo al archivo de configuración), crear ese
 archivo hace que el motor borre su estado y su caché en su siguiente petición, sin terminar la
 sesión; ningún identificador se emite otra vez después. El motor atiende cada instancia del archivo

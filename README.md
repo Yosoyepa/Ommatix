@@ -284,7 +284,7 @@ already delivered keep their reported status (a replay of their `request_id` sti
 `input_delivered`); nothing is rolled back. No MCP tool can set or clear the stop. Ending
 the process (Ctrl+C) also stops it; without a `stop_file`, that is the only local stop.
 
-**Operator purge** ([ADR-0028](docs/adr/0028-operator-purge-file.md), proposed; off by
+**Operator purge** ([ADR-0028](docs/adr/0028-operator-purge-file.md), accepted; off by
 default). With `[safety] purge_file = "PURGE"` (relative to the configuration file), creating
 that file makes the engine delete its state and cache at its next request, without ending the
 session; no identifier is issued again afterwards. The engine honours each instance of the file

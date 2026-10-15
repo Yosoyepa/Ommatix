@@ -1,8 +1,8 @@
 # 0028. Let the operator purge the engine's state on demand, through a purge file that is honoured once per instance
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-15)
 - **Date:** 2026-10-15
-- **Approval:** Pending. The project owner decides whether on-demand deletion is required (chapter 06 §6.7, decision 2). The mechanism is off by default and changes no guarantee accepted today: it adds one optional setting and one check at the request boundary, and it changes neither SEC-04 nor chapter 08 §8.4.
+- **Approval:** Accepted by the project owner on 2026-10-15 (chapter 06 §6.7, decision 2: on-demand deletion is required). The mechanism is off by default and changes no guarantee accepted today: it adds one optional setting and one check at the request boundary, and it changes neither SEC-04 nor chapter 08 §8.4.
 
 ## Context
 
@@ -124,5 +124,5 @@ la frontera de la siguiente petición, nunca durante una, y una vez por cada ins
 archivo (fecha de modificación y tamaño). No borra el archivo, porque SEC-04 y el capítulo 08
 §8.4 prohíben que el código de producción borre archivos. El agente no gana ninguna
 herramienta, argumento ni campo de contrato: sólo ve `STALE_SNAPSHOT` en su siguiente acción,
-como tras cualquier caducidad. Si el borrado bajo demanda es obligatorio lo decide el
-responsable (capítulo 06 §6.7, decisión 2).
+como tras cualquier caducidad. El responsable la aprobó el 15 de octubre de 2026: el
+borrado bajo demanda es obligatorio (capítulo 06 §6.7, decisión 2).
