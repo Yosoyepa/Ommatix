@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-15T16:32:24.318545+00:00",
+  "timestamp_utc": "2026-10-15T17:07:11.934574+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -16,7 +16,7 @@
     "references": 24,
     "adrs": 30
   },
-  "checks_run": 544,
+  "checks_run": 546,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -1853,7 +1853,7 @@
     {
       "check": "doc01_adr_existen:RNF-05",
       "passed": true,
-      "detail": "ADR-0010; ADR-0019"
+      "detail": "ADR-0010; ADR-0019; ADR-0030"
     },
     {
       "check": "doc01_propietario:RNF-05",
@@ -1873,7 +1873,7 @@
     {
       "check": "doc01_adr_existen:RNF-06",
       "passed": true,
-      "detail": "ADR-0010"
+      "detail": "ADR-0010; ADR-0029"
     },
     {
       "check": "doc01_propietario:RNF-06",
@@ -2729,6 +2729,16 @@
       "check": "doc01_nota_de_alcance:RNF-03",
       "passed": true,
       "detail": "Protocolo reducido de S4 (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado b): E2E-01, E2E-02, E2E-03, S4R-02 y S4R-03, diez de diez corridas puntuadas cada uno y sin falsos éxitos (docs/thesis/S4_ACEPTACION_REDUCIDA.md). EV-02 (450 corridas) sin ejecutar: pasa al próximo corte. Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c)"
+    },
+    {
+      "check": "doc01_nota_de_alcance:RNF-05",
+      "passed": true,
+      "detail": "PERF-02 ejecutada en parte: docs/thesis/S0_RESULTADOS.md §10 (medianas y p95, sin y con uia) y §§13.3 y 13.11 (B0 frente a B1); tools/perf/measure_latency.py. Medición de INC-07 con uia (docs/thesis/S0_RESULTADOS.md §16, ADR-0030, activada por defecto con dos regiones): p95 de 136,3 ms en incr1, 137,6 ms en incr2 y 131,8 ms en full (refresco completo, B0), con p99 publicado en cada caso. Lectura del responsable: «incremental» nombra el escenario, y con esa lectura las metas de latencia se cumplen; la aceptación de §6.7 (a) queda superada para la latencia. Lo que resta de PERF-02 (variante de caché B2 e igualdad de modelos) se acepta por alcance para el próximo corte: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (e) y CHANGELOG 1.0.69. Con dos regiones y sin la regla de ADR-0030, la ruta incremental da 186,8 ms en incr2 (§16); la regla está activada por defecto."
+    },
+    {
+      "check": "doc01_nota_de_alcance:RNF-06",
+      "passed": true,
+      "detail": "PERF-03 ejecutado en dos corridas supervisadas de 120 minutos, completas y sin entrada: sobre fe35d80 sin accesibilidad (docs/thesis/S0_RESULTADOS.md §12) y sobre 745caff con uia (§15); tools/perf/soak.py. El conjunto de trabajo cumple el umbral del responsable (no más de 10 MiB/h; +1,25 MiB/h en §15). En la corrida con uia el recuento de manejadores pasa de 1008 a 1009 en el minuto 69 y se queda plano, con pendiente de +0,81 por hora, que no cumple el criterio de no crecimiento. Aceptado por cambio de alcance para el MVP, con esta evidencia documentada: ese paso de manejador (§15), la cota de la cola de regiones pendientes (decisión 9, sin cifra ni prueba con observaciones fallidas) y la memoria de la caché de iconos (no activa en la corrida): docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (f) y CHANGELOG 1.0.69. No se afirma ausencia de fugas."
     },
     {
       "check": "doc01_nota_de_alcance:RNF-07",

@@ -924,7 +924,8 @@ fn doc_01_a_requirement_accepted_by_scope_cites_its_scope_note() {
         .filter(|row| row["estado_producto"] == SCOPE_ACCEPTED)
         .map(|row| row["id"].clone())
         .collect();
-    let named = BTreeSet::from(["RNF-02", "RNF-03", "RNF-07"].map(str::to_owned));
+    let named =
+        BTreeSet::from(["RNF-02", "RNF-03", "RNF-05", "RNF-06", "RNF-07"].map(str::to_owned));
     assert_eq!(accepted, named);
 }
 
