@@ -36,7 +36,7 @@ use ommatix_domain::fusion::{
     AccessibleControl, Actionability, Affordance, Control, FusedControl, LabelChoice, Role,
     TextKind, Word, fuse, reconcile_accessibility,
 };
-use ommatix_domain::identity::{Observation, Registry, TargetId};
+use ommatix_domain::identity::{Changes, Observation, Registry, TargetId};
 use ommatix_domain::incremental::{BgraFrame, Evidence, RegionPlan, Work, plan_regions};
 
 use super::accessibility::accessible_control;
@@ -231,6 +231,9 @@ pub(super) struct Published {
     /// since: the next observation reads them again, pixels changed or not. Empty when
     /// the evidence is complete.
     pub accessibility_gaps: Vec<BBox>,
+    /// What the last observation did to the tracks: why each lost its ID (ADR-0026), as
+    /// codes only.
+    pub changes: Changes,
 }
 
 impl Published {
@@ -288,7 +291,9 @@ fn control_candidate(
             bbox: fc.control.bbox,
             role,
             label: (!label.is_empty()).then(|| label.clone()),
-            discriminant: None,
+            // Only an accessibility element carries a native identity (ADR-0026): a visual
+            // box has no evidence of being the same object across observations.
+            discriminant: access.and_then(|a| a.discriminant.clone()),
             affordance: fc.control.affordance,
         },
         label,
@@ -352,6 +357,7 @@ struct Tracked {
     elements: Vec<StoredElement>,
     /// When fusion ended and tracking began.
     fused_at: Duration,
+    changes: Changes,
 }
 
 /// Fuses `evidence`, labels the curated icons of the controls the `planned` work re-analyses (from
@@ -437,7 +443,7 @@ fn fuse_and_track(
         .collect();
     let fused_at = clock.now();
     let observations: Vec<Observation> = candidates.iter().map(|c| c.observation.clone()).collect();
-    let (registry, _changes) = base
+    let (registry, changes) = base
         .observe(frame.geometry_epoch(), &observations, config.association)
         .ok()?;
     let elements = stored_elements(&registry, candidates);
@@ -447,6 +453,7 @@ fn fuse_and_track(
         icons,
         elements,
         fused_at,
+        changes,
     })
 }
 
@@ -611,6 +618,7 @@ impl Engine {
                 elements: tracked.elements,
                 timings,
                 accessibility_gaps,
+                changes: tracked.changes,
             },
         );
         if self.store.commit(staged).is_err() {

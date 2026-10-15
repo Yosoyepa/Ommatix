@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ommatix_domain::fusion::FusionParams;
-use ommatix_domain::identity::{AssociationPolicy, Registry};
+use ommatix_domain::identity::{AssociationPolicy, Changes, Registry};
 use ommatix_domain::incremental::{PlanParams, connected_components};
 use ommatix_domain::snapshot::SnapshotStore;
 
@@ -250,6 +250,13 @@ impl Engine {
         self.store
             .published()
             .map(|p| p.accessibility_gaps.is_empty())
+    }
+
+    /// Why the tracks of the published snapshot retired in the observation that published it
+    /// (ADR-0026): codes only, never a label, a discriminant or a box. `None` before the
+    /// first observation.
+    pub fn last_identity_changes(&self) -> Option<&Changes> {
+        self.store.published().map(|p| &p.changes)
     }
 
     /// Stage durations of the last `execute_action` the gate ran, for MCP `_meta`. `None`

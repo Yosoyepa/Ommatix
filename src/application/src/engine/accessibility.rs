@@ -16,7 +16,7 @@
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{AccessibleControl, Actionability, Affordance, Control, Role};
 
-use crate::ports::AccessibleElement;
+use crate::ports::{AccessibleElement, NativeIdentity};
 
 /// The accessible name as a label: no control characters, single spaces.
 fn clean_name(name: &str) -> String {
@@ -69,6 +69,7 @@ pub(super) fn accessible_control(element: &AccessibleElement) -> Option<Accessib
         },
         label: clean_name(&element.name),
         sensitive: element.password,
+        discriminant: element.native.as_ref().map(NativeIdentity::discriminant),
     })
 }
 
@@ -100,6 +101,7 @@ mod tests {
             offscreen: false,
             password: false,
             patterns,
+            native: None,
         }
     }
 

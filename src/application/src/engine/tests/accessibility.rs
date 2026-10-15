@@ -31,6 +31,7 @@ fn element(bbox: BBox, role: Role, name: &str, patterns: AccessiblePatterns) -> 
         offscreen: false,
         password: false,
         patterns,
+        native: None,
     }
 }
 

@@ -20,7 +20,9 @@
 //!    call: control type, name, rectangle, enabled, off-screen, password, process id and
 //!    the availability of the `Invoke`, `Toggle`, `ExpandCollapse`, `SelectionItem`,
 //!    `Value` (and whether it is read-only) and `Scroll` patterns. `Value.Value` is never
-//!    requested.
+//!    requested. The runtime ID and the window handle come in the same cache: an element's
+//!    native identity is its runtime ID with the process and the window of the walk, never
+//!    a runtime ID on its own (ADR-0026).
 //! 4. **Say when it was cut short.** A walk that ends on its budget (elements, time or
 //!    depth), or that cannot read a window, reports `truncated`: what is missing is
 //!    unknown, not absent, and the engine reads those regions again on its next
@@ -45,7 +47,10 @@ use uiautomation::types::{TreeScope, UIProperty};
 use uiautomation::variants::Variant;
 use uiautomation::{UIAutomation, UIElement, UITreeWalker};
 
-use crate::{ADAPTER, Budget, HOSTED_WINDOW_CLASS, Spent, is_frame_host_window, role_of, walk};
+use crate::{
+    ADAPTER, Budget, HOSTED_WINDOW_CLASS, Spent, is_frame_host_window, native_identity, role_of,
+    walk,
+};
 
 /// The live mapping from frame pixels to desktop coordinates (the capturer's).
 type MappingSource = Box<dyn Fn() -> Result<DisplayMapping, PortError> + Send + Sync>;
@@ -208,7 +213,7 @@ struct Reader {
 }
 
 /// Properties fetched for every element of the attested application.
-const FULL: [UIProperty; 14] = [
+const FULL: [UIProperty; 16] = [
     UIProperty::ControlType,
     UIProperty::Name,
     UIProperty::BoundingRectangle,
@@ -223,14 +228,17 @@ const FULL: [UIProperty; 14] = [
     UIProperty::IsValuePatternAvailable,
     UIProperty::ValueIsReadOnly,
     UIProperty::IsScrollPatternAvailable,
+    UIProperty::RuntimeId,
+    UIProperty::NativeWindowHandle,
 ];
 
 /// Properties fetched for top-level windows and their children.
-const LIGHT: [UIProperty; 4] = [
+const LIGHT: [UIProperty; 5] = [
     UIProperty::ProcessId,
     UIProperty::ClassName,
     UIProperty::IsOffscreen,
     UIProperty::BoundingRectangle,
+    UIProperty::NativeWindowHandle,
 ];
 
 fn cache_request(
@@ -243,6 +251,24 @@ fn cache_request(
     }
     request.set_tree_scope(TreeScope::Element)?;
     Ok(request)
+}
+
+/// The element's cached runtime ID (UI Automation's `RuntimeId`), `None` when it has none.
+/// Read from the cache, so it costs no call to the provider.
+fn runtime_id(element: &UIElement) -> Option<Vec<i32>> {
+    let value = element
+        .get_cached_property_value(UIProperty::RuntimeId)
+        .ok()?;
+    let array = value.get_array().ok()?;
+    array.try_into().ok()
+}
+
+/// The window handle of a window element (its cached `NativeWindowHandle`); `0` when it has
+/// none.
+fn window_handle(window: &UIElement) -> isize {
+    window
+        .get_cached_native_window_handle()
+        .map_or(0, Into::into)
 }
 
 /// A cached boolean property; `false` when it is unsupported or unreadable.
@@ -374,14 +400,14 @@ impl Reader {
             .ok()?
             .build_updated_cache(&self.full)
             .ok()?;
-        let (pid, _) = self.process_of_window_holding(focused.clone())?;
+        let (pid, window) = self.process_of_window_holding(focused.clone())?;
         if focused.get_cached_process_id().ok() != Some(pid)
             || focused.is_cached_offscreen().unwrap_or(true)
         {
             return None;
         }
         let bbox = frame_box(&focused, mapping).ok().flatten()?;
-        Self::element(&focused, bbox)
+        Self::element(&focused, bbox, (pid, window_handle(&window)))
     }
 
     /// The elements of process `pid`'s visible windows inside `regions`, within the budget.
@@ -448,6 +474,8 @@ impl Reader {
             read.truncated = true;
             return false;
         };
+        // The scope of every runtime ID this walk reads (ADR-0026).
+        let scope = (pid, window_handle(&window));
         let Read {
             found,
             spent,
@@ -470,7 +498,7 @@ impl Reader {
                     Ok(b) => b,
                 };
                 if let Some(bbox) = bbox
-                    && let Some(e) = Self::element(element, bbox)
+                    && let Some(e) = Self::element(element, bbox, scope)
                 {
                     found.push(e);
                 }
@@ -482,8 +510,13 @@ impl Reader {
         walked.out_of_budget
     }
 
-    /// The element as evidence, when its control type is one the contract can use.
-    fn element(element: &UIElement, bbox: BBox) -> Option<AccessibleElement> {
+    /// The element as evidence, when its control type is one the contract can use. `scope` is
+    /// the process and the window handle its provider belongs to (ADR-0026).
+    fn element(
+        element: &UIElement,
+        bbox: BBox,
+        (pid, hwnd): (i32, isize),
+    ) -> Option<AccessibleElement> {
         let control_type: i32 = element
             .get_cached_property_value(UIProperty::ControlType)
             .ok()
@@ -511,6 +544,7 @@ impl Reader {
             offscreen: false,
             password,
             patterns,
+            native: native_identity(pid, hwnd, runtime_id(element)),
         })
     }
 }

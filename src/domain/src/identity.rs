@@ -57,8 +57,9 @@ pub struct Observation {
     pub bbox: BBox,
     pub role: Role,
     pub label: Option<String>,
-    /// Content that tells repeated rows apart (a file name in a list). A change of it is a
-    /// different element, even at the same place.
+    /// Content that tells repeated rows apart (a file name in a list), or the native identity
+    /// of an accessibility element, scoped by its application (ADR-0026). A change of it is a
+    /// different element, even at the same place; visual elements carry none.
     pub discriminant: Option<String>,
     pub affordance: Affordance,
 }
@@ -92,12 +93,31 @@ impl Default for AssociationPolicy {
     }
 }
 
+/// Why a track lost its ID: the abstention of ADR-0026, recorded as a code. The label, the
+/// discriminant and the box never appear in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Retirement {
+    /// No observation has its role and label over its box.
+    Vanished,
+    /// The same identity is observed, but its box moved beyond the association's IoU.
+    Moved,
+    /// An observation has its role, label and box but another discriminant: another object
+    /// stands there. The ID is not carried over, even though nothing else changed.
+    Substituted,
+    /// Several tracks or observations compete for the association, so none keeps an ID.
+    Ambiguous,
+    /// The screen geometry changed (a new epoch): associations are not carried over.
+    GeometryChanged,
+}
+
 /// What an observation did to the registry, each list sorted by ID.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changes {
     pub created: Vec<TargetId>,
     pub updated: Vec<TargetId>,
     pub retired: Vec<TargetId>,
+    /// Why each retired track retired, in the order of `retired`.
+    pub reasons: Vec<(TargetId, Retirement)>,
 }
 
 /// The tracks of one session at one snapshot. Observing returns the next registry, so it can
@@ -173,8 +193,10 @@ impl Registry {
     /// A track keeps its ID only when exactly one observation is compatible with it and it
     /// is the only track compatible with that observation: same role, same normalised label
     /// and discriminant, and an IoU of at least `policy.min_iou`. A new geometry epoch
-    /// associates nothing. Unmatched tracks retire; unmatched observations get new IDs in
-    /// reading order (top to bottom, left to right).
+    /// associates nothing. Unmatched tracks retire, each with the reason the registry
+    /// recorded ([`Retirement`]); unmatched observations get new IDs in reading order (top to
+    /// bottom, left to right). Uncertain continuity therefore means a new ID, never the ID
+    /// of the most similar neighbour (ADR-0026).
     pub fn observe(
         &self,
         geometry_epoch: u64,
@@ -199,7 +221,8 @@ impl Registry {
 
         let same_geometry = geometry_epoch == self.geometry_epoch;
         let tracks: Vec<&Track> = self.tracks.values().collect();
-        let matched_track = associate(&tracks, &order, same_geometry, policy.min_iou);
+        let (matched_track, retirements) =
+            associate(&tracks, &order, same_geometry, policy.min_iou);
 
         let mut next = Self {
             session_id: self.session_id.clone(),
@@ -234,10 +257,11 @@ impl Registry {
             };
             next.tracks.insert(track.target_id, track);
         }
-        for t in &tracks {
-            if !next.tracks.contains_key(&t.target_id) {
+        for (t, retirement) in tracks.iter().zip(retirements) {
+            if let Some(reason) = retirement {
                 next.retired.insert(t.target_id);
                 delta.retired.push(t.target_id);
+                delta.reasons.push((t.target_id, reason));
             }
         }
         delta.updated.sort_unstable();
@@ -321,26 +345,36 @@ fn identity_of(observation: &Observation) -> Identity {
 /// so a track is compared only with the observations of its own identity: normalising a
 /// label for every pair of tracks and observations cost 57 ms of the 60 ms of a warm
 /// observation of 300 controls and 600 text spans (PERF-01).
+///
+/// It also says why each track that keeps no ID retires (`Some`, aligned with `tracks`): a
+/// track with competing candidates is ambiguous; one with none is substituted when another
+/// discriminant stands in its place, moved when its identity is seen beyond the IoU, and
+/// vanished otherwise (ADR-0026).
 fn associate(
     tracks: &[&Track],
     order: &[&Observation],
     same_geometry: bool,
     min_iou: f64,
-) -> Vec<Option<usize>> {
+) -> (Vec<Option<usize>>, Vec<Option<Retirement>>) {
     let mut matched_track = vec![None; order.len()];
     if !same_geometry {
-        return matched_track;
+        return (
+            matched_track,
+            vec![Some(Retirement::GeometryChanged); tracks.len()],
+        );
     }
     let observed: Vec<Identity> = order.iter().map(|o| identity_of(o)).collect();
     let mut groups: BTreeMap<&Identity, Vec<usize>> = BTreeMap::new();
     for (j, identity) in observed.iter().enumerate() {
         groups.entry(identity).or_default().push(j);
     }
+    let identities: Vec<Identity> = tracks.iter().map(|t| identity_of(&t.observation)).collect();
     let by_track: Vec<Vec<usize>> = tracks
         .iter()
-        .map(|t| {
+        .zip(&identities)
+        .map(|(t, identity)| {
             groups
-                .get(&identity_of(&t.observation))
+                .get(identity)
                 .into_iter()
                 .flatten()
                 .copied()
@@ -352,14 +386,40 @@ fn associate(
     for &j in by_track.iter().flatten() {
         rivals[j] += 1;
     }
+    let mut kept = vec![false; tracks.len()];
     for (i, candidates) in by_track.iter().enumerate() {
         if let [j] = candidates[..]
             && rivals[j] == 1
         {
             matched_track[j] = Some(i);
+            kept[i] = true;
         }
     }
-    matched_track
+    let retirements = tracks
+        .iter()
+        .enumerate()
+        .map(|(i, track)| {
+            if kept[i] {
+                return None;
+            }
+            let identity = &identities[i];
+            let reason = if !by_track[i].is_empty() {
+                Retirement::Ambiguous
+            } else if (0..order.len()).any(|j| {
+                observed[j].0 == identity.0
+                    && observed[j].1 == identity.1
+                    && track.observation.bbox.iou(&order[j].bbox) >= min_iou
+            }) {
+                Retirement::Substituted
+            } else if groups.contains_key(identity) {
+                Retirement::Moved
+            } else {
+                Retirement::Vanished
+            };
+            Some(reason)
+        })
+        .collect();
+    (matched_track, retirements)
 }
 
 /// The references an action carries, as the agent sent them.
@@ -661,6 +721,156 @@ mod tests {
         );
     }
 
+    /// An element with a native identity (ADR-0026): the same text and box, another identity.
+    fn native(key: &str, bbox: BBox) -> Observation {
+        Observation {
+            discriminant: Some(key.to_owned()),
+            ..button(bbox, "Guardar")
+        }
+    }
+
+    /// ADR-0026: a substitution with identical text and box is another object, so it gets a
+    /// new ID, and the old one is recorded as substituted.
+    #[test]
+    fn a_substituted_element_with_the_same_text_and_box_gets_a_new_id() {
+        let box_a = bx(0.0, 0.0, 40.0, 20.0);
+        let (r, _) = observe(&Registry::new("s", 1), &[native("uia:1:2:42.7", box_a)]);
+        let (r, changes) = observe(&r, &[native("uia:1:2:42.9", box_a)]);
+        assert_eq!(changes.created, vec![id(2)]);
+        assert_eq!(changes.retired, vec![id(1)]);
+        assert_eq!(changes.reasons, vec![(id(1), Retirement::Substituted)]);
+        assert_eq!(
+            r.check_action(&action(&r, "e1", 1), Delivery::DryRun),
+            Err(ActionRejection::TargetNotFound)
+        );
+    }
+
+    /// ADR-0026: the same native identity that moves a little is the same object: it keeps
+    /// its ID and only its revision moves.
+    #[test]
+    fn the_same_native_identity_with_jitter_keeps_its_id() {
+        let (r, _) = observe(
+            &Registry::new("s", 1),
+            &[native("uia:1:2:42.7", bx(0.0, 0.0, 40.0, 20.0))],
+        );
+        let (r, changes) = observe(&r, &[native("uia:1:2:42.7", bx(1.0, 0.0, 41.0, 20.0))]);
+        assert_eq!(changes.created, vec![]);
+        assert_eq!(changes.retired, vec![]);
+        assert_eq!(changes.updated, vec![id(1)]);
+        assert_eq!(r.get(id(1)).expect("kept").revision, 2);
+    }
+
+    /// ADR-0026: two identical twins that swap places keep neither ID: each now stands where
+    /// the other was, and neither takes the other's ID, though that is the nearest one.
+    #[test]
+    fn twin_controls_that_swap_places_never_exchange_their_ids() {
+        let left = bx(0.0, 0.0, 40.0, 20.0);
+        let right = bx(50.0, 0.0, 90.0, 20.0);
+        let (r, _) = observe(
+            &Registry::new("s", 1),
+            &[native("uia:1:2:42.7", left), native("uia:1:2:42.8", right)],
+        );
+        let (r, changes) = observe(
+            &r,
+            &[native("uia:1:2:42.7", right), native("uia:1:2:42.8", left)],
+        );
+        assert_eq!(changes.retired, vec![id(1), id(2)]);
+        assert_eq!(changes.created, vec![id(3), id(4)]);
+        assert_eq!(
+            changes.reasons,
+            vec![
+                (id(1), Retirement::Substituted),
+                (id(2), Retirement::Substituted)
+            ]
+        );
+        assert!(r.get(id(1)).is_none() && r.get(id(2)).is_none());
+    }
+
+    /// ADR-0026: twins stacked on one box, each with its own identity, keep their own IDs,
+    /// because the identity tells them apart where the box cannot.
+    #[test]
+    fn stacked_twins_keep_their_own_ids() {
+        let same_box = bx(0.0, 0.0, 40.0, 20.0);
+        let (r, _) = observe(
+            &Registry::new("s", 1),
+            &[
+                native("uia:1:2:42.7", same_box),
+                native("uia:1:2:42.8", same_box),
+            ],
+        );
+        let (r, changes) = observe(
+            &r,
+            &[
+                native("uia:1:2:42.8", same_box),
+                native("uia:1:2:42.7", same_box),
+            ],
+        );
+        assert_eq!(changes, Changes::default());
+        assert_eq!(
+            r.get(id(1))
+                .expect("kept")
+                .observation
+                .discriminant
+                .as_deref(),
+            Some("uia:1:2:42.7")
+        );
+        assert_eq!(
+            r.get(id(2))
+                .expect("kept")
+                .observation
+                .discriminant
+                .as_deref(),
+            Some("uia:1:2:42.8")
+        );
+    }
+
+    /// ADR-0026: every retirement records why the ID was lost, as a code.
+    #[test]
+    fn retirements_record_why_an_id_was_lost() {
+        let (r, _) = observe(
+            &Registry::new("s", 1),
+            &[button(bx(0.0, 0.0, 40.0, 20.0), "OK")],
+        );
+        let (_, changes) = observe(&r, &[]);
+        assert_eq!(changes.reasons, vec![(id(1), Retirement::Vanished)]);
+
+        let (r, _) = observe(
+            &Registry::new("s", 1),
+            &[native("uia:1:2:42.7", bx(0.0, 0.0, 40.0, 20.0))],
+        );
+        let (_, changes) = observe(&r, &[native("uia:1:2:42.7", bx(200.0, 0.0, 240.0, 20.0))]);
+        assert_eq!(changes.reasons, vec![(id(1), Retirement::Moved)]);
+
+        let (r, _) = observe(
+            &Registry::new("s", 1),
+            &[
+                button(bx(0.0, 0.0, 40.0, 20.0), "OK"),
+                button(bx(4.0, 0.0, 44.0, 20.0), "OK"),
+            ],
+        );
+        let (_, changes) = observe(&r, &[button(bx(2.0, 0.0, 42.0, 20.0), "OK")]);
+        assert_eq!(
+            changes.reasons,
+            vec![
+                (id(1), Retirement::Ambiguous),
+                (id(2), Retirement::Ambiguous)
+            ]
+        );
+
+        let (r, _) = observe(
+            &Registry::new("s", 1),
+            &[button(bx(0.0, 0.0, 40.0, 20.0), "OK")],
+        );
+        let (_, changes) = r
+            .observe(
+                2,
+                &[button(bx(0.0, 0.0, 40.0, 20.0), "OK")],
+                AssociationPolicy::default(),
+            )
+            .expect("a valid policy");
+        assert_eq!(changes.reasons, vec![(id(1), Retirement::GeometryChanged)]);
+    }
+
     /// UT-38 (OR-39): an action from an older snapshot is rejected even if its ID lives on.
     #[test]
     fn ut_38_stale_snapshot_is_rejected() {
@@ -957,8 +1167,16 @@ mod tests {
             let tracks: Vec<&Track> = registry.tracks().collect();
             for (same_geometry, min_iou) in [(true, 0.5), (true, 0.9), (false, 0.5), (true, 1.0)] {
                 let expected = reference_associate(&tracks, &order, same_geometry, min_iou);
-                let actual = associate(&tracks, &order, same_geometry, min_iou);
+                let (actual, retirements) = associate(&tracks, &order, same_geometry, min_iou);
                 assert_eq!(actual, expected, "case {case}, {same_geometry}, {min_iou}");
+                let kept: BTreeSet<usize> = actual.iter().flatten().copied().collect();
+                for (i, reason) in retirements.iter().enumerate() {
+                    assert_eq!(
+                        reason.is_some(),
+                        !kept.contains(&i),
+                        "case {case}: a reason for exactly the tracks that retire ({i})"
+                    );
+                }
                 matched_any += actual.iter().flatten().count();
             }
         }

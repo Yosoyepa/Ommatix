@@ -24,6 +24,7 @@ fn scene() -> World {
                 invoke: true,
                 ..AccessiblePatterns::default()
             },
+            native: None,
         },
         AccessibleElement {
             bbox: bx(100.0, 40.0, 300.0, 70.0),
@@ -36,6 +37,7 @@ fn scene() -> World {
                 editable_value: true,
                 ..AccessiblePatterns::default()
             },
+            native: None,
         },
     ];
     w

@@ -63,7 +63,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-10", "BDD-11", "BDD-12", "BDD-13", "BDD-14", "BDD-15", "BDD-16", "BDD-17", "BDD-18",
     "BDD-19", "BDD-20", "BDD-21", "BDD-22", "BDD-23", "BDD-24", "BDD-25", "BDD-26", "BDD-27",
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
-    "BDD-37", "BDD-38", "BDD-39",
+    "BDD-37", "BDD-38", "BDD-39", "BDD-40",
 ];
 
 #[derive(Debug, Default, World)]
@@ -613,6 +613,45 @@ fn identity_of_a_not_kept(e: &mut Engine) {
     let snapshot = e.registry().snapshot_id();
     assert_eq!(
         e.check(snapshot, a, 1),
+        Err(ActionRejection::TargetNotFound)
+    );
+}
+
+// ---- BDD-40 (ADR-0026): a native identity is the discriminant of its element ----
+
+/// A button named «Guardar» in the same box, exposed with the native identity `key`.
+fn native_save(key: &str) -> Observation {
+    Observation {
+        discriminant: Some(key.to_owned()),
+        ..button(bx(400.0, 250.0, 480.0, 280.0), "Guardar")
+    }
+}
+
+#[given("un botón de accesibilidad «Guardar» con identidad nativa A en una caja")]
+fn native_button_a(e: &mut Engine) {
+    e.remembered = e
+        .observe(&[native_save("uia:4321:500:42.7")])
+        .created
+        .clone();
+    assert_eq!(e.remembered.len(), 1);
+}
+
+#[when("otro objeto con identidad nativa B, el mismo texto y la misma caja ocupa ese sitio")]
+fn another_native_object_takes_the_place(e: &mut Engine) {
+    e.observe(&[native_save("uia:4321:500:42.9")]);
+}
+
+#[then("el elemento recibe un ID nuevo y el anterior se retira sin reanclaje")]
+fn new_id_and_old_retired_without_reanchoring(e: &mut Engine) {
+    let old = e.remembered[0];
+    let changes = e.last_changes();
+    assert_eq!(changes.retired, vec![old]);
+    assert_eq!(changes.created.len(), 1);
+    assert_ne!(changes.created[0], old);
+    assert!(e.registry().is_retired(old));
+    let snapshot = e.registry().snapshot_id();
+    assert_eq!(
+        e.check(snapshot, old, 1),
         Err(ActionRejection::TargetNotFound)
     );
 }
@@ -2262,6 +2301,7 @@ fn calculator_tree() -> Vec<AccessibleElement> {
         offscreen: false,
         password: false,
         patterns,
+        native: None,
     };
     vec![
         element(
@@ -2368,6 +2408,7 @@ fn name_field() -> AccessibleElement {
             editable_value: true,
             ..AccessiblePatterns::default()
         },
+        native: None,
     }
 }
 

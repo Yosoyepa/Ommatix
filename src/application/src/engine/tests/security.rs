@@ -234,6 +234,7 @@ fn sec_03_accessibility_names_label_elements_and_never_instruct() {
         offscreen,
         password: false,
         patterns,
+        native: None,
     };
     let invoke = AccessiblePatterns {
         invoke: true,
@@ -368,6 +369,7 @@ fn private_world() -> World {
                     editable_value: true,
                     ..AccessiblePatterns::default()
                 },
+                native: None,
             },
             AccessibleElement {
                 bbox: password,
@@ -380,6 +382,7 @@ fn private_world() -> World {
                     editable_value: true,
                     ..AccessiblePatterns::default()
                 },
+                native: None,
             },
         ],
         ..World::default()
