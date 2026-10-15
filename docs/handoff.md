@@ -1,6 +1,6 @@
 # Estado del proyecto y relevo / Project status and handoff
 
-Fecha: 2026-10-15 (versión 1.0.58). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
+Fecha: 2026-10-15 (versión 1.0.59). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
 persona o agente continúe sin rehacer nada. La especificación es el dossier de
 [`docs/thesis/`](thesis/README.md); las reglas del repositorio están en
 [`AGENTS.md`](../AGENTS.md).
@@ -59,8 +59,9 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | INC-02, B0 frente a B1 en vivo y PERF-01 sin carga (rama `docs/inc02-b0b1`, CHANGELOG 1.0.56, [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §13 y [`thesis/09_EVALUACION_EXPERIMENTAL.md`](thesis/09_EVALUACION_EXPERIMENTAL.md) §9.9.1): 240 procesos en vivo sobre la aplicación de prueba, sin entrada. Con una región B1 tarda 18,6 ms menos; con dos, 45,8 ms más, porque cada región es una inferencia completa. Con dos regiones B1 publica 67 elementos por observación frente a 85, por investigar. PERF-01 sin carga no reproduce el desplazamiento de p95 de +0,2 a +0,35 ms. RNF-05 sin cambio. | PR abierto |
 | — | Seguimiento de INC-02 (rama `fix/inc02-region-loss`, CHANGELOG 1.0.57, [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §13.10 a §13.13 y [`thesis/09_EVALUACION_EXPERIMENTAL.md`](thesis/09_EVALUACION_EXPERIMENTAL.md) §9.9.1): la pérdida de elementos con dos regiones (B1 publica ≈ 20 de 75 controles menos) **no es un defecto del Algoritmo 1**: el cierre del halo no corta ninguna caja; es el comportamiento del detector sobre recortes (escala 1,0 frente a 0,67 del fotograma completo y falta de contexto: la bandeja de 14 iconos se vuelve una caja del tamaño del recorte). B0/B1 repetido con `[models] accessibility = "uia"` (240 procesos, sin entrada): con una región B1 ya no ahorra (+2,4 ms; la lectura de UIA, ≈ 117 ms, fija el total) y con dos regiones es +46,6 ms más lenta, con p95 de 186,3 ms (RNF-05 sin cambio de estado). Corregido el `-0.0` de `region_area_px` en observaciones inactivas, con prueba. Pendiente (no autorizado): INC-07, política adaptativa entre refresco completo y regional. | PR abierto |
 | — | Reevaluación de la Definition of Done contra `origin/main` (rama `docs/dod-reevaluation-2`, CHANGELOG 1.0.58, [`thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md`](thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) §6.7): siguen marcadas tres casillas (captura, diferenciador y lockfiles). Se refrescan las evidencias de `requisitos_trazabilidad.csv` sin cambiar ningún estado, porque el validador sólo admite `PENDIENTE_IMPLEMENTACION_O_VALIDACION`. Se corrigen E2E-03 (diez de diez) y los 52 escenarios BDD, y se añaden las ocho decisiones pendientes del responsable. Sin ejecución en vivo ni entrada. |
+| — | Sesión B con `uia` sobre `main` (rama `docs/perf03-soak-uia`, CHANGELOG 1.0.59, [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §14): intento bloqueado antes de la corrida de 120 minutos. El ensayo de un minuto no capturó la pantalla (`CAPTURE_UNAVAILABLE` en todas las observaciones, con y sin `uia`); causa probable, no verificada: el apagado de pantalla de 15 minutos. Sin cifras; PERF-03 y RNF-06 sin cambio. Desviaciones declaradas: auxiliar de primer plano fuera del repositorio y `--foreground-wait 30`. | PR abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.58)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.59)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
@@ -272,11 +273,11 @@ La tercera continuación de la undécima ronda (1.0.46, rama `docs/s4-eleventh-r
 
 ## Qué sigue
 
-**Estado al 15 de octubre de 2026 (1.0.58, alcance reducido del MVP).** Para cerrar el MVP con el alcance reducido queda:
+**Estado al 15 de octubre de 2026 (1.0.59, alcance reducido del MVP).** Para cerrar el MVP con el alcance reducido queda:
 
 1. **Protocolo reducido de S4: completo en `main`.** E2E-01, E2E-02, E2E-03, S4R-02 y S4R-03 tienen diez de diez corridas puntuadas sin falsos éxitos (E2E-03 desde 1.0.46). Esas corridas son de commits anteriores a INC-03 (#38) e INC-04 (#39); la decisión 6 de la lista de [06 §6.7](thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) pide repetirlas sobre el código actual.
 2. **Sesión A (REL-01)**: instalar, verificar y revertir siguiendo [`S4_INSTALACION_Y_REVERSION.md`](thesis/S4_INSTALACION_Y_REVERSION.md) en una máquina limpia, y archivar el `environment.json` (decisión 7). Es la evidencia de REL-01; la casilla de documentación ya está marcada.
-3. **Sesión B (PERF-03)**: ejecutada en 1.0.55 sobre `fe35d80`, sin accesibilidad (§12 de [`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md)). Falta que el responsable fije el umbral de RNF-06 y lea con él la pendiente de memoria (decisión 1), y un soak del código actual con `uia` (decisión 6). Sin umbral, RNF-06 no tiene veredicto.
+3. **Sesión B (PERF-03)**: ejecutada en 1.0.55 sobre `fe35d80`, sin accesibilidad (§12 de [`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md)). Falta que el responsable fije el umbral de RNF-06 y lea con él la pendiente de memoria (decisión 1), y un soak del código actual con `uia` (decisión 6). Sin umbral, RNF-06 no tiene veredicto. El intento con `uia` de 1.0.59 quedó bloqueado antes de la corrida porque la captura de pantalla falló (causa probable: el apagado de pantalla); el responsable debe dejar la pantalla encendida antes de repetirlo ([`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §14).
 4. **Pendientes que no están en el alcance cedido**: el borrado bajo demanda del operador, sin terminar la sesión (capítulo 08 §8.4; decisión 2); la parte de percepción de PERF-02, que ya tiene p99 en S0 §12 pero no la variante de caché (B2) ni la igualdad de modelos; y SEC-02, SEC-05 e IT-01 a IT-05 en parte. La prueba diferencial del diferenciador (capítulo 05 §5.5) está hecha desde 1.0.53.
 5. **Próximo corte** (fuera de este MVP): EV-01, EV-02, IT-07 y el corpus de REL-01, con el plan del paquete Paper (INC-00 a INC-09; no se copia aquí). RNF-05 sigue como incumplimiento documentado; con `uia` y una animación de 30 ms su caso de dos regiones da 186,3 ms (decisión 5). IT-07 y su sesión con el responsable presente son la decisión 3, y INC-07 la decisión 4 (no autorizada).
 
