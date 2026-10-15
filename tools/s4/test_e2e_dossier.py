@@ -955,6 +955,30 @@ class ExplorerRunTest(QuietTest):
         res = desk.run_once(1)
         self.assertEqual((desk.clicks, res["success"]), ([], False))
 
+    def test_a_safety_event_in_run_1_of_3_sends_nothing_more_and_engages_the_stop(self):
+        desk = self.desk()
+        desk.args.runs = 3
+        desk.stop_file = self.tmp / "stop.flag"
+        desk.metrics = lambda: {"delivered_actions": 0, "rejected_actions": 0}
+        desk.navigate = False  # the first click does nothing: grounding_wrong, false success
+        with self.assertRaises(driver.Abort):
+            desk.run()
+        self.assertEqual(len(desk.clicks), 1, "no click of run 1 beyond the first, none of 2 or 3")
+        self.assertEqual(len(desk.results), 1)
+        self.assertTrue(desk.stop_file.exists())
+        self.assertEqual(desk.results[0]["safety_stop"], "grounding_wrong")
+        self.assertEqual(desk.closed_windows, [OURS], "the window it opened is still closed")
+
+    def test_a_plain_failure_lets_the_next_explorer_run_start(self):
+        desk = self.desk()
+        desk.args.runs = 2
+        desk.stop_file = self.tmp / "stop.flag"
+        desk.metrics = lambda: {"delivered_actions": 0, "rejected_actions": 0}
+        desk.front_ok = False  # the window never arrives: a failure, no input, no safety event
+        desk.run()
+        self.assertEqual(len(desk.results), 2)
+        self.assertFalse(desk.stop_file.exists())
+
     def test_a_click_that_does_not_navigate_ends_the_run_with_no_further_input(self):
         desk = self.desk()
         desk.navigate = False

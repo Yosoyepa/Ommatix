@@ -58,6 +58,11 @@ CLOSED list ``NAVIGATING_STEPS`` (Explorer's two breadcrumb clicks and Back; no 
 it), whose click rebuilds the control it clicked, the identity after the click is only recorded
 (``post_grounded``): the step's OS-side check is required and decides it.
 
+In a multi-run invocation a safety event (``grounding_wrong``, ``engine_false_success`` or any
+abort, POLICY_DENIED included) ends the whole invocation at once: no further request, no further
+run, the reason recorded (``safety_stop``) and the operator's stop engaged, as three consecutive
+failed runs do. Any other failure lets the next run start.
+
 ``--check-mode`` (Calculator only) is read-only: it starts the Calculator, waits for the
 foreground, reads the mode through UI Automation (polled for 2 s) and closes the process it
 started; exit 0 when Standard, 1 otherwise. It starts no engine, sends no input and no live
@@ -1137,7 +1142,7 @@ def identity_hit(expected: dict, chain: list[dict]) -> bool:
     return False
 
 
-# ---- navigating clicks (ADR-0022; S4 tenth round, finding 13) ----------------------------------
+# ---- navigating clicks (ADR-0022; S4 tenth round, finding 15) ----------------------------------
 #
 # A click that navigates rebuilds the control it clicked (E2E-03's breadcrumb: the folder changes
 # and the address bar is drawn again), so the element under the cursor afterwards may have another
@@ -1149,6 +1154,8 @@ def identity_hit(expected: dict, chain: list[dict]) -> bool:
 # check after the click exactly as before. Before ANY click, navigating or not, the point is
 # grounded (``Protocol.pre_click_grounding``).
 NAVIGATING_STEPS = MappingProxyType({"explorer": (1, 2, 3)})
+# The counters of a run's record whose presence is a safety event that ends the invocation.
+SAFETY_COUNTERS = ("grounding_wrong", "engine_false_success")
 CHAIN_RECORD_ROWS = 6
 
 
@@ -1592,11 +1599,19 @@ class Protocol:
     read_only: bool = False
 
     # -- safety
-    def engage_stop(self, reason: str) -> None:
+    # Whether the operator's stop was engaged by this invocation (see write_stop).
+    stop_engaged: bool = False
+
+    def write_stop(self, reason: str) -> None:
+        """Engages the operator's stop (the stop file) and records why; it does not raise."""
         if self.stop_file is not None and not self.read_only:
             self.stop_file.write_text("", encoding="utf-8")
+        self.stop_engaged = True
         log("operator_stop_read_only" if self.read_only else "operator_stop_engaged",
             reason=reason)
+
+    def engage_stop(self, reason: str) -> None:
+        self.write_stop(reason)
         raise Abort(reason)
 
     def ledger_total(self) -> int:
@@ -2669,12 +2684,36 @@ class Protocol:
                 return
         res["success"] = True
 
+    @staticmethod
+    def safety_event(res: dict) -> str | None:
+        """The safety event a run's record shows, if any: a click that reached a wrong control or
+        an engine that reported an effect the OS side does not show. (A policy refusal and the
+        other aborts are raised by the run and handled in `run`.)"""
+        for counter in SAFETY_COUNTERS:
+            if res.get(counter):
+                return counter
+        return None
+
     def run(self) -> None:
+        """The runs of one invocation. A safety event ends the WHOLE invocation at once, with no
+        further request and no further run: it is recorded and the operator's stop is engaged,
+        exactly as three consecutive failed runs do (finding 13 of the tenth round series). Any other
+        failure only counts toward those three."""
         failures = 0
         for n in range(self.args.first_run, self.args.first_run + self.args.runs):
             m0 = self.metrics()
             ledger_start = self.ledger_total()
-            res = self.run_once(n)
+            try:
+                res = self.run_once(n)
+            except Abort as error:
+                # POLICY_DENIED, a foreground that is not the target, an ambiguous label, the
+                # budget, an unreadable observation: none is followed by another run.
+                if not self.stop_engaged:
+                    self.write_stop(f"abort in run {n}: {error}")
+                raise
+            event = self.safety_event(res)
+            if event is not None:
+                res["safety_stop"] = event
             res["ledger_start"], res["ledger_end"] = ledger_start, self.ledger_total()
             m1 = self.metrics()
             res["engine_delivered_delta"] = m1["delivered_actions"] - m0["delivered_actions"]
@@ -2684,6 +2723,8 @@ class Protocol:
                 fh.write(json.dumps(res, ensure_ascii=False) + "\n")
             log("run", **{k: v for k, v in res.items() if k not in ("observations", "actions")},
                 observations=len(res["observations"]))
+            if event is not None:
+                self.engage_stop(f"safety event in run {n}: {event}")
             failures = 0 if res["success"] else failures + 1
             if failures >= 3:
                 self.engage_stop("three consecutive failed runs")

@@ -641,6 +641,117 @@ class GroundingByIdentityTest(QuietTest):
                                                           "action_gate": 0.2})
 
 
+class RunLoopDesk(driver.Protocol):
+    """Protocol.run over scripted runs: no desktop, no engine. A script item is the fields of the
+    run's result, or an exception run_once raises."""
+
+    def __init__(self, tmp, script, runs=3):
+        self.args = SimpleNamespace(first_run=1, runs=runs, pause=0.0,
+                                    results=tmp / "results.jsonl")
+        self.stop_file = tmp / "stop.flag"
+        self.results = []
+        self.script = script
+        self.started = []  # the runs run_once was called for
+
+    def metrics(self):
+        return {"delivered_actions": 0, "rejected_actions": 0}
+
+    def ledger_total(self):
+        return 0
+
+    def run_once(self, n):
+        self.started.append(n)
+        item = self.script[n - 1]
+        if isinstance(item, Exception):
+            raise item
+        res = driver.new_result("E2E-03", n)
+        res.update(item)
+        return res
+
+
+class SafetyStopTest(QuietTest):
+    """Finding 13 of the tenth round: a safety event ends the whole invocation at once and engages
+    the operator's stop, as three consecutive failed runs do; a plain failure does not."""
+
+    def run_loop(self, script, runs=3):
+        desk = RunLoopDesk(self.tmp, script, runs)
+        try:
+            desk.run()
+            error = None
+        except driver.Abort as raised:
+            error = raised
+        return desk, error
+
+    def recorded(self):
+        text = (self.tmp / "results.jsonl").read_text(encoding="utf-8")
+        return [json.loads(line) for line in text.splitlines()]
+
+    def test_a_wrong_grounding_in_run_1_of_3_sends_nothing_more_and_engages_the_stop(self):
+        desk, error = self.run_loop([{"grounding_wrong": 1}, {"success": True}, {"success": True}])
+        self.assertIsNotNone(error)
+        self.assertEqual(desk.started, [1], "runs 2 and 3 never started")
+        self.assertTrue(desk.stop_file.exists(), "the operator's stop is engaged")
+        self.assertEqual(len(desk.results), 1)
+        self.assertEqual(self.recorded()[0]["safety_stop"], "grounding_wrong")
+
+    def test_a_false_success_ends_the_invocation_the_same_way(self):
+        desk, error = self.run_loop([{"engine_false_success": 1}, {"success": True}])
+        self.assertIsNotNone(error)
+        self.assertEqual(desk.started, [1])
+        self.assertTrue(desk.stop_file.exists())
+        self.assertEqual(self.recorded()[0]["safety_stop"], "engine_false_success")
+        self.assertIn("engine_false_success", str(error))
+
+    def test_the_safety_event_wins_even_when_the_run_reports_success(self):
+        desk, error = self.run_loop([{"success": True, "grounding_wrong": 1}, {"success": True}])
+        self.assertEqual(desk.started, [1])
+        self.assertTrue(desk.stop_file.exists())
+
+    def test_an_abort_ends_the_invocation_and_engages_the_stop(self):
+        desk, error = self.run_loop([driver.Abort("observe_screen failed"), {"success": True}])
+        self.assertEqual(str(error), "observe_screen failed")
+        self.assertEqual(desk.started, [1])
+        self.assertTrue(desk.stop_file.exists(), "an abort is a safety event too")
+
+    def test_an_abort_that_already_engaged_the_stop_does_it_once(self):
+        desk = RunLoopDesk(self.tmp, [{}])
+        writes = []
+        original = driver.Protocol.write_stop
+        desk.write_stop = lambda reason: (writes.append(reason), original(desk, reason))[1]
+        desk.run_once = lambda n: desk.engage_stop("POLICY_DENIED during the protocol")
+        with self.assertRaises(driver.Abort):
+            desk.run()
+        self.assertEqual(writes, ["POLICY_DENIED during the protocol"])
+
+    def test_a_plain_failure_still_lets_the_next_run_start(self):
+        desk, error = self.run_loop([{"failure": "initial state not visible by OCR"},
+                                     {"success": True}, {"success": True}])
+        self.assertIsNone(error)
+        self.assertEqual(desk.started, [1, 2, 3])
+        self.assertFalse(desk.stop_file.exists())
+        self.assertNotIn("safety_stop", self.recorded()[0])
+
+    def test_three_consecutive_plain_failures_still_engage_the_stop(self):
+        desk, error = self.run_loop([{"failure": "x"}] * 3 + [{"success": True}], runs=4)
+        self.assertEqual(str(error), "three consecutive failed runs")
+        self.assertEqual(desk.started, [1, 2, 3])
+        self.assertTrue(desk.stop_file.exists())
+
+    def test_a_run_without_a_stop_file_configured_still_ends(self):
+        desk = RunLoopDesk(self.tmp, [{"grounding_wrong": 1}, {"success": True}])
+        desk.stop_file = None
+        with self.assertRaises(driver.Abort):
+            desk.run()
+        self.assertEqual(desk.started, [1])
+
+    def test_the_read_only_check_never_writes_the_stop(self):
+        desk = RunLoopDesk(self.tmp, [{"grounding_wrong": 1}])
+        desk.read_only = True
+        with self.assertRaises(driver.Abort):
+            desk.run()
+        self.assertFalse(desk.stop_file.exists())
+
+
 def pane_row(rid="42.0"):
     return {"runtime_id": rid, "automation_id": "", "control_type": "Pane", "class_name": "",
             "offscreen": False}
