@@ -44,6 +44,13 @@ const G4_REDUCTION: f64 = 0.20;
 /// Gate G5: a p95 regression is reviewed above the larger of this share and 0.2 ms.
 const G5_SHARE: f64 = 0.01;
 const G5_FLOOR_NS: f64 = 200_000.0;
+/// The time cap of one cell (the coordinator's rule for this run): a cell still running after this
+/// long is recorded as not measured, with the repetitions it completed.
+const CELL_CAP: Duration = Duration::from_secs(15 * 60);
+/// Repetitions of the 8192-control cells of the quadratic families, where one repetition takes minutes.
+const LARGE_QUADRATIC_REPS: usize = 3;
+/// The families whose work grows with the square of the controls: every window meets every control.
+const QUADRATIC: [Family; 2] = [Family::IdenticalBoxes, Family::ExtremeOverlap];
 
 /// SplitMix64, for the bootstrap resamples only: deterministic, with no dependency.
 struct Rng(u64);
@@ -207,21 +214,24 @@ fn fused(s: &Scene, threshold: f64, search: CandidateSearch) -> ommatix_domain::
     .expect("valid parameters")
 }
 
-/// G1 and G2 on one scene: the fusion of both enumerators, at the reference threshold and at a
-/// zero and a full threshold, and the owners alone. Returns the number of checks that differ.
-fn differences(s: &Scene) -> usize {
-    let boxes: Vec<BBox> = s.controls.iter().map(|c| c.bbox).collect();
-    let mut differing = 0;
-    for threshold in [THRESHOLD, 0.0, 1.0] {
-        let scan = fused(s, threshold, CandidateSearch::Scan);
-        let tree = fused(s, threshold, CandidateSearch::RStar);
-        differing += usize::from(scan != tree);
+/// The equivalence checks of one scene, run one at a time so that the time cap can stop between
+/// them: the fusion at the reference threshold, at zero and at one, and the owners alone (G1 and
+/// G2).
+const CHECKS: usize = 4;
+
+/// Whether check `index` finds the two enumerators different on this scene.
+fn check(s: &Scene, index: usize) -> bool {
+    if index < 3 {
+        let threshold = [THRESHOLD, 0.0, 1.0][index];
+        fused(s, threshold, CandidateSearch::Scan) != fused(s, threshold, CandidateSearch::RStar)
+    } else {
+        let boxes: Vec<BBox> = s.controls.iter().map(|c| c.bbox).collect();
+        let scan = internal_owners_with(&boxes, &s.words, THRESHOLD, CandidateSearch::Scan)
+            .expect("valid threshold");
+        let tree = internal_owners_with(&boxes, &s.words, THRESHOLD, CandidateSearch::RStar)
+            .expect("valid threshold");
+        scan != tree
     }
-    let scan = internal_owners_with(&boxes, &s.words, THRESHOLD, CandidateSearch::Scan)
-        .expect("valid threshold");
-    let tree = internal_owners_with(&boxes, &s.words, THRESHOLD, CandidateSearch::RStar)
-        .expect("valid threshold");
-    differing + usize::from(scan != tree)
 }
 
 /// One variant's timings for one repetition, in nanoseconds.
@@ -264,51 +274,92 @@ fn sample(s: &Scene, plan: &Plan, variant: CandidateSearch) -> Sample {
     }
 }
 
-/// Everything measured for one family and size.
+/// Whether a cell ran its whole protocol or was stopped by the time cap.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Status {
+    Measured,
+    TimeCap,
+}
+
+/// Everything measured for one family and size, and what the cap left of it.
 struct Cell {
     family: Family,
     size: usize,
     controls: usize,
     words: usize,
     gaps: usize,
-    checks: usize,
+    reps_planned: usize,
+    checks_done: usize,
     differing: usize,
+    status: Status,
     scan: Vec<Sample>,
     tree: Vec<Sample>,
 }
 
+/// One cell: its equivalence checks, the warm-up and the repetitions. Each step starts only if
+/// the cell is still within its time cap, and a repetition pair that ends past the cap is not
+/// recorded.
 fn measure(family: Family, size: usize, reps: usize) -> Cell {
-    let seed = 0x2026_1015 ^ size as u64;
-    let s = scene(family, size, seed);
+    let deadline = Instant::now() + CELL_CAP;
+    let s = scene(family, size, 0x2026_1015 ^ size as u64);
     let plan = plan(&s);
-    let differing = differences(&s);
-    // Warm-up: two repetitions per variant, not recorded.
-    for _ in 0..2 {
-        sample(&s, &plan, CandidateSearch::Scan);
-        sample(&s, &plan, CandidateSearch::RStar);
-    }
-    let (mut scan, mut tree) = (Vec::with_capacity(reps), Vec::with_capacity(reps));
-    for rep in 0..reps {
-        // Alternate the order within each pair, so neither variant always runs second.
-        if rep % 2 == 0 {
-            scan.push(sample(&s, &plan, CandidateSearch::Scan));
-            tree.push(sample(&s, &plan, CandidateSearch::RStar));
-        } else {
-            tree.push(sample(&s, &plan, CandidateSearch::RStar));
-            scan.push(sample(&s, &plan, CandidateSearch::Scan));
-        }
-    }
-    Cell {
+    let mut cell = Cell {
         family,
         size,
         controls: s.controls.len(),
         words: s.words.len(),
         gaps: plan.gaps.len(),
-        checks: 4,
-        differing,
-        scan,
-        tree,
+        reps_planned: reps,
+        checks_done: 0,
+        differing: 0,
+        status: Status::Measured,
+        scan: Vec::with_capacity(reps),
+        tree: Vec::with_capacity(reps),
+    };
+    for index in 0..CHECKS {
+        if Instant::now() >= deadline {
+            cell.status = Status::TimeCap;
+            return cell;
+        }
+        cell.differing += usize::from(check(&s, index));
+        cell.checks_done += 1;
     }
+    // Warm-up: two repetitions per variant, not recorded.
+    for _ in 0..2 {
+        for variant in [CandidateSearch::Scan, CandidateSearch::RStar] {
+            if Instant::now() >= deadline {
+                cell.status = Status::TimeCap;
+                return cell;
+            }
+            sample(&s, &plan, variant);
+        }
+    }
+    for rep in 0..reps {
+        if Instant::now() >= deadline {
+            cell.status = Status::TimeCap;
+            return cell;
+        }
+        // Alternate the order within each pair, so neither variant always runs second.
+        let order = if rep % 2 == 0 {
+            [CandidateSearch::Scan, CandidateSearch::RStar]
+        } else {
+            [CandidateSearch::RStar, CandidateSearch::Scan]
+        };
+        let first = sample(&s, &plan, order[0]);
+        let second = sample(&s, &plan, order[1]);
+        if Instant::now() > deadline {
+            cell.status = Status::TimeCap;
+            return cell;
+        }
+        let (scan_sample, tree_sample) = if order[0] == CandidateSearch::Scan {
+            (first, second)
+        } else {
+            (second, first)
+        };
+        cell.scan.push(scan_sample);
+        cell.tree.push(tree_sample);
+    }
+    cell
 }
 
 fn column(samples: &[Sample], pick: impl Fn(&Sample) -> f64) -> Vec<f64> {
@@ -331,7 +382,40 @@ fn summary(samples: &[Sample]) -> serde_json::Value {
     })
 }
 
+/// The JSON of one cell and its line of the table. A cell stopped by the cap is recorded as not
+/// measured, with the repetitions completed and the equivalence checks that ran.
 fn report(cell: &Cell) -> (serde_json::Value, String) {
+    let label = format!("{:?}", cell.family);
+    let target = TARGET.contains(&cell.family);
+    let equivalence = serde_json::json!({
+        "checks": CHECKS,
+        "completed": cell.checks_done,
+        "differences": cell.differing,
+    });
+    if cell.status == Status::TimeCap {
+        let line = format!(
+            "{label:<22} {:>5}  not measured (time cap): {} of {} repetitions; equivalence {} of {} checks, {} differing",
+            cell.size,
+            cell.scan.len(),
+            cell.reps_planned,
+            cell.checks_done,
+            CHECKS,
+            cell.differing,
+        );
+        let json = serde_json::json!({
+            "family": label,
+            "size_requested": cell.size,
+            "target_family": target,
+            "controls": cell.controls,
+            "words": cell.words,
+            "corridor_queries": cell.gaps,
+            "status": "not measured (time cap)",
+            "repetitions_done": cell.scan.len(),
+            "repetitions_planned": cell.reps_planned,
+            "equivalence": equivalence,
+        });
+        return (json, line);
+    }
     let scan_total = column(&cell.scan, |s| s.total);
     let tree_total = column(&cell.tree, |s| s.total);
     let (point, lo, hi) = ratio_interval(&scan_total, &tree_total, 0x5EED ^ cell.size as u64);
@@ -341,11 +425,17 @@ fn report(cell: &Cell) -> (serde_json::Value, String) {
     let p95_tree = nearest_rank(&tree_total, 0.95);
     let p95_delta = p95_tree - p95_scan;
     let p95_limit = (G5_SHARE * p95_scan).max(G5_FLOOR_NS);
-    let target = TARGET.contains(&cell.family);
     let g4_pass = target && cell.size >= 512 && reduction >= G4_REDUCTION && reduction_lo > 0.0;
+    let verdict = if cell.differing > 0 {
+        "DIFFERS"
+    } else if g4_pass {
+        "G4 met"
+    } else {
+        ""
+    };
     let line = format!(
         "{:<22} {:>5} {:>10.3} {:>10.3} {:>8.1}% [{:>6.1}, {:>6.1}] {:>9.3} {:>9.3} {}",
-        format!("{:?}", cell.family),
+        label,
         cell.size,
         median(&scan_total) / 1e6,
         median(&tree_total) / 1e6,
@@ -354,23 +444,19 @@ fn report(cell: &Cell) -> (serde_json::Value, String) {
         100.0 * reduction_hi,
         p95_delta / 1e6,
         p95_limit / 1e6,
-        if cell.differing > 0 {
-            "DIFFERS"
-        } else if g4_pass {
-            "G4 met"
-        } else {
-            ""
-        },
+        verdict,
     );
     let json = serde_json::json!({
-        "family": format!("{:?}", cell.family),
+        "family": label,
         "size_requested": cell.size,
         "target_family": target,
         "controls": cell.controls,
         "words": cell.words,
         "corridor_queries": cell.gaps,
+        "status": "measured",
         "repetitions": cell.scan.len(),
-        "equivalence": { "checks": cell.checks, "differences": cell.differing },
+        "repetitions_planned": cell.reps_planned,
+        "equivalence": equivalence,
         "scan": summary(&cell.scan),
         "rstar": summary(&cell.tree),
         "reduction_median": reduction,
@@ -434,6 +520,29 @@ fn parse(args: &[String]) -> Result<Options, String> {
     Ok(options)
 }
 
+/// The whole report so far. Written after every cell, so an interrupted run keeps what it measured.
+fn document(options: &Options, cells: &[serde_json::Value], differing: usize) -> serde_json::Value {
+    serde_json::json!({
+        "experiment": "ADR-0027 candidate enumeration: scan against the R*-tree",
+        "commit": options.commit,
+        "build": "release",
+        "repetitions_planned": options.reps,
+        "warm_up_repetitions": 2,
+        "cell_time_cap_seconds": CELL_CAP.as_secs(),
+        "sizes": options.sizes,
+        "target_families": TARGET.iter().map(|f| format!("{f:?}")).collect::<Vec<_>>(),
+        "threshold": THRESHOLD,
+        "label_margin": MARGIN,
+        "resamples": RESAMPLES,
+        "deviations": [
+            "Each cell has a time cap of 15 minutes (the coordinator's rule for this run): a cell still running at the cap is recorded as not measured, with the repetitions completed.",
+            "The 8192-control cells of the quadratic families (IdenticalBoxes, ExtremeOverlap) take 3 repetitions instead of the 9 of the protocol."
+        ],
+        "equivalence_differences": differing,
+        "cells": cells,
+    })
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let options = match parse(&args) {
@@ -461,36 +570,34 @@ fn main() {
         "family", "size", "scan ms", "rstar ms", "reduction", "95% CI (%)", "p95 Δ ms", "limit ms"
     );
     let mut cells = Vec::new();
+    let mut differing = 0;
     for family in FAMILIES {
         for &size in &options.sizes {
-            eprintln!("candidate_index: {family:?} {size} ...");
-            let cell = measure(family, size, options.reps);
+            let reps = if QUADRATIC.contains(&family) && size == 8192 {
+                LARGE_QUADRATIC_REPS.min(options.reps)
+            } else {
+                options.reps
+            };
+            eprintln!(
+                "candidate_index: {family:?} {size} ({reps} repetitions, cap {} min) ...",
+                CELL_CAP.as_secs() / 60
+            );
+            let cell = measure(family, size, reps);
+            differing += cell.differing;
             let (json, line) = report(&cell);
             println!("{line}");
             cells.push(json);
+            if let Some(path) = &options.out {
+                std::fs::write(
+                    path,
+                    serde_json::to_string_pretty(&document(&options, &cells, differing))
+                        .expect("json"),
+                )
+                .expect("the report can be written");
+            }
         }
     }
-    let differing: usize = cells
-        .iter()
-        .map(|c| c["equivalence"]["differences"].as_u64().unwrap_or(0))
-        .sum::<u64>() as usize;
-    let document = serde_json::json!({
-        "experiment": "ADR-0027 candidate enumeration: scan against the R*-tree",
-        "commit": options.commit,
-        "build": "release",
-        "repetitions": options.reps,
-        "warm_up_repetitions": 2,
-        "sizes": options.sizes,
-        "target_families": TARGET.iter().map(|f| format!("{f:?}")).collect::<Vec<_>>(),
-        "threshold": THRESHOLD,
-        "label_margin": MARGIN,
-        "resamples": RESAMPLES,
-        "equivalence_differences": differing,
-        "cells": cells,
-    });
     if let Some(path) = &options.out {
-        std::fs::write(path, serde_json::to_string_pretty(&document).expect("json"))
-            .expect("the report can be written");
         eprintln!("candidate_index: report written to {path}");
     }
     if differing > 0 {
