@@ -1,5 +1,9 @@
 # Historial documental
 
+## 1.0.37 — 2026-10-14: el responsable aprueba la ADR-0021 y autoriza la décima ronda
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código. El responsable del proyecto aprueba el 14 de octubre de 2026 la [ADR-0021](../adr/0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md) (comprobar por hash todo artefacto antes de cargar nada, fijar el archivo de íconos curados con `[cache] prototypes_sha256` y no repetir texto de pantalla ni del agente en los errores), que 1.0.35 dejó propuesta, y autoriza la décima ronda supervisada (S4R-02 con la Calculadora en modo Estándar puesto a mano, E2E-02 y E2E-03 con los clientes de 1.0.36; cupo de 200 solicitudes reales, sin usar el equipo). Se actualizan el estado de la ADR, su índice, AGENTS.md y el traspaso.
+
 ## 1.0.36 — 2026-10-14: S4, los bloqueos de la novena ronda: señal de modo de la Calculadora, `--check-mode`, foco de teclado del editor y flujo del Explorador (rama `fix/s4-round9-blockers`)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust. **No se envió entrada de ningún tipo ni ninguna solicitud real** (cuaderno 429). Cambian los dos clientes de S4 (`tools/s4/e2e_driver.py`, SHA-256 `143ea45464274936e5b5eca06ade8279117d3c33cbc0b13257b74753341aee3d`, antes `cbe6905c…4821265`; `tools/s4/e2e_dossier.py`, SHA-256 `85111edbe1b7acc113f71e88d48ba41d6c1fe485b5571f9b0c827d53d7f316df`, antes `c1ba4a37…1020e`) y el editor (`tools/s4/testeditor`, compilación `--release` de la rama `0a01b7a19ce25aa978794b8b8bd16590aef3d26c83d8e6274fe2acbfbd196cea`, antes `541fc0a8…2793`). Motor sin cambio (`3a451211…cbb1a`).

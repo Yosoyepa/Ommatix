@@ -10,7 +10,7 @@ need, ADR-0017 adds UI Automation evidence fused with the visual path, and ADR-0
 runs the perception stages of one observation concurrently; the owner accepted all five on
 2026-10-14. ADR-0020, accepted the same day, narrows the application allowlist to
 windows (window classes and a pinned window) so that `explorer.exe` can be allowed without
-the desktop and the taskbar. ADR-0021 (proposed, awaiting the owner) pins every artefact the
+the desktop and the taskbar. ADR-0021, accepted the same day, pins every artefact the
 engine loads, the curated-icon file included, before loading anything, and keeps screen and
 agent text out of protocol errors.
 
@@ -36,7 +36,7 @@ agent text out of protocol errors.
 | [0018](0018-two-phase-type-with-element-level-focus-confirmation.md) | Two-phase type with element-level focus confirmation | Accepted (2026-10-14) |
 | [0019](0019-concurrent-observation-stages.md) | Run the perception stages of one observation concurrently | Accepted (2026-10-14) |
 | [0020](0020-operator-scope-on-windows.md) | The operator's scope on windows: window classes and a pinned window | Accepted (2026-10-14) |
-| [0021](0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md) | Pin every artefact the engine loads before loading anything, and keep screen and agent text out of errors | Proposed |
+| [0021](0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md) | Pin every artefact the engine loads before loading anything, and keep screen and agent text out of errors | Accepted (2026-10-14) |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They
@@ -63,4 +63,4 @@ decisiones del arranque: documentación bilingüe y crates hexagonales. ADR-0015
 propio y acotado. ADR-0016, de S3 y aprobada el mismo día, limita el `unsafe` a
 los módulos Windows de captura DXGI y entrada `SendInput`. ADR-0017, aprobada el mismo día, añade la
 evidencia de UI Automation como un puerto más, fusionada con la visual y sin `unsafe` propio. ADR-0018,
-aprobada el mismo día, entrega `type` en dos fases: las teclas esperan a que el foco del teclado esté en el campo destino, confirmado por UI Automation. ADR-0019, de RNF-05 y aprobada el mismo día, ejecuta de forma concurrente las etapas de percepción de una observación. ADR-0020, aprobada el mismo día, acota la lista de aplicaciones permitidas a ventanas (clases de ventana y una ventana registrada) para poder permitir `explorer.exe` sin el escritorio ni la barra de tareas. Las ADR del arranque se archivan en `bootstrap/` como B0001–B0012.
+aprobada el mismo día, entrega `type` en dos fases: las teclas esperan a que el foco del teclado esté en el campo destino, confirmado por UI Automation. ADR-0019, de RNF-05 y aprobada el mismo día, ejecuta de forma concurrente las etapas de percepción de una observación. ADR-0020, aprobada el mismo día, acota la lista de aplicaciones permitidas a ventanas (clases de ventana y una ventana registrada) para poder permitir `explorer.exe` sin el escritorio ni la barra de tareas. ADR-0021, aprobada el mismo día, comprueba por hash todo artefacto que carga el motor, el archivo de íconos curados incluido, antes de cargar nada, y no repite texto de pantalla ni del agente en los errores del protocolo. Las ADR del arranque se archivan en `bootstrap/` como B0001–B0012.

@@ -1,8 +1,8 @@
 # 0021. Pin every artefact the engine loads before loading anything, and keep screen and agent text out of errors
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
-- **Approval:** Pending (the project owner)
+- **Approval:** Accepted by the project owner on 2026-10-14
 
 ## Context
 
@@ -89,4 +89,4 @@ minimisation); implements chapter 08 §8.2 for the cache.
   (`Unknown tool` lista las herramientas; `Method not found` repite sólo nombres con forma de
   método).
 - **Costo:** una clave más para el operador, que calcula el digest una vez.
-- **Estado:** propuesta, a la espera del responsable.
+- **Estado:** aprobada por el responsable el 14 de octubre de 2026.
