@@ -82,6 +82,10 @@ pub struct EngineSection {
     pub halo_px: u32,
     pub max_regions: usize,
     pub full_refresh_area_ratio: f64,
+    /// The adaptive cost rule of Algorithm 1 (INC-07, ADR-0030): a plan with this many regions
+    /// or more is processed as a full refresh (reason `adaptive_cost`), because each region is a
+    /// whole detector inference and the full frame is one. `0` switches the rule off.
+    pub adaptive_min_regions: usize,
     /// How old the snapshot's capture and the accessibility read that confirms a target may
     /// be when an action is authorised, measured on the injected clock (ADR-0025). Checked at
     /// the gate and before every real input.
@@ -114,6 +118,7 @@ impl Default for EngineSection {
             halo_px: 32,
             max_regions: 4,
             full_refresh_area_ratio: 0.40,
+            adaptive_min_regions: 2,
             max_snapshot_age_ms: 10_000,
             verify_timeout_ms: 500,
             verify_poll_ms: 50,
@@ -553,6 +558,10 @@ impl Config {
             "[engine] full_refresh_area_ratio must be greater than 0 and at most 1",
         );
         check(
+            e.adaptive_min_regions <= 1024,
+            "[engine] adaptive_min_regions must be at most 1024 (0 switches the rule off)",
+        );
+        check(
             e.max_snapshot_age_ms >= 1,
             "[engine] max_snapshot_age_ms must be at least 1",
         );
@@ -696,6 +705,7 @@ impl Config {
             halo_px: f64::from(self.engine.halo_px),
             max_regions: self.engine.max_regions,
             max_area_fraction: self.engine.full_refresh_area_ratio,
+            adaptive_min_regions: self.engine.adaptive_min_regions,
             experimental_full_frame: self.engine.experimental_full_frame,
             ..PlanParams::default()
         }
@@ -817,7 +827,15 @@ mod tests {
     #[test]
     fn the_defaults_map_to_the_engine_defaults_and_deny_everything() {
         let config = Config::default();
-        assert_eq!(config.plan_params(), PlanParams::default());
+        // `PlanParams::default()` is the reference planner (the adaptive rule off); the
+        // product's configuration adds the rule's measured threshold (ADR-0030) and nothing else.
+        assert_eq!(
+            config.plan_params(),
+            PlanParams {
+                adaptive_min_regions: config.engine.adaptive_min_regions,
+                ..PlanParams::default()
+            }
+        );
         assert_eq!(config.verify_params(), VerifyParams::default());
         assert_eq!(config.mcp_config(false), McpConfig::default());
         assert_eq!(config.local_policy(), LocalPolicy::default());
@@ -983,6 +1001,36 @@ concurrent_stages = false
         )
         .unwrap();
         assert!(!config.engine.concurrent_stages);
+    }
+
+    #[test]
+    fn inc_07_the_adaptive_rule_reaches_the_planner_and_zero_switches_it_off() {
+        // ADR-0030: the rule's threshold travels from `[engine]` to Algorithm 1; 0 is off and
+        // an absurd value is refused like the other plan parameters.
+        assert_eq!(Config::default().engine.adaptive_min_regions, 2);
+        assert_eq!(Config::default().plan_params().adaptive_min_regions, 2);
+        let off = Config::parse(
+            "[engine]
+adaptive_min_regions = 0
+",
+        )
+        .unwrap();
+        assert_eq!(off.plan_params().adaptive_min_regions, 0);
+        let three = Config::parse(
+            "[engine]
+adaptive_min_regions = 3
+",
+        )
+        .unwrap();
+        assert_eq!(three.plan_params().adaptive_min_regions, 3);
+        assert!(
+            Config::parse(
+                "[engine]
+adaptive_min_regions = 5000
+"
+            )
+            .is_err()
+        );
     }
 
     #[test]

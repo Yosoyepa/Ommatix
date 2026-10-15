@@ -290,7 +290,7 @@ fn session_responses() -> Vec<Value> {
 
 /// The names the plan may carry (ADR-0024): the closed vocabulary of the planner, never
 /// screen content.
-const PLAN_WORDS: [&str; 9] = [
+const PLAN_WORDS: [&str; 10] = [
     "full",
     "regions",
     "idle",
@@ -300,6 +300,7 @@ const PLAN_WORDS: [&str; 9] = [
     "too_many_regions",
     "area_budget",
     "experimental_baseline",
+    "adaptive_cost",
 ];
 
 /// IT-06 (redaction): in every result `_meta` there are the engine keys and the server's name

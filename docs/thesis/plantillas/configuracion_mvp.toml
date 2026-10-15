@@ -7,6 +7,10 @@ tile_size = 64
 halo_px = 32
 max_regions = 4
 full_refresh_area_ratio = 0.40
+# Regla de coste adaptativa del Algoritmo 1 (INC-07, ADR-0030): un plan con esta cantidad de
+# regiones o mas se procesa como refresco completo (razon adaptive_cost), porque cada region es
+# una inferencia completa del detector y el fotograma entero es una. 0 apaga la regla.
+adaptive_min_regions = 2
 # Vigencia (ADR-0025, INC-03): edad máxima, medida en el reloj inyectado, de la captura del
 # snapshot y de la lectura de accesibilidad que confirma un objetivo, para autorizar una
 # acción. Se comprueba en la puerta, también en simulación, y antes de cada entrada real. Pasado

@@ -62,6 +62,15 @@ B0 and B1 (the same executable, a configuration that differs only in the experim
         --variant B1=target\\release\\ommatix.exe,CONFIG_B1.toml ^
         --allow-difference engine.experimental_full_frame --paired B0:B1 --out chunk-N.json
 
+A third variant for the adaptive cost rule of INC-07 (ADR-0030) differs from B1 only in
+``[engine] adaptive_min_regions``; declare it too and pair as needed::
+
+    python tools/perf/measure_latency.py --experiment-id EXPERIMENT ^
+        --variant B0=EXE,B0.toml --variant B1=EXE,B1.toml --variant AD=EXE,AD.toml ^
+        --allow-difference engine.experimental_full_frame ^
+        --allow-difference engine.adaptive_min_regions ^
+        --paired B0:B1 --paired B0:AD --paired B1:AD --out chunk-N.json
+
 Join chunks and print the headline table again::
 
     python tools/perf/measure_latency.py --combine chunk-1.json chunk-2.json ^
@@ -98,7 +107,8 @@ STAGES = ("capture", "plan", "detect", "recognize", "accessibility", "fuse", "tr
           "commit", "response_build", "total")
 WORK_KINDS = ("full", "regions", "idle")
 REFRESH_REASONS = ("no_committed_base", "geometry_changed", "closure_budget",
-                   "too_many_regions", "area_budget", "experimental_baseline")
+                   "too_many_regions", "area_budget", "experimental_baseline",
+                   "adaptive_cost")
 PROCESS_STATUSES = ("ok", "discarded", "failed")
 WARM = ("warm_full", "warm_regions")
 CASES = {
