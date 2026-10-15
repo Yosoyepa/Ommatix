@@ -284,6 +284,15 @@ already delivered keep their reported status (a replay of their `request_id` sti
 `input_delivered`); nothing is rolled back. No MCP tool can set or clear the stop. Ending
 the process (Ctrl+C) also stops it; without a `stop_file`, that is the only local stop.
 
+**Operator purge** ([ADR-0028](docs/adr/0028-operator-purge-file.md), proposed; off by
+default). With `[safety] purge_file = "PURGE"` (relative to the configuration file), creating
+that file makes the engine delete its state and cache at its next request, without ending the
+session; no identifier is issued again afterwards. The engine honours each instance of the file
+once (a new modification time or size is a new instance), writes a line on stderr and never
+deletes the file: to ask again, the operator removes it, lets one request pass and creates it
+again. No MCP tool can request a purge, and the agent sees only the usual `STALE_SNAPSHOT` on its
+next action on the previous snapshot.
+
 **Operator scope on windows** ([ADR-0020](docs/adr/0020-operator-scope-on-windows.md),
 accepted; off by default). `allowed_applications` names a process, and `explorer.exe` also
 owns the desktop and the taskbar. `[safety] allowed_window_classes = { "explorer.exe" =
@@ -304,7 +313,7 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
 - **Refused** (the server does not start): unknown sections or keys; out-of-range values
   (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024, `full_refresh_area_ratio`
   in (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` a boolean (default `true`), `candidate_search` `scan` (default, the reference) or `rstar` (experimental R*-tree, [ADR-0027](docs/adr/0027-candidate-enumeration-with-an-rstar-index.md); the same results), `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
-  blank `allowed_applications` entries, a blank `stop_file` or `window_pin_file`, an
+  blank `allowed_applications` entries, a blank `stop_file`, `window_pin_file` or `purge_file`, an
   `allowed_window_classes` entry that could never apply or that names the desktop, the taskbar or
   `applicationframehost.exe`); and values this build cannot
   honour: a `platform` other than `windows`, a `snapshot_policy` other than `strict`, a `profile` other than

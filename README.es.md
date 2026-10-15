@@ -302,6 +302,15 @@ archivo la retira. Las acciones ya entregadas conservan el estado informado (rep
 puede activar ni retirar la parada. Terminar el proceso (Ctrl+C) también detiene; sin
 `stop_file`, es la única parada local.
 
+**Purga del operador** ([ADR-0028](docs/adr/0028-operator-purge-file.md), propuesta; apagada por
+defecto). Con `[safety] purge_file = "PURGE"` (relativo al archivo de configuración), crear ese
+archivo hace que el motor borre su estado y su caché en su siguiente petición, sin terminar la
+sesión; ningún identificador se emite otra vez después. El motor atiende cada instancia del archivo
+una sola vez (una fecha de modificación o un tamaño nuevos son otra instancia), escribe una línea
+en stderr y nunca borra el archivo: para volver a pedirla, el operador lo retira, deja pasar una
+petición y lo vuelve a crear. Ninguna herramienta MCP puede pedir la purga, y el agente sólo ve el
+`STALE_SNAPSHOT` habitual en su siguiente acción sobre el snapshot anterior.
+
 **Alcance del operador por ventanas** ([ADR-0020](docs/adr/0020-operator-scope-on-windows.md),
 aprobada; apagado por defecto). `allowed_applications` nombra un proceso, y `explorer.exe`
 es también dueño del escritorio y de la barra de tareas. `[safety] allowed_window_classes =
@@ -322,8 +331,8 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
 - **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
   rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
   `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` booleano (por defecto `true`), `candidate_search` `scan` (por defecto, la referencia) o `rstar` (R*-tree experimental, [ADR-0027](docs/adr/0027-candidate-enumeration-with-an-rstar-index.md); los mismos resultados), `max_message_bytes`
-  4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`
-  o `window_pin_file` en blanco, una entrada de `allowed_window_classes` que nunca podría
+  4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`,
+  `window_pin_file` o `purge_file` en blanco, una entrada de `allowed_window_classes` que nunca podría
   aplicarse o que nombra el escritorio, la barra de tareas o `applicationframehost.exe`); y valores que este binario no puede cumplir: un `platform` distinto de
   `windows`, un `snapshot_policy`
   distinto de `strict`, un `profile` distinto de `2026-07-28` (el perfil legacy se habilita
