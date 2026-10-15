@@ -381,7 +381,7 @@ fn configure(ctx: &egui::Context) {
 }
 
 /// The decoy's two fields (`--decoy-focus` only). A click on the first one gives it the keyboard
-/// focus, and as soon as it has it, the focus moves on to the second, so the first never keeps
+/// focus, and once that click is over, the focus moves on to the second, so the first never keeps
 /// the focus. That is the case BDD-35 needs: a `type` on the first field waits for a focus that
 /// does not come, and no key may be sent. Nothing here reads or writes the keyboard; the
 /// toolkit's own focus is moved inside the window.
@@ -396,14 +396,6 @@ fn decoy_fields(ui: &mut egui::Ui, decoy: &mut Decoy) {
     );
     ui.ctx()
         .accesskit_node_builder(field.id, |node| node.set_label(DECOY_LABEL));
-    // Every frame in which the decoy holds the focus, the focus goes on to the target: the decoy
-    // never keeps it, whichever frame the click gave it in, and whether or not the window has the
-    // operating system's focus. `Response::has_focus` also requires that focus, so in a window
-    // without it the decoy kept the focus (the S4 decoy round read the focus `elsewhere`).
-    if ui.ctx().memory(|memory| memory.has_focus(field.id)) {
-        ui.ctx()
-            .memory_mut(|memory| memory.request_focus(egui::Id::new(TARGET_FIELD_ID)));
-    }
     ui.add_space(20.0);
     let target = ui.add(
         egui::TextEdit::singleline(&mut decoy.target)
@@ -414,6 +406,16 @@ fn decoy_fields(ui: &mut egui::Ui, decoy: &mut Decoy) {
     );
     ui.ctx()
         .accesskit_node_builder(target.id, |node| node.set_label(TARGET_LABEL));
+    // The hand-over comes after the target has been laid out, and only once the decoy's button is
+    // up. Handed over during the press, the focus reached the target before the click was over, and
+    // the release, a click elsewhere, took it from the focused field (egui surrenders focus on a
+    // click outside it by default): the toolkit then published no focused field, and UI Automation
+    // read the window (S4's D1). The check reads the toolkit's memory, not `Response::has_focus`,
+    // which also requires the operating system's focus.
+    if !field.is_pointer_button_down_on() && ui.ctx().memory(|memory| memory.has_focus(field.id)) {
+        ui.ctx()
+            .memory_mut(|memory| memory.request_focus(egui::Id::new(TARGET_FIELD_ID)));
+    }
 }
 
 struct EditorApp {
@@ -1097,6 +1099,178 @@ mod tests {
             ctx.memory(egui::Memory::focused),
             Some(egui::Id::new(FIELD_ID)),
             "the main field lost the keyboard focus without the decoy"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// One frame at `time` seconds with the given input events (the toolkit's own input, never the
+    /// operating system's); returns the whole output, so that a test can read the accessibility
+    /// update the frame published.
+    fn run_frame(
+        ctx: &egui::Context,
+        app: &mut EditorApp,
+        time: f64,
+        window_focused: bool,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let mut raw = egui::RawInput {
+            time: Some(time),
+            focused: window_focused,
+            events,
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1920.0, 1080.0),
+            )),
+            ..Default::default()
+        };
+        raw.viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                focused: Some(window_focused),
+                ..Default::default()
+            },
+        );
+        let mut output = ctx.run_ui(raw, |ui| app.show(ui));
+        output.textures_delta.clear();
+        output
+    }
+
+    /// The decoy click (a pointer press and release on Campo auxiliar, given to the toolkit): in
+    /// the frame of the click and in the idle frames after it, the keyboard focus is Campo de
+    /// destino both in the toolkit's memory and in the accessibility tree that UI Automation reads
+    /// (the update's `focus`). S4's D1 read the focus on the window instead, not on the target.
+    #[test]
+    fn a_decoy_click_leaves_the_focus_on_the_target_in_the_accessibility_tree() {
+        let root = temp_root();
+        let dir = run_dir(&root, "decoy-click-tree");
+        let mut editor = Editor::new(SaveFolder::new(&dir, &root).unwrap());
+        editor.decoy = Some(Decoy::default());
+        let mut app = EditorApp {
+            editor,
+            started: Instant::now(),
+            maximized: true,
+            seeker: FocusSeeker::default(),
+        };
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        ctx.enable_accesskit();
+        for step in 0..3 {
+            let _ = run_frame(&ctx, &mut app, f64::from(step) * 0.01, true, Vec::new());
+        }
+        let decoy = ctx
+            .read_response(egui::Id::new(DECOY_FIELD_ID))
+            .expect("the decoy field is drawn")
+            .rect
+            .center();
+        let press = |pressed: bool| egui::Event::PointerButton {
+            pos: decoy,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let target = egui::Id::new(TARGET_FIELD_ID).accesskit_id();
+        // A click as the frames carry it: the pointer comes over the field, the button goes down,
+        // then up. The focus is read in the frame of the release.
+        let _ = run_frame(
+            &ctx,
+            &mut app,
+            0.04,
+            true,
+            vec![egui::Event::PointerMoved(decoy)],
+        );
+        let _ = run_frame(&ctx, &mut app, 0.05, true, vec![press(true)]);
+        assert_eq!(
+            ctx.memory(egui::Memory::focused),
+            Some(egui::Id::new(DECOY_FIELD_ID)),
+            "the focus left the decoy before its click was over"
+        );
+        let click = run_frame(&ctx, &mut app, 0.06, true, vec![press(false)]);
+        let published = |output: &egui::FullOutput| {
+            output
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .map(|update| update.focus)
+        };
+        assert_eq!(
+            ctx.memory(egui::Memory::focused),
+            Some(egui::Id::new(TARGET_FIELD_ID)),
+            "the click frame left the toolkit's focus off Campo de destino"
+        );
+        assert_eq!(
+            published(&click),
+            Some(target),
+            "the click frame published a focus other than Campo de destino"
+        );
+        for step in 1..=2 {
+            let idle = run_frame(
+                &ctx,
+                &mut app,
+                0.06 + f64::from(step) * 0.01,
+                true,
+                Vec::new(),
+            );
+            assert_eq!(
+                published(&idle),
+                Some(target),
+                "an idle frame after the click changed the published focus"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The same click when the press and the release reach the toolkit in one frame, as a quick
+    /// click can: the focus still ends on Campo de destino, in the toolkit and in the tree.
+    #[test]
+    fn a_decoy_click_in_one_frame_leaves_the_focus_on_the_target_in_the_accessibility_tree() {
+        let root = temp_root();
+        let dir = run_dir(&root, "decoy-click-one-frame");
+        let mut editor = Editor::new(SaveFolder::new(&dir, &root).unwrap());
+        editor.decoy = Some(Decoy::default());
+        let mut app = EditorApp {
+            editor,
+            started: Instant::now(),
+            maximized: true,
+            seeker: FocusSeeker::default(),
+        };
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        ctx.enable_accesskit();
+        for step in 0..3 {
+            let _ = run_frame(&ctx, &mut app, f64::from(step) * 0.01, true, Vec::new());
+        }
+        let decoy = ctx
+            .read_response(egui::Id::new(DECOY_FIELD_ID))
+            .expect("the decoy field is drawn")
+            .rect
+            .center();
+        let press = |pressed: bool| egui::Event::PointerButton {
+            pos: decoy,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let click = run_frame(
+            &ctx,
+            &mut app,
+            0.04,
+            true,
+            vec![egui::Event::PointerMoved(decoy), press(true), press(false)],
+        );
+        let target = egui::Id::new(TARGET_FIELD_ID);
+        assert_eq!(
+            ctx.memory(egui::Memory::focused),
+            Some(target),
+            "the one-frame click left the toolkit's focus off Campo de destino"
+        );
+        assert_eq!(
+            click
+                .platform_output
+                .accesskit_update
+                .as_ref()
+                .map(|update| update.focus),
+            Some(target.accesskit_id()),
+            "the one-frame click published a focus other than Campo de destino"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
