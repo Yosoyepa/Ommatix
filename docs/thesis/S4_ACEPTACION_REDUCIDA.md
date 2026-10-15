@@ -1239,3 +1239,101 @@ Las pruebas de seguridad se comprobaron por mutación: sin la comprobación de l
   3. **El cupo:** el valor de `--round-start` de la ronda y cuántas solicitudes se asignan (el editor usa 2 por corrida, el Explorador 3, más los reintentos tras `STALE_SNAPSHOT`; se sugiere `--max-live 8`).
   4. **El entorno:** sin uso concurrente del equipo durante la corrida, sin otras ventanas del Explorador necesarias y con la ventana del propietario fuera de la zona de clics (el cliente la deja abierta y no la toca).
   5. **El nombre:** si los informes siguen llamando E2E-02/E2E-03 a la Calculadora y el Bloc de notas (S4R-02/S4R-03) o pasan a los de la matriz.
+
+## Octava ronda: S4R-02 no alcanzó el modo Estándar, y E2E-02 y E2E-03 no llegaron al primer plano; ninguna corrida puntuada
+
+**Fecha:** 14 de octubre de 2026. Rama `docs/s4-eighth-round`, desde `main` en `b7a5e7b` (fusión de #19). No cambia ningún código. Se usaron el cliente comprometido `tools/s4/e2e_driver.py` (SHA-256 `a16c53afca63e21f629140ab33951f481b75dfd113866720ab947aa8272ae22d`) y `tools/s4/e2e_dossier.py` (SHA-256 `cd959f590fb02f7abc64f903fa1a7773fec25ed34ed8ad214b7409228157f306`), comprobados antes de cada invocación en vivo. El binario del motor se compiló de nuevo en esta rama (`target/release/ommatix.exe`, SHA-256 `3a451211763f8ef9c92adb98955dca7b42dedf58974c97248bc97aac513cbb1a`), porque el de la séptima ronda (`11a3d792…aca9da`) es anterior a la fusión de #19. El editor (`tools/s4/testeditor/target/release/ommatix-testeditor.exe`) tiene SHA-256 `a6765dca0b5e63b45cfd3ab8a28b470a0896a3dcdfe1ea062cb48c8ff745119d`. Autorización del responsable del 14 de octubre de 2026: `calculatorapp.exe` (S4R-02), `ommatix-testeditor.exe` (E2E-02) y `explorer.exe` sólo en la ventana `CabinetWClass` que abre el cliente (E2E-03, ADR-0020); cupo de 200 solicitudes con `--round-start 426`; el responsable no usó el equipo.
+
+**Resultado:** ninguna corrida puntuada. S4R-02 no alcanzó el modo Estándar, así que no hubo piloto ni serie. El editor no llegó al primer plano maximizado en tres de cuatro intentos (el primer sondeo sí llegó), y el Explorador no llegó en su sondeo; en ningún caso se envió entrada. En el sondeo que sí llegó al primer plano, el motor no tiene ninguna etiqueta de accesibilidad para el campo del editor. Se envió una sola solicitud real, el clic de navegación de S4R-02, que se entregó y se verificó. No se creó `stop.flag`. Cuaderno: 426 → 427 (1 de 200 solicitudes de la ronda).
+
+### 1. Verificación previa a la entrada en vivo
+
+- `cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia` y `cargo build --release` en `tools/s4/testeditor`: correctos.
+- `cargo fmt --all --check` y `cargo clippy --workspace --all-targets -- -D warnings`: correctos.
+- `cargo test --workspace`: 383 pruebas pasadas, 0 fallidas, 1 ignorada.
+- `python -m unittest discover -s tools/s4 -p "test_*.py"`: 193 pruebas correctas.
+- Desde `docs/thesis`: `referencia_ejecutable/run_tests.py`, 48 de 48; `validar_paquete.py`, 218 comprobaciones y 0 fallidas. Cuatro archivos de `referencia_ejecutable/resultados/` cambiaron sólo en la marca de tiempo, las cadenas de Python y de plataforma, una duración y el fin de línea; se restauraron con `git restore`.
+- Configuraciones (fuera del repositorio, en la carpeta de corridas): `s4r8-live.toml` (SHA-256 `0428daf861e1567e1be9eb8588887fd56f370beef863099904cd9bd3ce5ec1e2`) es una copia de `s4r7-live.toml` (`b6e9e8e8…e74c`) con `allowed_applications = ["calculatorapp.exe", "ommatix-testeditor.exe"]`, sin alcance por ventana ni archivo de ventana. `s4r8-explorer.toml` (SHA-256 `ab6c33b5144e6785e4be60aac71a6d54b93c29e8f383932ed60324dbaaa233d7`) tiene `allowed_applications = ["explorer.exe"]`, `allowed_window_classes = { "explorer.exe" = ["CabinetWClass"] }` y un `window_pin_file` absoluto en la carpeta de corridas. Las comprobaciones de configuración del cliente pasan para cada flujo con su configuración y fallan con la otra.
+- Manifiesto float16 (`AppData\Local\Ommatix\models\manifest.rnf05.json`): `f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47`, el mismo de la séptima ronda.
+- Escritorio antes de empezar: ningún proceso de prueba; los dos procesos del Bloc de notas del propietario (PIDs 8960 y 23164) sin cambios; sin `stop.flag` ni `window.pin`; cuaderno en 426.
+
+### 2. Ejecución en vivo
+
+| Paso | Invocación (resumen) | Solicitudes | Resultado |
+|---|---|---|---|
+| S4R-02, sondeo | `e2e_driver.py --app calculator --mode probe --runs 1` | 0 | Los cinco elementos del flujo (`Siete`, `Más`, `Ocho`, `Es igual a` y el control de borrado) confirmados por accesibilidad, un botón cada uno; el primer plano llegó en una solicitud (1,18 s). El control de borrado al empezar es «Borrar». |
+| S4R-02, `--calc-standard` | `--app calculator --mode run --calc-standard --max-live 4 --round-start 426` | 1 | Clic «Abrir navegación» entregado y anclado. «Estándar», con `AutomationId` `Standard`, no aceptado por su nombre (`unknown_name`), sin segundo clic. Modo antes y después: «otro». La Calculadora que lanzó se cerró. |
+| E2E-02, sondeo 1 | `e2e_dossier.py --app editor --mode probe --runs 1` | 0 | Primer plano en 10 solicitudes de activación. Ningún elemento con etiqueta de accesibilidad; «Guardar» confirmado sólo por OCR; «Editor de texto» sin candidato. |
+| E2E-02, piloto 1 | `e2e_dossier.py --app editor --mode run --runs 1 --max-live 8 --round-start 426` | 0 | Sin primer plano maximizado en 30 intentos (unos 60 s). Sin entrada. |
+| E2E-02, piloto 2 | la misma invocación | 0 | Igual que el piloto 1. |
+| E2E-02, sondeo 2 | `--app editor --mode probe --runs 1` | 0 | Igual: sin primer plano maximizado en 30 intentos. |
+| E2E-03, sondeo | `e2e_dossier.py --app explorer --mode probe --runs 1` (`s4r8-explorer.toml`) | 0 | Sin primer plano maximizado en 62,9 s. Ventana registrada, archivo de ventana escrito y borrado, ventana cerrada por su `HWND`, árbol temporal borrado (2 archivos y 3 carpetas). El panel de navegación no se observó. |
+
+Un primer intento del sondeo de la Calculadora falló al arrancar el motor, porque el ejecutable se pasó como ruta relativa (`target/release/ommatix.exe`): Windows no lo encontró, no se lanzó ningún proceso y no se gastó ninguna solicitud. El segundo intento usó la ruta absoluta (hallazgo 4).
+
+Cuaderno: 426 → 427, es decir, una solicitud real. La ronda lleva 1 de 200.
+
+### 3. Resultados
+
+#### 3.1 S4R-02, Calculadora: sin modo Estándar, sin piloto ni serie
+
+- **Sondeo.** Cada uno de los cinco elementos del flujo tiene un único candidato, un botón confirmado por accesibilidad. El control de borrado al empezar es «Borrar».
+- **Modo al empezar:** `other`.
+- **Clic 1, «Abrir navegación».** Un candidato (`TogglePaneButton`, `Button`), con identidad `ok` antes del clic. Entregado, `effect_observed` y anclado tras el clic. `_meta` de esa única acción: `action_total` 84,8 ms, `action_verification` 57,3 ms, `action_freshness` 25,4 ms, `action_delivery` 1,7 ms y `action_gate` 0,3 ms; rtt del cliente 85,0 ms. Es una muestra, sin mediana ni p95.
+- **Paso 2, «Estándar».** En una única lectura de UI Automation dentro de la ventana de 3 s (407 ms) hay un candidato con `AutomationId` `Standard` y tipo `ListItem`, en pantalla. Su nombre no está en la lista cerrada (`Estándar`, `Calculadora estándar`): `unknown_name`. El nombre no se registró, ni en el resumen ni en el archivo de resultados. `by_name`: ningún elemento de la ventana tiene uno de los dos nombres aceptados, de cualquier tipo o `AutomationId`. No hubo clic.
+- **Modo al terminar:** `other`, leído de sólo lectura antes de cerrar la Calculadora. `foreground_wait_s` 0,89; `activation_requests` 1; `window_placements` 2.
+- **Qué confirma y qué no.** Confirma la hipótesis de la sexta ronda sobre el `AutomationId`: `Standard` existe, es un `ListItem` y hay un único candidato. No confirma que su nombre sea «Estándar» o «Calculadora estándar». La lista cerrada no lo acepta, y el nombre sólo puede conocerse leyendo texto de pantalla, que no se guarda.
+- **Consecuencia.** Según la autorización, sin modo Estándar no hay piloto ni serie. S4R-02 queda sin corridas puntuadas.
+
+#### 3.2 E2E-02, editor: el piloto no llegó al primer plano
+
+- **Sondeo 1** (primer plano en 10 solicitudes de activación): 69 elementos del motor, ninguno con origen de etiqueta de accesibilidad (`unknown` 60, `ocr` 9). Por OCR se ven «Editor», «Estado:» y «pendiente». «Guardar» se confirma sólo por OCR. «Editor de texto», el campo, no tiene candidato: con ese resultado el primer paso se detendría antes de cualquier entrada.
+- **Piloto 1, piloto 2 y sondeo 2.** El editor no llegó al primer plano maximizado en 30 solicitudes de activación (unos 60 s). Ninguna observación, ninguna solicitud y ninguna entrada. En los tres casos la ventana se cerró y la carpeta de la corrida se borró.
+- **Por qué no se abre la serie.** Un piloto que no pasa no abre la serie. Una serie con este fallo contaría tres corridas fallidas seguidas, y el cliente crearía `stop.flag`, que detendría también el Explorador (hallazgo 6).
+
+#### 3.3 E2E-03, Explorador: el sondeo no llegó al primer plano
+
+- El sondeo registró la única ventana nueva `CabinetWClass` cuya carpeta es la raíz, escribió el archivo de ventana y la maximizó. No llegó al primer plano maximizado en 62,9 s, así que no leyó el panel de navegación ni la ruta de navegación: esa lectura sólo ocurre con la ventana en primer plano.
+- Sin entrada. El cliente cerró la ventana por su `HWND` (`WM_CLOSE`), borró el archivo de ventana y borró el árbol temporal que creó (2 archivos y 3 carpetas).
+- Según el orden de la ronda, un sondeo que no muestra los objetivos no autoriza la ejecución en vivo. Queda sin resolver si los tres clics sencillos son alcanzables.
+
+#### 3.4 Totales
+
+- Solicitudes reales: 1 (cuaderno 426 → 427). Entregadas: 1, `effect_observed` y verificada por el motor. Rechazadas: 0. `indeterminate`: 0. Falsos éxitos: 0. `grounding_wrong`: 0. `POLICY_DENIED`: 0. Reintentos por `STALE_SNAPSHOT`: 0.
+- Corridas puntuadas: 0. Pilotos aprobados: 0.
+
+### 4. Latencias (`_meta`)
+
+Una sola acción (el clic de navegación de S4R-02), sin serie: no hay mediana ni p95, y no mide RNF-05 (S0 §10). Valores en §3.1.
+
+### 5. Hallazgos
+
+| # | Severidad | Hallazgo | Estado y siguiente paso |
+|---|---|---|---|
+| 1 | Mayor, Calculadora | El elemento de Estándar tiene `AutomationId` `Standard` y es un `ListItem`, pero su nombre no está en la lista cerrada, así que el cliente lo rechaza sin clic. | Abierto (decisión del responsable). Confirmar con el panel abierto el nombre exacto, sin guardarlo. Después, en una ronda aparte, un cambio de la lista cerrada con una prueba que falle sin el cambio y un hash nuevo. |
+| 2 | Mayor, activación de la ventana | Desde el primer sondeo, el editor no llegó al primer plano maximizado en tres de cuatro intentos, y el Explorador tampoco en su sondeo. El cliente activa la ventana principal del editor con `main_window(pid)`, que cuenta una solicitud de activación aunque no halle ninguna ventana. Causa no verificada: (a) la ventana principal del proceso no es la que muestra el editor; (b) el bloqueo de primer plano de Windows; (c) la maximización en el monitor principal. La disposición de monitores era normal. | Abierto. Qué lo resolvería: un sondeo supervisado, sin entrada, que registre las ventanas de nivel superior del proceso (clase, visibilidad, área, estado maximizado) y el primer plano durante la activación. Después, un cambio del cliente con prueba. |
+| 3 | Mayor, E2E-02 | En el sondeo que sí llegó al primer plano, el motor no tiene ningún elemento con etiqueta de accesibilidad (0 de 69), y «Editor de texto» no aparece. «Guardar» sólo por OCR. | Abierto. Causa no verificada: el árbol de UI Automation del editor (egui sobre AccessKit) puede no estar disponible en la primera observación, o el proveedor de accesibilidad no ve esa ventana. Qué lo resolvería: una lectura de sólo lectura, con el editor en primer plano, que compare su árbol de UI Automation con las etiquetas del motor. |
+| 4 | Menor, uso del cliente | El ejecutable relativo (`target/release/ommatix.exe`) no arrancó en Windows (`WinError 2`): no se lanzó proceso ni se gastó solicitud. | Sin cambio del cliente. Pasar siempre rutas absolutas en `--exe`, `--config`, `--results` y `--ledger`. |
+| 5 | Observación | Las ventanas que no llegaron al primer plano tenían entre 60 s y 257 s de inactividad del propietario; la que sí llegó tenía 49 s. La inactividad no explica el patrón. | Sin cambio. |
+| 6 | Interpretación de la regla del orden | La regla («un piloto fallido por agarre o seguridad no abre la serie») se aplicó a cualquier piloto que no pase, porque una serie que falla tres corridas seguidas crea `stop.flag`, que detiene también el Explorador. | Pendiente de confirmación del responsable. |
+
+### 6. Estado en la matriz
+
+Sin cambio. S4R-02, E2E-02 y E2E-03 siguen en `NO_EJECUTADO` y `PENDIENTE_PRODUCTO` en `matrices/plan_pruebas.csv`, porque no hubo corridas puntuadas y la evidencia no sostiene otro estado. RF-18, RNF-03, RNF-05 y las casillas de la Definition of Done no cambian.
+
+### 7. Estado final del escritorio, del cuaderno y de `stop.flag`
+
+- **Procesos de prueba:** ninguno (`ommatix.exe`, `CalculatorApp.exe`, `ommatix-testeditor.exe` y `ommatix-testapp.exe`).
+- **Bloc de notas del propietario:** procesos 8960 y 23164, los mismos que al empezar. No se tocó ninguna de sus ventanas: el cliente sólo cierra los `HWND` que abre. No se contó el número de ventanas `CabinetWClass` antes del sondeo del Explorador, así que no hay referencia exacta de su estado previo.
+- **Carpeta temporal `ommatix-e2e`:** no existe al final.
+- **`stop.flag` y `window.pin`:** ausentes. El cliente no creó ninguno.
+- **Cuaderno:** 427 (1 de 200 solicitudes de la ronda; 199 disponibles).
+- **Capturas y texto de pantalla:** ninguno guardado. Los registros contienen estados, códigos, contadores, tiempos, tipos de control, `AutomationId`, identificadores de elemento y las etiquetas fijas del protocolo.
+
+### 8. Qué queda y cómo reanudar
+
+1. **Responsable:** confirmar, con el panel abierto y sin guardar el texto, el nombre exacto del elemento Estándar, y decidir si la lista cerrada `CALC_STANDARD_NAMES` lo admite. Eso exige un cambio del cliente en una ronda aparte, con su prueba y un hash nuevo.
+2. **Responsable:** decidir cómo diagnosticar el primer plano del editor y del Explorador: un sondeo supervisado sin entrada, o un cambio del cliente con su prueba.
+3. **Responsable:** decidir cómo se resuelve la etiqueta de accesibilidad del campo «Editor de texto» (un diagnóstico de sólo lectura con el editor en primer plano, o un cambio de la aplicación o del contrato, que queda fuera de esta rama).
+4. **Responsable:** confirmar la interpretación de la regla del piloto (hallazgo 6).
+5. **Cuaderno:** 427. La siguiente ronda usa su propio `--round-start`.
