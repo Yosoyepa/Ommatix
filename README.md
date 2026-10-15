@@ -241,7 +241,7 @@ Build features, all off by default:
 | `--output N` | the output `--source dxgi` duplicates, in DXGI order (0 is normally the primary monitor); a rotated output is refused | `0` |
 | `--input` | `dry-run` (record, never touch the OS), `native` (`enigo`; feature `native-input`, source `screen`) or `sendinput` (Win32 `SendInput`; feature `sendinput`, source `dxgi`) | `[engine] mode` (`dry_run`) |
 | `--theme` | `light`, `dark`, `contrasting-wallpaper` (simulated desktop only) | `light` |
-| `--session-id ID` | 1–64 visible ASCII characters, for reproducible output; a fixed ID is not unique across runs (chapter 08 §8.4) | derived from the start time and the process ID |
+| `--session-id ID` | 1–64 visible ASCII characters, for reproducible output; with live input a fixed ID is refused at start (chapter 08 §8.4) | derived from the start time and the process ID |
 | `--legacy` | also serve the legacy MCP profile 2025-11-25 (like `[mcp] legacy_enabled = true`) | off |
 | `--observations N` (`demo` only) | 1–20 | 3 |
 
