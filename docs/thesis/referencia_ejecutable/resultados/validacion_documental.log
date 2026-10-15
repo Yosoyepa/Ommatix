@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 27
+PASS adrs_encontradas 28
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -104,6 +104,7 @@ PASS referencias:0024-observation-spans-and-a-switched-full-frame-baseline.md []
 PASS referencias:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
 PASS referencias:0026-native-identity-discriminant.md []
 PASS referencias:0027-candidate-enumeration-with-an-rstar-index.md []
+PASS referencias:0028-operator-purge-file.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 
@@ -191,6 +192,8 @@ PASS gherkin_estructura:BDD-38
 PASS gherkin_cabecera:07_retencion.feature 
 PASS gherkin_id_unico:BDD-39 
 PASS gherkin_estructura:BDD-39 
+PASS gherkin_id_unico:BDD-53 
+PASS gherkin_estructura:BDD-53 
 PASS gherkin_cabecera:08_indice_candidatos.feature 
 PASS gherkin_id_unico:BDD-41 
 PASS gherkin_estructura:BDD-41 
@@ -269,6 +272,7 @@ PASS trazabilidad:BDD-49
 PASS trazabilidad:BDD-50 
 PASS trazabilidad:BDD-51 
 PASS trazabilidad:BDD-52 
+PASS trazabilidad:BDD-53 
 PASS doc01_pruebas_existen:RF-01 []
 PASS doc01_adr_existen:RF-01 ADR-0008; ADR-0016
 PASS doc01_propietario:RF-01 
@@ -278,11 +282,11 @@ PASS doc01_adr_existen:RF-02 ADR-0001; ADR-0011
 PASS doc01_propietario:RF-02 
 PASS doc01_evidencia_existe:RF-02 []
 PASS doc01_pruebas_existen:RF-03 []
-PASS doc01_adr_existen:RF-03 ADR-0011
+PASS doc01_adr_existen:RF-03 ADR-0011; ADR-0027
 PASS doc01_propietario:RF-03 
 PASS doc01_evidencia_existe:RF-03 []
 PASS doc01_pruebas_existen:RF-04 []
-PASS doc01_adr_existen:RF-04 ADR-0006
+PASS doc01_adr_existen:RF-04 ADR-0006; ADR-0027
 PASS doc01_propietario:RF-04 
 PASS doc01_evidencia_existe:RF-04 []
 PASS doc01_pruebas_existen:RF-05 []
@@ -290,7 +294,7 @@ PASS doc01_adr_existen:RF-05 ADR-0009; ADR-0019
 PASS doc01_propietario:RF-05 
 PASS doc01_evidencia_existe:RF-05 []
 PASS doc01_pruebas_existen:RF-06 []
-PASS doc01_adr_existen:RF-06 ADR-0003; ADR-0017
+PASS doc01_adr_existen:RF-06 ADR-0003; ADR-0017; ADR-0027
 PASS doc01_propietario:RF-06 
 PASS doc01_evidencia_existe:RF-06 []
 PASS doc01_pruebas_existen:RF-07 []
@@ -302,11 +306,11 @@ PASS doc01_adr_existen:RF-08 ADR-0004
 PASS doc01_propietario:RF-08 
 PASS doc01_evidencia_existe:RF-08 []
 PASS doc01_pruebas_existen:RF-09 []
-PASS doc01_adr_existen:RF-09 ADR-0005
+PASS doc01_adr_existen:RF-09 ADR-0005; ADR-0026
 PASS doc01_propietario:RF-09 
 PASS doc01_evidencia_existe:RF-09 []
 PASS doc01_pruebas_existen:RF-10 []
-PASS doc01_adr_existen:RF-10 ADR-0002; ADR-0006
+PASS doc01_adr_existen:RF-10 ADR-0002; ADR-0006; ADR-0027
 PASS doc01_propietario:RF-10 
 PASS doc01_evidencia_existe:RF-10 []
 PASS doc01_pruebas_existen:RF-11 []
@@ -334,7 +338,7 @@ PASS doc01_adr_existen:RF-16 ADR-0007; ADR-0012; ADR-0020
 PASS doc01_propietario:RF-16 
 PASS doc01_evidencia_existe:RF-16 []
 PASS doc01_pruebas_existen:RF-17 []
-PASS doc01_adr_existen:RF-17 ADR-0010; ADR-0012
+PASS doc01_adr_existen:RF-17 ADR-0010; ADR-0012; ADR-0024
 PASS doc01_propietario:RF-17 
 PASS doc01_evidencia_existe:RF-17 []
 PASS doc01_pruebas_existen:RF-18 []
@@ -370,7 +374,7 @@ PASS doc01_adr_existen:RNF-07 ADR-0008
 PASS doc01_propietario:RNF-07 
 PASS doc01_evidencia_existe:RNF-07 []
 PASS doc01_pruebas_existen:RNF-08 []
-PASS doc01_adr_existen:RNF-08 ADR-0001; ADR-0009; ADR-0012
+PASS doc01_adr_existen:RNF-08 ADR-0001; ADR-0009; ADR-0012; ADR-0023
 PASS doc01_propietario:RNF-08 
 PASS doc01_evidencia_existe:RNF-08 []
 PASS doc01_pruebas_existen:RNF-09 []
@@ -422,6 +426,7 @@ PASS doc01_adr_pruebas:0024-observation-spans-and-a-switched-full-frame-baseline
 PASS doc01_adr_pruebas:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
 PASS doc01_adr_pruebas:0026-native-identity-discriminant.md []
 PASS doc01_adr_pruebas:0027-candidate-enumeration-with-an-rstar-index.md []
+PASS doc01_adr_pruebas:0028-operator-purge-file.md []
 PASS doc01_prueba_enlazada:UT-01 
 PASS doc01_prueba_enlazada:UT-02 
 PASS doc01_prueba_enlazada:UT-03 

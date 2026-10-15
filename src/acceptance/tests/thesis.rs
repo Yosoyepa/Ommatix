@@ -66,7 +66,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-19", "BDD-20", "BDD-21", "BDD-22", "BDD-23", "BDD-24", "BDD-25", "BDD-26", "BDD-27",
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
     "BDD-37", "BDD-38", "BDD-39", "BDD-40", "BDD-41", "BDD-42", "BDD-43", "BDD-44", "BDD-45",
-    "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52",
+    "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52", "BDD-53",
 ];
 
 #[derive(Debug, Default, World)]
@@ -856,6 +856,8 @@ struct Agent {
     stop_file: Option<PathBuf>,
     /// The operator's window pin file, in a directory of its own, when the scenario has one.
     pin_file: Option<PathBuf>,
+    /// The operator's purge file, in a directory of its own, when the scenario has one.
+    purge_file: Option<PathBuf>,
     next_id: u64,
     /// The last observation page (`structuredContent`).
     page: Option<Value>,
@@ -874,7 +876,7 @@ struct Agent {
 
 impl Drop for Agent {
     fn drop(&mut self) {
-        for file in [&self.stop_file, &self.pin_file] {
+        for file in [&self.stop_file, &self.pin_file, &self.purge_file] {
             if let Some(dir) = file.as_deref().and_then(std::path::Path::parent) {
                 let _ = std::fs::remove_dir_all(dir);
             }
@@ -1187,6 +1189,7 @@ impl Agent {
             typing,
             stop_file: None,
             pin_file: None,
+            purge_file: None,
             next_id: 0,
             page: None,
             pages: Vec::new(),
@@ -1896,6 +1899,74 @@ fn a_later_observation_reuses_no_identifier(e: &mut Engine) {
     for element in fresh {
         assert!(!old_ids.contains(&element["target_id"]), "{element}");
     }
+}
+
+// ---- BDD-53: the operator's purge on demand, without ending the session (chapter 08 §8.4) ----
+
+/// A purge file path in a directory of its own, which the [`Agent`] removes when dropped.
+fn fresh_purge_file() -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ommatix-bdd53-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a temporary directory");
+    dir.join("PURGE")
+}
+
+#[given(
+    "un agente con una observación publicada, un elemento confirmado y el archivo de purga del operador configurado"
+)]
+fn an_agent_with_a_purge_file_configured(e: &mut Engine) {
+    let purge_file = fresh_purge_file();
+    let policy = ConfigPolicy::new(live_policy()).with_purge_file(&purge_file);
+    let agent = e
+        .agent
+        .insert(Agent::live_with(form_with_title(), Arc::new(policy)));
+    agent.purge_file = Some(purge_file);
+    agent.observe(json!({}));
+    let button = agent.element("Guardar");
+    assert_eq!(button["actionability"], "confirmed");
+    agent.target = Some(button);
+}
+
+#[when("el operador crea el archivo de purga y el agente envía su siguiente petición")]
+fn the_operator_creates_the_purge_file_and_the_agent_sends_its_next_request(e: &mut Engine) {
+    let agent = e.agent();
+    let purge_file = agent.purge_file.clone().expect("a purge file");
+    std::fs::write(&purge_file, b"").expect("the operator creates the purge file");
+    // The next request is the boundary: the engine purges before it handles this action.
+    let args = agent.live_click_args(agent.target(), "bdd53-click", "none");
+    agent.tool_result("execute_action", args);
+}
+
+#[then(
+    "el motor borra su estado y su caché, y el archivo de purga queda donde el operador lo dejó"
+)]
+fn the_engine_deletes_its_state_and_the_purge_file_stays(e: &mut Engine) {
+    let agent = e.agent();
+    let purge_file = agent.purge_file.clone().expect("a purge file");
+    assert!(
+        purge_file.exists(),
+        "the operator's file is left to the operator"
+    );
+    assert!(
+        !agent.policy.purge_requested(),
+        "the instance was honoured at the boundary"
+    );
+}
+
+#[then(
+    "la acción sobre el elemento anterior se rechaza con STALE_SNAPSHOT y no entrega ningún evento"
+)]
+fn the_action_on_the_old_element_is_refused_and_nothing_is_delivered(e: &mut Engine) {
+    let agent = e.agent();
+    let outcome = agent.last_response()["result"]["structuredContent"].clone();
+    assert_eq!(outcome["error"]["code"], "STALE_SNAPSHOT", "{outcome}");
+    assert_eq!(outcome["input_delivered"], false, "{outcome}");
+    assert_eq!(
+        agent.desktop.handed_actions().len(),
+        0,
+        "no event reached the OS"
+    );
+    assert_eq!(agent.metric("delivered_actions"), 0);
 }
 
 /// What the injected text on screen asks for.

@@ -386,6 +386,9 @@ fn operator_policy(config: &Config) -> ConfigPolicy {
     if let Some(path) = config.stop_file() {
         policy = policy.with_stop_file(path);
     }
+    if let Some(path) = config.purge_file() {
+        policy = policy.with_purge_file(path);
+    }
     match config.window_pin_file() {
         Some(path) => policy.with_window_pin_file(path),
         None => policy,
@@ -896,6 +899,33 @@ accessibility = \"uia\"
         assert!(!note(
             "[safety]\nactuation_enabled = true\nallowed_applications = [\"notepad.exe\"]\n"
         ));
+    }
+
+    #[test]
+    fn the_configured_purge_file_purges_the_engine_and_is_left_to_the_operator() {
+        let dir = std::env::temp_dir().join(format!("ommatix-wiring-purge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = Config::parse("[safety]\npurge_file = \"PURGE\"\n").unwrap();
+        config.base_dir = Some(dir.clone());
+        let mut wired = build(&args("serve"), &config).unwrap();
+        wired
+            .engine
+            .observe_screen(&ObserveRequest::default())
+            .unwrap();
+        assert!(wired.engine.last_timings().is_some());
+
+        std::fs::write(dir.join("PURGE"), b"").unwrap();
+        wired.engine.honour_purge_request();
+        assert!(
+            wired.engine.last_timings().is_none(),
+            "the state is deleted"
+        );
+        assert!(
+            dir.join("PURGE").exists(),
+            "the file is left to the operator"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

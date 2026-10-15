@@ -343,4 +343,17 @@ pub struct LocalPolicy {
 /// an implementation may reflect the operator's changes (the stop) as they happen.
 pub trait PolicyStore: Send + Sync {
     fn current(&self) -> LocalPolicy;
+
+    /// Whether the operator has asked the engine to delete its state and cache (`[safety]
+    /// purge_file`, chapter 08 §8.4). The engine asks at each request boundary, never in the
+    /// middle of a request. After it has purged, it calls [`PolicyStore::purge_done`], and the
+    /// instance of the file it honoured is not reported again. The default: no purge is ever
+    /// requested.
+    fn purge_requested(&self) -> bool {
+        false
+    }
+
+    /// The engine has deleted its state and cache for the request that
+    /// [`PolicyStore::purge_requested`] reported.
+    fn purge_done(&self) {}
 }

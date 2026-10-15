@@ -2,6 +2,7 @@
 //! a planned test carry its ID; their expected outcome follows the oracle case in brackets.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -411,12 +412,42 @@ impl OsActuator for Actuator {
 }
 
 /// The operator's policy; the queue answers the next reads before the base policy takes
-/// over (an operator acting while the engine works).
+/// over (an operator acting while the engine works). The third field is the operator's
+/// purge file (`[safety] purge_file`).
 #[derive(Debug, Default)]
-struct Policy(Mutex<LocalPolicy>, Mutex<VecDeque<LocalPolicy>>);
+struct Policy(Mutex<LocalPolicy>, Mutex<VecDeque<LocalPolicy>>, PurgeFile);
+
+/// The operator's purge file, as the tests make it. Each creation is a new instance of the
+/// file, and the engine honours each instance once: `ConfigPolicy` keys the file on its
+/// modification time and size, and the tests count creations instead.
+#[derive(Debug, Default)]
+struct PurgeFile {
+    /// Instances the operator has created.
+    created: AtomicU64,
+    /// The last instance the engine honoured.
+    honoured: AtomicU64,
+    /// Purges the engine reported.
+    purges: AtomicU64,
+    /// The operator creates an instance on the next policy read: the operator acting while
+    /// the engine works on a request.
+    create_on_read: AtomicBool,
+}
+
+impl PurgeFile {
+    fn create(&self) {
+        self.created.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn purges(&self) -> u64 {
+        self.purges.load(Ordering::SeqCst)
+    }
+}
 
 impl PolicyStore for Policy {
     fn current(&self) -> LocalPolicy {
+        if self.2.create_on_read.swap(false, Ordering::SeqCst) {
+            self.2.create();
+        }
         let next = self
             .1
             .lock()
@@ -428,6 +459,16 @@ impl PolicyStore for Policy {
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone()
         })
+    }
+
+    fn purge_requested(&self) -> bool {
+        self.2.created.load(Ordering::SeqCst) != self.2.honoured.load(Ordering::SeqCst)
+    }
+
+    fn purge_done(&self) {
+        let created = self.2.created.load(Ordering::SeqCst);
+        self.2.honoured.store(created, Ordering::SeqCst);
+        self.2.purges.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -2411,6 +2452,7 @@ mod accessibility;
 mod candidates;
 mod concurrency;
 mod identity;
+mod purge;
 mod security;
 mod snapshot_age;
 mod typing;

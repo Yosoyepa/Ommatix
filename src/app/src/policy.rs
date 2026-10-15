@@ -12,11 +12,18 @@
 //! that holds the handle of the only window live input may go to. The operator (or the
 //! harness it runs) writes it; no tool and nothing on the screen can. It is read on every
 //! action, and a missing, empty or malformed file pins nothing, which allows no input.
+//!
+//! The purge file (`[safety] purge_file`, SEC-07, chapter 08 §8.4) asks the engine to delete
+//! its state and cache. The operator creates it; the engine reads it at each request boundary
+//! and honours each instance of it once, an instance being told apart by its modification time
+//! and size. The engine never deletes the file: it stays where the operator put it, and creating
+//! it again is a new request.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::SystemTime;
 
 use ommatix_application::{LocalPolicy, PolicyStore, WindowPin};
 
@@ -39,10 +46,43 @@ impl StopSwitch {
     }
 }
 
-/// Whether the stop file is there. Fails closed: a file whose presence cannot be
-/// established (a permission error, an unreachable volume) counts as present.
-fn stop_file_present(path: &Path) -> bool {
+/// Whether an operator's file (the stop or the purge file) is there. Fails closed: a file
+/// whose presence cannot be established (a permission error, an unreachable volume) counts as
+/// present.
+fn operator_file_present(path: &Path) -> bool {
     path.try_exists().unwrap_or(true)
+}
+
+/// The stderr line once the operator's purge request has been honoured (SEC-07).
+const PURGE_NOTICE: &str =
+    "ommatix: the engine's state and cache were deleted on the operator's request";
+
+/// One instance of the purge file, told apart by its modification time and size. A file whose
+/// metadata cannot be read has no stamp of its own: its one instance is honoured once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    modified: Option<SystemTime>,
+    len: Option<u64>,
+}
+
+impl FileStamp {
+    fn of(path: &Path) -> Self {
+        let metadata = std::fs::metadata(path).ok();
+        Self {
+            modified: metadata.as_ref().and_then(|m| m.modified().ok()),
+            len: metadata.as_ref().map(std::fs::Metadata::len),
+        }
+    }
+}
+
+/// The purge file's state as the engine has seen it.
+#[derive(Debug, Default)]
+struct PurgeState {
+    /// The instance honoured last. Cleared when the file is gone, so that the next file the
+    /// operator creates is a new request.
+    honoured: Option<FileStamp>,
+    /// The instance that `purge_requested` reported and `purge_done` has yet to honour.
+    pending: Option<FileStamp>,
 }
 
 /// Longest pin file read, in bytes: a decimal window handle is at most 20 digits.
@@ -71,11 +111,14 @@ pub struct ConfigPolicy {
     policy: LocalPolicy,
     stop_file: Option<PathBuf>,
     window_pin_file: Option<PathBuf>,
+    purge_file: Option<PathBuf>,
     switch: StopSwitch,
     /// Whether to report the stop being engaged or cleared on stderr.
     notices: bool,
     /// The stop state last read, to report changes once.
     was_stopped: AtomicBool,
+    /// Which instance of the purge file has been honoured.
+    purge: Mutex<PurgeState>,
 }
 
 impl ConfigPolicy {
@@ -84,15 +127,25 @@ impl ConfigPolicy {
             policy,
             stop_file: None,
             window_pin_file: None,
+            purge_file: None,
             switch: StopSwitch::default(),
             notices: false,
             was_stopped: AtomicBool::new(false),
+            purge: Mutex::new(PurgeState::default()),
         }
     }
 
     /// Engages the stop while `path` exists.
     pub fn with_stop_file(mut self, path: impl Into<PathBuf>) -> Self {
         self.stop_file = Some(path.into());
+        self
+    }
+
+    /// Asks the engine to delete its state and cache whenever the operator creates a new
+    /// instance of the file at `path` (SEC-07, chapter 08 §8.4). The engine never deletes the
+    /// file, and an instance it has honoured is not honoured again.
+    pub fn with_purge_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.purge_file = Some(path.into());
         self
     }
 
@@ -130,7 +183,7 @@ impl ConfigPolicy {
         }
         self.stop_file
             .as_deref()
-            .filter(|path| stop_file_present(path))
+            .filter(|path| operator_file_present(path))
             .map(|path| format!("the stop file {} exists", path.display()))
     }
 
@@ -166,6 +219,40 @@ impl PolicyStore for ConfigPolicy {
             stopped: reason.is_some(),
             window_pin: self.window_pin_file.as_deref().map(read_window_pin),
             ..self.policy.clone()
+        }
+    }
+
+    /// A purge is requested by an instance of the purge file that has not been honoured yet.
+    /// While the file is gone, nothing is requested and the honoured instance is forgotten, so
+    /// the next file the operator creates is a new request.
+    fn purge_requested(&self) -> bool {
+        let Some(path) = self.purge_file.as_deref() else {
+            return false;
+        };
+        let mut state = self.purge.lock().unwrap_or_else(PoisonError::into_inner);
+        if !operator_file_present(path) {
+            *state = PurgeState::default();
+            return false;
+        }
+        let stamp = FileStamp::of(path);
+        if state.honoured == Some(stamp) {
+            return false;
+        }
+        state.pending = Some(stamp);
+        true
+    }
+
+    /// The engine purged for the request reported last: that instance is honoured, and the
+    /// file stays where the operator put it.
+    fn purge_done(&self) {
+        let mut state = self.purge.lock().unwrap_or_else(PoisonError::into_inner);
+        let Some(stamp) = state.pending.take() else {
+            return;
+        };
+        state.honoured = Some(stamp);
+        drop(state);
+        if self.notices {
+            eprintln!("{PURGE_NOTICE}");
         }
     }
 }
@@ -340,5 +427,90 @@ mod tests {
         });
         store.stop_switch().clear();
         assert!(store.current().stopped);
+    }
+
+    /// Writes the purge file and sets its modification time: one instance of the file, which
+    /// a test can replace by another with the same size and a later time.
+    fn purge_instance(path: &Path, contents: &[u8], modified_secs: u64) {
+        std::fs::write(path, contents).unwrap();
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(modified_secs))
+            .unwrap();
+    }
+
+    #[test]
+    fn the_purge_file_requests_one_purge_per_instance_and_is_left_to_the_operator() {
+        let dir = temp_dir("purge");
+        let file = dir.join("PURGE");
+        let store = ConfigPolicy::new(live()).with_purge_file(&file);
+        assert!(!store.purge_requested(), "no file, no request");
+
+        purge_instance(&file, b"", 1_000);
+        assert!(store.purge_requested(), "the operator created the file");
+        store.purge_done();
+        assert!(
+            file.exists(),
+            "the file is the operator's: the engine does not delete it"
+        );
+        assert!(
+            !store.purge_requested(),
+            "an honoured instance is not honoured again"
+        );
+
+        purge_instance(&file, b"", 2_000);
+        assert!(
+            store.purge_requested(),
+            "a new modification time is a new instance"
+        );
+        store.purge_done();
+
+        purge_instance(&file, b"longer", 2_000);
+        assert!(store.purge_requested(), "a new size is a new instance");
+        store.purge_done();
+        assert!(!store.purge_requested());
+
+        std::fs::remove_file(&file).unwrap();
+        assert!(!store.purge_requested(), "no file, no request");
+        purge_instance(&file, b"longer", 2_000);
+        assert!(
+            store.purge_requested(),
+            "a file that was removed and written again is a new request"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn without_a_purge_file_no_file_requests_a_purge() {
+        let dir = temp_dir("purge-off");
+        std::fs::write(dir.join("PURGE"), b"").unwrap();
+        let store = ConfigPolicy::new(live());
+        assert!(!store.purge_requested());
+        store.purge_done();
+        assert_eq!(store.current(), live());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_purge_request_changes_nothing_else_in_the_policy() {
+        let dir = temp_dir("purge-else");
+        let purge = dir.join("PURGE");
+        let stop = dir.join("STOP");
+        let store = ConfigPolicy::new(live())
+            .with_purge_file(&purge)
+            .with_stop_file(&stop);
+        purge_instance(&purge, b"", 1_000);
+        assert!(store.purge_requested());
+        store.purge_done();
+        assert_eq!(store.current(), live());
+        assert_eq!(store.stop_reason(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_purge_notice_reads_as_the_dossier_sentence() {
+        assert_eq!(
+            PURGE_NOTICE,
+            "ommatix: the engine's state and cache were deleted on the operator's request"
+        );
     }
 }

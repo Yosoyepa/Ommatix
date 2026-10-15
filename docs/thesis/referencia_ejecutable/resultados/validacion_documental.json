@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-15T09:56:53.272374+00:00",
+  "timestamp_utc": "2026-10-15T13:20:37.295958+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -10,13 +10,13 @@
     "invalid_examples": 8,
     "jsonl_messages": 13,
     "feature_files": 8,
-    "gherkin_scenarios": 52,
+    "gherkin_scenarios": 53,
     "requirements": 28,
     "planned_tests": 104,
     "references": 24,
-    "adrs": 27
+    "adrs": 28
   },
-  "checks_run": 532,
+  "checks_run": 537,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -348,7 +348,7 @@
     {
       "check": "adrs_encontradas",
       "passed": true,
-      "detail": "27"
+      "detail": "28"
     },
     {
       "check": "referencias:00_AUDITORIA_TECNICA.md",
@@ -547,6 +547,11 @@
     },
     {
       "check": "referencias:0027-candidate-enumeration-with-an-rstar-index.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0028-operator-purge-file.md",
       "passed": true,
       "detail": "[]"
     },
@@ -986,6 +991,16 @@
       "detail": ""
     },
     {
+      "check": "gherkin_id_unico:BDD-53",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-53",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "check": "gherkin_cabecera:08_indice_candidatos.feature",
       "passed": true,
       "detail": ""
@@ -1376,6 +1391,11 @@
       "detail": ""
     },
     {
+      "check": "trazabilidad:BDD-53",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "check": "doc01_pruebas_existen:RF-01",
       "passed": true,
       "detail": "[]"
@@ -1423,7 +1443,7 @@
     {
       "check": "doc01_adr_existen:RF-03",
       "passed": true,
-      "detail": "ADR-0011"
+      "detail": "ADR-0011; ADR-0027"
     },
     {
       "check": "doc01_propietario:RF-03",
@@ -1443,7 +1463,7 @@
     {
       "check": "doc01_adr_existen:RF-04",
       "passed": true,
-      "detail": "ADR-0006"
+      "detail": "ADR-0006; ADR-0027"
     },
     {
       "check": "doc01_propietario:RF-04",
@@ -1483,7 +1503,7 @@
     {
       "check": "doc01_adr_existen:RF-06",
       "passed": true,
-      "detail": "ADR-0003; ADR-0017"
+      "detail": "ADR-0003; ADR-0017; ADR-0027"
     },
     {
       "check": "doc01_propietario:RF-06",
@@ -1543,7 +1563,7 @@
     {
       "check": "doc01_adr_existen:RF-09",
       "passed": true,
-      "detail": "ADR-0005"
+      "detail": "ADR-0005; ADR-0026"
     },
     {
       "check": "doc01_propietario:RF-09",
@@ -1563,7 +1583,7 @@
     {
       "check": "doc01_adr_existen:RF-10",
       "passed": true,
-      "detail": "ADR-0002; ADR-0006"
+      "detail": "ADR-0002; ADR-0006; ADR-0027"
     },
     {
       "check": "doc01_propietario:RF-10",
@@ -1703,7 +1723,7 @@
     {
       "check": "doc01_adr_existen:RF-17",
       "passed": true,
-      "detail": "ADR-0010; ADR-0012"
+      "detail": "ADR-0010; ADR-0012; ADR-0024"
     },
     {
       "check": "doc01_propietario:RF-17",
@@ -1883,7 +1903,7 @@
     {
       "check": "doc01_adr_existen:RNF-08",
       "passed": true,
-      "detail": "ADR-0001; ADR-0009; ADR-0012"
+      "detail": "ADR-0001; ADR-0009; ADR-0012; ADR-0023"
     },
     {
       "check": "doc01_propietario:RNF-08",
@@ -2137,6 +2157,11 @@
     },
     {
       "check": "doc01_adr_pruebas:0027-candidate-enumeration-with-an-rstar-index.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "doc01_adr_pruebas:0028-operator-purge-file.md",
       "passed": true,
       "detail": "[]"
     },

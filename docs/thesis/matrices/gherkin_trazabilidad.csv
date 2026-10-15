@@ -51,3 +51,4 @@ BDD-49,RF-06,IDX-08,features/08_indice_candidatos.feature,Etiqueta alta no desap
 BDD-50,RF-03,IDX-11,features/08_indice_candidatos.feature,Presupuesto de cierre conserva su significado,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
 BDD-51,RF-03,IDX-12,features/08_indice_candidatos.feature,Relaciones se activan por sus extremos,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
 BDD-52,RF-06,IDX-13,features/08_indice_candidatos.feature,Solapamiento extremo no justifica perder candidatos,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-53,RF-16,SEC-07,features/07_retencion.feature,Borrado bajo demanda del operador sin terminar la sesión,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
