@@ -1,6 +1,6 @@
 # S3: corridas supervisadas con captura y entrada reales
 
-**Fecha:** 14 de octubre de 2026. **Autorización:** el responsable del proyecto autorizó el 14 de octubre de 2026 corridas supervisadas en la máquina de referencia con captura real y entrada real (`SendInput`) **limitadas a `notepad.exe` con datos desechables**, con parada local por `stop_file`. **Alcance:** una aplicación, un monitor (salida 0), DPI 100 %, una máquina. Este informe registra lo que se ejecutó, con qué resultado y qué no se ejecutó; no cierra ningún requisito RF/RNF ni ninguna casilla DoD.
+**Fecha:** 14 de octubre de 2026. **Autorización:** el responsable del proyecto autorizó el 14 de octubre de 2026 corridas supervisadas en la máquina de referencia con captura real y entrada real (`SendInput`) **limitadas a `notepad.exe` con datos desechables**, con parada local por `stop_file`. **Alcance:** una aplicación, un monitor (salida 0), DPI 100 %, una máquina. Este informe registra lo que se ejecutó, con qué resultado y qué no se ejecutó; no cierra ningún requisito RF/RNF ni ninguna casilla DoD. Las secciones 1 a 8 son las corridas del 14 de octubre; la sección 9 (15 de octubre de 2026, 1.0.74) registra una ronda de regresión en vivo sobre el `main` de ese día, con SEC-02 ejecutada, y los estados de §5 son los de las corridas iniciales: el vigente está en `matrices/plan_pruebas.csv`.
 
 Todas las cifras son **mediciones [V]** con el `n` indicado. No se guardó ningún frame ni ninguna etiqueta: la pantalla y el OCR (es-ES) se procesaron sólo en memoria (ADR-0012). El cliente imprime sólo estados, códigos, recuentos, números de frame y tiempos; las etiquetas se usan en memoria para elegir el objetivo y no se escriben en ningún sitio.
 
@@ -194,4 +194,135 @@ Para repetirlo (la configuración B es la A con `verify_timeout_ms = 0`):
 ```text
 python tools\s3\mcp_driver.py --exe target\release\ommatix.exe --config <A>.toml --scenario live --steps it03 --max-live 4 --observations 2
 python tools\s3\mcp_driver.py --exe target\release\ommatix.exe --config <B>.toml --scenario live --steps it04 --max-live 5 --observations 2
+```
+
+## 9. Ronda de regresión en vivo sobre el `main` actual (1.0.74)
+
+**Fecha:** 15 de octubre de 2026, con el responsable presente en la máquina de referencia (las marcas de tiempo de los registros van de las 14:53 a las 15:02, hora local; DPI 100 %). **Autorización y reglas:** las de §1 y §8: `SendInput` real sólo sobre `notepad.exe`, maximizado en primer plano en la salida 0, **sólo clics sobre `Editar`** (`--menu-labels Editar,Edit`), ningún `type`, ningún `scroll`, parada local por `stop_file`. **Objetivo:** ejercer en vivo lo que las rondas de §3 y §8 no ejercieron y que desde entonces entró en el motor: la parada del operador a mitad de una secuencia, con repetición y entrada nueva (SEC-02, RF-16); el borrado bajo demanda (`[safety] purge_file`, [ADR-0028](../adr/0028-operator-purge-file.md)); la vigencia del snapshot de 10 000 ms ([ADR-0025](../adr/0025-bound-authorisations-by-snapshot-and-evidence-age.md)); el cambio de primer plano que hace el responsable a mano (SEC-05, RF-11); la denegación por defecto (SEC-01); y el plazo de verificación (IT-04) con el motor de hoy. Es la ronda que la decisión 6 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) dejaba programada. Los pasos del cliente son los que `tools/s3/mcp_driver.py` ganó en la 1.0.71 (`sec02r`, `purge`, `ttl`, `sec05m`). No se guardó ningún frame ni ninguna etiqueta. Los registros crudos de la ronda (JSONL del cliente, sin etiquetas ni coordenadas) quedaron fuera del repositorio, y las cifras de abajo salen de ellos.
+
+### 9.1 Entorno y configuraciones
+
+| Campo | Valor |
+|---|---|
+| Binario | Compilado desde `6278b6f` (su código es idéntico al de `7a91354`: la PR #65 sólo cambió documentación) con `--features dxgi,sendinput,directml,winrt-ocr,uia`. SHA-256 `bda691245fb2d6315fa3b7fcb84f7068a8e0f4604bdf22715397e8850925429f` |
+| Modelos y accesibilidad | Los de la configuración viva de S4: `icon_detect_v3` en float16 sobre DirectML (manifiesto `f8b04be9…`), OCR `winrt` es-ES y `[models] accessibility = "uia"` |
+| Políticas comunes | `allowed_applications = ["notepad.exe"]`, `include_values = false`, `stop_file` y `purge_file` propios en una carpeta nueva fuera del repositorio, `verify_poll_ms = 50`. Ninguna configuración contiene secretos; los hashes sólo identifican el archivo usado |
+| `dry.toml` | `actuation_enabled = false`. SHA-256 `e98760cec3b92d00c208538f12839ac1bc5bc79c8c4b9b62d3af87089de815a6` |
+| `live_a.toml` | `actuation_enabled = true`, `verify_timeout_ms = 500`, `max_snapshot_age_ms = 10000`. SHA-256 `7d57bdbad9ef7de888eec5e911ee2f88ab7ee8124233bb5a7e586fb7e9bbab08` |
+| `live_b.toml` | Como `live_a` con `max_snapshot_age_ms = 120000`, para que la espera del responsable en la Corrida 3 no venza el snapshot. SHA-256 `f56d79fb7ac34a7063fb14d62592a8350f7bda66e6dfe443b0be929a98428e23` |
+| `live_c.toml` | Como `live_a` con `verify_timeout_ms = 0` (IT-04). SHA-256 `f62823db6039d2b9366754ba828b3b2a1d51b1dcbf66491dbc2058d8176e3310` |
+
+Cada sesión imprimió su aviso de arranque con `values redacted`; las que tenían actuación, además, el aviso `ACTIVE CONTROL` con la aplicación permitida y el modo de parar. Cada corrida terminó con `ommatix: session ended; the engine's state and cache were deleted` (§9.5).
+
+### 9.2 Corridas 0 y 0b: SEC-01 con `dry.toml`
+
+| Solicitud | Resultado | Entrega |
+|---|---|---|
+| `s3-dry-1`, `dry_run: true` | `simulated`, 0,2 ms | ninguna |
+| `s3-sec01-1`, `dry_run: false` | `rejected`, `POLICY_DENIED` ("live input is not allowed by the local policy or no live actuator is available"), `retryable: false`, `next_step: operator_review`, 0,2 ms | `input_delivered: false`; `delivered_actions` 0; `rejected_actions` 1 |
+
+La Corrida 0b repite la 0 después de corregir el envoltorio (§9.3) con el mismo resultado; las dos salieron con código 0. La sesión anuncia `input=dry-run (never live)` y `actuation disabled`.
+
+### 9.3 Incidencia de procedimiento: la primera Corrida 1 la abortó el envoltorio
+
+La primera Corrida 1 (`live_a.toml`, pasos `sec02r,purge,ttl`) terminó a los pocos segundos de empezar su primer paso. **No fue el cliente ni el motor:** el envoltorio de PowerShell que lanzaba el cliente tenía `$ErrorActionPreference = 'Stop'` y convirtió la primera línea que el cliente escribió en stderr (`sec02r: this run created the operator stop file and will remove it itself`) en un error terminante, que mató la corrida. Hasta ese punto el registro muestra: la apertura `s3-sec02r-open-1` entregada con `effect_observed` (76,9 ms) y la parada creada por la corrida (`operator_stop`, `created_by_this_run: true`). **No se entregó nada más.** El archivo de parada quedó activo, que es el estado seguro; el **responsable cerró el menú y retiró el archivo de parada a mano**. El registro de esa corrida no tiene evento `end` ni las líneas de stderr del motor, así que no se puede afirmar cómo terminó su borrado de fin de sesión. El envoltorio se corrigió (`Start-Process` con la salida de errores redirigida a un archivo) y la Corrida 1 se repitió entera; la repetición es la que se puntúa (§9.4). Se registra como incidencia de procedimiento porque cuenta una entrega real y una parada que el operador tuvo que retirar. Lo que muestra de paso: el fallo del orquestador dejó el sistema en el estado cerrado (parada activa, ninguna entrada más), no en uno abierto.
+
+### 9.4 Resultados por corrida
+
+**Corrida 1 (`live_a`, `--steps sec02r,purge,ttl`, `--max-live 8`).** 16 comprobaciones `check`, las 16 en `ok`, código de salida 0. Seis solicitudes con `dry_run: false`: dos entregas, una repetición y tres rechazos.
+
+| Paso | Qué ocurrió | Resultado medido |
+|---|---|---|
+| `sec02r` (SEC-02) | `s3-sec02r-open-1` abre el menú | `effect_observed`, `input_delivered: true`, 70,2 ms |
+| | el cliente crea el archivo de parada y repite el `request_id` de la apertura | el resultado guardado (`effect_observed`, `input_delivered: true`) en 0,2 ms, sin captura ni entrega nueva |
+| | solicitud nueva con la parada activa | `rejected`, `POLICY_DENIED` ("the operator stopped live input; nothing was delivered"), `retryable: false`, `next_step: operator_review`, 0,2 ms; sin captura (`frame_seq` 7 → 8 sólo por la observación siguiente) |
+| | contadores | `delivered` +0, `rejected` +1 |
+| | stderr del motor | `STOP engaged by the operator (…): no new input will be sent; …` y, al retirarlo el cliente, `stop cleared by the operator: [safety] governs live input again` |
+| | cierre del menú, ya sin parada | `s3-sec02r-close-1` entregado, `effect_observed`, 93,8 ms |
+| `purge` (ADR-0028) | el cliente crea `purge_file`; acción de prueba y acción viva sobre el snapshot anterior | las dos `rejected`, `STALE_SNAPSHOT` ("the action does not reference the published snapshot; observe again"), `observe_again`, 0,3 ms cada una, sin entrega ni captura |
+| | observación siguiente | snapshot nuevo (`s8`), 0 identificadores reutilizados (`ids_fresh`) |
+| | stderr del motor | `the engine's state and cache were deleted on the operator's request`, una sola vez; el cliente retiró su archivo |
+| | contadores | `delivered` +0, `rejected` +2 |
+| `ttl` (ADR-0025) | observación y acción de prueba dentro de la ventana | `simulated`, 0,2 ms |
+| | espera de 12,0 s (`max_snapshot_age_ms` 10 000 ms más 2000 ms de margen), acción de prueba y acción viva | las dos `rejected`, `STALE_SNAPSHOT` ("the snapshot is older than [engine] max_snapshot_age_ms; observe again"), sin entrega |
+| Final | contadores | `observations` 9, `delivered_actions` 2 (los dos clics reales), `rejected_actions` 5 |
+
+**Corrida 2 (`live_a`, `--steps it03,it05`, `--max-live 4`).** Una apertura entregada y **dos cierres rechazados** (hallazgo de §9.6).
+
+| `request_id` | Resultado | Ida y vuelta |
+|---|---|---|
+| `s3-it03-open-1` | `effect_observed`, `input_delivered: true` | 83,6 ms |
+| `s3-it03-close-1` (observación de `frame_seq` 7) | `rejected`, `STALE_SNAPSHOT` ("the screen changed since the observation; nothing was delivered; observe again"), `input_delivered: false` | 5,3 ms |
+| `s3-it03-close-2` (observación nueva, `frame_seq` 9) | lo mismo | 5,6 ms |
+| repetición de `s3-it03-close-2` (IT-05) | el resultado guardado (`rejected`, `STALE_SNAPSHOT`), sin entrega | 0,2 ms |
+| el mismo `request_id` con `dry_run: true` | `rejected`, `REQUEST_CONFLICT` ("this request_id was already used with other arguments"), `operator_review` | 0,1 ms |
+
+Final: `delivered_actions` 1, `rejected_actions` 3. No se sabe si el menú `Editar` quedó abierto al terminar: la Corrida 2b empezó con una observación normal y el cliente no registra el estado del menú.
+
+**Corrida 2b (`live_c`, `--steps it04`, `--max-live 5`, `verify_timeout_ms = 0`).**
+
+| Solicitud | Resultado | Ida y vuelta | `delivered_actions` |
+|---|---|---|---|
+| apertura `s3-it04-open-1` | `indeterminate`, `input_delivered: true`, `verified: false`, `observed_effect: unknown`, `INDETERMINATE_EFFECT` ("input was delivered but no visual change was observed within the verification window; do not retry"), `retryable: false`, `next_step: reconcile_effect` | 24,6 ms | 0 → 1 |
+| repetición exacta | el mismo resultado guardado, sin captura ni entrega | 0,2 ms | 1 → 1 |
+| cierre `s3-it04-close-1` (observación nueva) | `indeterminate`, el mismo error | 34,5 ms | 1 → 2 |
+
+Final: `delivered_actions` 2, `rejected_actions` 0.
+
+**Corrida 3 (`live_b`, `--steps sec05m`, `--owner-wait-s 90`, `--max-live 1`; SEC-05).** El cliente observó con el Bloc de notas en primer plano y no envió nada hasta que **el responsable trajo la Calculadora al primer plano a mano**. La solicitud de clic salió unos 26 s después de la observación, dentro de la ventana de 120 000 ms de `live_b`, de modo que la causa del rechazo no es la vigencia.
+
+| Solicitud | Resultado | Ida y vuelta |
+|---|---|---|
+| `s3-sec05m-1`, `dry_run: false` | `rejected`, `POLICY_DENIED` ("foreground application is not on the local allowlist"), `retryable: false`, `next_step: operator_review`, `input_delivered: false` | 0,7 ms |
+
+Las comprobaciones `delivered_nothing`, `denied` y `counters` (`delivered` +0, `rejected` +1) pasaron. El responsable devolvió el Bloc de notas al primer plano (`notepad_back: true`). **El cliente no registra qué ejecutable vio en primer plano** (`calculatorapp.exe` o `applicationframehost.exe`; `--switch-to` acepta ambos como el cambio del responsable). Lo que se afirma es que el primer plano atestiguado por el actuador no estaba en la lista. Es la parte de cambio de primer plano que §3.6 no pudo provocar.
+
+### 9.5 Recuento y estado
+
+- Solicitudes con `dry_run: false` de la ronda: **17** (Corrida 0: 1; 0b: 1; Corrida 1 abortada: 1; Corrida 1: 6; Corrida 2: 4; 2b: 3; Corrida 3: 1). **Clics entregados al SO: 6**, todos sobre `Editar` en el Bloc de notas maximizado (1 en la Corrida 1 abortada, 2 en la 1, 1 en la 2 y 2 en la 2b). Repeticiones sin entrega: 3 (Corridas 1, 2 y 2b). Ninguna escritura, ningún desplazamiento y ningún clic fuera de `Editar`. Todos los rechazos fueron sin entrega: SEC-01 (2), SEC-02 (1), purga (2, una de ellas de prueba), vigencia (2, una de prueba), cierres obsoletos de la Corrida 2 (2), conflicto de `request_id` (1, de prueba) y SEC-05 (1).
+- **Borrado al terminar la sesión (SEC-07), visto en vivo.** Las seis sesiones que terminaron con normalidad (Corridas 0, 0b, 1, 2, 2b y 3) imprimieron `session ended; the engine's state and cache were deleted`. Esa línea es el aviso del propio motor: la ronda no inspeccionó su memoria. Lo que sí se comprobó desde fuera es el efecto del borrado bajo demanda (`STALE_SNAPSHOT` sobre el snapshot anterior e identificadores no reutilizados).
+- **Matriz.** **SEC-02 pasa a `EJECUTADO_SUPERVISADO`:** la parada por archivo a mitad de una secuencia en vivo deja pasar la repetición de una entrega anterior (resultado guardado, sin entrega nueva), rechaza la entrada nueva con `POLICY_DENIED` sin captura ni evento, los contadores no se mueven, el motor avisa de la parada y de su retirada, y la entrega posterior a retirarla funciona. **Límites declarados, que no bloquean ese estado:** el motor no tiene manejador de Ctrl+C (la parada en proceso, `StopSwitch`, se pierde con el proceso; desde 1.0.67 un `--session-id` fijo con actuación viva se rechaza al arrancar) y un cierre forzado no borra nada. Lo ejercido es la parada por archivo, no la parada en proceso. **SEC-05 sigue `EJECUTADO_SUPERVISADO_PARCIAL`:** ahora se vieron en vivo el cambio de primer plano (Corrida 3), la vigencia (Corrida 1, `ttl`) y la frescura de pantalla (Corrida 2), pero no un foco de teclado equivocado para `type` en el actuador real (el lado del actuador de BDD-28). **IT-03, IT-04 e IT-05 siguen `EJECUTADO_SUPERVISADO_PARCIAL`:** IT-04 (Corrida 2b) e IT-05 (repetición y conflicto, Corridas 1, 2 y 2b) se repiten con el motor de hoy; IT-03 suma un hallazgo (§9.6); la caída ambigua de IT-05, el recibo de `SendInput`, la integridad, los modificadores, el punto fuera de ventana y el foco de `type` siguen sin ejercerse. SEC-01 se ejerció dos veces más con el mismo resultado. La fila SEC-07 no se cambia en esta ronda.
+- **Sobre la vigencia de 10 000 ms.** Se ejerció el lado vencido (12 s de espera: dos rechazos con el mensaje de la vigencia del snapshot) y el lado vigente (acciones dentro de la ventana). No se ejerció el borde exacto (eso es UT-46, con reloj inyectado), no se aisló la cota de la evidencia de accesibilidad de la del snapshot y no se midió la relectura de accesibilidad que calibra la ventana.
+
+### 9.6 Hallazgo de IT-03: el cierre del menú se rechazó dos veces con `STALE_SNAPSHOT`
+
+**Qué se vio.** En la Corrida 2 la apertura se entregó (`effect_observed`) y el cierre se rechazó **dos veces seguidas** con `STALE_SNAPSHOT` ("the screen changed since the observation; nothing was delivered; observe again"), cada vez con una observación nueva (`frame_seq` 7 y 9), con 5,3 y 5,6 ms de ida y vuelta y sin entrega. Difiere de §8.2, donde el cierre se entregó, y de otras dos partes de esta ronda, donde el cierre se entregó (Corrida 1, después del paso `sec02r`; Corrida 2b, con `verify_timeout_ms = 0`). **No es un fallo de seguridad:** es el comportamiento especificado y a prueba de fallos (no se entregó nada y el motor pidió observar de nuevo). Es un dato de utilidad: el flujo de dos clics de IT-03 no se completó en esa corrida.
+
+**Qué hace el motor (lectura del código; no se ejecutó nada nuevo).** Antes de cualquier entrega viva, `fresh_frame` (`src/application/src/engine/act.rs`) vuelve a capturar la pantalla y la compara con el cuadro base confirmado mediante `dirty_tiles` (`src/domain/src/incremental.rs`). Si **un solo tile** es distinto (o hay un refresco completo por cambio de geometría), responde `STALE_SNAPSHOT` con ese mensaje y marca el snapshot como gastado. Tres propiedades de la comparación importan aquí. (1) Es **sobre el fotograma entero** (1920×1080 de la salida 0), no sobre la región del objetivo. (2) Es **exacta por píxel**: `tile_changed` compara los tres canales de color de cada píxel de cada tile de 64×64 (`[engine] tile_size`), sin tolerancia; sólo el alfa y el relleno de fila se ignoran. (3) El cuadro base es la **captura con que empezó la observación** (`captured_at` es el instante de esa captura), no la del final: entre ella y la captura de frescura pasa casi todo el tiempo de la observación, que el campo `age_ms` de la respuesta informa.
+
+**Lo que dicen las cifras de la ronda** (`age_ms` de `observe_screen`, en ms; «ligera» es una observación sin regiones que analizar, y «pesada» la que analiza regiones cambiadas con detector, OCR y accesibilidad):
+
+| Observación previa a una acción viva | `age_ms` | Tipo | Resultado de la acción |
+|---|---|---|---|
+| Aperturas (Corridas 1 abortada, 1, 2 y 2b; 4 de 4) | 1–2 | ligera | entregada |
+| Cierre de la Corrida 1 (`frame_seq` 8) | 155 | pesada | entregada |
+| Cierre de la Corrida 2b (`frame_seq` 6) | 121 | pesada | entregada (`indeterminate` por el plazo de 0 ms) |
+| Cierre de la Corrida 2, intento 1 (`frame_seq` 7) | 138 | pesada | **`STALE_SNAPSHOT`** |
+| Cierre de la Corrida 2, intento 2 (`frame_seq` 9) | 133 | pesada | **`STALE_SNAPSHOT`** |
+
+La pantalla debe quedar idéntica entre la captura base y la de frescura: unos pocos ms con una observación ligera (la comprobación pasó 4 de 4) y de 120 a 155 ms con una pesada (pasó 2 de 4). Un cierre va siempre después de un cambio visual (el menú abierto), así que sigue a una observación pesada; una apertura, tras una observación ligera. Además, **la pantalla cambia sola**. En la Corrida 2, la observación de `frame_seq` 11 (pesada, 1,2 s después de la de 9, sin entrega ni captura entre ellas salvo la de frescura rechazada) volvió a analizar regiones, y lo mismo ocurrió en la Corrida 1 entre `frame_seq` 7 y 8 (1,7 s; lo único intermedio fue un rechazo sin captura). En las corridas sin actuación, de 3 pares de observaciones consecutivas separados por unos 125 ms, 2 analizaron regiones con detector y OCR con el menú cerrado y sin entrada (Corrida 0, `obs3`; Corrida 0b, `obs2`); los 9 pares a 15–30 ms (8 de las corridas vivas y 1 de la 0b) no analizaron ninguna.
+
+**Hipótesis (no verificada).** Algo de la salida 0 cambia de forma periódica o intermitente, aunque sea un solo píxel; una observación pesada deja abierta una ventana de unos 140 ms en la que ese cambio hace fallar la comprobación exacta de frescura, y una ligera casi nunca la sufre. El candidato principal es el **cursor de texto parpadeante** del área de edición del Bloc de notas: en la décima ronda el cursor parpadeante del editor de prueba causó `STALE_SNAPSHOT` tras escribir y se corrigió en el editor ([`reviews/2026-10-14-s4-tenth-round.md`](../reviews/2026-10-14-s4-tenth-round.md), `CHANGELOG.md` 1.0.39). Otros candidatos: la animación o el resalte del menú abierto, y cualquier otro contenido de la salida 0 (el reloj de la barra de tareas cambia cada minuto). Con cuatro observaciones pesadas (dos pasaron y dos no) no se pueden separar esas causas ni descartar el azar, y la ronda no registró qué tiles diferían. La hipótesis es coherente con tres hechos: el motor compara la pantalla entera con exactitud, los rechazos aparecen sólo con ventanas largas y la pantalla cambia sola a escala de cientos de milisegundos.
+
+**Seguimiento propuesto (ningún cambio de código en esta PR).**
+
+1. *Cliente (`tools/s3/mcp_driver.py`, PR aparte):* antes de buscar el objetivo del cierre, una observación de reposo extra, para que la observación sobre la que se actúa sea ligera (como en §8.2, que usaba `--observations`). Un reintento más tras `STALE_SNAPSHOT` sólo ayuda si la observación de reintento es ligera. No cambia la seguridad: la frescura sigue siendo la del motor.
+2. *Medición sin entrada, con el responsable presente:* con el menú cerrado y luego abierto, N pares de observaciones separados unos 150 ms con el escenario `observe`, contando los que analizan regiones; separa el parpadeo de la animación del menú.
+3. *Diagnóstico del motor (PR aparte, con prueba):* al rechazar por frescura, contar (sólo números, nunca píxeles ni etiquetas) cuántos tiles difieren y si alguno toca la caja del objetivo, en stderr o en `_meta`. Distinguiría un parpadeo lejano de un cambio real bajo el objetivo.
+4. *Decisión de diseño, no tomada aquí:* [02 §2.6](02_SDD_ARQUITECTURA_MVP.md) prevé validar «por región inalterada, tras demostrar su corrección» como mejora posterior. Si el parpadeo se confirma como causa, esa validación por región (con una prueba de que no deja pasar un cambio bajo el objetivo) es la salida de diseño. Hasta entonces el motor rechaza más de lo necesario, no menos.
+
+Registro del hallazgo con las pruebas que cubren el rechazo: [`reviews/2026-10-15-live-round-close-refused.md`](../reviews/2026-10-15-live-round-close-refused.md).
+
+### 9.7 Qué no cubre
+
+Un monitor y DPI 100 %; una aplicación (Bloc de notas) y un solo elemento de menú; ningún `type` ni `scroll`; el foco de teclado de `type` en el actuador real, la caída ambigua de IT-05, el recibo de `SendInput`, la integridad, los modificadores y un punto fuera de ventana siguen sin ejercerse; ninguna medición de la relectura de accesibilidad que calibra la ventana de 10 000 ms; Ctrl+C no se probó (el motor no tiene manejador); el cierre forzado no se probó y no borra nada; el cliente no registra qué ejecutable atestiguó el actuador en la Corrida 3; no se sabe en qué estado quedó el menú tras la Corrida 2.
+
+Para repetirlo (desde la raíz del repositorio, con el Bloc de notas maximizado en primer plano, las configuraciones de §9.1 y un envoltorio que **no** convierta stderr en error):
+
+```text
+python tools\s3\mcp_driver.py --exe <ommatix.exe> --config dry.toml --scenario dry --max-live 1 --menu-labels Editar,Edit
+python tools\s3\mcp_driver.py --exe <ommatix.exe> --config live_a.toml --scenario live --steps sec02r,purge,ttl --max-live 8 --observations 2 --menu-labels Editar,Edit
+python tools\s3\mcp_driver.py --exe <ommatix.exe> --config live_a.toml --scenario live --steps it03,it05 --max-live 4 --observations 2 --menu-labels Editar,Edit
+python tools\s3\mcp_driver.py --exe <ommatix.exe> --config live_c.toml --scenario live --steps it04 --max-live 5 --observations 2 --menu-labels Editar,Edit
+python tools\s3\mcp_driver.py --exe <ommatix.exe> --config live_b.toml --scenario live --steps sec05m --max-live 1 --observations 2 --owner-wait-s 90 --menu-labels Editar,Edit
 ```
