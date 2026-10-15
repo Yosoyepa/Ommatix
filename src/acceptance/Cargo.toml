@@ -18,10 +18,18 @@ cucumber = { workspace = true }
 futures = { workspace = true }
 jsonschema = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
+toml = { workspace = true }
 
 [[test]]
 name = "thesis"
 harness = false
+
+[[example]]
+## PERF-01 (RNF-04): the latency of the core on 300 controls and 600 text spans. Its unit
+## tests run with `cargo test`; the measurement needs `--release`.
+name = "core_latency"
+test = true
 
 [lints]
 workspace = true
