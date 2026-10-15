@@ -253,7 +253,7 @@ Do not bypass them with `--no-verify` unless the PR says why.
 
 See `docs/adr/README.md`. ADR-0001..0012 come from the thesis; the project owner accepted
 them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015, ADR-0016, ADR-0017,
-ADR-0018, ADR-0019, ADR-0020 and ADR-0021 were accepted on 2026-10-14 too.
+ADR-0018, ADR-0019, ADR-0020, ADR-0021 and ADR-0022 were accepted on 2026-10-14 too.
 Highlights: Rust runtime with independent oracles (0001), MCP over stdio with explicit
 profiles (0002), conservative spatial fusion with IoC (0003), masked open-set icon cache
 (0004), persistent tracking instead of cell hashes (0005), transactional snapshots (0006),
@@ -267,4 +267,5 @@ with no `unsafe` of our own (0017), `type` in two phases whose keys wait for
 element-level keyboard focus (0018) and the perception stages of one observation running
 concurrently on scoped threads (0019), the operator's scope on windows (0020) and every
 loaded artefact pinned before anything loads, with screen and agent text kept out of errors
-(0021).
+(0021) and the supervised test clients' point grounding before every click, with a closed
+list of navigating clicks decided by the operating system's state (0022).
