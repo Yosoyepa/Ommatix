@@ -1,5 +1,15 @@
 # Historial documental
 
+## 1.0.38 — 2026-10-14: S4, décima ronda: S4R-02 pasa su piloto y sus diez corridas puntuadas; el piloto de E2E-02 no pasa y E2E-03 no cumple la condición del flujo (rama `docs/s4-tenth-round`)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código. Cambian los documentos de evidencia y **una celda de la matriz**. Se enviaron 61 solicitudes reales (cuaderno 429 → 490, de 200 autorizadas): 55 clics de la Calculadora y una escritura en el editor propio, todos entregados y verificados por el estado del sistema, y 5 solicitudes rechazadas por el motor con `STALE_SNAPSHOT`, sin entrada. Clientes sin cambio (`tools/s4/e2e_driver.py`, SHA-256 `143ea45464274936e5b5eca06ade8279117d3c33cbc0b13257b74753341aee3d`; `tools/s4/e2e_dossier.py`, `85111edbe1b7acc113f71e88d48ba41d6c1fe485b5571f9b0c827d53d7f316df`). Motor y editor recompilados desde `main` en `193e7ce`: `ommatix.exe` `38080631602ab2a0a1e94baf8432492d95fc6ec0db0cd6eee92232b956d0e5d3` y `ommatix-testeditor.exe` `32b8fadd2e97b73462043a53205247fbe4384f818119d769b829918cc2da88f8`.
+
+- **S4R-02 (Calculadora):** piloto aprobado y 10 de 10 corridas puntuadas, todas con éxito verificado por el sistema y 0 falsos éxitos. Es la primera lectura en vivo de la señal de modo en Estándar: el encabezado se llama «Modo de calculadora Estándar».
+- **E2E-02 (editor):** el sondeo ve 6 elementos de accesibilidad. El piloto no pasó: el clic de «Guardar» fue rechazado cuatro veces con `STALE_SNAPSHOT`. La serie queda bloqueada, sin corridas puntuadas.
+- **E2E-03 (Explorador):** el sondeo no halla «carpeta-a» ni la raíz como candidatos `button` del motor. No se ejecutó en vivo.
+- **Matrices:** S4R-02 pasa de `PENDIENTE_PRODUCTO` a `EJECUTADO_SUPERVISADO_PARCIAL`, con la lectura de S4R-03. E2E-02 y E2E-03 no cambian.
+- **Pendiente del responsable:** la causa del `STALE_SNAPSHOT` en E2E-02, el contrato de navegación de E2E-03 y el cupo (139 solicitudes con `--round-start 429`, o una ronda nueva desde 490). Registro en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), «Décima ronda», y en la [revisión](../reviews/2026-10-14-s4-tenth-round.md).
+
 ## 1.0.37 — 2026-10-14: el responsable aprueba la ADR-0021 y autoriza la décima ronda
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni código. El responsable del proyecto aprueba el 14 de octubre de 2026 la [ADR-0021](../adr/0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md) (comprobar por hash todo artefacto antes de cargar nada, fijar el archivo de íconos curados con `[cache] prototypes_sha256` y no repetir texto de pantalla ni del agente en los errores), que 1.0.35 dejó propuesta, y autoriza la décima ronda supervisada (S4R-02 con la Calculadora en modo Estándar puesto a mano, E2E-02 y E2E-03 con los clientes de 1.0.36; cupo de 200 solicitudes reales, sin usar el equipo). Se actualizan el estado de la ADR, su índice, AGENTS.md y el traspaso.
