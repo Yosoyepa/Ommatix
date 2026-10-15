@@ -201,6 +201,18 @@ impl Engine {
         self.measured = None;
     }
 
+    /// Honours the operator's purge request (SEC-07, chapter 08 §8.4, `[safety] purge_file`).
+    /// The adapter calls it at a request boundary, before it handles the next request and
+    /// never while one is in progress, so a request always runs on the state it started
+    /// with. When the policy reports a request, this purges as the end of the session does and
+    /// then tells the policy the request is done. Without a request it changes nothing.
+    pub fn honour_purge_request(&mut self) {
+        if self.ports.policy.purge_requested() {
+            self.purge();
+            self.ports.policy.purge_done();
+        }
+    }
+
     pub fn session_id(&self) -> &str {
         &self.config.session_id
     }
