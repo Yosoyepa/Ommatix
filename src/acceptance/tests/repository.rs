@@ -569,11 +569,10 @@ fn rel_01_every_dependency_has_a_licence_and_none_is_copyleft() {
     );
 }
 
-/// REL-01: the reproduction guide names files that exist, and the commands it gives are
-/// the ones the repository defines.
-#[test]
-fn rel_01_the_reproduction_guide_points_at_files_that_exist() {
-    let guide = read("docs/thesis/S4_REPRODUCIBILIDAD.md");
+/// Asserts that every repository path a document names in code spans exists, and returns how
+/// many it checked. A span is a path if it has a `/`, no space, `<` or `%`, and a file
+/// extension the repository uses.
+fn assert_paths_exist(guide: &str) -> usize {
     let mut paths = 0;
     for part in guide.split('`').skip(1).step_by(2) {
         let looks_like_a_path = part.contains('/')
@@ -597,6 +596,15 @@ fn rel_01_the_reproduction_guide_points_at_files_that_exist() {
             );
         }
     }
+    paths
+}
+
+/// REL-01: the reproduction guide names files that exist, and the commands it gives are
+/// the ones the repository defines.
+#[test]
+fn rel_01_the_reproduction_guide_points_at_files_that_exist() {
+    let guide = read("docs/thesis/S4_REPRODUCIBILIDAD.md");
+    let paths = assert_paths_exist(&guide);
     assert!(paths >= 10, "{paths} paths checked");
     for command in [
         "cargo test --workspace",
@@ -610,6 +618,40 @@ fn rel_01_the_reproduction_guide_points_at_files_that_exist() {
             guide.contains(command),
             "the guide does not give {command:?}"
         );
+    }
+}
+
+/// REL-01: the install and rollback guide and the document of the pending supervised
+/// sessions name only repository paths that exist, and give the steps the Definition of
+/// Done asks for: build, verify, connect a client, roll back and check that nothing is
+/// left. The options, features and digests they cite are checked by
+/// `tools/repro/test_install_guide.py`.
+#[test]
+fn rel_01_the_install_guide_points_at_files_that_exist() {
+    let install = read("docs/thesis/S4_INSTALACION_Y_REVERSION.md");
+    let sessions = read("docs/thesis/S4_SESIONES_PENDIENTES.md");
+    for (name, text, at_least) in [("install", &install, 5), ("sessions", &sessions, 1)] {
+        let paths = assert_paths_exist(text);
+        assert!(paths >= at_least, "{name}: {paths} paths checked");
+    }
+    for step in [
+        "cargo build --release --locked",
+        "tools/repro/environment.py",
+        "--operator-dir",
+        "git worktree add",
+        "Remove-Item -Recurse",
+        "## 8. Reversión",
+        "mcpServers",
+        "rel_01_the_install_guide_points_at_files_that_exist",
+    ] {
+        assert!(install.contains(step), "the install guide lacks {step:?}");
+    }
+    for tool in ["tools/perf/soak.py", "tools/perf/dpi_probe.py"] {
+        assert!(
+            sessions.contains(tool),
+            "the sessions document lacks {tool}"
+        );
+        assert!(root().join(tool).is_file(), "{tool} is missing");
     }
 }
 
