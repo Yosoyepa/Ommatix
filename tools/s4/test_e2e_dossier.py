@@ -882,5 +882,188 @@ class ExplorerRunTest(QuietTest):
             self.assertNotIn(secret, text)
 
 
+class ExplorerActivationTest(QuietTest):
+    """Eighth round, finding 2: the Explorer window is the one the client opened, asked for by
+    its handle (the shell's explorer.exe owns the desktop and the taskbar too, so a process
+    lookup could name another window). The result is verified by GetForegroundWindow."""
+
+    class Desk(dossier.DossierProtocol):
+        def __init__(self, hwnd=900, arrives_by=None, operator=False):
+            self.args = SimpleNamespace(foreground_wait=6.0, operator_activation=operator,
+                                        operator_activation_wait=4.0)
+            self.flow = {"exe": "explorer.exe"}
+            self.notepad = None
+            self.started = set()
+            self.activation = driver.new_activation()
+            self.now = 0.0
+            self.hwnd = hwnd
+            self.fg = {"exe": "msedge.exe", "pid": 7, "hwnd": 50, "maximized_primary": True,
+                       "class": "Chrome_WidgetWin_1"}
+            self.arrives_by = arrives_by
+            self.asked = []
+            self.maximized = []
+            self.announced = []
+            self.zoomed = False
+
+        def mono(self):
+            return self.now
+
+        def pause(self, seconds):
+            self.now += seconds
+
+        def front_window(self):
+            return self.fg
+
+        def front_hwnd(self):
+            return self.fg["hwnd"]
+
+        def bring_front(self, hwnd):
+            self.maximized.append(hwnd)
+
+        def activate(self, hwnd):
+            self.asked.append(hwnd)
+            if self.arrives_by is not None and len(self.asked) >= self.arrives_by[1]:
+                self.fg = {"exe": "explorer.exe", "pid": 11, "hwnd": hwnd,
+                           "maximized_primary": True, "class": "CabinetWClass"}
+                return self.arrives_by[0]
+            return None
+
+        def diagnose(self, pid, hwnd=None):
+            return {"windows": [{"class": "CabinetWClass", "visible": True, "iconic": False,
+                                 "zoomed": True, "primary_monitor": True}],
+                    "foreground": {"class": "Chrome_WidgetWin_1", "exe": "msedge.exe"},
+                    "asked_for": hwnd}
+
+        def announce(self, text):
+            self.announced.append(text)
+
+    def test_the_operator_flag_exists_and_is_off_by_default(self):
+        import inspect
+        source = inspect.getsource(dossier.main)
+        self.assertIn('"--operator-activation", action="store_true"', source)
+        self.assertIn('"--operator-activation-wait", type=float, default=120.0', source)
+
+    def test_the_recorded_handle_is_asked_for_and_the_method_is_recorded(self):
+        desk = self.Desk(arrives_by=("attach_all_topmost", 2))
+        self.assertTrue(desk.wait_explorer_front(900))
+        self.assertEqual(desk.asked, [900, 900])
+        self.assertEqual(desk.activation["method"], "attach_all_topmost")
+        self.assertTrue(desk.maximized and set(desk.maximized) == {900},
+                        "placed by handle on every round")
+
+    def test_a_window_that_never_arrives_leaves_a_diagnostic_of_that_handle_only(self):
+        desk = self.Desk()
+        self.assertFalse(desk.wait_explorer_front(900))
+        diag = desk.activation["diagnostic"]
+        self.assertEqual(diag["asked_for"], 900)
+        self.assertEqual(diag["windows"][0]["class"], "CabinetWClass")
+        self.assertEqual(desk.announced, [])
+
+    def test_the_operator_may_bring_the_recorded_window_when_asked_to(self):
+        desk = self.Desk(operator=True)
+        original = desk.pause
+
+        def pause(seconds):
+            original(seconds)
+            if desk.now >= 7.0:  # after the 6 s wait, inside the operator's
+                desk.fg = {"exe": "explorer.exe", "pid": 11, "hwnd": 900,
+                           "maximized_primary": True, "class": "CabinetWClass"}
+
+        desk.pause = pause
+        self.assertTrue(desk.wait_explorer_front(900))
+        self.assertIs(desk.activation["operator_activation"], True)
+        self.assertEqual(len(desk.announced), 1)
+        self.assertIn("explorer.exe", desk.announced[0])
+
+    def test_the_run_record_carries_the_activation_and_the_failure(self):
+        desk = FakeExplorerDesk(self.tmp, self.temp_root, self.tmp / "window.pin")
+        desk.front_ok = False
+        desk.activation = {"method": None, "tried": {"none": 3}, "operator_activation": False,
+                           "diagnostic": {"windows": [], "foreground": {}}}
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["activation_tried"], {"none": 3})
+        self.assertIn("activation_diagnostic", res)
+        self.assertIn("did not reach the foreground", res["failure"])
+
+
+class EditorAccessibilityTest(QuietTest):
+    """Eighth round, finding 3: the field «Editor de texto» is named by UI Automation only. In
+    the probe that reached the foreground the engine reported no accessibility-sourced element,
+    and the run would have gone on to a step with no candidate."""
+
+    class Desk(FakeEditorDesk):
+        def __init__(self, *args, accessible_after=0, never=False, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.accessible_after = accessible_after  # observations that come back empty
+            self.never = never
+            self.observations = 0
+            self.windows = {5151: 99}
+
+        def window_of(self, pid):
+            return self.windows.get(pid)
+
+        def observe(self):
+            self.observations += 1
+            snap, elements, obs = super().observe()
+            if self.never or self.observations <= self.accessible_after:
+                elements = [dict(e, label_source="ocr", actionability="unknown",
+                                 role="text_node") for e in elements]
+            return snap, elements, obs
+
+        def focus_owner(self, pid):
+            return {"pid": 4, "class": "Chrome_WidgetWin_1", "control_type": "Document",
+                    "top_level_class": "Chrome_WidgetWin_1", "is_app": False}
+
+    def desk(self, **kwargs):
+        return self.Desk(self.tmp, self.temp_root, **kwargs)
+
+    def test_a_first_read_without_accessibility_is_read_again(self):
+        desk = self.desk(accessible_after=2)
+        res = desk.run_once(1)
+        self.assertTrue(res["success"], res)
+        self.assertGreater(res["accessibility_elements"], 0)
+        self.assertEqual(desk.observations >= 3, True)
+
+    def test_no_accessibility_evidence_stops_the_run_before_any_input(self):
+        desk = self.desk(never=True)
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["failure"], "no accessibility evidence from the editor")
+        self.assertEqual(res["accessibility_elements"], 0)
+        self.assertEqual((desk.actions, desk.ledger_total()), ([], 0))
+        self.assertEqual(desk.closed, [5151], "the editor is closed all the same")
+        self.assertFalse(desk.folder.exists())
+
+    def test_the_focus_owner_is_recorded_without_names(self):
+        desk = self.desk(never=True)
+        res = desk.run_once(1)
+        self.assertEqual(set(res["uia_focus"]),
+                         {"pid", "class", "control_type", "top_level_class", "is_app"})
+        self.assertIs(res["uia_focus"]["is_app"], False)
+
+    def test_the_steps_read_the_editors_main_window(self):
+        desk = self.desk()
+        desk.run_once(1)
+        self.assertEqual(desk.app_hwnd, 99, "not the foreground window, which may be a helper")
+
+    def test_the_focus_owner_says_whether_it_belongs_to_the_application(self):
+        desk = FakeEditorDesk(self.tmp, self.temp_root)
+        with mock.patch.object(driver, "uia_focus_owner", return_value={
+                "pid": 5151, "class": "Window Class", "control_type": "Window",
+                "top_level_class": "Window Class"}):
+            self.assertIs(dossier.DossierProtocol.focus_owner(desk, 5151)["is_app"], True)
+            self.assertIs(dossier.DossierProtocol.focus_owner(desk, 9)["is_app"], False)
+        with mock.patch.object(driver, "uia_focus_owner", return_value=None):
+            self.assertEqual(dossier.DossierProtocol.focus_owner(desk, 5151), {"unreadable": True})
+
+    def test_the_focus_owner_output_is_parsed_strictly(self):
+        self.assertEqual(driver.parse_focus_owner("12\tWindow Class\tWindow\tWindow Class"),
+                         {"pid": 12, "class": "Window Class", "control_type": "Window",
+                          "top_level_class": "Window Class"})
+        for bad in ("", "x\ty\tz\tw", "12\ta\tb", "12\ta\tb\tc\td"):
+            self.assertIsNone(driver.parse_focus_owner(bad), bad)
+
+
 if __name__ == "__main__":
     unittest.main()

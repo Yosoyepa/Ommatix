@@ -30,6 +30,7 @@ use std::fmt;
 use std::fs::OpenOptions;
 use std::io::{ErrorKind, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use eframe::egui;
 
@@ -43,6 +44,20 @@ const RUN_ID_LIMIT: usize = 64;
 const TEXT_LIMIT_CHARS: usize = 1024;
 /// The largest file the editor writes (a character is at most 4 bytes of UTF-8).
 const MAX_NOTE_BYTES: usize = 4 * TEXT_LIMIT_CHARS;
+
+/// How long after start the editor keeps asking for the keyboard focus.
+const FRONT_REQUEST_WINDOW: Duration = Duration::from_secs(2);
+/// How often it repaints while it is asking, so that the request is sent at all.
+const FRONT_REQUEST_PERIOD: Duration = Duration::from_millis(100);
+
+/// Whether the editor still asks the OS for the foreground. A window started by a background
+/// process is not brought to the front by the OS (its taskbar button flashes instead), and UI
+/// Automation, like the engine, reads the foreground application. The request is sent early and
+/// for a short time only: the OS grants it when the user has not touched the machine for a
+/// while, and never takes it from someone who is working. It sends no input.
+fn asks_for_front(since_start: Duration) -> bool {
+    since_start < FRONT_REQUEST_WINDOW
+}
 
 /// Why a folder is not a folder the editor saves into.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,11 +259,23 @@ const FIELD_ROWS: usize = 6;
 
 struct EditorApp {
     editor: Editor,
+    started: Instant,
+    maximized: bool,
 }
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let before = self.editor.title();
+        if asks_for_front(self.started.elapsed()) {
+            let ctx = ui.ctx().clone();
+            if !self.maximized {
+                // Once: the window maximizes itself like the test application does.
+                self.maximized = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.request_repaint_after(FRONT_REQUEST_PERIOD);
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             ui.add_space(60.0);
             ui.vertical_centered(|ui| {
@@ -310,7 +337,11 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             cc.egui_ctx.set_theme(egui::Theme::Light);
-            Ok(Box::new(EditorApp { editor }))
+            Ok(Box::new(EditorApp {
+                editor,
+                started: Instant::now(),
+                maximized: false,
+            }))
         }),
     )
 }
@@ -319,6 +350,15 @@ fn main() -> eframe::Result {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn the_editor_asks_for_the_front_early_and_only_for_a_short_time() {
+        assert!(asks_for_front(Duration::ZERO));
+        assert!(asks_for_front(Duration::from_millis(1999)));
+        assert!(!asks_for_front(FRONT_REQUEST_WINDOW));
+        assert!(!asks_for_front(Duration::from_secs(60)));
+        assert!(FRONT_REQUEST_PERIOD < FRONT_REQUEST_WINDOW);
+    }
 
     /// A fresh directory standing for the system's temporary directory.
     fn temp_root() -> PathBuf {
