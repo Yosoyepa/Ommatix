@@ -25,17 +25,26 @@
 //! gate and again after the freshness capture, immediately before delivery: an action
 //! that meets it is `POLICY_DENIED` and sends nothing. It never undoes what was already
 //! delivered: those results stay recorded as they were reported.
+//!
+//! The snapshot and the accessibility evidence that confirms the target must be within
+//! `[engine] max_snapshot_age_ms` (ADR-0025). The capture instant bounds the snapshot, the
+//! instant its accessibility read started bounds the evidence, both on the injected clock.
+//! An expired bound is `STALE_SNAPSHOT`: observe again, never re-target. The gate checks it
+//! (simulated actions included), and so does each check right before a real input, after
+//! the freshness capture and, for `type`, after the focusing click.
 
 use std::time::Duration;
 
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::Role;
-use ommatix_domain::identity::{ActionRef, ActionRejection, ActionStatus, Clearance, Delivery};
+use ommatix_domain::identity::{
+    ActionRef, ActionRejection, ActionStatus, Clearance, Delivery, TargetId,
+};
 use ommatix_domain::incremental::{BgraFrame, dirty_tiles};
 
-use super::Engine;
 use super::accessibility::focus_is_on;
 use super::journal::{Lookup, arguments_hash};
+use super::{Engine, aged_out};
 use crate::contract::{
     ActionKind, ActionRequest, ActionResult, ActionTimings, ErrorCode, ExpectedEffect,
     ObservedEffect, ToolError, ValidatedAction, limits,
@@ -83,6 +92,24 @@ fn stale_snapshot() -> ToolError {
     ToolError::new(
         ErrorCode::StaleSnapshot,
         "the action does not reference the published snapshot; observe again",
+    )
+}
+
+/// The snapshot was captured more than `[engine] max_snapshot_age_ms` ago (ADR-0025).
+fn snapshot_expired() -> ToolError {
+    ToolError::new(
+        ErrorCode::StaleSnapshot,
+        "the snapshot is older than [engine] max_snapshot_age_ms; observe again",
+    )
+}
+
+/// The accessibility evidence that confirms the target was read more than
+/// `[engine] max_snapshot_age_ms` ago (ADR-0025).
+fn evidence_expired() -> ToolError {
+    ToolError::new(
+        ErrorCode::StaleSnapshot,
+        "the accessibility evidence for the target is older than [engine] max_snapshot_age_ms; \
+         observe again",
     )
 }
 
@@ -295,6 +322,9 @@ impl Engine {
                 "type needs a confirmed input field",
             ));
         }
+        // Simulation meets the same bound, so it never accepts what the live path would
+        // refuse. It sends nothing, so it has no boundary after this one (ADR-0025).
+        self.check_age(target_id)?;
 
         if request.dry_run {
             return Ok(Outcome::simulated());
@@ -339,7 +369,7 @@ impl Engine {
         self.check_window_scope(&policy, foreground.as_deref(), point)?;
         let since = self.ports.clock.now();
         let checked = self.fresh_frame().and_then(|before| {
-            self.last_look(foreground.as_deref(), point)
+            self.last_look(foreground.as_deref(), point, target_id)
                 .map(|()| before)
         });
         self.spend(since, Stage::Freshness);
@@ -387,11 +417,42 @@ impl Engine {
         }
     }
 
+    /// The snapshot and the accessibility evidence that confirms `target` are within
+    /// `[engine] max_snapshot_age_ms` (ADR-0025). The capture instant bounds the snapshot;
+    /// the instant the confirming accessibility read started bounds that evidence, which a
+    /// newer publication never renews. A target no accessibility read confirms has no
+    /// evidence age. Only reads the clock and the published state.
+    fn check_age(&self, target: TargetId) -> Result<(), ToolError> {
+        let Some(published) = self.store.published() else {
+            return Err(stale_snapshot());
+        };
+        let now = self.ports.clock.now();
+        let max = self.config.max_snapshot_age;
+        if aged_out(now, published.captured_at, max) {
+            return Err(snapshot_expired());
+        }
+        let read_at = published
+            .elements
+            .iter()
+            .find(|e| e.target_id == target)
+            .and_then(|e| e.evidence_at);
+        if read_at.is_some_and(|read_at| aged_out(now, read_at, max)) {
+            return Err(evidence_expired());
+        }
+        Ok(())
+    }
+
     /// The checks that can change while the engine works, repeated immediately before
-    /// delivery (SDD §2.9, chapter 08 §8.2): the operator's stop and consent, and the
-    /// foreground application attested at the gate. A residual window between this look
-    /// and the OS remains (§8.3); the live actuator narrows it with its own checks.
-    fn last_look(&self, foreground: Option<&str>, point: (f64, f64)) -> Result<(), ToolError> {
+    /// delivery (SDD §2.9, chapter 08 §8.2): the operator's stop and consent, the age of the
+    /// snapshot and of the evidence for `target` (ADR-0025), and the foreground application
+    /// attested at the gate. A residual window between this look and the OS remains (§8.3);
+    /// the live actuator narrows it with its own checks.
+    fn last_look(
+        &self,
+        foreground: Option<&str>,
+        point: (f64, f64),
+        target: TargetId,
+    ) -> Result<(), ToolError> {
         let policy = self.ports.policy.current();
         if policy.stopped {
             return Err(operator_stopped());
@@ -399,6 +460,7 @@ impl Engine {
         if !policy.actuation_enabled {
             return Err(policy_denied());
         }
+        self.check_age(target)?;
         let now = self.ports.actuator.foreground_application();
         if now.is_none() || now.as_deref() != foreground {
             return Err(not_allowlisted(
@@ -565,14 +627,18 @@ impl Engine {
         } else {
             None
         };
-        let unchanged = self.last_look(foreground, target.center()).is_ok();
+        let checked = self.last_look(foreground, target.center(), action.target_id);
         self.spend(since, Stage::Freshness);
-        if !unchanged {
-            return Outcome::uncertain(
-                true,
+        if let Err(error) = checked {
+            // The window can end while the focus is awaited; that is named apart (ADR-0025).
+            let message = if error.code == ErrorCode::StaleSnapshot {
+                "the click was delivered, then the snapshot expired; no key was sent; observe \
+                 again; do not retry"
+            } else {
                 "the click was delivered, then the operator's stop or consent or the \
-                 foreground application changed; no key was sent; do not retry",
-            );
+                 foreground application changed; no key was sent; do not retry"
+            };
+            return Outcome::uncertain(true, message);
         }
         let since = self.ports.clock.now();
         let sent = self.ports.actuator.deliver_keys(action);

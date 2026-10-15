@@ -62,3 +62,10 @@ Característica: Actuación y verificación honestas
     Dado una aplicación permitida con una ventana registrada por el operador
     Cuando el agente solicita un clic en otra ventana de la misma clase
     Entonces se rechaza la entrada y sólo la ventana registrada recibe clics
+
+  @BDD-38 @RF-11 @UT-46
+  Escenario: BDD-38 Observación caducada
+    Dado una observación de una ventana permitida
+    Cuando pasa la vigencia configurada y el agente solicita un clic de prueba sobre ella
+    Entonces se devuelve STALE_SNAPSHOT con observe_again y no se envía ningún evento
+    Y una nueva observación vuelve a permitir el clic de prueba

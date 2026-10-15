@@ -97,6 +97,10 @@ struct World {
     /// Answers to the next foreground-window reads, before `foreground_window` takes
     /// over: a window that changes while the engine works.
     foreground_window_script: VecDeque<Option<TopLevelWindow>>,
+    /// How long one accessibility read takes on the clock (a late read, ADR-0025).
+    access_delay: Duration,
+    /// How long one capture takes on the clock, after the frame is stamped.
+    advance_on_capture: Duration,
 }
 
 impl Default for World {
@@ -139,6 +143,8 @@ impl Default for World {
             foreground_window: None,
             window_at_point: None,
             foreground_window_script: VecDeque::new(),
+            access_delay: Duration::ZERO,
+            advance_on_capture: Duration::ZERO,
         }
     }
 }
@@ -223,11 +229,16 @@ impl FrameCapturer for Capturer {
             Some(n) => w.pending_redraw = Some(n - 1),
             None => {}
         }
-        Ok(CapturedFrame {
+        let captured = CapturedFrame {
             frame: render(&w),
             frame_seq: w.seq,
             captured_at: self.1.now(),
-        })
+        };
+        // A capture that takes time: the clock moves on once the frame is stamped.
+        let took = w.advance_on_capture;
+        drop(w);
+        self.1.advance(took);
+        Ok(captured)
     }
 }
 
@@ -274,8 +285,8 @@ impl TextRecognizer for Recognizer {
 }
 
 /// The accessibility provider double: returns the elements overlapping the regions, like
-/// the detector double, and records each call.
-struct Access(Shared);
+/// the detector double, and records each call. A read takes `access_delay` on the clock.
+struct Access(Shared, Arc<ManualClock>);
 
 impl AccessibilityProvider for Access {
     fn name(&self) -> &'static str {
@@ -298,6 +309,9 @@ impl AccessibilityProvider for Access {
         if let Some(n) = w.access_limit {
             elements.truncate(n);
         }
+        let took = w.access_delay;
+        drop(w);
+        self.1.advance(took);
         Ok(AccessibleRead {
             elements,
             truncated,
@@ -531,7 +545,7 @@ fn rig_with(world: World, config: EngineConfig) -> Rig {
             capturer: Box::new(Capturer(world.clone(), clock.clone())),
             detector: Box::new(Detector(world.clone())),
             recognizer: Box::new(Recognizer(world.clone())),
-            accessibility: Box::new(Access(world.clone())),
+            accessibility: Box::new(Access(world.clone(), clock.clone())),
             actuator: Box::new(Actuator(world.clone())),
             policy: policy.clone(),
             clock: clock.clone(),
@@ -2134,5 +2148,6 @@ mod icons {
 mod accessibility;
 mod concurrency;
 mod security;
+mod snapshot_age;
 mod typing;
 mod window_scope;

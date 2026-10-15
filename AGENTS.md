@@ -272,4 +272,4 @@ element-level keyboard focus (0018) and the perception stages of one observation
 concurrently on scoped threads (0019), the operator's scope on windows (0020) and every
 loaded artefact pinned before anything loads, with screen and agent text kept out of errors
 (0021) and the supervised test clients' point grounding before every click, with a closed
-list of navigating clicks decided by the operating system's state (0022).
+list of navigating clicks decided by the operating system's state (0022), and the age bound of every authorisation, the snapshot's and the accessibility evidence's, checked at every real-input boundary (0025, accepted on 2026-10-15).

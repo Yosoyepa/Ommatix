@@ -311,9 +311,14 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
   `[models] detector_path`, `detector_sha256`, `ocr_path` or `ocr_sha256` (weights are
   declared in the model manifest), a half-configured or malformed detector pin (below),
   and `[cache] persist = true`.
-- **Accepted but not enforced** (a note on stderr at startup): `max_snapshot_age_ms` (every
-  page reports its `age_ms` instead), and `actuation_enabled = true` with an input adapter
-  that is not live.
+- **Enforced** (ADR-0025): `max_snapshot_age_ms` (default `10000`) bounds how old, on the
+  engine's clock, the capture of the published snapshot and the accessibility read that
+  confirms a target may be when an action is authorised. Past that age the action is refused
+  with `STALE_SNAPSHOT` (observe again, never re-target): at the gate, simulated actions
+  included, and again before every real input, including the keys of a two-phase `type`.
+  A new publication does not renew an old accessibility read.
+- **Accepted with no effect** (a note on stderr at startup): `actuation_enabled = true` with
+  an input adapter that is not live.
 
 `[cache]` may also turn on the icon resolver (Algorithm 3A) with six keys that go together:
 `prototypes` (a JSON-lines file, relative to the configuration file, one

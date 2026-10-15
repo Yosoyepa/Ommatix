@@ -23,6 +23,10 @@
 //! contradict is kept (so a truncated read never takes away a confirmation or a password's
 //! `sensitive` mark), and a visual box there is not confirmed on the strength of a tree
 //! that may lack the control its click point falls on.
+//!
+//! Each accessibility element keeps the instant its read started (ADR-0025). A publication
+//! that reuses it keeps that instant, and an observation reads again the regions whose
+//! evidence has expired, so a semantic change with no repaint is seen once the window ends.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -37,7 +41,7 @@ use ommatix_domain::incremental::{BgraFrame, Evidence, RegionPlan, Work, plan_re
 
 use super::accessibility::accessible_control;
 use super::icons::{self, IconLabel, Scope};
-use super::{Engine, EngineConfig, Ports};
+use super::{Engine, EngineConfig, Ports, aged_out};
 use crate::PortError;
 use crate::contract::{ErrorCode, LabelSource, StageTimings, ToolError};
 use crate::ports::{AccessibilityProvider, Clock, TextRecognizer, VisionDetector};
@@ -47,8 +51,17 @@ use crate::ports::{AccessibilityProvider, Clock, TextRecognizer, VisionDetector}
 pub(super) struct EvidenceSet {
     pub controls: Vec<Control>,
     pub words: Vec<Word>,
-    /// Accessibility elements on screen (ADR-0017).
-    pub accessible: Vec<AccessibleControl>,
+    /// Accessibility elements on screen (ADR-0017), each with the instant its read started.
+    pub accessible: Vec<ReadAccessible>,
+}
+
+/// An accessibility element and the instant its read started on the injected clock
+/// (ADR-0025). Its age is measured from that instant: a later publication that keeps the
+/// element does not make the element newer.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct ReadAccessible {
+    pub element: AccessibleControl,
+    pub read_at: Duration,
 }
 
 impl EvidenceSet {
@@ -58,7 +71,7 @@ impl EvidenceSet {
             .iter()
             .map(|c| c.bbox)
             .chain(self.words.iter().map(|w| w.bbox))
-            .chain(self.accessible.iter().map(|a| a.control.bbox))
+            .chain(self.accessible.iter().map(|a| a.element.control.bbox))
             .collect()
     }
 
@@ -73,12 +86,15 @@ impl EvidenceSet {
     /// proves nothing about what it did not reach.
     fn merged(&self, detected: &[BBox], read: &[BBox], fresh: Self, truncated: bool) -> Self {
         let outside = |regions: &[BBox], b: &BBox| !regions.iter().any(|r| r.overlaps(b));
-        let keeps = |a: &AccessibleControl| {
-            let b = &a.control.bbox;
+        let keeps = |a: &ReadAccessible| {
+            let b = &a.element.control.bbox;
             outside(read, b)
                 || (truncated
                     && outside(detected, b)
-                    && !fresh.accessible.iter().any(|f| f.control.bbox == *b))
+                    && !fresh
+                        .accessible
+                        .iter()
+                        .any(|f| f.element.control.bbox == *b))
         };
         let mut next = Self {
             controls: self
@@ -148,23 +164,29 @@ impl EvidenceSet {
             .accessible
             .into_iter()
             .filter_map(|a| {
-                let bbox = a.control.bbox.clip(bounds)?;
-                Some(AccessibleControl {
-                    control: Control { bbox, ..a.control },
-                    ..a
+                let bbox = a.element.control.bbox.clip(bounds)?;
+                Some(ReadAccessible {
+                    element: AccessibleControl {
+                        control: Control {
+                            bbox,
+                            ..a.element.control
+                        },
+                        ..a.element
+                    },
+                    read_at: a.read_at,
                 })
             })
             .collect();
         self.accessible.sort_by(|a, b| {
-            let (x, y) = (&a.control, &b.control);
+            let (x, y) = (&a.element.control, &b.element.control);
             x.bbox
                 .cmp_corners(&y.bbox)
                 .then(x.role.cmp(&y.role))
-                .then_with(|| a.label.cmp(&b.label))
+                .then_with(|| a.element.label.cmp(&b.element.label))
                 .then(x.affordance.actionability.cmp(&y.affordance.actionability))
                 .then(x.affordance.enabled.cmp(&y.affordance.enabled))
                 .then(x.affordance.visible.cmp(&y.affordance.visible))
-                .then(a.sensitive.cmp(&b.sensitive))
+                .then(a.element.sensitive.cmp(&b.element.sensitive))
         });
         self.accessible.dedup();
         self
@@ -185,6 +207,9 @@ pub(super) struct StoredElement {
     /// both the request and the local policy allow values.
     pub value: Option<(String, TextKind)>,
     pub text_node: bool,
+    /// When the accessibility read that confirms this element started (ADR-0025); `None`
+    /// when no accessibility evidence confirms it.
+    pub evidence_at: Option<Duration>,
 }
 
 /// The payload of a committed snapshot.
@@ -222,18 +247,20 @@ struct Candidate {
     label_source: LabelSource,
     value: Option<(String, TextKind)>,
     text_node: bool,
+    evidence_at: Option<Duration>,
 }
 
-/// `access` is the accessibility element this control comes from, if any: its name wins
-/// over every other label, and a password field publishes no OCR text at all. `icon` is
-/// the curated label Algorithm 3A found for this control, if any; it only replaces the
-/// visual label, never the affordance.
+/// `origin` is the accessibility element this control comes from, if any, and when its read
+/// started: that element's name wins over every other label, and a password field publishes
+/// no OCR text at all. `icon` is the curated label Algorithm 3A found for this control, if
+/// any; it only replaces the visual label, never the affordance.
 fn control_candidate(
     fc: &FusedControl,
-    access: Option<&AccessibleControl>,
+    origin: Option<&ReadAccessible>,
     icon: Option<&str>,
 ) -> Candidate {
     let role = fc.control.role;
+    let access = origin.map(|o| &o.element);
     let sensitive = access.is_some_and(|a| a.sensitive);
     let inner = if sensitive {
         String::new()
@@ -269,6 +296,7 @@ fn control_candidate(
         value: (role.holds_value() && !sensitive)
             .then(|| (inner, fc.text_kind.unwrap_or(TextKind::Unknown))),
         text_node: false,
+        evidence_at: origin.map(|o| o.read_at),
     }
 }
 
@@ -285,6 +313,7 @@ fn text_node_candidate(word: &Word) -> Candidate {
         label_source: LabelSource::Ocr,
         value: None,
         text_node: true,
+        evidence_at: None,
     }
 }
 
@@ -309,6 +338,7 @@ fn stored_elements(registry: &Registry, candidates: Vec<Candidate>) -> Vec<Store
                 affordance: track.observation.affordance,
                 value: c.value,
                 text_node: c.text_node,
+                evidence_at: c.evidence_at,
             })
         })
         .collect()
@@ -364,9 +394,14 @@ fn fuse_and_track(
             c
         })
         .collect();
-    let reconciled = reconcile_accessibility(&visual, &evidence.accessible, config.fusion).ok()?;
+    let accessible: Vec<AccessibleControl> = evidence
+        .accessible
+        .iter()
+        .map(|a| a.element.clone())
+        .collect();
+    let reconciled = reconcile_accessibility(&visual, &accessible, config.fusion).ok()?;
     let fusion = fuse(&reconciled.controls, &evidence.words, config.fusion).ok()?;
-    let access_of = |i: usize| reconciled.origins[i].and_then(|k| evidence.accessible.get(k));
+    let origin_of = |i: usize| reconciled.origins[i].and_then(|k| evidence.accessible.get(k));
     let relations = fusion
         .controls
         .iter()
@@ -392,7 +427,7 @@ fn fuse_and_track(
         .controls
         .iter()
         .enumerate()
-        .map(|(i, fc)| control_candidate(fc, access_of(i), icon_of(fc)))
+        .map(|(i, fc)| control_candidate(fc, origin_of(i), icon_of(fc)))
         .chain(fusion.text_nodes.iter().map(text_node_candidate))
         .collect();
     let fused_at = clock.now();
@@ -422,9 +457,11 @@ struct Inferred {
     truncated: bool,
 }
 
-/// What a perception stage returned and how long it ran on the injected clock.
+/// What a perception stage returned, when it started and how long it ran on the injected
+/// clock.
 struct Timed<T> {
     result: Result<T, PortError>,
+    started: Duration,
     took: Duration,
 }
 
@@ -433,6 +470,7 @@ fn timed<T>(clock: &dyn Clock, stage: impl FnOnce() -> Result<T, PortError>) -> 
     let result = stage();
     Timed {
         result,
+        started: start,
         took: clock.now().saturating_sub(start),
     }
 }
@@ -441,6 +479,7 @@ fn timed<T>(clock: &dyn Clock, stage: impl FnOnce() -> Result<T, PortError>) -> 
 fn idle<T: Default>() -> Timed<T> {
     Timed {
         result: Ok(T::default()),
+        started: Duration::ZERO,
         took: Duration::ZERO,
     }
 }
@@ -508,7 +547,7 @@ impl Engine {
             Work::FullRefresh(_) => vec![frame.bounds()],
         };
         let bounds = frame.bounds();
-        let read_regions = self.accessibility_regions(&plan.work, &regions, &bounds);
+        let read_regions = self.accessibility_regions(&plan.work, &regions, &bounds, t0);
         let Ok(Inferred {
             evidence: fresh,
             detect,
@@ -578,24 +617,41 @@ impl Engine {
         Ok(())
     }
 
-    /// The regions the accessibility provider reads: the plan, and also where an earlier
-    /// read was cut short, whether or not pixels changed there. The detector and the
-    /// recogniser see the plan only. A full refresh reads everything anyway.
-    fn accessibility_regions(&self, work: &Work, planned: &[BBox], bounds: &BBox) -> Vec<BBox> {
+    /// The regions the accessibility provider reads: the plan, the gaps where an earlier read
+    /// was cut short, and the regions whose evidence has expired by `now` (ADR-0025), whether
+    /// or not pixels changed there. A publication never renews an old read, so this is how a
+    /// new observation does. The detector and the recogniser see the plan only. A full
+    /// refresh reads everything anyway.
+    fn accessibility_regions(
+        &self,
+        work: &Work,
+        planned: &[BBox],
+        bounds: &BBox,
+        now: Duration,
+    ) -> Vec<BBox> {
         if matches!(work, Work::FullRefresh(_)) {
             return planned.to_vec();
         }
-        let gaps: Vec<BBox> = self
-            .store
-            .published()
-            .map(|p| {
-                p.accessibility_gaps
+        let max = self.config.max_snapshot_age;
+        let (gaps, expired) = self.store.published().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |p| {
+                let gaps: Vec<BBox> = p
+                    .accessibility_gaps
                     .iter()
                     .filter_map(|g| g.clip(bounds))
-                    .collect()
-            })
-            .unwrap_or_default();
-        union(planned, &gaps)
+                    .collect();
+                let expired: Vec<BBox> = p
+                    .evidence
+                    .accessible
+                    .iter()
+                    .filter(|a| aged_out(now, a.read_at, max))
+                    .filter_map(|a| a.element.control.bbox.clip(bounds))
+                    .collect();
+                (gaps, expired)
+            },
+        );
+        union(&union(planned, &gaps), &expired)
     }
 
     /// Algorithm 1 against the committed base, the pending tiles and the last evidence.
@@ -694,6 +750,9 @@ impl Engine {
         };
 
         let (detect_took, recognize_took, access_took) = (controls.took, words.took, tree.took);
+        // Evidence is dated by when its read started: the state it reports is no older
+        // than that, so the age it is judged by is never understated (ADR-0025).
+        let read_at = tree.started;
         let controls = controls.result?;
         let words = words.result?;
         let read = tree.result?;
@@ -702,6 +761,7 @@ impl Engine {
             .iter()
             .filter(|e| read_regions.iter().any(|r| r.overlaps(&e.bbox)))
             .filter_map(accessible_control)
+            .map(|element| ReadAccessible { element, read_at })
             .collect();
         Ok(Inferred {
             evidence: EvidenceSet {

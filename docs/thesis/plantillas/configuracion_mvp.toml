@@ -7,7 +7,13 @@ tile_size = 64
 halo_px = 32
 max_regions = 4
 full_refresh_area_ratio = 0.40
-max_snapshot_age_ms = 250
+# Vigencia (ADR-0025, INC-03): edad máxima, medida en el reloj inyectado, de la captura del
+# snapshot y de la lectura de accesibilidad que confirma un objetivo, para autorizar una
+# acción. Se comprueba en la puerta, también en simulación, y antes de cada entrada real. Pasado
+# el plazo: STALE_SNAPSHOT, observar de nuevo. Por defecto 10 000 ms, más que los 250 ms del
+# primer borrador: un agente actúa segundos después de observar y la captura de frescura sigue
+# protegiendo la pantalla.
+max_snapshot_age_ms = 10000
 # Plazo de verificación del efecto (SDD §2.9, BDD-29): tras entregar, el motor vuelve a
 # capturar cada verify_poll_ms hasta ver un cambio visual o hasta que venza el plazo
 # (entonces indeterminate, sin reintentar). 0: una sola comprobación inmediata.

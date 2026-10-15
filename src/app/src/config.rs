@@ -4,9 +4,8 @@
 //! Every field is optional and defaults to the template's value; unknown sections and keys
 //! are rejected. [`Config::validate`] rejects values this build cannot honour (another
 //! transport or profile, weights outside a model manifest, unpinned or half-configured
-//! models, a persistent cache, permissions it cannot enforce)
-//! instead of accepting them silently, and [`Config::notes`] lists the accepted values that
-//! the engine does not enforce yet, for stderr.
+//! models, a persistent cache, permissions it cannot enforce) instead of accepting them
+//! silently.
 //!
 //! `[cache]` may add, beyond the template, a curated prototypes file for Algorithm 3A, its
 //! SHA-256 and the thresholds to use it with. The thesis calibrates those thresholds (H4),
@@ -60,6 +59,9 @@ pub struct EngineSection {
     pub halo_px: u32,
     pub max_regions: usize,
     pub full_refresh_area_ratio: f64,
+    /// How old the snapshot's capture and the accessibility read that confirms a target may
+    /// be when an action is authorised, measured on the injected clock (ADR-0025). Checked at
+    /// the gate and before every real input.
     pub max_snapshot_age_ms: u64,
     /// How long after delivering an action the engine looks for its visual effect
     /// (SDD §2.9, the deadline of BDD-29). 0: a single check right after delivery.
@@ -82,7 +84,7 @@ impl Default for EngineSection {
             halo_px: 32,
             max_regions: 4,
             full_refresh_area_ratio: 0.40,
-            max_snapshot_age_ms: 250,
+            max_snapshot_age_ms: 10_000,
             verify_timeout_ms: 500,
             verify_poll_ms: 50,
             concurrent_stages: true,
@@ -575,15 +577,6 @@ impl Config {
         out
     }
 
-    /// Accepted values that the engine does not enforce yet, to report on stderr.
-    pub fn notes(&self) -> Vec<String> {
-        vec![format!(
-            "[engine] max_snapshot_age_ms = {} is not enforced yet; every page reports \
-                 its age_ms",
-            self.engine.max_snapshot_age_ms
-        )]
-    }
-
     /// A path from this file: a relative one resolves against the file's directory (the
     /// working directory for the built-in defaults).
     pub fn resolve_path(&self, path: &str) -> PathBuf {
@@ -651,6 +644,12 @@ impl Config {
             timeout: Duration::from_millis(self.engine.verify_timeout_ms),
             poll: Duration::from_millis(self.engine.verify_poll_ms),
         }
+    }
+
+    /// How old the snapshot's capture and the accessibility evidence may be when an action is
+    /// authorised (ADR-0025).
+    pub fn max_snapshot_age(&self) -> Duration {
+        Duration::from_millis(self.engine.max_snapshot_age_ms)
     }
 
     /// The MCP adapter's settings. `--legacy` can only add the legacy profile.
@@ -872,6 +871,16 @@ mod tests {
         let config =
             Config::parse("[engine]\nverify_timeout_ms = 5000\nverify_poll_ms = 1000\n").unwrap();
         assert_eq!(config.verify_params().timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn the_snapshot_window_is_ten_seconds_unless_the_operator_sets_it() {
+        assert_eq!(
+            Config::default().max_snapshot_age(),
+            Duration::from_secs(10)
+        );
+        let config = Config::parse("[engine]\nmax_snapshot_age_ms = 2500\n").unwrap();
+        assert_eq!(config.max_snapshot_age(), Duration::from_millis(2500));
     }
 
     #[test]

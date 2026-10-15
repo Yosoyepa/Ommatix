@@ -329,9 +329,14 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
   `allow_screenshots_to_client = true`, `[models] detector_path`, `detector_sha256`,
   `ocr_path` u `ocr_sha256` (los pesos se declaran en el manifiesto del modelo), un detector
   configurado a medias o con hashes mal formados (abajo) y `[cache] persist = true`.
-- **Se acepta pero no se aplica** (una nota en stderr al arrancar): `max_snapshot_age_ms`
-  (cada página informa su `age_ms`) y `actuation_enabled = true` con un adaptador de entrada
-  que no es real.
+- **Vigencia** (ADR-0025): `max_snapshot_age_ms` (por defecto `10000`) acota la edad, en el
+  reloj del motor, de la captura del snapshot publicado y de la lectura de accesibilidad que
+  confirma un objetivo al autorizar una acción. Pasada esa edad, la acción se rechaza con
+  `STALE_SNAPSHOT` (observar de nuevo, sin reanclar): en la puerta, también en simulación, y
+  antes de cada entrada real, incluidas las teclas de un `type` en dos fases. Una publicación
+  nueva no renueva una lectura de accesibilidad antigua.
+- **Se acepta sin efecto** (una nota en stderr al arrancar): `actuation_enabled = true` con un
+  adaptador de entrada que no es real.
 
 `[cache]` puede además encender el resolvedor de íconos (algoritmo 3A) con seis claves que
 van juntas: `prototypes` (un archivo JSON lines, relativo al archivo de configuración, con un
