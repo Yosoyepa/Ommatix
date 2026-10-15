@@ -284,8 +284,9 @@ confirmado. El resolvedor está apagado salvo que el operador configure prototip
 pueda identificar la aplicación en primer plano.
 
 **`execute_action`** comprueba los argumentos, busca el `request_id` en un diario de
-deduplicación acotado (hash FNV-1a de los argumentos canónicos, de modo que nunca se guarda el
-texto tecleado; el mismo ID con otros argumentos es `REQUEST_CONFLICT`) y después comprueba de
+deduplicación (hash FNV-1a de los argumentos canónicos, de modo que nunca se guarda el texto
+tecleado; el mismo ID con otros argumentos es `REQUEST_CONFLICT`; los resultados que informaron
+entrada se conservan hasta el fin de la sesión y los demás están acotados) y después comprueba de
 forma estricta sesión, epoch geométrico, snapshot, target, revisión y accionabilidad contra el
 snapshot publicado. Un dry run (por defecto) es `simulated`. La entrada real exige la política
 del operador (`actuation_enabled`, sin parada), un actuador real **y** una aplicación en

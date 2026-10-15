@@ -265,9 +265,10 @@ The resolver is off unless the operator configures prototypes and thresholds (`[
 because the thesis calibrates them (H4); the context is configured too until S3 can identify
 the foreground application.
 
-**`execute_action`** checks the arguments, looks the `request_id` up in a bounded
-deduplication journal (FNV-1a hash of the canonical arguments, so typed text is never stored;
-same ID with other arguments is `REQUEST_CONFLICT`), then checks session, geometry epoch,
+**`execute_action`** checks the arguments, looks the `request_id` up in a deduplication
+journal (FNV-1a hash of the canonical arguments, so typed text is never stored; same ID with
+other arguments is `REQUEST_CONFLICT`; results that reported input are kept for the session,
+the others are bounded), then checks session, geometry epoch,
 snapshot, target, revision and actionability strictly against the published snapshot. A dry
 run (the default) is `simulated`. Live input needs the operator's policy
 (`actuation_enabled`, not stopped), a live actuator **and** a foreground application on the
