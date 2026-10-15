@@ -186,13 +186,15 @@ fn plan(s: &Scene) -> Plan {
 /// Every query of the plan against `search`: the owner windows, then the corridor windows.
 /// Each candidate is visited and counted, so the work cannot be optimised away.
 fn enumerate(search: &ControlSearch<'_>, plan: &Plan) -> usize {
+    // Each visited position goes through `black_box`: without it the optimiser folds the sum
+    // of a scan's positions into a closed form and the scan's query time is not measured.
     let mut sink = 0usize;
     for w in &plan.words {
-        search.owner_candidates(w, THRESHOLD, |i| sink = sink.wrapping_add(i));
+        search.owner_candidates(w, THRESHOLD, |i| sink = sink.wrapping_add(black_box(i)));
     }
     for g in &plan.gaps {
         search.any_overlapping(g, |i| {
-            sink = sink.wrapping_add(i);
+            sink = sink.wrapping_add(black_box(i));
             false
         });
     }
