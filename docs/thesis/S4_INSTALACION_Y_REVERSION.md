@@ -257,7 +257,7 @@ Esperado tras una retirada completa: ningún proceso, `False`, sólo el árbol d
 |---|---|---|
 | Sistema | Windows 11 x64; un monitor (la salida 0 de DXGI, `--output N`) | ADR-0008 |
 | Pantalla | sin rotar, formato BGRA8; una pantalla rotada se rechaza | `README.md` |
-| Escala | 100, 125 y 150 %; **IT-07 sin ejecutar** y el motor no comprueba la escala fuera del perfil | RNF-07, [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md) sesión C |
+| Escala | 100, 125 y 150 %; **IT-07 sin ejecutar**. Fuera del perfil el motor rechaza con `UNSUPPORTED_GEOMETRY` ([ADR-0031](../adr/0031-refuse-scaling-outside-the-dpi-profile.md)) | RNF-07, [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md) sesión C |
 | OCR | Windows OCR `es-ES`; sin recurso a otro idioma | `README.md` |
 | Detector | `icon_detect_v3` con una sola clase (rol `unknown`) | `S0_RESULTADOS.md` §4 |
 | Entrada | sólo `SendInput`; rechaza primer plano elevado, punto fuera de las ventanas, modificadores pulsados; sin `applicationframehost.exe` | ADR-0007, ADR-0020 |

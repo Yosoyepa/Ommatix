@@ -41,7 +41,7 @@ mod frame;
 mod geometry;
 
 pub use action::{Action, Key, MouseButton};
-pub use display::DisplayMapping;
+pub use display::{DisplayMapping, SUPPORTED_DPI, Scaling};
 pub use element::{Detection, ElementKind};
 pub use error::DomainError;
 pub use frame::Frame;

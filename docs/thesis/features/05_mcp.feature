@@ -32,3 +32,10 @@ Característica: Contrato MCP versionado
     Dado más elementos que el límite solicitado
     Cuando se devuelve una página de observación
     Entonces se informa truncated y un cursor vinculado al mismo snapshot
+
+  @BDD-54 @RNF-07 @IT-07
+  Escenario: BDD-54 Escala fuera de perfil
+    Dado un snapshot confirmado con la escala de 100 %
+    Cuando el monitor pasa a 175 % y el agente observa de nuevo
+    Entonces recibe UNSUPPORTED_GEOMETRY sin reintento y con siguiente paso stop
+    Y un clic sobre el snapshot anterior se rechaza con STALE_SNAPSHOT sin enviar nada

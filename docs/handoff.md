@@ -1,6 +1,6 @@
 # Estado del proyecto y relevo / Project status and handoff
 
-Fecha: 2026-10-15 (versión 1.0.69). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
+Fecha: 2026-10-15 (versión 1.0.72). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
 persona o agente continúe sin rehacer nada. La especificación es el dossier de
 [`docs/thesis/`](thesis/README.md); las reglas del repositorio están en
 [`AGENTS.md`](../AGENTS.md).
@@ -68,6 +68,7 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | SEC-02, B: con actuación viva, un `--session-id` fijo se rechaza al arrancar (rama `fix/sec02-fixed-session-id`, CHANGELOG 1.0.67): la raíz de composición lo refiere antes de abrir ningún adaptador, y los clientes `tools/s4/e2e_driver.py` y `e2e_dossier.py` ya no lo pasan a las corridas en vivo (pruebas `serve_argv` y `dossier_serve_argv`, y `sec_02_a_fixed_session_id_with_live_input_is_refused_before_serving`). Dry runs, simulación y `demo` lo admiten. Sin ejecución en vivo. | PR abierto |
 | — | Sesión B con `uia` sobre `main` (rama `docs/perf03-soak-uia-2`, CHANGELOG 1.0.66, [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §15): corrida de 120 minutos completa, sobre `745caff`, con la pantalla encendida y sin entrada. Conjunto de trabajo +1,25 MiB/h: cumple (≤ 10 MiB/h). Manejadores: pendiente positiva (un manejador más en el minuto 69): **no cumple** el criterio estricto del [capítulo 09 §9.7](thesis/09_EVALUACION_EXPERIMENTAL.md). RNF-06 y PERF-03 sin cambio de estado. | PR abierto |
 | — | Decisiones del responsable sobre RNF-05, PERF-02, RNF-06 y §6.7 (rama `docs/owner-decisions-1145`, CHANGELOG 1.0.69, [`thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md`](thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) §6.7 (e) y (f)): RNF-05 y RNF-06 pasan a `ACEPTADO_POR_ALCANCE` con nota de alcance; se marca la casilla 6 (rendimiento) y quedan sin marcar la 3 y la 7 pese a sus aceptaciones (decisión estricta del responsable, 2026-10-15 ~12:10: una aceptación no marca casillas; sólo la 10 las cuenta); la casilla 10 lista lo que sigue sin resolver ni aceptar. La ronda de regresión y la sesión A siguen programadas para hoy sin ejecutar; la sesión C de IT-07: el 150 % da `met_all` con la aplicación de prueba corregida (la primera ejecución falló por un límite de disposición, que una PR aparte corrige); el 100 % y el 125 % se repiten con la nueva aplicación. | PR abierto |
+| — | RNF-07, rechazo de la escala fuera de perfil (rama `feat/dpi-out-of-profile`, CHANGELOG 1.0.70, [ADR-0031](adr/0031-refuse-scaling-outside-the-dpi-profile.md)): el motor rechaza con `UNSUPPORTED_GEOMETRY` una escala conocida fuera de 100, 125 y 150 %, antes de publicar nada, y `tools/perf/dpi_probe.py` lee el código de error donde lo pone el protocolo. IT-07 sigue sin ejecutar. |
 
 Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.69)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de

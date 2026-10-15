@@ -169,7 +169,7 @@ The third continuation of the eleventh round ([CHANGELOG 1.0.46](docs/thesis/CHA
   operator enables it (below). The [overview](docs/architecture/overview.md#where-the-code-is-today) lists what
   remains.
 - First platform: **Windows 11 x64**, one monitor, DPI 100/125/150 %
-  ([ADR-0008](docs/adr/0008-one-real-platform-first.md), approved 2026-10-14). For this MVP the profile is DPI 100 % and one theme; 125 % and 150 % move to the next cut.
+  ([ADR-0008](docs/adr/0008-one-real-platform-first.md), approved 2026-10-14). For this MVP the profile is DPI 100 % and one theme; 125 % and 150 % move to the next cut. Outside 100, 125 and 150 % the engine refuses the observation with `UNSUPPORTED_GEOMETRY` ([ADR-0031](docs/adr/0031-refuse-scaling-outside-the-dpi-profile.md)).
 
 The blockers of that round are fixed offline ([CHANGELOG 1.0.36](docs/thesis/CHANGELOG.md); no live request, no input): the Calculator's Standard mode is read from a header that contains «estándar» or «standard» (its real name is not known yet), a read-only `--check-mode` reads the mode without ever creating the stop file, the test editor now obtains the Win32 keyboard focus (verified read-only: UI Automation reports the editor, not the desktop) and neither test app asks the toolkit for the foreground any more, because that request sent a synthetic Alt key (a safety finding, fixed), and the Explorer flow starts in `carpeta-b` and goes breadcrumb up, breadcrumb up, Back. None of it is confirmed with the engine or in a live run.
 

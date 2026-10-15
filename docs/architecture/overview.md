@@ -177,7 +177,7 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
 - *Capture* (`dxgi`, `--source dxgi --output N`): DXGI Desktop Duplication of one output in
   physical pixels (the process is per-monitor-v2 DPI aware). The desktop texture is copied
   to a staging texture and read row by row with its own stride; frames stay in memory. A
-  rotated output is refused; a change of size, DPI or origin bumps the geometry epoch; when
+  rotated output is refused; a scaling outside 100, 125 and 150 % is refused as `UNSUPPORTED_GEOMETRY` ([ADR-0031](../adr/0031-refuse-scaling-outside-the-dpi-profile.md)); a change of size, DPI or origin bumps the geometry epoch; when
   no desktop update arrives the last frame is returned again; the first capture after
   opening (or recreating) the duplication waits up to 500 ms for an update that carries a
   presented desktop image (`LastPresentTime != 0`) and fails rather than return a blank

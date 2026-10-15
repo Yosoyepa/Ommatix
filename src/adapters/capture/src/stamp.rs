@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ommatix_application::{CapturedFrame, Clock, PortError};
+use ommatix_domain::Scaling;
 use ommatix_domain::incremental::BgraFrame;
 
 /// Stamps the frames of one capturer.
@@ -48,6 +49,7 @@ impl Stamper {
         height: u32,
         mut rgba: Vec<u8>,
         captured_at: Duration,
+        scaling: Scaling,
     ) -> Result<CapturedFrame, PortError> {
         for p in rgba.as_chunks_mut::<4>().0 {
             p.swap(0, 2);
@@ -65,16 +67,22 @@ impl Stamper {
         })?;
         self.geometry_epoch = epoch;
         self.last_size = Some(size);
-        Ok(self.stamp(frame, captured_at))
+        Ok(self.stamp(frame, captured_at, scaling))
     }
 
     /// Stamps a frame that already carries its epoch.
-    pub fn stamp(&mut self, frame: BgraFrame, captured_at: Duration) -> CapturedFrame {
+    pub fn stamp(
+        &mut self,
+        frame: BgraFrame,
+        captured_at: Duration,
+        scaling: Scaling,
+    ) -> CapturedFrame {
         self.frame_seq += 1;
         CapturedFrame {
             frame,
             frame_seq: self.frame_seq,
             captured_at,
+            scaling,
         }
     }
 }
@@ -90,14 +98,32 @@ mod tests {
         let clock = Arc::new(ManualClock::new());
         let mut s = Stamper::new(clock.clone());
         let a = s
-            .stamp_rgba("t", 1, 1, vec![1, 2, 3, 4], clock.now())
+            .stamp_rgba("t", 1, 1, vec![1, 2, 3, 4], clock.now(), Scaling::Unknown)
             .unwrap();
         assert_eq!(a.frame.pixels(), &[3, 2, 1, 4]);
         assert_eq!((a.frame_seq, a.frame.geometry_epoch()), (1, 1));
-        let b = s.stamp_rgba("t", 1, 1, vec![0; 4], clock.now()).unwrap();
+        let b = s
+            .stamp_rgba("t", 1, 1, vec![0; 4], clock.now(), Scaling::Unknown)
+            .unwrap();
         assert_eq!((b.frame_seq, b.frame.geometry_epoch()), (2, 1));
-        assert!(s.stamp_rgba("t", 2, 2, vec![0; 3], clock.now()).is_err());
-        let c = s.stamp_rgba("t", 2, 1, vec![0; 8], clock.now()).unwrap();
+        assert!(
+            s.stamp_rgba("t", 2, 2, vec![0; 3], clock.now(), Scaling::Unknown)
+                .is_err()
+        );
+        let c = s
+            .stamp_rgba("t", 2, 1, vec![0; 8], clock.now(), Scaling::Unknown)
+            .unwrap();
         assert_eq!((c.frame_seq, c.frame.geometry_epoch()), (3, 2));
+    }
+
+    #[test]
+    fn the_scaling_given_to_the_stamper_travels_with_the_frame() {
+        let clock = Arc::new(ManualClock::new());
+        let mut s = Stamper::new(clock.clone());
+        let frame = BgraFrame::new(1, 1, 4, 1, vec![0; 4]).unwrap();
+        assert_eq!(
+            s.stamp(frame, clock.now(), Scaling::Dpi(144)).scaling,
+            Scaling::Dpi(144)
+        );
     }
 }

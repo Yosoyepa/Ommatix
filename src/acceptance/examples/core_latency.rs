@@ -467,6 +467,7 @@ impl FrameCapturer for Screen {
             frame: self.0[self.1.load(Ordering::Relaxed)].frame.clone(),
             frame_seq: self.2,
             captured_at: self.3.now(),
+            scaling: ommatix_domain::Scaling::Dpi(96),
         })
     }
 }

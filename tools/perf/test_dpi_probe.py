@@ -54,7 +54,11 @@ class FakeEngine:
     def call(self, name, arguments, timeout=0):
         self.calls.append(name)
         if self.error_code:
-            return ({"code": self.error_code}, True, {}, 1.0)
+            # The wire shape of a tool error (tool_error.output): the code sits under "error".
+            envelope = {"schema_version": "1.0", "status": "rejected",
+                        "error": {"code": self.error_code, "message": "refused",
+                                  "retryable": False, "next_step": "stop"}}
+            return (envelope, True, {}, 1.0)
         epoch = self.epochs.pop(0) if len(self.epochs) > 1 else self.epochs[0]
         elements = [{"label": label, "target_id": "t"} for label in self.labels]
         elements.append({"label": "the owner's own text", "target_id": "x"})
@@ -239,6 +243,16 @@ class Session(Case):
         self.assertEqual(record["criteria"]["out_of_profile"], "served_unflagged")
         self.assertFalse(record["criteria"]["met_all"])
         self.assertEqual(code, 1)
+
+    def test_the_refusal_code_is_read_where_the_wire_puts_it(self):
+        # Found by the 175 % review of PR #59: the probe read the code at the top level of the
+        # structured content, where a tool error never has it, so a real refusal was reported
+        # as refused_with_another_code.
+        envelope = {"schema_version": "1.0", "status": "rejected",
+                    "error": {"code": "UNSUPPORTED_GEOMETRY", "message": "refused",
+                              "retryable": False, "next_step": "stop"}}
+        self.assertEqual(probe.error_code_of(envelope), "UNSUPPORTED_GEOMETRY")
+        self.assertIsNone(probe.error_code_of({"geometry_epoch": 1}))
 
     def test_outside_the_profile_an_explicit_refusal_is_flagged(self):
         engine = FakeEngine(error_code="UNSUPPORTED_GEOMETRY")

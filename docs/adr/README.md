@@ -55,6 +55,7 @@ continuity abstain with a new ID and a recorded reason. ADR-0027, accepted the s
 | [0028](0028-operator-purge-file.md) | Let the operator purge the engine's state on demand, through a purge file honoured once per instance | Accepted (2026-10-15) |
 | [0029](0029-accepted-by-scope-requirement-status.md) | Record a requirement accepted by explicit scope change with the status ACEPTADO_POR_ALCANCE | Accepted (2026-10-15) |
 | [0030](0030-adaptive-full-or-regional-plan.md) | Choose between the full refresh and the regional plan with a measured cost rule (`adaptive_min_regions`), taking Algorithm 1's fallback earlier | Accepted (2026-10-15) |
+| [0031](0031-refuse-scaling-outside-the-dpi-profile.md) | Refuse a monitor scaling outside the dossier's DPI profile (100, 125, 150 %) with `UNSUPPORTED_GEOMETRY`, and carry the scaling with the frame | Accepted (2026-10-15) |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They
