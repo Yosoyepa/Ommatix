@@ -452,6 +452,11 @@ impl EditorApp {
         if self.seeker.is_seeking(since_start) {
             ui.ctx().request_repaint_after(FRONT_REQUEST_PERIOD);
         }
+        // With --decoy-focus the main field is not interactive: it never takes the keyboard focus,
+        // so no click on it, the operator's included, can move the focus and the caret into the
+        // frame the engine compares (the S4 decoy round's STALE_SNAPSHOT). Only the decoy's fields
+        // take it.
+        let main_field_interactive = self.editor.decoy.is_none();
         egui::CentralPanel::default().show(ui, |ui| {
             ui.add_space(60.0);
             ui.vertical_centered(|ui| {
@@ -460,6 +465,7 @@ impl EditorApp {
                 let field = ui.add(
                     egui::TextEdit::multiline(&mut self.editor.text)
                         .id(egui::Id::new(FIELD_ID))
+                        .interactive(main_field_interactive)
                         .char_limit(TEXT_LIMIT_CHARS)
                         .desired_rows(FIELD_ROWS)
                         .desired_width(FIELD_WIDTH)
@@ -1035,6 +1041,62 @@ mod tests {
             ctx.memory(egui::Memory::focused),
             Some(egui::Id::new(TARGET_FIELD_ID)),
             "the decoy kept the focus while the window had no operating system focus"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// With `--decoy-focus` the main field cannot take the keyboard focus. A click on it, the
+    /// operator's included, would otherwise move the focus and the caret into the frame the engine
+    /// compares, and the decoy case would be refused as `STALE_SNAPSHOT` (the S4 decoy round).
+    #[test]
+    fn the_main_field_cannot_take_the_focus_in_the_decoy_window() {
+        let root = temp_root();
+        let dir = run_dir(&root, "decoy-main");
+        let mut editor = Editor::new(SaveFolder::new(&dir, &root).unwrap());
+        editor.decoy = Some(Decoy::default());
+        let mut app = EditorApp {
+            editor,
+            started: Instant::now(),
+            maximized: true,
+            seeker: FocusSeeker::default(),
+        };
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        for step in 0..3 {
+            let _ = paint_frame(&ctx, &mut app, f64::from(step) * 0.01, true);
+        }
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new(FIELD_ID)));
+        let _ = paint_frame(&ctx, &mut app, 0.04, true);
+        assert_ne!(
+            ctx.memory(egui::Memory::focused),
+            Some(egui::Id::new(FIELD_ID)),
+            "the main field kept the keyboard focus in the decoy window"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Without the decoy the main field keeps the focus it is given, as before.
+    #[test]
+    fn the_main_field_keeps_the_focus_without_the_decoy() {
+        let root = temp_root();
+        let dir = run_dir(&root, "plain-main");
+        let mut app = EditorApp {
+            editor: Editor::new(SaveFolder::new(&dir, &root).unwrap()),
+            started: Instant::now(),
+            maximized: true,
+            seeker: FocusSeeker::default(),
+        };
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        for step in 0..3 {
+            let _ = paint_frame(&ctx, &mut app, f64::from(step) * 0.01, true);
+        }
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new(FIELD_ID)));
+        let _ = paint_frame(&ctx, &mut app, 0.04, true);
+        assert_eq!(
+            ctx.memory(egui::Memory::focused),
+            Some(egui::Id::new(FIELD_ID)),
+            "the main field lost the keyboard focus without the decoy"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
