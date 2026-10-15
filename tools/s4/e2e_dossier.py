@@ -96,11 +96,6 @@ DEEP_FILE = ("dummy.txt", b"Ommatix E2E: archivo de prueba.\n")
 FORBIDDEN_APPLICATIONS = ("applicationframehost.exe",)
 
 WM_CLOSE = 0x0010
-GA_ROOT = 2
-user32.WindowFromPoint.argtypes = [wintypes.POINT]
-user32.WindowFromPoint.restype = wintypes.HWND
-user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
-user32.GetAncestor.restype = wintypes.HWND
 user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 user32.PostMessageW.restype = wintypes.BOOL
 user32.IsWindow.argtypes = [wintypes.HWND]
@@ -389,6 +384,9 @@ def explorer_flow(root_name: str, back_name: str = EXPLORER_BACK,
             (NavLabel(back_name, ("Button",), "top_bar", back_automation_id), NOT_BY_OCR,
              (FOLDER_A,)),
         ],
+        # Every click of this flow rebuilds the breadcrumb or the history (ADR-0022): the closed
+        # list of driver.NAVIGATING_STEPS, whose success criterion is the folder check above.
+        "navigating": driver.NAVIGATING_STEPS["explorer"],
         "vocabulary": {FOLDER_A, FOLDER_B, root_name, back_name},
     }
 
@@ -444,15 +442,6 @@ def explorer_windows() -> set[int]:
 
     user32.EnumWindows(driver.WNDENUMPROC(visit), 0)
     return found
-
-
-def root_window_at(point: tuple[int, int]) -> int | None:
-    """The top-level window that receives a click at `point` (WindowFromPoint, GA_ROOT)."""
-    hwnd = user32.WindowFromPoint(wintypes.POINT(int(point[0]), int(point[1])))
-    if not hwnd:
-        return None
-    root = user32.GetAncestor(hwnd, GA_ROOT)
-    return int(root or hwnd)
 
 
 def is_recorded_explorer_window(hwnd: int) -> bool:
@@ -515,9 +504,6 @@ class DossierProtocol(driver.Protocol):
     def is_our_explorer_window(self, hwnd: int) -> bool:
         return is_recorded_explorer_window(hwnd)
 
-    def window_under(self, point: tuple[int, int]) -> int | None:
-        return root_window_at(point)
-
     def front_window(self) -> dict:
         return driver.foreground()
 
@@ -566,6 +552,11 @@ class DossierProtocol(driver.Protocol):
         if found and found[0]["actionability"] == "confirmed":
             return spec, found[0]
         return spec, None
+
+    def label_control_types(self, label, target):
+        if isinstance(label, NavLabel):
+            return label.control_types
+        return super().label_control_types(label, target)
 
     def identity_lookup(self, hwnd, label, target):
         if not isinstance(label, NavLabel):

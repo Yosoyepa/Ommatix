@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 21
+PASS adrs_encontradas 22
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -98,6 +98,7 @@ PASS referencias:0018-two-phase-type-with-element-level-focus-confirmation.md []
 PASS referencias:0019-concurrent-observation-stages.md []
 PASS referencias:0020-operator-scope-on-windows.md []
 PASS referencias:0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md []
+PASS referencias:0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 
@@ -363,6 +364,7 @@ PASS doc01_adr_pruebas:0018-two-phase-type-with-element-level-focus-confirmation
 PASS doc01_adr_pruebas:0019-concurrent-observation-stages.md []
 PASS doc01_adr_pruebas:0020-operator-scope-on-windows.md []
 PASS doc01_adr_pruebas:0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md []
+PASS doc01_adr_pruebas:0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md []
 PASS doc01_prueba_enlazada:UT-01 
 PASS doc01_prueba_enlazada:UT-02 
 PASS doc01_prueba_enlazada:UT-03 
