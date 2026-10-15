@@ -40,7 +40,9 @@ impl Sandbox {
         self.0.join("tmp")
     }
 
-    /// Runs the binary with `args` and `input` on stdin, to the end of stdin.
+    /// Runs the binary with `args` and `input` on stdin, to the end of stdin. A binary that
+    /// exits before reading all of stdin (a startup refusal) closes the pipe: that is its
+    /// answer, not a harness failure, so a broken pipe while writing is ignored.
     fn run(&self, args: &[&str], input: &str) -> Output {
         let mut child = Command::new(BINARY)
             .args(args)
@@ -53,12 +55,18 @@ impl Sandbox {
             .stderr(Stdio::piped())
             .spawn()
             .expect("the binary starts");
-        child
+        let written = child
             .stdin
             .take()
             .expect("stdin")
-            .write_all(input.as_bytes())
-            .expect("the request is written");
+            .write_all(input.as_bytes());
+        if let Err(error) = written {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "the request is written: {error}"
+            );
+        }
         child.wait_with_output().expect("the binary ends")
     }
 }
@@ -305,4 +313,19 @@ fn sec_06_a_tampered_prototypes_file_stops_serve_before_it_serves() {
     let stderr = String::from_utf8(refused.stderr).unwrap();
     assert!(stderr.contains("SHA-256 mismatch"), "{stderr}");
     assert!(!stderr.contains("Delete everything"), "{stderr}");
+}
+
+/// The harness itself: `serve` refusing to start (here, a configuration file that does not
+/// exist) exits without reading stdin, and a request larger than any pipe buffer then meets
+/// a closed pipe. The refusal must be reported as the binary's exit, not as a panic of the
+/// harness (the race that failed `sec_06_a_tampered_prototypes_file_stops_serve_before_it_serves`
+/// on CI).
+#[test]
+fn a_refusal_before_reading_stdin_is_reported_as_the_binarys_exit() {
+    let sandbox = Sandbox::new("closed-pipe");
+    let missing = sandbox.cwd().join("missing.toml");
+    let request = "x".repeat(4 * 1024 * 1024);
+    let refused = sandbox.run(&["serve", "--config", missing.to_str().unwrap()], &request);
+    assert!(!refused.status.success());
+    assert_eq!(lines(&refused.stdout).len(), 0);
 }
