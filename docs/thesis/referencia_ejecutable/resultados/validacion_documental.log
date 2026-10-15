@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 28
+PASS adrs_encontradas 29
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -105,6 +105,7 @@ PASS referencias:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
 PASS referencias:0026-native-identity-discriminant.md []
 PASS referencias:0027-candidate-enumeration-with-an-rstar-index.md []
 PASS referencias:0028-operator-purge-file.md []
+PASS referencias:0029-accepted-by-scope-requirement-status.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 
@@ -350,11 +351,11 @@ PASS doc01_adr_existen:RNF-01 ADR-0001
 PASS doc01_propietario:RNF-01 
 PASS doc01_evidencia_existe:RNF-01 []
 PASS doc01_pruebas_existen:RNF-02 []
-PASS doc01_adr_existen:RNF-02 ADR-0003; ADR-0009
+PASS doc01_adr_existen:RNF-02 ADR-0003; ADR-0009; ADR-0029
 PASS doc01_propietario:RNF-02 
 PASS doc01_evidencia_existe:RNF-02 []
 PASS doc01_pruebas_existen:RNF-03 []
-PASS doc01_adr_existen:RNF-03 ADR-0007; ADR-0008
+PASS doc01_adr_existen:RNF-03 ADR-0007; ADR-0008; ADR-0029
 PASS doc01_propietario:RNF-03 
 PASS doc01_evidencia_existe:RNF-03 []
 PASS doc01_pruebas_existen:RNF-04 []
@@ -370,7 +371,7 @@ PASS doc01_adr_existen:RNF-06 ADR-0010
 PASS doc01_propietario:RNF-06 
 PASS doc01_evidencia_existe:RNF-06 []
 PASS doc01_pruebas_existen:RNF-07 []
-PASS doc01_adr_existen:RNF-07 ADR-0008
+PASS doc01_adr_existen:RNF-07 ADR-0008; ADR-0029
 PASS doc01_propietario:RNF-07 
 PASS doc01_evidencia_existe:RNF-07 []
 PASS doc01_pruebas_existen:RNF-08 []
@@ -427,6 +428,7 @@ PASS doc01_adr_pruebas:0025-bound-authorisations-by-snapshot-and-evidence-age.md
 PASS doc01_adr_pruebas:0026-native-identity-discriminant.md []
 PASS doc01_adr_pruebas:0027-candidate-enumeration-with-an-rstar-index.md []
 PASS doc01_adr_pruebas:0028-operator-purge-file.md []
+PASS doc01_adr_pruebas:0029-accepted-by-scope-requirement-status.md []
 PASS doc01_prueba_enlazada:UT-01 
 PASS doc01_prueba_enlazada:UT-02 
 PASS doc01_prueba_enlazada:UT-03 
@@ -533,5 +535,8 @@ PASS doc01_prueba_enlazada:IDX-13
 PASS doc01_prueba_enlazada:IDX-14 
 PASS doc01_estados_de_pruebas []
 PASS doc01_estados_de_escenarios []
-PASS doc01_estado_de_requisitos 
+PASS doc01_estado_de_requisitos []
+PASS doc01_nota_de_alcance:RNF-02 EV-01 sin ejecutar: el corpus de 300 capturas no existe (docs/thesis/09_EVALUACION_EXPERIMENTAL.md); fuera del MVP por el alcance reducido (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado c). Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c)
+PASS doc01_nota_de_alcance:RNF-03 Protocolo reducido de S4 (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado b): E2E-01, E2E-02, E2E-03, S4R-02 y S4R-03, diez de diez corridas puntuadas cada uno y sin falsos éxitos (docs/thesis/S4_ACEPTACION_REDUCIDA.md). EV-02 (450 corridas) sin ejecutar: pasa al próximo corte. Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c)
+PASS doc01_nota_de_alcance:RNF-07 IT-07 sin ejecutar; fuera del MVP (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado c). Perfil medido: docs/thesis/plantillas/hardware_profile.s0.json; sesión preparada: docs/thesis/S4_SESIONES_PENDIENTES.md §C y tools/perf/dpi_probe.py. Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c)
 PASS reporte_oraculo_aprobado Se lee el informe previo; para volver a ejecutar use referencia_ejecutable/run_tests.py

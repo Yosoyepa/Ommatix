@@ -9,9 +9,10 @@
 //!   pinned, and every dependency has a licence.
 //! - DOC-01 (traceability): every planned test marked implemented in Rust has a Rust test
 //!   that carries its ID, every Rust test named after a planned test names one that exists,
-//!   the scenarios the acceptance suite runs are those the matrix says it runs, and every
-//!   status is from the vocabulary of the matrices. (The links between requirements, tests,
-//!   evidence and ADRs are checked by `docs/thesis/validar_paquete.py`.)
+//!   the scenarios the acceptance suite runs are those the matrix says it runs, every status
+//!   is from the vocabulary of the matrices, and a requirement accepted by a scope change
+//!   cites its scope note (ADR-0029). (The links between requirements, tests, evidence and
+//!   ADRs are checked by `docs/thesis/validar_paquete.py`.)
 //!
 //! They need no screen, no model and no input.
 
@@ -729,6 +730,14 @@ const SCENARIO_STATUSES: &[&str] = &[
     "EJECUTADO_SOBRE_CONTRATO_S3_DOBLE",
     "EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL",
 ];
+/// The statuses of the requirements. `ACEPTADO_POR_ALCANCE` (ADR-0029) marks a requirement the
+/// owner accepted by an explicit scope change (chapter 06 §6.7): it is not met, and its
+/// evidence cites the note that accepts it.
+const REQUIREMENT_STATUSES: &[&str] = &[
+    "PENDIENTE_IMPLEMENTACION_O_VALIDACION",
+    "ACEPTADO_POR_ALCANCE",
+];
+const SCOPE_ACCEPTED: &str = "ACEPTADO_POR_ALCANCE";
 
 fn rust_sources() -> String {
     files("src", &["rs"], &[])
@@ -850,10 +859,114 @@ fn doc_01_every_status_is_from_the_vocabulary_of_the_matrices() {
         );
     }
     for row in csv("docs/thesis/matrices/requisitos_trazabilidad.csv") {
-        assert_eq!(
-            row["estado_producto"], "PENDIENTE_IMPLEMENTACION_O_VALIDACION",
-            "{}",
-            row["id"]
+        assert!(
+            REQUIREMENT_STATUSES.contains(&row["estado_producto"].as_str()),
+            "{}: {}",
+            row["id"],
+            row["estado_producto"]
         );
     }
+}
+
+/// The scope note a requirement accepted by a scope change cites (ADR-0029): the scope block
+/// of chapter 06 (§6.7), or a CHANGELOG entry written `CHANGELOG 1.0.N` that exists. Returns
+/// the problem with the row, if it has one. A row with any other status needs no note.
+fn scope_note_problem(
+    row: &BTreeMap<String, String>,
+    scope_block: &str,
+    changelog: &str,
+) -> Option<String> {
+    if row["estado_producto"] != SCOPE_ACCEPTED {
+        return None;
+    }
+    let evidence = &row["evidencia"];
+    let cites_block = evidence.contains("docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md")
+        && evidence.contains("§6.7")
+        && scope_block.contains("\n## 6.7 ");
+    let cites_entry = cited_changelog_versions(evidence)
+        .iter()
+        .any(|version| changelog.contains(&format!("\n## {version} ")));
+    (!cites_block && !cites_entry).then(|| {
+        format!(
+            "{} is accepted by scope but its evidence cites no scope note: {evidence}",
+            row["id"]
+        )
+    })
+}
+
+/// The versions a text cites as `CHANGELOG 1.0.N`.
+fn cited_changelog_versions(text: &str) -> Vec<String> {
+    text.split("CHANGELOG ")
+        .skip(1)
+        .map(|rest| {
+            rest.chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect::<String>()
+                .trim_end_matches('.')
+                .to_owned()
+        })
+        .filter(|version| !version.is_empty())
+        .collect()
+}
+
+/// DOC-01 (ADR-0029): every requirement the owner accepted by a scope change cites its scope
+/// note, and the requirements that carry the status are the ones the owner named.
+#[test]
+fn doc_01_a_requirement_accepted_by_scope_cites_its_scope_note() {
+    let scope_block = read("docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md");
+    let changelog = read("docs/thesis/CHANGELOG.md");
+    let rows = csv("docs/thesis/matrices/requisitos_trazabilidad.csv");
+    for row in &rows {
+        assert_eq!(scope_note_problem(row, &scope_block, &changelog), None);
+    }
+    let accepted: BTreeSet<String> = rows
+        .iter()
+        .filter(|row| row["estado_producto"] == SCOPE_ACCEPTED)
+        .map(|row| row["id"].clone())
+        .collect();
+    let named = BTreeSet::from(["RNF-02", "RNF-03", "RNF-07"].map(str::to_owned));
+    assert_eq!(accepted, named);
+}
+
+/// DOC-01 (ADR-0029): the rule refuses an acceptance with no note, or with a note that does
+/// not resolve, and leaves the other statuses alone.
+#[test]
+fn doc_01_the_scope_rule_refuses_an_acceptance_without_a_note() {
+    let scope_block = read("docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md");
+    let changelog = read("docs/thesis/CHANGELOG.md");
+    let row = |status: &str, evidence: &str| {
+        BTreeMap::from([
+            ("id".to_owned(), "RNF-99".to_owned()),
+            ("estado_producto".to_owned(), status.to_owned()),
+            ("evidencia".to_owned(), evidence.to_owned()),
+        ])
+    };
+    let refused = [
+        "EV-99 sin ejecutar; fuera del MVP",
+        "fuera del MVP (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado c)",
+        "aceptado por cambio de alcance: CHANGELOG 1.0.999",
+        "aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md (c)",
+    ];
+    for evidence in refused {
+        assert!(
+            scope_note_problem(&row(SCOPE_ACCEPTED, evidence), &scope_block, &changelog).is_some(),
+            "accepted without a note: {evidence}"
+        );
+    }
+    let accepted = [
+        "aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c)",
+        "aceptado por cambio de alcance; CHANGELOG 1.0.60",
+    ];
+    for evidence in accepted {
+        assert_eq!(
+            scope_note_problem(&row(SCOPE_ACCEPTED, evidence), &scope_block, &changelog),
+            None,
+            "{evidence}"
+        );
+    }
+    let pending = row(
+        "PENDIENTE_IMPLEMENTACION_O_VALIDACION",
+        "EV-99 sin ejecutar",
+    );
+    assert_eq!(scope_note_problem(&pending, &scope_block, &changelog), None);
 }

@@ -168,7 +168,17 @@ def main() -> int:
           str(sorted({x['estado_aceptacion_producto'] for x in planned}-plan_statuses)))
     check('doc01_estados_de_escenarios',all(x['status'] in scenario_statuses for x in scenarios),
           str(sorted({x['status'] for x in scenarios}-scenario_statuses)))
-    check('doc01_estado_de_requisitos',{x['estado_producto'] for x in requirements}=={'PENDIENTE_IMPLEMENTACION_O_VALIDACION'})
+    # ADR-0029: un requisito aceptado por cambio de alcance cita la nota de alcance (§6.7 o una entrada de CHANGELOG que existe).
+    requirement_statuses={'PENDIENTE_IMPLEMENTACION_O_VALIDACION','ACEPTADO_POR_ALCANCE'}
+    check('doc01_estado_de_requisitos',all(x['estado_producto'] in requirement_statuses for x in requirements),
+          str(sorted({x['estado_producto'] for x in requirements}-requirement_statuses)))
+    scope_block=(ROOT/'06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md').read_text(encoding='utf-8')
+    changelog=(ROOT/'CHANGELOG.md').read_text(encoding='utf-8')
+    for x in requirements:
+        if x['estado_producto']=='ACEPTADO_POR_ALCANCE':
+            cites_block='docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md' in x['evidencia'] and '§6.7' in x['evidencia'] and '\n## 6.7 ' in scope_block
+            cites_entry=any(f'\n## {v} ' in changelog for v in re.findall(r'CHANGELOG (1\.0\.\d+)',x['evidencia']))
+            check('doc01_nota_de_alcance:'+x['id'],cites_block or cites_entry,x['evidencia'])
     oracle=load('referencia_ejecutable/resultados/oraculo_report.json')
     check('reporte_oraculo_aprobado',oracle.get('success') is True and oracle.get('tests_run')==48,
           'Se lee el informe previo; para volver a ejecutar use referencia_ejecutable/run_tests.py')

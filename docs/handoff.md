@@ -1,6 +1,6 @@
 # Estado del proyecto y relevo / Project status and handoff
 
-Fecha: 2026-10-15 (versión 1.0.59). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
+Fecha: 2026-10-15 (versión 1.0.63). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
 persona o agente continúe sin rehacer nada. La especificación es el dossier de
 [`docs/thesis/`](thesis/README.md); las reglas del repositorio están en
 [`AGENTS.md`](../AGENTS.md).
@@ -62,10 +62,12 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | Sesión B con `uia` sobre `main` (rama `docs/perf03-soak-uia`, CHANGELOG 1.0.59, [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §14): intento bloqueado antes de la corrida de 120 minutos. El ensayo de un minuto no capturó la pantalla (`CAPTURE_UNAVAILABLE` en todas las observaciones, con y sin `uia`); causa probable, no verificada: el apagado de pantalla de 15 minutos. Sin cifras; PERF-03 y RNF-06 sin cambio. Desviaciones declaradas: auxiliar de primer plano fuera del repositorio y `--foreground-wait 30`. | PR abierto |
 | — | Borrado bajo demanda del operador (rama `feat/operator-purge`, CHANGELOG 1.0.60, [ADR-0028](adr/0028-operator-purge-file.md), aprobada el 15 de octubre de 2026): `[safety] purge_file`, apagado por defecto. Al crearlo, el motor borra su estado y su caché en la siguiente petición, una vez por cada archivo nuevo, sin terminar la sesión y sin borrar el archivo (SEC-07, BDD-53; [capítulo 08 §8.4](thesis/08_SEGURIDAD_Y_PRIVACIDAD.md)). Pruebas sobre dobles y archivos temporales, **sin ejecución en vivo**. Aprobar la ADR-0028 es decisión del responsable (§6.7, decisión 2). | PR abierto |
 | — | Umbral del responsable para RNF-06 (rama `docs/rnf06-threshold`, CHANGELOG 1.0.62; [capítulo 09 §9.7](thesis/09_EVALUACION_EXPERIMENTAL.md)): conjunto de trabajo de no más de 10 MiB/h y manejadores sin crecimiento, por defecto en `tools/perf/soak.py` (`criteria` juzga esos dos; la cota de la cola sigue sin fijar, decisión 9). La corrida de [S0 §12](thesis/S0_RESULTADOS.md) los cumple en sus condiciones, pero el umbral se fijó después de leer su pendiente y no es un veredicto sobre RNF-06. Casilla 7 sin marcar. Sin ejecución en vivo ni entrada. | PR abierto |
+| — | Estado `ACEPTADO_POR_ALCANCE` (rama `feat/scope-accepted-status`, CHANGELOG 1.0.63, [ADR-0029](adr/0029-accepted-by-scope-requirement-status.md)) para RNF-02 (EV-01), RNF-03 (EV-02) y RNF-07 (IT-07), aceptados por cambio de alcance (capítulo 06 §6.7 (c)). Lo registra la matriz con su nota de alcance; `validar_paquete.py` y DOC-01 comprueban que la nota existe. Ninguna casilla cambia y RNF-05 y RNF-08 conservan su estado. | PR abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.61)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.63)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
-aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
+aceptación, salvo RNF-02, RNF-03 y RNF-07, aceptados por cambio de alcance (`ACEPTADO_POR_ALCANCE`,
+ADR-0029): eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
 en parte, IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05. IT-06, SEC-03, SEC-04 y SEC-06 están
 implementadas en Rust sobre dobles, el escritorio simulado y archivos temporales (1.0.35), sin
@@ -283,7 +285,7 @@ La tercera continuación de la undécima ronda (1.0.46, rama `docs/s4-eleventh-r
 4. **Pendientes que no están en el alcance cedido**: el borrado bajo demanda del operador, sin terminar la sesión (capítulo 08 §8.4; decisión 2); la parte de percepción de PERF-02, que ya tiene p99 en S0 §12 pero no la variante de caché (B2) ni la igualdad de modelos; y SEC-02, SEC-05 e IT-01 a IT-05 en parte. La prueba diferencial del diferenciador (capítulo 05 §5.5) está hecha desde 1.0.53.
 5. **Próximo corte** (fuera de este MVP): EV-01, EV-02, IT-07 y el corpus de REL-01, con el plan del paquete Paper (INC-00 a INC-09; no se copia aquí). RNF-05 sigue como incumplimiento documentado; con `uia` y una animación de 30 ms su caso de dos regiones da 186,3 ms (decisión 5). IT-07 y su sesión con el responsable presente son la decisión 3, y INC-07 la decisión 4 (no autorizada).
 
-Las ocho decisiones están en [06 §6.7](thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md), con la evidencia que el responsable necesita para cada una. El vocabulario de estado de los requisitos (decisión 8) explica por qué ningún RF/RNF cambia de estado aunque tenga evidencia.
+Las ocho decisiones están en [06 §6.7](thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md), con la evidencia que el responsable necesita para cada una. El vocabulario de estado de los requisitos (decisión 8) está resuelto desde 1.0.63: RNF-02, RNF-03 y RNF-07 llevan `ACEPTADO_POR_ALCANCE` ([ADR-0029](adr/0029-accepted-by-scope-requirement-status.md)), y ningún otro RF/RNF cambia de estado: la evidencia parcial no basta para marcarlo.
 
 **Fuera del cierre del MVP, pendientes tras INC-02 (1.0.57):** INC-07 (política adaptativa entre refresco completo y regional, no autorizada); un control B0 frente a B0 del acuerdo; la captura de `full` y el residuo de PERF-01; investigar con `uia` la pérdida de elementos y separar la causa de la lectura lenta de UIA. Hechos en 1.0.57: la repetición con `uia`, la atribución de la pérdida de elementos y el `-0.0`. Detalle en [`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §13.13.
 
