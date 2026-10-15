@@ -217,7 +217,8 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   [ADR-0017](../adr/0017-ui-automation-evidence-fused-with-vision.md)): the UI Automation tree
   of the foreground window the actuator attests (the `ApplicationFrameHost` frame resolves to
   its hosted app), read once per observation inside the planned regions, bounded by elements,
-  depth and time, through the safe `uiautomation` crate (no `unsafe` of our own; the crate's
+  depth and time (the window with the keyboard focus first, each window shallowest level
+  first, so a walk cut short loses the deepest nodes), through the safe `uiautomation` crate (no `unsafe` of our own; the crate's
   input and pattern calls are forbidden by the adapter's `clippy.toml`). Evidence, not a
   replacement: an enabled, on-screen element with an action pattern is `confirmed` with its
   role and name (`label_source: accessibility`), the detector boxes that are the same control

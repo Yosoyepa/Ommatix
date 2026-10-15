@@ -314,6 +314,20 @@ const VALUE_TEXT: f32 = 64.0;
 const HEADING_TEXT: f32 = 40.0;
 const FIELD_WIDTH: f32 = 900.0;
 const FIELD_ROWS: usize = 6;
+/// The field's identity, so that a test can give it the keyboard focus without any input.
+const FIELD_ID: &str = "editor-field";
+
+/// The look of the editor, set once before the first frame.
+///
+/// The text caret does not blink (E2E-02, tenth round): the engine accepts an action only
+/// when a frame captured right before delivery equals the committed base, and a blinking
+/// caret changes the screen every half second, so every click after the typing was refused
+/// `STALE_SNAPSHOT`. A caret that stays on is part of the controlled application, not a
+/// relaxation of the engine's freshness gate.
+fn configure(ctx: &egui::Context) {
+    ctx.set_theme(egui::Theme::Light);
+    ctx.all_styles_mut(|style| style.visuals.text_cursor.blink = false);
+}
 
 struct EditorApp {
     editor: Editor,
@@ -324,6 +338,12 @@ struct EditorApp {
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.show(ui);
+    }
+}
+
+impl EditorApp {
+    fn show(&mut self, ui: &mut egui::Ui) {
         let before = self.editor.title();
         if !self.maximized {
             // Once: the window maximizes itself like the test application does.
@@ -352,6 +372,7 @@ impl eframe::App for EditorApp {
                 ui.add_space(30.0);
                 let field = ui.add(
                     egui::TextEdit::multiline(&mut self.editor.text)
+                        .id(egui::Id::new(FIELD_ID))
                         .char_limit(TEXT_LIMIT_CHARS)
                         .desired_rows(FIELD_ROWS)
                         .desired_width(FIELD_WIDTH)
@@ -405,7 +426,7 @@ fn main() -> eframe::Result {
         "ommatix-testeditor",
         options,
         Box::new(|cc| {
-            cc.egui_ctx.set_theme(egui::Theme::Light);
+            configure(&cc.egui_ctx);
             Ok(Box::new(EditorApp {
                 editor,
                 started: Instant::now(),
@@ -505,7 +526,7 @@ mod tests {
         let mut seeker = FocusSeeker::default();
         assert_eq!(seeker.step(ms(600), false), Some(Reshow::Hide));
         assert_eq!(seeker.step(ms(800), false), Some(Reshow::Show));
-        assert_eq!(seeker.step(ms(600) + RESHOW_PERIOD - ms(1), false), None);
+        assert_eq!(seeker.step(ms(599) + RESHOW_PERIOD, false), None);
         assert_eq!(
             seeker.step(ms(600) + RESHOW_PERIOD, false),
             Some(Reshow::Hide)
@@ -813,5 +834,87 @@ mod tests {
         folded.sort();
         folded.dedup();
         assert_eq!(folded.len(), n);
+    }
+
+    /// What the editor paints, frame by frame, with the field holding the keyboard focus and
+    /// the window in front, at the given times (seconds). No input reaches the OS: the focus
+    /// is given to the field inside the toolkit's own context. `look` sets the context up like
+    /// `configure` does, or like the toolkit's default.
+    fn painted_at(times: &[f64], look: impl Fn(&egui::Context)) -> Vec<String> {
+        let root = temp_root();
+        let dir = run_dir(&root, "caret");
+        let mut app = EditorApp {
+            editor: Editor::new(SaveFolder::new(&dir, &root).unwrap()),
+            started: Instant::now(),
+            maximized: true,
+            seeker: FocusSeeker::default(),
+        };
+        app.editor.text.push_str("hola");
+        let ctx = egui::Context::default();
+        look(&ctx);
+        let mut frame = |time: f64| {
+            let mut raw = egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1920.0, 1080.0),
+                )),
+                ..Default::default()
+            };
+            raw.viewports.insert(
+                egui::ViewportId::ROOT,
+                egui::ViewportInfo {
+                    focused: Some(true),
+                    ..Default::default()
+                },
+            );
+            let mut output = ctx.run_ui(raw, |ui| app.show(ui));
+            // The textures are not uploaded anywhere: the toolkit insists they are handled.
+            output.textures_delta.clear();
+            format!("{:?}", output.shapes)
+        };
+        // Fonts and layout settle in the first frames; the field then takes the focus.
+        for step in 0..3 {
+            let _ = frame(f64::from(step) * 0.01);
+        }
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new(FIELD_ID)));
+        let _ = frame(0.04);
+        let painted = times.iter().map(|t| frame(*t)).collect();
+        let _ = std::fs::remove_dir_all(&root);
+        painted
+    }
+
+    /// Instants spread over two blink periods, one in each half-second of the cycle.
+    const SAMPLES: [f64; 6] = [0.1, 0.3, 0.6, 0.9, 1.2, 1.6];
+
+    /// E2E-02, tenth round: with the field focused, the screen must not change by itself, or
+    /// the engine's freshness gate refuses every action after the typing (`STALE_SNAPSHOT`).
+    #[test]
+    fn a_focused_field_paints_the_same_frame_at_any_time() {
+        let painted = painted_at(&SAMPLES, configure);
+        assert!(
+            painted.windows(2).all(|pair| pair[0] == pair[1]),
+            "the editor paints different frames with nothing happening"
+        );
+    }
+
+    /// The cause, kept as a test of the premise: the toolkit's own default blinks the caret, so
+    /// the same scene differs between the on and the off half of its cycle.
+    #[test]
+    fn the_toolkits_default_caret_blinks() {
+        let painted = painted_at(&SAMPLES, |ctx| ctx.set_theme(egui::Theme::Light));
+        assert!(
+            painted.windows(2).any(|pair| pair[0] != pair[1]),
+            "the default caret did not change the frame: the test above proves nothing"
+        );
+    }
+
+    #[test]
+    fn the_caret_stays_on_in_both_themes() {
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            assert!(!ctx.style_of(theme).visuals.text_cursor.blink, "{theme:?}");
+        }
     }
 }
