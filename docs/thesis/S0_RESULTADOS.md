@@ -620,7 +620,7 @@ En `incr1` e `incr2` el texto de la etiqueta animada (`Tic nnnn`) difiere entre 
 1. **Una región: B1 es más rápida.** En `incr1` la mediana baja de 89,5 a 70,8 ms (−18,6 ms, −21 %). El ahorro es del detector: con una región tarda 64 ms y con el frame completo 83 ms, aunque las dos entradas miden 1280×1280. El OCR baja de 36 a 3 ms, pero corre a la vez que la detección: en las dos variantes la detección es el camino crítico. Por qué una región cuesta menos en el detector no queda establecido: los registros no separan preprocesado, inferencia y postproceso. La hipótesis es que el frame completo se reduce antes de la entrada y el recorte no (§6), pero no está verificada.
 2. **Dos regiones: B1 es más lenta.** En `incr2` la mediana sube de 89,3 a 134,8 ms (+45,8 ms, +51 %). Cada región es una inferencia completa: 128 ms para dos, frente a 82 ms del frame completo. Con el resto de B1 casi constante (6,5 ms) y unos 64 ms por región, la igualdad con el refresco completo cae entre una y dos regiones (≈ 1,3). Es una estimación de dos puntos, no una medida con tres o más regiones. A partir de dos regiones, la incrementalidad tal como está construida no ahorra.
 3. **Refresco completo (control): no hay ventaja de B1.** Con un velo sobre toda la ventana, la detección (80 ms en ambas) y el OCR (34 ms en ambas) cuestan lo mismo. La diferencia de −9,9 ms viene de la captura (−8,2 ms) y de la planificación (−1,6 ms: B0 calcula la diferencia de teselas antes de forzar el refresco, según ADR-0024, y B1 decide por área en 0,25 ms). Ninguna se debe al algoritmo incremental. Además B1 sólo analizó 66 observaciones, las que siguieron a un cambio del velo, así que no es una muestra al azar de las de B0. Por qué la captura de B0 espera más no queda establecido.
-4. **Acuerdo y calidad.** Con dos regiones B1 publica una mediana de 67 elementos frente a 85 de B0: 717 de sus 720 observaciones tienen entre 66 y 69. Con una región la mediana baja de 85 a 84. El registro no guarda cajas, así que no dice qué elementos faltan. El mecanismo está en el código: `merged` (`src/application/src/engine/observe.rs`, líneas 78 a 112) descarta todo control o palabra cuya caja solape una región replanificada, incluido su halo, y sólo conserva lo que la detección del recorte encuentra dentro. Si el recorte no reproduce lo que el frame completo detecta (§10.2), se pierden elementos. Esto no es una medida de precisión, y no se puede atribuir sin las cajas: es el primer punto que hay que investigar antes de llamar equivalente a B1.
+4. **Acuerdo y calidad.** Con dos regiones B1 publica una mediana de 67 elementos frente a 85 de B0: 717 de sus 720 observaciones tienen entre 66 y 69. Con una región la mediana baja de 85 a 84. El registro no guarda cajas, así que no dice qué elementos faltan. El mecanismo está en el código: `merged` (`src/application/src/engine/observe.rs`, líneas 78 a 112) descarta todo control o palabra cuya caja solape una región replanificada, incluido su halo, y sólo conserva lo que la detección del recorte encuentra dentro. Si el recorte no reproduce lo que el frame completo detecta (§10.2), se pierden elementos. Esto no es una medida de precisión. La causa se investigó en 1.0.57 con las cajas (13.10): es el comportamiento del detector sobre recortes, no un defecto del plan.
 5. **Qué ahorra B1 y qué no.** Ahorra cuando cambia una región, que es el caso de la prueba más sencillo. No ahorra con dos o más regiones en este modelo y esta GPU. Ahorra en las observaciones sin cambio (unos 5 ms, sin detector), pero esas no entran en la comparación de latencia (§9.9, límite 4). La captura, la publicación y la fusión no cambian. B0 paga unos 2 ms de planificación que un refresco de producción por área no paga (punto 3): B0 es una línea de base de experimento, no un modo de producción (ADR-0024).
 6. **RNF-05: sin cambio de estado.** En esta condición (sin accesibilidad, con el manifiesto float16 de §10), el p95 incremental con dos regiones es de 142,5 ms [IC 95 %: 139,4; 144,5] y con una región de 78,4 ms: ambos quedan por debajo de la meta de 150 ms. **No se declara RNF-05 cumplido.** Esta condición no es la de §10, donde con accesibilidad `uia` el p95 de dos regiones fue de 153,0 ms; la accesibilidad forma parte del camino de producto (ADR-0017), y el estado del requisito lo fija el responsable (decisión del 15 de octubre de 2026, [capítulo 03](03_ESPECIFICACION_REQUISITOS.md) RNF-05).
 
@@ -653,14 +653,133 @@ Milisegundos. Mediana de las seis corridas de cada binario (A → B) y diferenci
 3. En `full`, B1 tiene una o dos observaciones cálidas por proceso: sus medianas y su p95 por proceso no son estables, y la diferencia de `full` no es una ventaja demostrada.
 4. Los intervalos son de procesos (secuencias), nunca de fotogramas. No se publica el p95 por proceso de `full`, y no se publica p99: el número de muestras por proceso no alcanza para colas.
 5. El acuerdo es entre dos variantes que observan pantallas que no coinciden en el tiempo; no es precisión, y no hay control B0 frente a B0.
-6. El registro de observación no guarda cajas, así que no se puede atribuir qué elementos faltan en `incr2`.
+6. El registro de observación no guarda cajas. La pérdida de `incr2` se atribuyó en 13.10 con un compilado de diagnóstico local, no con el registro.
 7. El ensayo previo queda fuera de todas las cifras.
 8. Por diseño del protocolo, las observaciones inactivas de B1 no entran en la latencia; su coste se reporta aparte (13.4).
 
 ### 13.9 Pendiente y decisiones para el responsable
 
-1. **Repetir B0 y B1 con `[models] accessibility = "uia"`** en ambas copias (sólo esa línea cambia), para comparar con §10.4 y decidir si la configuración de RNF-05 debe llevarla. Es una corrida de unos 20 minutos, con un identificador de experimento nuevo.
-2. **Investigar la pérdida de elementos con dos regiones** (13.6, punto 4). Hacen falta cajas o identificadores de los elementos en el registro de observación; hoy sólo hay firmas.
+1. ~~Repetir B0 y B1 con `[models] accessibility = "uia"`~~ Hecho en 1.0.57 (13.11).
+2. ~~Investigar la pérdida de elementos con dos regiones~~ Hecho en 1.0.57 (13.10): comportamiento del detector sobre recortes.
 3. **Control B0 frente a B0**, para separar el acuerdo de la variante del efecto de la animación.
 4. **Explicar la captura de `full`** (13.6, punto 3) y **atribuir el residuo de PERF-01** (13.7).
-5. **Cosmético:** los registros de observación inactiva escriben `region_area_px` como `-0.0`. No altera ninguna estadística; conviene corregirlo al emitir el registro.
+5. ~~Cosmético: `region_area_px` como `-0.0`~~ Corregido en 1.0.57 (13.12). Lo que sigue pendiente está en 13.13.
+
+### 13.10 Pérdida de elementos con dos regiones: qué falta y por qué (1.0.57) [V]
+
+Cierra el pendiente 2 de 13.9. **No es un defecto del Algoritmo 1: es el comportamiento del detector sobre recortes**, un coste de calidad de la incrementalidad que el paper pidió medir. El algoritmo no cambia (una política adaptativa entre refresco completo y regional es INC-07, no autorizada).
+
+**Método.** Con un compilado local (commit `875ee5b` más un parche de diagnóstico **no versionado**, activado por una variable de entorno, que escribe en stderr rol y caja de cada control y cada palabra, **nunca** texto ni píxeles; el parche se guardó fuera del repositorio) se observó la aplicación de prueba con `--animate 30 --animate-labels 2` y las configuraciones B0 y B1 de 13.1 (sin accesibilidad), 8 observaciones cada una. Se comparó, observación a observación, la evidencia que publica B1 con la de B0 (IoU ≥ 0,5). No se guardó ningún fotograma. Las etiquetas de la aplicación son sintéticas.
+
+**Qué regiones planifica el motor.** Tras la primera observación (refresco completo), la segunda planifica un recorte de 318×160 px (la etiqueta superior, con su halo) y uno grande de 1410×500 px (su causa no se investigó). Desde la tercera, **dos recortes casi estables: la etiqueta superior (de 258 a 310 × 160 px) y la esquina inferior derecha (de 220 a 224 × 151 px)**, que cubre la bandeja del sistema de la barra de tareas (de 1032 a 1080 de alto). El cierre del halo (Algoritmo 1) funciona: en las observaciones 2 a 8, de 18 a 68 cajas de la base solapan una región y **ninguna** queda cortada por ella (0 de 18 a 68; todas están contenidas dentro de la región, con 1 px de tolerancia de redondeo). `merged` descarta lo que debe: lo que cae en la región.
+
+**Qué falta.** Régimen estable (observaciones 3 a 8, las seis con el mismo patrón):
+
+| | B0 (refresco completo) | B1 (dos recortes) |
+|---|---|---|
+| Controles publicados como evidencia | 74 a 75 | 58 a 59 |
+| Palabras | 33 a 34 | 35 a 37 |
+| Controles de B0 sin pareja en B1 (IoU ≥ 0,5) | | 19 a 21 |
+| de ellos, dentro de las regiones actuales | | 15 a 17 (14 son iconos pequeños de la bandeja, de 1707 a 1920 × 1032 a 1080) |
+| de ellos, fuera de las regiones actuales | | 4 (los perdió el recorte grande de la observación 2 y no se rehacen) |
+| Controles de B1 sin pareja en B0 | | 5 |
+| Controles que devuelven **los dos recortes juntos** | | **3 a 4** (frente a las 18 a 30 cajas, controles y palabras, de la base que los solapaban), 3 de ellos con una caja que toca 3 o 4 lados de su propia región |
+
+Es decir, el recorte de la bandeja, donde el refresco completo ve unos 14 iconos pequeños y un reloj, devuelve **una caja del tamaño del recorte entero** (`1696,929,1920,1079` y `1696,1032,1920,1079`), y el de la etiqueta superior, otra de `24,0,334,160` (la propia región). Esas cajas pasan a la evidencia en lugar de los iconos. En la observación siguiente son soportes del plan, y el cierre del halo no agranda la región (la caja ya es la región). La pérdida **es estable, no se acumula**: cada observación vuelve a analizar las mismas regiones y obtiene lo mismo.
+
+**Por qué: no es el contexto sólo, es también la escala.** Con la aplicación de prueba quieta (sin animación) se hizo un refresco completo y, **sobre el mismo fotograma**, se llamó al detector con una sola región cada vez (el motor, con el parche de diagnóstico, lo hace en el mismo proceso, sin guardar nada). Referencia: los controles del fotograma completo, cuya caja cae entera dentro de la región. «Pareja» es IoU ≥ 0,5.
+
+| Región (x0,y0,x1,y1) | Tamaño | Controles del recorte | Controles del fotograma completo dentro | Con pareja |
+|---|---|---|---|---|
+| 0,0,1280,720 | 1280×720 | 10 | 9 | 6 |
+| 640,360,1920,1080 | 1280×720 | 47 | 46 | 33 |
+| 0,360,1280,1080 | 1280×720 | 37 | 40 | 29 |
+| 960,540,1920,1080 | 960×540 | 32 | 31 | 23 |
+| 1248,736,1920,1080 | 672×344 | 19 | 19 | 13 |
+| 1472,832,1920,1080 | 448×248 | 11 | 15 | 6 |
+| 1696,928,1920,1079 | 224×151 | 6 | 11 | 4 |
+| 24,0,334,160 | 310×160 | 1 | 0 | 0 |
+| 0,0,1920,1080 | 1920×1080 | 76 | 76 | 76 |
+
+Dos hechos, ambos medidos. (1) Incluso un recorte de 1280×720, con mucho contexto, sólo reproduce entre 6 de 9 y 33 de 46 (≈ 67 a 72 %) de lo que ve el fotograma completo: la entrada es siempre de 1280×1280 (§13.3), el recorte entra sin ampliar ni reducir (escala 1,0) y el fotograma de 1920×1080 se reduce a 2/3 antes de entrar. **El detector ve otra escala**, y a otra escala encuentra otros iconos. (2) Cuanto más pequeño el recorte, peor: de 15 a 6 en 448×248 y 11 a 4 en 224×151, donde además aparece la caja del recorte entero. El mismo efecto que en §10.2 (las entradas más pequeñas no encuentran lo mismo que la de 1280×1280), ahora entre el recorte y el fotograma completo. Esto no separa aún cuánto es escala y cuánto es falta de contexto: un recorte de 1280×720 no tiene poco contexto, y aun así pierde la tercera parte, lo que apunta a la escala; confirmarlo exigiría alimentar el mismo recorte a las dos escalas, y esa variante no existe en el detector.
+
+**Qué se descartó.** (a) Cajas cortadas por el borde de una región: 0 (arriba). (b) Descarte indebido de `merged`: sólo descarta lo que solapa una región, y todo eso está contenido en ella. (c) Fusión de los dos recortes o duplicados: no hay; el `dedup` del detector elimina los exactos. (d) Evidencia fuera de las regiones: se conserva tal cual.
+
+**Lectura.** B1 con dos regiones pierde unos 20 de 75 controles (≈ 26 %) por el cambio de escala y de contexto del detector, no por un fallo del plan. Es un coste de calidad medido de la incrementalidad con este modelo (§10.2), que se suma al de latencia de 13.6. **Recomendación (INC-07, no autorizada esta noche):** una política adaptativa que use el refresco completo cuando el área o el número de regiones supere un umbral (con dos regiones B1 ya no ahorra tiempo, 13.6 punto 2, y además pierde calidad), y/o descartar o desconfiar de una detección cuya caja ocupa casi todo su recorte. Ninguna de las dos se implementa aquí.
+
+**Límites.** Un equipo, una aplicación sintética, un modelo; las regiones de la bandeja dependen de dónde esté la barra de tareas; la comparación usa IoU ≥ 0,5 contra B0, que no es la verdad (§9.5); las cifras del régimen estable son de una sola corrida de 8 observaciones, con el mismo patrón en las seis últimas; la tabla de recortes quietos es de una sola captura y de una sola pantalla.
+
+### 13.11 B0 frente a B1 con `[models] accessibility = "uia"` (1.0.57) [V]
+
+Cierra el pendiente 1 de 13.9. Mismo protocolo (§9.9), mismas cifras de procesos que 13.1 a 13.5 y **una sola diferencia con aquella corrida: `accessibility = "uia"` en `[models]` en las dos copias** (se añade tras `ocr_language`; B0 y B1 siguen difiriendo sólo en `experimental_full_frame`, la única diferencia declarada). **Entrada: ninguna.**
+
+| Condición | Valor |
+|---|---|
+| Identificador | `inc02-b0b1-uia-20261015`; semilla del bootstrap 20261015; 10 000 remuestreos |
+| Commit medido | `875ee5b74efe38e347fffe614ef3c10ce7a109e4` (rama `fix/inc02-region-loss`, árbol limpio): `origin/main` (`2b127a7`, que no cambia código respecto de `f6d94cd`) más la corrección de `region_area_px` de 13.12. El parche de diagnóstico de 13.10 **no** forma parte de este binario |
+| Compilación | `cargo build --release --locked -p ommatix --features dxgi,directml,winrt-ocr,uia`; `ommatix.exe` SHA-256 `c7c3bf394266d3e6a3920e67e373f4de779d19de25e79f8294baf43f00f8cc1f` |
+| Aplicación de prueba | `5050596d46bc300fdc9c31d6835af00d470dd5fb9ca12b464d1e66edec29a942` (la binaria de 13.1 y §12, copiada del árbol principal: al recompilarla en el árbol de trabajo salió otro hash, posiblemente por las rutas, sin verificar) |
+| Configuración B1 / B0 (SHA-256) | `b47c22cee67c22b3e0814ca4757230731aa6354feb14e63b946bd942291219d3` / `907612b61a5d3e3f0b88e435c08e508f4422e0968d41254f7b3258c2eacba520` (las de 13.1 más `accessibility = "uia"`) |
+| Procesos | 40 por variante y caso (240 en total, 20 observaciones cada uno), en seis trozos de 20; 0 descartados, 0 fallidos, 0 errores en los trozos válidos |
+| Animación | `--animate 30` (las etiquetas) y 250 ms (el velo), como en 13.1 |
+| Fecha | 15 de octubre de 2026, de 06:16 a 06:30 (hora local) |
+
+**Trozos descartados y repetidos, declarado.** La primera tanda se lanzó con un guion en segundo plano y la herramienta descartó 4 de los 6 trozos (todos sus procesos) porque la aplicación de prueba no tenía el primer plano; los 2 trozos válidos de esa tanda (`incr1` a y `full` a) también se descartaron de las cifras y se repitieron, igual que los 4 anteriores, **en primer plano**, como en 13.1, para que los seis trozos tuvieran las mismas condiciones. Los informes de la tanda descartada están aparte (`b0b1uia_discarded`) y **no entran en ninguna cifra**. Un lanzamiento previo se rechazó antes de empezar (ruta mal convertida por el intérprete de órdenes) sin ejecutar nada. La herramienta hizo lo que debe: descartó lo que no cumplía el primer plano.
+
+**Latencia** (ms de `total`; IC 95 % bootstrap sobre procesos):
+
+| Caso | Variante | n cálidas | Mediana [IC 95 %] | p95 [IC 95 %] | Inferencias | Elementos publicados (mediana / p95) |
+|---|---|---|---|---|---|---|
+| `incr1` | B0 | 720 | 123,4 [122,4; 124,1] | 135,6 [134,1; 137,4] | 1 | 80 / 80 |
+| `incr1` | B1 | 720 | 123,3 [123,0; 123,6] | 132,9 [130,7; 135,9] | 1 | 79 / 81 |
+| `incr2` | B0 | 720 | 123,4 [122,5; 124,3] | 137,0 [135,9; 139,2] | 1 | 80 / 81 |
+| `incr2` | B1 | 720 | 166,2 [165,8; 166,4] | 186,3 [185,6; 186,9] | 2 | 62 / 81 |
+| `full` | B0 | 720 | 98,1 [97,1; 98,9] | 131,3 [127,0; 141,8] | 1 | 77 / 78 |
+| `full` | B1 | 65 | 92,4 [90,3; 93,8] | 102,5 [97,4; 103,1] | 1 | 75 / 78 |
+
+**Diferencia apareada por proceso (B1 − B0).**
+
+| Caso | Δ de la mediana (ms) [IC 95 %] | Δ del p95 por proceso (ms) [IC 95 %] | Procesos | Dice [IC 95 %] |
+|---|---|---|---|---|
+| `incr1` | +2,4 [+0,8; +4,1] | −7,5 [−15,1; −2,2] | 40 | 0,966 [0,966; 0,967] |
+| `incr2` | +46,6 [+44,6; +48,7] | +48,2 [+45,3; +51,0] | 40 | 0,833 [0,831; 0,834] |
+| `full` | −5,4 [−7,3; −3,6] | no interpretable: 1 o 2 observaciones de B1 por proceso | 36 (4 excluidos) | 0,978 [0,977; 0,980] |
+
+**Tramos** (mediana por proceso en B0 y B1, y Δ B1 − B0 con su IC 95 %; ms):
+
+| Caso | Tramo | B0 | B1 | Δ [IC 95 %] |
+|---|---|---|---|---|
+| `incr1` | detección | 81,2 | 71,9 | −9,4 [−9,5; −9,3] |
+| `incr1` | OCR | 36,3 | 3,7 | −32,5 [−32,6; −32,3] |
+| `incr1` | **accesibilidad** | **116,9** | **116,7** | +2,6 [+0,9; +4,3] |
+| `incr2` | detección | 81,1 | 134,3 | +53,1 [+53,0; +53,3] |
+| `incr2` | OCR | 36,9 | 8,1 | −28,9 [−29,0; −28,7] |
+| `incr2` | **accesibilidad** | **116,6** | **159,4** | **+46,2 [+44,2; +48,4]** |
+| `full` | captura | 12,5 | 10,0 | −3,5 [−5,0; −2,0] |
+| `full` | planificación | 1,8 | 0,26 | −1,5 [−1,6; −1,5] |
+| `full` | detección | 80,2 | 80,5 | +0,3 [+0,1; +0,6] |
+| `full` | accesibilidad | 54,1 | 54,0 | +0,07 [−0,6; +0,8] |
+
+Observaciones inactivas de B1 (aparte): `incr1` 0, `incr2` 0, `full` 655 de 720 (mediana 14,2 ms, p95 20,7 ms). Primera observación (control, 120 por variante): B0 y B1 difieren en menos de 1,5 ms (`incr1` 131,5 y 133,0; `incr2` 131,5 y 132,0; `full` 87,6 y 87,7).
+
+**Lectura.**
+
+1. **Con accesibilidad la ventaja de una región desaparece.** En `incr1` B1 ya no es más rápida: +2,4 ms de mediana (frente a −18,6 ms sin accesibilidad) y −7,5 ms de p95. La lectura de UI Automation tarda lo mismo con una región que con el fotograma completo (≈ 117 ms en las dos variantes) y es el tramo más largo, por encima de la detección (72 y 81 ms): el total lo fija ella. El ahorro del detector (−9,4 ms) queda tapado.
+2. **Con dos regiones la accesibilidad crece con las regiones** (117 → 159 ms, +46 ms) igual que la detección (81 → 134 ms): cada región es una lectura de UIA y una inferencia. B1 pasa de 123 a 166 ms de mediana (+46,6 ms).
+3. **Comparación con §10.** Estas cifras se parecen a las de §10.5 (animación de 30 ms, float16, lectura de UIA de 121 ms con una región y 171 con dos, p95 de dos regiones 199,5 ms), y **no** a las de §10.4 (animación de 100 ms, p95 de dos regiones 153,0 ms). La animación de 30 ms de este protocolo repinta la aplicación de prueba a ≈ 33 fotogramas por segundo en la misma GPU, y la lectura de accesibilidad espera a la GPU saturada por float16 (§10.5). No se ha separado aquí esa causa de otras (otras ventanas abiertas en el equipo); la tabla de tramos sólo establece que la lectura es de ≈ 117 ms en B0, por encima de los 58 a 73 ms de §10.4.
+4. **RNF-05: sin cambio de estado.** En esta condición (con `uia`, float16, animación de 30 ms) el p95 incremental con dos regiones es de **186,3 ms** [185,6; 186,9]: **no cumple 150 ms**. Con una región el p95 de B1 es de 132,9 ms [130,7; 135,9] (cumple), igual que el de B0 (135,6 ms), así que sin ventaja. No se declara RNF-05 cumplido ni incumplido: el estado lo fija el responsable.
+5. **Elementos publicados.** Con dos regiones, B1 publica una mediana de 62 frente a 80 (sin accesibilidad: 67 frente a 85, 13.3). La pérdida (≈ 22 %) es del orden de la de 13.10; se espera la misma causa, pero no se investigó caja a caja con `uia`, así que no está probado.
+6. **Refresco completo (control).** Detección igual (80 ms); la diferencia de −5,4 ms viene de la captura (−3,5 ms) y la planificación (−1,5 ms), como en 13.6 punto 3. B1 analizó sólo 65 observaciones. No es una ventaja de B1.
+
+**Límites.** Los de 13.8, salvo el 2 (ahora hay accesibilidad). Además: los trozos tienen variaciones entre sí (la mediana de B0 en `incr1` fue 112,7 ms en un trozo y 124,4 ms en otro; la lectura de UIA depende de lo que haga el resto del escritorio); el IC de procesos las recoge pero no las explica. El p95 de B0 en `full` (131 ms) viene de colas de la lectura de UIA.
+
+### 13.12 Cosmético: `region_area_px` de una observación inactiva (1.0.57) [V]
+
+La suma de ningún área es `-0.0` en Rust (`Iterator::sum` de `f64` arranca en `-0.0`), así que el registro de una observación inactiva escribía `"region_area_px": -0.0`. `0.0 == -0.0`, por eso la prueba existente no lo veía. Se corrige en `plan_record` (`src/application/src/engine/observe.rs`): la suma arranca en `+0.0`. Prueba de regresión `an_idle_observation_records_its_region_area_as_a_positive_zero` (`src/application/src/engine/tests.rs`), que comprueba el signo y **falla sin la corrección** (se verificó). Ninguna estadística cambia; las medidas de 13.1 a 13.5 conservan el `-0.0` en sus registros de origen.
+
+### 13.13 Pendiente tras 1.0.57
+
+1. **INC-07 (no autorizado esta noche):** política adaptativa entre refresco completo y regional. Las evidencias que la motivan: con dos regiones B1 es más lenta (13.3, 13.11) y publica menos elementos (13.10); con accesibilidad ni siquiera una región ahorra (13.11).
+2. Control B0 frente a B0 (acuerdo), captura de `full` y residuo de PERF-01 (13.9, puntos 3 y 4): siguen abiertos.
+3. Investigar con `uia` la pérdida de elementos (13.11, punto 5) y separar la causa de la lectura lenta de UIA (13.11, punto 3: GPU saturada frente a ventanas abiertas).
+4. El responsable decide el estado de RNF-05 (con `uia` y animación de 30 ms el p95 con dos regiones es 186,3 ms).
