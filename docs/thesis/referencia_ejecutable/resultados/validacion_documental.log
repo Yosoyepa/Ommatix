@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 26
+PASS adrs_encontradas 27
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []

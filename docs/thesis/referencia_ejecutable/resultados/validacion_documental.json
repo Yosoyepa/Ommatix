@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-15T09:42:37.251410+00:00",
+  "timestamp_utc": "2026-10-15T09:56:53.272374+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -9,14 +9,14 @@
     "valid_examples": 9,
     "invalid_examples": 8,
     "jsonl_messages": 13,
-    "feature_files": 7,
-    "gherkin_scenarios": 40,
+    "feature_files": 8,
+    "gherkin_scenarios": 52,
     "requirements": 28,
-    "planned_tests": 90,
+    "planned_tests": 104,
     "references": 24,
-    "adrs": 26
+    "adrs": 27
   },
-  "checks_run": 479,
+  "checks_run": 532,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -348,7 +348,7 @@
     {
       "check": "adrs_encontradas",
       "passed": true,
-      "detail": "26"
+      "detail": "27"
     },
     {
       "check": "referencias:00_AUDITORIA_TECNICA.md",
@@ -542,6 +542,11 @@
     },
     {
       "check": "referencias:0026-native-identity-discriminant.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0027-candidate-enumeration-with-an-rstar-index.md",
       "passed": true,
       "detail": "[]"
     },
@@ -981,6 +986,131 @@
       "detail": ""
     },
     {
+      "check": "gherkin_cabecera:08_indice_candidatos.feature",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-41",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-41",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-42",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-42",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-43",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-43",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-44",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-44",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-45",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-45",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-46",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-46",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-47",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-47",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-48",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-48",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-49",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-49",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-50",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-50",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-51",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-51",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-52",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-52",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "check": "escenarios_matriz_completos",
       "passed": true,
       "detail": ""
@@ -1182,6 +1312,66 @@
     },
     {
       "check": "trazabilidad:BDD-40",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-41",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-42",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-43",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-44",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-45",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-46",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-47",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-48",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-49",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-50",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-51",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-52",
       "passed": true,
       "detail": ""
     },
@@ -1946,6 +2136,11 @@
       "detail": "[]"
     },
     {
+      "check": "doc01_adr_pruebas:0027-candidate-enumeration-with-an-rstar-index.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
       "check": "doc01_prueba_enlazada:UT-01",
       "passed": true,
       "detail": ""
@@ -2392,6 +2587,76 @@
     },
     {
       "check": "doc01_prueba_enlazada:DOC-01",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-01",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-02",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-03",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-04",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-05",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-06",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-07",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-08",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-09",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-10",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-11",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-12",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-13",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:IDX-14",
       "passed": true,
       "detail": ""
     },
