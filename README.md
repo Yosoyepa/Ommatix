@@ -59,6 +59,7 @@ unless the agent and a local policy both allow them. More in the
 
 **The dossier is the specification; the code is catching up with it.**
 
+- **MVP scope, decided by the owner on 15 October 2026** ([CHANGELOG 1.0.52](docs/thesis/CHANGELOG.md), [ADR-0023](docs/adr/0023-licence-and-reduced-mvp-scope.md)): the MVP closes with an explicit, reduced scope. [RNF-05](docs/thesis/03_ESPECIFICACION_REQUISITOS.md) is accepted as a documented near-miss and is **not met**: with two regions its p95 is 153 ms against 150 ms, while one region and the full refresh meet their targets. For this MVP the reduced S4 protocol (E2E-01, E2E-02, E2E-03, S4R-02 and S4R-03, ten of ten with no false success each) replaces the 450 runs of EV-02. On `main`, E2E-01, E2E-02, S4R-02 and S4R-03 each have ten of ten; E2E-03 has three of ten and its series is still running. EV-01, EV-02, IT-07 and the REL-01 corpus move to the next cut, which follows the next-cut plan of the paper package (INC-00 to INC-09, kept outside this repository). Two of the ten [Definition of Done boxes](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) are ticked, each with its evidence; the other eight say what is missing.
 - `docs/thesis/` holds the consolidated dossier. Its oracle (48/48) and validator run in CI.
 - `ommatix-domain` holds the thesis core: Algorithm 1 (exact tile diff, region plan, halo
   closure), Algorithm 2 (spatial fusion), Algorithm 3A (icon cache with rejection),
@@ -158,15 +159,15 @@ The second continuation of the eleventh round ([CHANGELOG 1.0.45](docs/thesis/CH
   ([ADR-0019](docs/adr/0019-concurrent-observation-stages.md), [CHANGELOG 1.0.22](docs/thesis/CHANGELOG.md))
   the initial RNF-05 targets are met on the reference machine for a full refresh
   (p95 98 ms) and a one-region update (p95 102 ms) but not, by 3 ms, for two regions
-  (p95 153 ms), so RNF-05 is not closed), so by default the detector is the bootstrap's flat-colour region finder (roles
-  `unknown`) and there is no OCR; no third-party MCP client has been tested; IT-02 ran only
-  in part (S0); IT-07 has not been run; and IT-06, SEC-03, SEC-04 and SEC-06 are tested in Rust
+  (p95 153 ms), so RNF-05 is not met; for this MVP it is accepted as a documented near-miss), so by default the detector is the bootstrap's flat-colour region finder (roles
+  `unknown`) and there is no OCR unless the operator configures it (the reduced protocol runs with the ONNX detector and Windows OCR); no third-party MCP client has been tested; IT-02 ran only
+  in part (S0); IT-07 has not been run and moves to the next cut; and IT-06, SEC-03, SEC-04 and SEC-06 are tested in Rust
   over test doubles and the simulated desktop ([CHANGELOG 1.0.35](docs/thesis/CHANGELOG.md)), not
   yet under supervision with the real stages. Live input stays **off** unless the
   operator enables it (below). The [overview](docs/architecture/overview.md#where-the-code-is-today) lists what
   remains.
 - First platform: **Windows 11 x64**, one monitor, DPI 100/125/150 %
-  ([ADR-0008](docs/adr/0008-one-real-platform-first.md), approved 2026-10-14).
+  ([ADR-0008](docs/adr/0008-one-real-platform-first.md), approved 2026-10-14). For this MVP the profile is DPI 100 % and one theme; 125 % and 150 % move to the next cut.
 
 The blockers of that round are fixed offline ([CHANGELOG 1.0.36](docs/thesis/CHANGELOG.md); no live request, no input): the Calculator's Standard mode is read from a header that contains «estándar» or «standard» (its real name is not known yet), a read-only `--check-mode` reads the mode without ever creating the stop file, the test editor now obtains the Win32 keyboard focus (verified read-only: UI Automation reports the editor, not the desktop) and neither test app asks the toolkit for the foreground any more, because that request sent a synthetic Alt key (a safety finding, fixed), and the Explorer flow starts in `carpeta-b` and goes breadcrumb up, breadcrumb up, Back. None of it is confirmed with the engine or in a live run.
 
@@ -444,3 +445,10 @@ Contribution rules, for humans and AI agents alike, are in [AGENTS.md](AGENTS.md
 - [Glossary / Glosario](docs/glossary.md)
 - Code reviews: [bootstrap MVP](docs/reviews/2026-10-14-mvp-review.md),
   [S2b engine and MCP adapter](docs/reviews/2026-10-14-s2b-engine-and-mcp.md)
+
+## Licence
+
+- **Code** (the crates, `tools/` and the two test applications in `tools/s4`): [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), at your option. The workspace declares `license = "MIT OR Apache-2.0"`.
+- **Documentation** (the thesis dossier in `docs/thesis/`, the rest of `docs/`, the READMEs, and the thesis paper where it is distributed with this repository): [CC BY 4.0](LICENSE-DOCS).
+- Copyright 2026 Juan Carlos Andrade Unigarro. The owner decided this on 2026-10-15 ([ADR-0023](docs/adr/0023-licence-and-reduced-mvp-scope.md)).
+- **Not ours, never committed:** the `icon_detect_v3` detector weights (OmniParser v3; MIT according to their model card), ONNX Runtime (MIT), and `DirectML.dll` (Microsoft's software licence terms for DirectML; not MIT, and neither included nor redistributed here). They are downloaded outside the repository and pinned by SHA-256. The AGPL-3.0 YOLOv8 weights of the same family are not used. The Cargo dependencies keep their own licences, none of them strong copyleft ([S4_REPRODUCIBILIDAD.md](docs/thesis/S4_REPRODUCIBILIDAD.md) §3).

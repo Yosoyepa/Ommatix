@@ -41,6 +41,7 @@ identity of a control that the click itself rebuilds.
 | [0020](0020-operator-scope-on-windows.md) | The operator's scope on windows: window classes and a pinned window | Accepted (2026-10-14) |
 | [0021](0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md) | Pin every artefact the engine loads before loading anything, and keep screen and agent text out of errors | Accepted (2026-10-14) |
 | [0022](0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md) | Ground the target point before every click, and verify the operating system after a click that rebuilds its own control | Accepted (2026-10-14) |
+| [0023](0023-licence-and-reduced-mvp-scope.md) | Licence the code (MIT OR Apache-2.0) and the documents (CC BY 4.0), and close the MVP with an explicit reduced scope | Accepted (2026-10-15) |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They

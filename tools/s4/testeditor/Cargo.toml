@@ -7,7 +7,7 @@ name = "ommatix-testeditor"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "UNLICENSED"
+license = "MIT OR Apache-2.0"
 publish = false
 description = "Disposable multi-line editor that saves one file in a client-created temporary folder, for Ommatix end-to-end runs."
 

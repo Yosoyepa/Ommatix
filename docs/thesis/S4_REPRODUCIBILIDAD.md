@@ -1,6 +1,6 @@
 # REL-01: reproducibilidad de las comprobaciones (RNF-08)
 
-**Fecha:** 14 de octubre de 2026 (`CHANGELOG.md`, 1.0.35). **Alcance:** qué se congela para que otra persona repita las comprobaciones del repositorio y obtenga lo mismo, dónde está cada dato y qué falta. Este documento no cierra RNF-08 ni la casilla de la Definition of Done que le corresponde (capítulo 06 §6.7: «Lockfiles, hashes, licencias, instalación, rollback y límites de compatibilidad están documentados»): falta ejecutar la instalación y el rollback en una máquina limpia (hay guía escrita desde 1.0.47) y el corpus de aceptación (§6).
+**Fecha:** 14 de octubre de 2026 (`CHANGELOG.md`, 1.0.35). **Alcance:** qué se congela para que otra persona repita las comprobaciones del repositorio y obtenga lo mismo, dónde está cada dato y qué falta. Este documento no cierra RNF-08. La casilla de la Definition of Done que le corresponde (capítulo 06 §6.7: «Lockfiles, hashes, licencias, instalación, rollback y límites de compatibilidad están documentados») se marca desde el 15 de octubre de 2026 (CHANGELOG 1.0.52), porque esa documentación existe; no prueba que la instalación y el rollback funcionen. Falta ejecutarlos en una máquina limpia, y el corpus de aceptación pasa al próximo corte (§6).
 
 Cada afirmación de las tablas la comprueba una prueba de Rust (`src/acceptance/tests/repository.rs`, funciones `rel_01_*`) o el script `tools/repro/environment.py`; lo que sólo describe, lo dice.
 
@@ -26,7 +26,7 @@ Las pruebas `sec_06_*` hacen lo contrario con archivos temporales falsos, nunca 
 
 ## 3. Licencias del grafo de dependencias
 
-`cargo metadata --locked` lista 243 paquetes para todas las plataformas: los 10 del espacio de trabajo (`UNLICENSED`, más abajo) y **233 de terceros**. Todos los de terceros declaran licencia; ninguno es copyleft fuerte. Las expresiones distintas y cuántos paquetes tiene cada una:
+`cargo metadata --locked` lista 243 paquetes para todas las plataformas: los 10 del espacio de trabajo (`MIT OR Apache-2.0`, más abajo) y **233 de terceros**. Todos los de terceros declaran licencia; ninguno es copyleft fuerte. Las expresiones distintas y cuántos paquetes tiene cada una:
 
 | Expresión | Paquetes |
 |---|---|
@@ -51,7 +51,18 @@ Las pruebas `sec_06_*` hacen lo contrario con archivos temporales falsos, nunca 
 | `MIT OR Apache-2.0 OR LGPL-2.1-or-later` | 1 |
 | `(MIT OR Apache-2.0) AND Unicode-3.0` | 1 |
 
-El paquete con `LGPL-2.1-or-later` la ofrece como alternativa (`OR`): se usa bajo MIT. El código del repositorio es `UNLICENSED` (`Cargo.toml`: `license = "UNLICENSED"`, `publish = false`): el responsable no ha elegido licencia para distribuirlo. Los pesos son MIT; `DirectML.dll` se distribuye con los términos de Microsoft para DirectML, no es MIT y el repositorio no la incluye ([`S0_RESULTADOS.md`](S0_RESULTADOS.md) §2). Los pesos `icon_detect` AGPL-3.0 no se usan. Si cambia el grafo, la prueba falla hasta que esta tabla lo recoja.
+El paquete con `LGPL-2.1-or-later` la ofrece como alternativa (`OR`): se usa bajo MIT.
+
+**Licencias propias.** El código del repositorio (los crates, `tools/` y las aplicaciones de prueba de `tools/s4`) es `MIT OR Apache-2.0`: `Cargo.toml` y los manifiestos de `tools/s4/testapp` y `tools/s4/testeditor` lo declaran, y los textos están en [`LICENSE-MIT`](../../LICENSE-MIT) y [`LICENSE-APACHE`](../../LICENSE-APACHE). Los documentos (el dossier, `docs/` y los README) son CC BY 4.0 ([`LICENSE-DOCS`](../../LICENSE-DOCS)). Lo decidió el responsable el 15 de octubre de 2026.
+
+**Terceros que no son del proyecto y nunca se versionan.** Ninguno de estos archivos está en el repositorio ni aparece en su historia (`git log --all` no contiene ningún `.onnx`, `.pt`, `.dll` ni `.zip`), y `.gitignore` los excluye. Viven fuera del repositorio, bajo `%LOCALAPPDATA%\Ommatix`, con su SHA-256 fijado en la configuración del operador y en el manifiesto:
+
+- Pesos del detector `icon_detect_v3` (OmniParser v3): MIT según su ficha; el `LICENSE` del modelo es el texto MIT de Microsoft Corporation ([`S0_RESULTADOS.md`](S0_RESULTADOS.md) §2).
+- ONNX Runtime 1.28.0 (CPU) y 1.24.4 (DirectML): MIT.
+- `DirectML.dll` 1.15.4: términos de licencia de software de Microsoft para DirectML (`LICENSE.txt` del paquete). No es MIT, y el repositorio no la incluye ni la redistribuye.
+- Pesos `icon_detect` AGPL-3.0 (YOLOv8): no se descargaron ni se usan.
+
+Si cambia el grafo, la prueba falla hasta que esta tabla lo recoja.
 
 ## 4. Cómo repetir las comprobaciones
 
@@ -93,10 +104,10 @@ El **corpus de aceptación** del capítulo 03 §3.5 (al menos 300 capturas etiqu
 
 ## 6. Lo que falta para cerrar REL-01 y RNF-08
 
-1. **Corpus de aceptación congelado** (§5): construirlo, etiquetarlo y fijarlo por hash. Es trabajo del responsable y de corridas supervisadas.
+1. **Corpus de aceptación congelado** (§5): construirlo, etiquetarlo y fijarlo por hash. Es trabajo del responsable y de corridas supervisadas. Desde el 15 de octubre de 2026 pasa al próximo corte, junto con EV-01, EV-02 y IT-07 (capítulo 06 §6.7).
 2. **Commit de entrega**: RNF-08 pide «commit … congelados». Un commit se congela en S4 al etiquetar la entrega; este PR sólo hace que cada medición lo registre.
-3. **Instalación, rollback y límites de compatibilidad** (casilla de la Definition of Done): desde 1.0.47 hay una guía escrita, [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md), con la compilación de cada conjunto de rasgos, los archivos del operador con su digest, la verificación, la conexión de un cliente MCP, la reversión y los límites de compatibilidad, y pruebas que comprueban que lo que nombra existe (`rel_01_the_install_guide_points_at_files_that_exist` y `tools/repro/test_install_guide.py`). **Nadie la ha seguido en una máquina limpia**: esa ejecución y su `environment.json` son la sesión A de [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md). Lo que dice sobre la escala (100, 125 y 150 %) tampoco está medido: IT-07 sigue sin ejecutar (sesión C).
+3. **Instalación, rollback y límites de compatibilidad** (documentados; la ejecución en una máquina limpia no está hecha): desde 1.0.47 hay una guía escrita, [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md), con la compilación de cada conjunto de rasgos, los archivos del operador con su digest, la verificación, la conexión de un cliente MCP, la reversión y los límites de compatibilidad, y pruebas que comprueban que lo que nombra existe (`rel_01_the_install_guide_points_at_files_that_exist` y `tools/repro/test_install_guide.py`). **Nadie la ha seguido en una máquina limpia**: esa ejecución y su `environment.json` son la sesión A de [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md). Lo que dice sobre la escala (100, 125 y 150 %) tampoco está medido: IT-07 sigue sin ejecutar (sesión C).
 4. **Proveniencia más allá del hash**: S0 comprobó a mano la firma Authenticode de `onnxruntime.dll` (DirectML) y de `DirectML.dll`, y que los digests de los zips coinciden con los publicados; no hay una comprobación automática de firma.
-5. **Aprobación de licencias por el responsable**: el detector del producto (ADR-0009) y la distribución de `DirectML.dll` son decisiones suyas; la licencia del código del repositorio, también.
+5. **Aprobación de licencias por el responsable**: la licencia del código y la de los documentos están decididas desde el 15 de octubre de 2026 (§3). Quedan para el responsable el detector del producto (ADR-0009: pesos y su licencia) y la distribución de `DirectML.dll`, que el repositorio no redistribuye.
 
 Por eso `matrices/plan_pruebas.csv` mantiene REL-01 en `PENDIENTE_PRODUCTO`.

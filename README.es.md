@@ -62,6 +62,7 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
 
 **El dossier es la especificación; el código se está poniendo al día con él.**
 
+- **Alcance del MVP, decidido por el responsable el 15 de octubre de 2026** ([CHANGELOG 1.0.52](docs/thesis/CHANGELOG.md), [ADR-0023](docs/adr/0023-licence-and-reduced-mvp-scope.md)): el MVP se cierra con un alcance reducido y explícito. [RNF-05](docs/thesis/03_ESPECIFICACION_REQUISITOS.md) se acepta como incumplimiento documentado y **no se cumple**: con dos regiones su p95 es de 153 ms frente a 150 ms, mientras que una región y el refresco completo cumplen sus metas. Para este MVP, el protocolo reducido de S4 (E2E-01, E2E-02, E2E-03, S4R-02 y S4R-03, diez de diez y cero falsos éxitos cada uno) sustituye a las 450 corridas de EV-02. En `main`, E2E-01, E2E-02, S4R-02 y S4R-03 tienen cada uno diez de diez; E2E-03 tiene tres de diez y su serie sigue en curso. EV-01, EV-02, IT-07 y el corpus de REL-01 pasan al próximo corte, que sigue el plan del paquete de artículo (INC-00 a INC-09, fuera de este repositorio). Dos de las diez [casillas de la Definition of Done](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) están marcadas, cada una con su evidencia; las otras ocho dicen qué falta.
 - `docs/thesis/` contiene el dossier consolidado. Su oráculo (48/48) y su validador corren en
   la integración continua.
 - `ommatix-domain` contiene el núcleo de la tesis: algoritmo 1 (diff exacto por tiles, plan
@@ -153,9 +154,9 @@ La continuación de esa ronda ([CHANGELOG 1.0.34](docs/thesis/CHANGELOG.md)) no 
   ([ADR-0019](docs/adr/0019-concurrent-observation-stages.md), [CHANGELOG 1.0.22](docs/thesis/CHANGELOG.md))
   se cumplen en la máquina de referencia las metas iniciales de RNF-05 para el refresco
   completo (p95 98 ms) y para una región (p95 102 ms), pero no, por 3 ms, para dos regiones
-  (p95 153 ms), así que RNF-05 no queda cerrado), así que por defecto el detector es el buscador de regiones de color
-  plano del arranque (roles `unknown`) y no hay OCR; no se ha probado un cliente MCP de
-  terceros; IT-02 sólo se ejecutó en parte (S0); IT-07 no se ha ejecutado; e IT-06, SEC-03, SEC-04
+  (p95 153 ms), así que RNF-05 no se cumple; para este MVP se acepta como incumplimiento documentado), así que por defecto el detector es el buscador de regiones de color
+  plano del arranque (roles `unknown`) y no hay OCR salvo que el operador lo configure (el protocolo reducido corre con el detector ONNX y el OCR de Windows); no se ha probado un cliente MCP de
+  terceros; IT-02 sólo se ejecutó en parte (S0); IT-07 no se ha ejecutado y pasa al próximo corte; e IT-06, SEC-03, SEC-04
   y SEC-06 se prueban en Rust sobre dobles de prueba y el escritorio simulado
   ([CHANGELOG 1.0.35](docs/thesis/CHANGELOG.md)), todavía no de forma supervisada con las etapas
   reales. La
@@ -163,7 +164,7 @@ La continuación de esa ronda ([CHANGELOG 1.0.34](docs/thesis/CHANGELOG.md)) no 
   [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo que
   falta.
 - Primera plataforma: **Windows 11 x64**, un monitor, DPI de 100/125/150 %
-  ([ADR-0008](docs/adr/0008-one-real-platform-first.md), aprobada el 14-oct-2026).
+  ([ADR-0008](docs/adr/0008-one-real-platform-first.md), aprobada el 14-oct-2026). Para este MVP el perfil es DPI 100 % y un tema; 125 % y 150 % pasan al próximo corte.
 
 Los bloqueos de esa ronda se corrigen sin conexión ([CHANGELOG 1.0.36](docs/thesis/CHANGELOG.md); sin solicitudes reales ni entrada): el modo Estándar de la Calculadora se lee de un encabezado que contenga «estándar» o «standard» (su nombre real aún no se conoce), un `--check-mode` de sólo lectura lee el modo sin crear nunca el archivo de parada, el editor de prueba obtiene ahora el foco de teclado de Win32 (verificado en lectura: UI Automation informa al editor, no al escritorio) y ninguna aplicación de prueba pide ya el primer plano al toolkit, porque esa petición enviaba una tecla Alt sintética (hallazgo de seguridad, corregido) y el flujo del Explorador empieza en `carpeta-b` y va miga de pan arriba, miga de pan arriba y «Atrás». Nada de esto está confirmado con el motor ni en una ejecución en vivo.
 
@@ -465,3 +466,10 @@ Las reglas de contribución, para personas y agentes de IA, están en [AGENTS.md
 - [Glosario / Glossary](docs/glossary.md)
 - Revisiones de código: [MVP del arranque](docs/reviews/2026-10-14-mvp-review.md),
   [motor y adaptador MCP de S2b](docs/reviews/2026-10-14-s2b-engine-and-mcp.md)
+
+## Licencia
+
+- **Código** (los crates, `tools/` y las dos aplicaciones de prueba de `tools/s4`): [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE), a elección de quien lo use. El espacio de trabajo declara `license = "MIT OR Apache-2.0"`.
+- **Documentación** (el dossier de la tesis en `docs/thesis/`, el resto de `docs/`, los README y el artículo de la tesis cuando se distribuya con este repositorio): [CC BY 4.0](LICENSE-DOCS).
+- Copyright 2026 Juan Carlos Andrade Unigarro. Lo decidió el responsable el 15 de octubre de 2026 ([ADR-0023](docs/adr/0023-licence-and-reduced-mvp-scope.md)).
+- **No son nuestros y nunca se versionan:** los pesos del detector `icon_detect_v3` (OmniParser v3; MIT según su ficha), ONNX Runtime (MIT) y `DirectML.dll` (términos de licencia de software de Microsoft para DirectML; no es MIT, y no se incluye ni se redistribuye aquí). Se descargan fuera del repositorio y su SHA-256 está fijado. Los pesos AGPL-3.0 de la misma familia no se usan. Las dependencias de Cargo conservan sus licencias, ninguna con copyleft fuerte ([S4_REPRODUCIBILIDAD.md](docs/thesis/S4_REPRODUCIBILIDAD.md) §3).
