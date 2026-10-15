@@ -61,6 +61,7 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | Reevaluación de la Definition of Done contra `origin/main` (rama `docs/dod-reevaluation-2`, CHANGELOG 1.0.58, [`thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md`](thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) §6.7): siguen marcadas tres casillas (captura, diferenciador y lockfiles). Se refrescan las evidencias de `requisitos_trazabilidad.csv` sin cambiar ningún estado, porque el validador sólo admite `PENDIENTE_IMPLEMENTACION_O_VALIDACION`. Se corrigen E2E-03 (diez de diez) y los 52 escenarios BDD, y se añaden las ocho decisiones pendientes del responsable. Sin ejecución en vivo ni entrada. |
 | — | Sesión B con `uia` sobre `main` (rama `docs/perf03-soak-uia`, CHANGELOG 1.0.59, [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §14): intento bloqueado antes de la corrida de 120 minutos. El ensayo de un minuto no capturó la pantalla (`CAPTURE_UNAVAILABLE` en todas las observaciones, con y sin `uia`); causa probable, no verificada: el apagado de pantalla de 15 minutos. Sin cifras; PERF-03 y RNF-06 sin cambio. Desviaciones declaradas: auxiliar de primer plano fuera del repositorio y `--foreground-wait 30`. | PR abierto |
 | — | Borrado bajo demanda del operador (rama `feat/operator-purge`, CHANGELOG 1.0.60, [ADR-0028](adr/0028-operator-purge-file.md), aprobada el 15 de octubre de 2026): `[safety] purge_file`, apagado por defecto. Al crearlo, el motor borra su estado y su caché en la siguiente petición, una vez por cada archivo nuevo, sin terminar la sesión y sin borrar el archivo (SEC-07, BDD-53; [capítulo 08 §8.4](thesis/08_SEGURIDAD_Y_PRIVACIDAD.md)). Pruebas sobre dobles y archivos temporales, **sin ejecución en vivo**. Aprobar la ADR-0028 es decisión del responsable (§6.7, decisión 2). | PR abierto |
+| — | Umbral del responsable para RNF-06 (rama `docs/rnf06-threshold`, CHANGELOG 1.0.62; [capítulo 09 §9.7](thesis/09_EVALUACION_EXPERIMENTAL.md)): conjunto de trabajo de no más de 10 MiB/h y manejadores sin crecimiento, por defecto en `tools/perf/soak.py` (`criteria` juzga esos dos; la cota de la cola sigue sin fijar, decisión 9). La corrida de [S0 §12](thesis/S0_RESULTADOS.md) los cumple en sus condiciones, pero el umbral se fijó después de leer su pendiente y no es un veredicto sobre RNF-06. Casilla 7 sin marcar. Sin ejecución en vivo ni entrada. | PR abierto |
 
 Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.61)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
@@ -278,7 +279,7 @@ La tercera continuación de la undécima ronda (1.0.46, rama `docs/s4-eleventh-r
 
 1. **Protocolo reducido de S4: completo en `main`.** E2E-01, E2E-02, E2E-03, S4R-02 y S4R-03 tienen diez de diez corridas puntuadas sin falsos éxitos (E2E-03 desde 1.0.46). Esas corridas son de commits anteriores a INC-03 (#38) e INC-04 (#39); la decisión 6 de la lista de [06 §6.7](thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) pide repetirlas sobre el código actual.
 2. **Sesión A (REL-01)**: instalar, verificar y revertir siguiendo [`S4_INSTALACION_Y_REVERSION.md`](thesis/S4_INSTALACION_Y_REVERSION.md) en una máquina limpia, y archivar el `environment.json` (decisión 7). Es la evidencia de REL-01; la casilla de documentación ya está marcada.
-3. **Sesión B (PERF-03)**: ejecutada en 1.0.55 sobre `fe35d80`, sin accesibilidad (§12 de [`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md)). Falta que el responsable fije el umbral de RNF-06 y lea con él la pendiente de memoria (decisión 1), y un soak del código actual con `uia` (decisión 6). Sin umbral, RNF-06 no tiene veredicto. El intento con `uia` de 1.0.59 quedó bloqueado antes de la corrida porque la captura de pantalla falló (causa probable: el apagado de pantalla); el responsable debe dejar la pantalla encendida antes de repetirlo ([`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §14).
+3. **Sesión B (PERF-03)**: ejecutada en 1.0.55 sobre `fe35d80`, sin accesibilidad (§12 de [`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md)). El umbral de memoria de trabajo y de manejadores lo fijó el responsable en 1.0.62 (decisión 1, resuelta), y la corrida lo cumple en sus condiciones. Faltan la cota de la cola (decisión 9) y un soak del código actual con `uia` (decisión 6, programado). Sin cota de cola, RNF-06 no tiene veredicto. El intento con `uia` de 1.0.59 quedó bloqueado antes de la corrida porque la captura de pantalla falló (causa probable: el apagado de pantalla); el responsable debe dejar la pantalla encendida antes de repetirlo ([`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §14).
 4. **Pendientes que no están en el alcance cedido**: el borrado bajo demanda del operador, sin terminar la sesión (capítulo 08 §8.4; decisión 2); la parte de percepción de PERF-02, que ya tiene p99 en S0 §12 pero no la variante de caché (B2) ni la igualdad de modelos; y SEC-02, SEC-05 e IT-01 a IT-05 en parte. La prueba diferencial del diferenciador (capítulo 05 §5.5) está hecha desde 1.0.53.
 5. **Próximo corte** (fuera de este MVP): EV-01, EV-02, IT-07 y el corpus de REL-01, con el plan del paquete Paper (INC-00 a INC-09; no se copia aquí). RNF-05 sigue como incumplimiento documentado; con `uia` y una animación de 30 ms su caso de dos regiones da 186,3 ms (decisión 5). IT-07 y su sesión con el responsable presente son la decisión 3, y INC-07 la decisión 4 (no autorizada).
 
@@ -306,7 +307,7 @@ Las decisiones de antes siguen en la lista de abajo; las que se refieren a la li
      en float16. Agrupar regiones en una entrada y usar entradas más pequeñas se midieron y se
      descartaron porque cambian las detecciones (§9.5 y §10.2). Falta: decidir si DirectML (ONNX Runtime 1.24.4,
      la última versión con DirectML, en ingeniería sostenida) es aceptable como proveedor del
-     producto, medir RSS y VRAM (RNF-06) y la precisión, o buscar un modelo más ligero. Los
+     producto, medir la precisión (RSS y VRAM de RNF-06 ya están en §12), o buscar un modelo más ligero. Los
      pesos `icon_detect` v2 (AGPL-3.0) no se usan.
    - RNF-05 (`thesis/S0_RESULTADOS.md` §10). Decidido por el responsable el 2026-10-14:
      (a) las corridas de S4 usan desde ahora la red en float16 (`model_manifest.rnf05.json`,
@@ -315,8 +316,8 @@ Las decisiones de antes siguen en la lista de abajo; las que se refieren a la li
      qué ventanas lee ADR-0017 ni se guarda la lista entre observaciones (enumerar las
      ventanas de nivel superior cuesta unos 48 ms de los 58 ms de la lectura de accesibilidad
      y es lo que separa a dos regiones de la meta de 150 ms), así que RNF-05 sigue sin
-     cumplirse por unos 3 ms con dos regiones. Sigue pendiente: (c) medir RSS y VRAM (RNF-06)
-     con las sesiones y el float16.
+     cumplirse por unos 3 ms con dos regiones. Sigue pendiente: (c) RSS y VRAM (RNF-06), medidas
+     en la corrida de 1.0.55 con float16 (§12 de S0); el umbral y la repetición con `uia` quedan en PERF-03 (decisiones 1, 6 y 9).
    - Protocolo de S4: el conflicto entre crear `stop.flag` tras tres corridas fallidas y dejar
      correr la serie siguiente cuando una se abortó por una causa propia (dos opciones en la
      [revisión de la quinta ronda](reviews/2026-10-14-s4-fifth-round.md)), y el clic de

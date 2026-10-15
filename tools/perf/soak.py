@@ -16,10 +16,12 @@ seconds for ``--minutes`` (default 120, the soak of RNF-06), samples:
 
 The report is JSON with no screen data: no frame, no element label, no coordinates. It carries
 the raw samples, the latency percentiles per window of time, and for each resource the first
-and last medians and the least-squares slope per hour after the warm-up. It states no verdict
-of its own: RNF-06 gives no threshold, so ``--max-rss-growth-mib-per-hour`` and
-``--max-pending-regions`` exist for the owner to set one and are reported as ``criteria``
-only when given.
+and last medians and the least-squares slope per hour after the warm-up. Its ``criteria`` judge
+the working-set slope and the handle slope against the owner's thresholds of 15 October 2026
+(dossier chapter 09, section 9.7: 10 MiB per hour, and no growth), which are the defaults of
+``--max-rss-growth-mib-per-hour`` and ``--max-handle-growth-per-hour``. The queue has no
+threshold yet: ``--max-pending-regions`` has no default and its criterion appears only when it is
+given. The tool states no verdict on RNF-06 as a whole; the reading is the owner's.
 
 What it will not do, by construction:
 
@@ -120,13 +122,17 @@ def latency_windows(points: list[tuple[float, float]], window_s: float) -> list[
 
 
 def criteria(report_resources: dict, pending: dict, args) -> dict:
-    """The optional thresholds the owner gave, each with the value measured against it."""
+    """The thresholds the owner set, each with the value measured against it. The working-set
+    and handle thresholds always apply; the queue only when it has a bound."""
     result = {}
-    if args.max_rss_growth_mib_per_hour is not None:
-        slope = report_resources["private_mib"].get("slope_per_hour")
-        result["private_growth_mib_per_hour"] = {
-            "limit": args.max_rss_growth_mib_per_hour, "measured": slope,
-            "met": slope is not None and slope <= args.max_rss_growth_mib_per_hour}
+    slope = report_resources["working_set_mib"].get("slope_per_hour")
+    result["working_set_growth_mib_per_hour"] = {
+        "limit": args.max_rss_growth_mib_per_hour, "measured": slope,
+        "met": slope is not None and slope <= args.max_rss_growth_mib_per_hour}
+    slope = report_resources["handles"].get("slope_per_hour")
+    result["handle_growth_per_hour"] = {
+        "limit": args.max_handle_growth_per_hour, "measured": slope,
+        "met": slope is not None and slope <= args.max_handle_growth_per_hour}
     if args.max_pending_regions is not None:
         result["pending_regions_max"] = {
             "limit": args.max_pending_regions, "measured": pending.get("max"),
@@ -375,11 +381,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--max-foreground-losses", type=int, default=3)
     ap.add_argument("--max-observe-errors", type=int, default=3)
     ap.add_argument("--call-timeout", type=float, default=120.0)
-    ap.add_argument("--max-rss-growth-mib-per-hour", type=float, default=None,
-                    help="optional threshold for the private-bytes slope; no default, the "
-                         "dossier gives none")
+    ap.add_argument("--max-rss-growth-mib-per-hour", type=float, default=10.0,
+                    help="threshold for the slope of the working set (RSS) after the warm-up, "
+                         "in MiB per hour (default 10: the owner's, 15 October 2026)")
+    ap.add_argument("--max-handle-growth-per-hour", type=float, default=0.0,
+                    help="threshold for the slope of the handle count after the warm-up "
+                         "(default 0: no growth; the owner's, 15 October 2026)")
     ap.add_argument("--max-pending-regions", type=int, default=None,
-                    help="optional bound for the queue; no default")
+                    help="bound for the queue (pending_regions); no default: the owner has "
+                         "set none (dossier chapter 06, decision 9)")
     args = ap.parse_args(argv)
     if args.minutes <= 0 or args.interval <= 0:
         ap.error("--minutes and --interval must be positive")

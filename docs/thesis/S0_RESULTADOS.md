@@ -422,11 +422,11 @@ Milisegundos. El peor p95 del núcleo, por corrida, fue de 5,27 a 5,40 ms en la 
 
 **Límites.** Seis pares y cuatro rondas no resuelven diferencias de décimas de milisegundo, y la carga del equipo, que es compartido, varía entre corridas. Estas cifras no sustituyen la medición de referencia.
 
-## 12. PERF-03 / RNF-06: recursos y soak de 2 h (1.0.55)
+## 12. PERF-03 / RNF-06: recursos y soak de 2 h (1.0.55; veredicto con el umbral del responsable en 1.0.62)
 
 **Qué mide.** `tools/perf/soak.py` durante 120 minutos, **sin entrada de ningún tipo**: la herramienta sólo llama a `observe_screen` y `get_engine_metrics`, no toma ninguna observación mientras la aplicación de prueba no está en primer plano y no llama a `execute_action`. Se mide `ommatix serve --source dxgi` con la configuración del operador `ommatix.rnf05.directml.toml` (detector en float16 sobre DirectML, la de RNF-05, §10), que observa la aplicación de prueba propia (`tools/s4/testapp` con `--animate 100 --animate-labels 2`: dos etiquetas que cambian cada 100 ms, para que haya regiones que re-analizar). Una muestra cada 5 s. El ajuste de crecimiento deja fuera los primeros 10 minutos; las tablas de latencia los incluyen.
 
-**Sin umbral.** RNF-06 pide «sin crecimiento sostenido» y no fija cifra, y el responsable no fijó ninguna antes de medir. Esta sección da las pendientes y los máximos medidos. No declara que haya ni que no haya crecimiento sostenido: esa lectura es del responsable, con el umbral que fije. Un resultado negativo no se reemplaza por un umbral retrospectivo ([`09_EVALUACION_EXPERIMENTAL.md`](09_EVALUACION_EXPERIMENTAL.md) §9.7).
+**Sin umbral cuando se midió.** RNF-06 pide «sin crecimiento sostenido» y no fija cifra, y el responsable no fijó ninguna antes de medir. Esta sección da las pendientes y los máximos medidos, y no declara por sí sola que haya o no crecimiento sostenido. Los criterios que el responsable fijó después, el 15 de octubre de 2026, se aplican en el veredicto de más abajo ([`09_EVALUACION_EXPERIMENTAL.md`](09_EVALUACION_EXPERIMENTAL.md) §9.7).
 
 **Condiciones [V].**
 
@@ -490,13 +490,24 @@ Milisegundos. El peor p95 del núcleo, por corrida, fue de 5,27 a 5,40 ms en la 
 
 **Lectura.**
 - La corrida terminó como `completed`: 120 minutos, 1440 de 1440 observaciones, sin pérdidas de primer plano ni errores. Cumple el protocolo de la sesión B ([`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md) §B) y no es una corrida truncada.
-- **Memoria.** Después de los primeros 10 minutos, los bytes privados del motor estuvieron entre 1457,4 y 1461,9 MiB, un intervalo de 4,5 MiB. La pendiente medida es de +1,6 MiB/h sobre 1 h 50 min de muestras, y el conjunto de trabajo tiene la misma pendiente. Los manejadores y la GPU no cambiaron. No hay umbral, así que esta sección no dice si la pendiente es «crecimiento sostenido».
+- **Memoria.** Después de los primeros 10 minutos, los bytes privados del motor estuvieron entre 1457,4 y 1461,9 MiB, un intervalo de 4,5 MiB. La pendiente medida es de +1,6 MiB/h sobre 1 h 50 min de muestras, y el conjunto de trabajo tiene la misma pendiente. Los manejadores y la GPU no cambiaron. En 1.0.55 no había umbral, así que esta sección no decía si la pendiente era «crecimiento sostenido»; el veredicto de 1.0.62 más abajo sí lo dice, con los criterios fijados entonces.
 - **Cola.** Cero en todas las muestras, por la razón de arriba. RNF-06 pide una cola acotada: esta corrida la cumple sin observaciones fallidas, y no dice cómo se comporta la cola cuando una observación falla.
 - **Latencia.** A partir del minuto 10, el total del motor tiene p50 de 142,5 ms, p95 de 150,8 ms y p99 de 155,8 ms, y las medianas de las ventanas se mantienen entre 141,8 y 143,2 ms. Esta medición no es la de RNF-05 (§10) y no cambia el estado de RNF-05.
 - **Alcance.** La memoria es la del proceso `ommatix.exe`, no la de todo el sistema ni la de la aplicación de prueba.
 
+**Veredicto con el umbral del responsable (1.0.62).** El 15 de octubre de 2026 el responsable fijó los criterios de [09 §9.7](09_EVALUACION_EXPERIMENTAL.md): el conjunto de trabajo crece no más de 10 MiB/h, y los manejadores no crecen (pendiente no positiva). Aplicados a esta corrida, con la misma pendiente que la herramienta publica (sólo cambió la presentación de `criteria`, no el cálculo):
+
+| Criterio | Medido | Umbral | Resultado |
+|---|---|---|---|
+| Conjunto de trabajo, pendiente por hora | +1,6 MiB/h | no más de 10 MiB/h | Cumple |
+| Manejadores, pendiente por hora | 0 (947 en las 1320 muestras tras el calentamiento) | no positiva | Cumple |
+| Cola de regiones pendientes | 0 en las 1440 muestras, sin observaciones fallidas | sin cota fijada | Sin veredicto |
+| Memoria dedicada de GPU y bytes privados | 0 y +1,6 MiB/h | sin umbral | Sólo se publica |
+
+Veredicto de esta corrida, en sus condiciones (commit `fe35d80`, sin accesibilidad, sin entrada): **cumple los criterios de memoria de trabajo y de manejadores.** No es un veredicto sobre RNF-06. Falta la cota de la cola; el código medido no es el de `main` (después de `fe35d80` entraron INC-03 (#38), INC-04 (#39), INC-01 (#41) e INC-05 (#43)); y la ruta de UI Automation no tiene soak. Cumplir no demuestra ausencia de fugas. Los criterios se fijaron **después** de conocer la pendiente de esta corrida, así que el resultado no es una prueba preregistrada. La repetición con `uia` sobre el código actual está programada y se juzgará con los mismos valores, fijados antes de leerla.
+
 **Qué queda abierto.**
-1. **Umbral de RNF-06.** Lo fija el responsable antes de leer la pendiente con él. Sin umbral, RNF-06 no tiene veredicto y su estado no cambia (`PENDIENTE_IMPLEMENTACION_O_VALIDACION`).
+1. **Umbral de RNF-06.** Fijado el 15 de octubre de 2026 para el conjunto de trabajo y los manejadores (veredicto de arriba). Falta la cota de la cola de regiones pendientes (decisión 9 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)): sin ella RNF-06 no tiene veredicto y su estado no cambia (`PENDIENTE_IMPLEMENTACION_O_VALIDACION`).
 2. **Una sola corrida.** No hay variación entre corridas ni entre días; otra corrida la daría.
 3. **Cola con fallos.** Esta corrida no inyecta fallos de observación. Medir la cola cuando una observación falla necesita un escenario propio.
 4. **Causa de la cola de latencia** de los primeros 10 minutos y de las dos observaciones de 214 ms. Una corrida con las etapas de `_meta` y la carga del equipo muestreada durante la corrida la cerraría.

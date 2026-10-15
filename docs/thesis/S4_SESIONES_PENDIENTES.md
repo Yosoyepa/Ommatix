@@ -6,7 +6,7 @@
 
 Ninguna de las tres sesiones envía entrada (ni de teclado, ni de ratón) ni usa `execute_action`. Las herramientas de `tools/perf/` observan, y están escritas para negarse a empezar si la configuración del operador pudiera entregar entrada ([`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) §5.1).
 
-**Estado (1.0.59):** la sesión B se ejecutó una vez, supervisada: una corrida de 120 minutos completa, sin entrada y sin umbral. Resultado en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §12. Un intento de repetirla con `uia` sobre `main` quedó bloqueado antes de la corrida: la captura de pantalla falló en todas las observaciones (causa probable: el apagado de pantalla; no verificada). Sin cifras (§14). Siguen sin ejecutar las sesiones A (REL-01) y C (IT-07).
+**Estado (1.0.62):** la sesión B se ejecutó una vez, supervisada: una corrida de 120 minutos completa, sin entrada, sobre `fe35d80` y sin accesibilidad. Resultado en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §12. Con los criterios que el responsable fijó el 15 de octubre de 2026 ([capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md)), esa corrida cumple los de conjunto de trabajo y manejadores, en sus condiciones; la cola no tiene veredicto porque no tiene cota (decisión 9 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)). La repetición con `uia` sobre el código actual está programada y sin cifras. Un intento anterior de repetirla con `uia` sobre `main` quedó bloqueado antes de la corrida: la captura de pantalla falló en todas las observaciones (causa probable: el apagado de pantalla; no verificada). Sin cifras (§14). Siguen sin ejecutar las sesiones A (REL-01) y C (IT-07).
 
 ## 0. Condiciones comunes
 
@@ -44,7 +44,7 @@ Pasos: seguir [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) d
 | | |
 |---|---|
 | **Tiempo** | 125 minutos ininterrumpidos (5 de preparación y 120 de corrida), más 5 minutos antes para el ensayo corto. |
-| **Necesita del responsable** | Dejar el equipo solo; sin suspensión ni bloqueo de pantalla durante 2 h; **fijar los umbrales antes** (el dossier no da ninguno para RNF-06; capítulo 09 §9.7): crecimiento máximo de bytes privados por hora y cola máxima de regiones pendientes. |
+| **Necesita del responsable** | Dejar el equipo solo; sin suspensión ni bloqueo de pantalla durante 2 h. Los criterios de conjunto de trabajo (no más de 10 MiB/h) y de manejadores (sin crecimiento) ya están fijados ([capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md)). Falta **fijar la cota de la cola** de regiones pendientes (decisión 9 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)) si quiere que la herramienta la juzgue. |
 | **Ajustes** | Plan de energía «Alto rendimiento» (el de S0); un solo monitor; 100 % de escala (como en RNF-05); notificaciones desactivadas. |
 
 1. Ensayo corto, con la corrida real entera por delante: confirma que la aplicación de prueba toma el primer plano sola, que el contador de GPU responde y que el informe se escribe (la herramienta se negará con código 2 si no puede mantener el primer plano sin entrada).
@@ -53,11 +53,13 @@ Pasos: seguir [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) d
    python tools/perf/soak.py --config "$env:LOCALAPPDATA\Ommatix\ommatix.rnf05.directml.toml" --minutes 1 --interval 2 --out C:\ruta\fuera\soak-ensayo.json
    ```
 
-2. La corrida de 2 h (por defecto `--minutes 120`, una muestra cada 5 s; los umbrales sólo si el responsable los fijó):
+2. La corrida de 2 h (por defecto `--minutes 120` y una muestra cada 5 s; los criterios son los de 15 de octubre de 2026):
 
    ```powershell
-   python tools/perf/soak.py --config "$env:LOCALAPPDATA\Ommatix\ommatix.rnf05.directml.toml" --minutes 120 --max-rss-growth-mib-per-hour <MiB/h> --max-pending-regions <n> --out C:\ruta\fuera\soak-120.json
+   python tools/perf/soak.py --config "$env:LOCALAPPDATA\Ommatix\ommatix.rnf05.directml.toml" --minutes 120 --out C:\ruta\fuera\soak-120.json
    ```
+
+   Los criterios son los valores por defecto (`--max-rss-growth-mib-per-hour 10` y `--max-handle-growth-per-hour 0`). Cuando el responsable fije la cota de la cola, se añade `--max-pending-regions <n>`. Cambiar un criterio sólo por decisión del responsable, y se anota en el informe.
 
 **Qué hace** (sin entrada, sin `execute_action`): lanza sólo la aplicación de prueba con `--animate` (dos etiquetas que cambian cada 100 ms, para que haya regiones incrementales continuas) y `ommatix serve --source dxgi` con la configuración, y cada 5 s observa y muestrea. Termina sólo sus procesos.
 
@@ -65,9 +67,9 @@ Pasos: seguir [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) d
 
 - `samples`: por muestra, el instante, el conjunto de trabajo, los bytes privados y los manejadores de `ommatix.exe`, la memoria dedicada de GPU si el contador de rendimiento de Windows la da (si no, `gpu_counter.reason`), `pending_regions`, `observations`, `rejected_actions` y `delivered_actions` de `get_engine_metrics`, y la latencia de `observe_screen` (ida y vuelta y total del motor, de `_meta`).
 - `resources`: de cada recurso, mínimo, máximo, mediana del primer y del último décimo tras el calentamiento y la pendiente por hora; `pending_regions`: máximo, último y número de muestras en cero (cola acotada); `latency_ms`: p50/p95/p99/máximo global y por ventana de 10 minutos (cómo cambia la cola con el tiempo).
-- `counts` (ticks, observaciones, pérdidas de primer plano, errores), `ended` (`completed` es la única terminación completa), `criteria` (sólo si se dieron umbrales), el commit, si el árbol estaba limpio, y los SHA-256 del ejecutable y de la configuración.
+- `counts` (ticks, observaciones, pérdidas de primer plano, errores), `ended` (`completed` es la única terminación completa), `criteria` (cada criterio con su valor medido y si se cumple: conjunto de trabajo y manejadores siempre; la cola sólo si se da su cota), el commit, si el árbol estaba limpio, y los SHA-256 del ejecutable y de la configuración.
 
-Qué decide: RNF-06 pide «RSS/VRAM totales, cola acotada y sin crecimiento sostenido en soak de 2 h». La herramienta entrega la serie y las pendientes; no declara «sin crecimiento sostenido». Esa lectura, con los umbrales que el responsable fijó antes, es suya. Una corrida que termina con `foreground_lost` o `observe_errors` no es un soak de 2 h: se anota como corrida truncada con su motivo y se repite.
+Qué decide: RNF-06 pide «RSS/VRAM totales, cola acotada y sin crecimiento sostenido en soak de 2 h». La herramienta entrega la serie, las pendientes y, para cada criterio fijado, si se cumple; no declara por sí sola «sin crecimiento sostenido» para RNF-06. Esa lectura es del responsable, con los criterios que fijó: la memoria de trabajo y los manejadores cumplen en la corrida de §12, y la repetición se juzga con los mismos; la cola necesita su cota y una corrida en la que alguna observación falle, porque con observaciones correctas vale cero por construcción; la memoria de GPU se publica sin criterio. Una corrida que termina con `foreground_lost` o `observe_errors` no es un soak de 2 h: se anota como corrida truncada con su motivo y se repite.
 
 ## C. IT-07 / RNF-07: DPI 100, 125 y 150 %
 
