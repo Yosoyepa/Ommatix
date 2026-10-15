@@ -1,5 +1,17 @@
 # Historial documental
 
+## 1.0.77 — 2026-10-15: ronda de box 4 documentada: el caso señuelo de BDD-35 no cumple en seis corridas y la casilla 4 sigue sin marcar; IT-05 queda ejecutado con la caída ambigua de C1; el cliente del señuelo espera al operador antes de cada petición viva (ramas `docs/box4-session-record` y `fix/box4-decoy-guard`, PRs #68 a #73)
+
+Documentación, herramientas y pruebas. El motor no cambia. Ningún requisito, contrato ni escenario cambia. Cambian el estado de IT-05 en `plan_pruebas.csv` y el texto de §6.7 (casillas 4 y 10). **Ninguna casilla se marca.**
+
+- **Qué se ejecutó.** Nueve corridas en vivo, con el responsable presente: C0 dos veces, C1 una vez y el caso señuelo seis veces. Hubo 17 peticiones con `dry_run: false`, cinco clics entregados al sistema operativo y ninguna tecla en ningún campo. Cada corrida y su resultado, sin maquillar, están en [S3 §10](S3_CORRIDAS_SUPERVISADAS.md).
+- **Casilla 4 (BDD-35 en vivo), sin marcar.** Ninguna de las seis corridas cumplió el criterio pre-registrado. En la sexta, el clic de enfoque sobre Campo auxiliar se entregó, la repetición devolvió el resultado guardado y no hubo teclas, pero UI Automation situó el foco en la ventana del editor y no en Campo de destino. Decisión del responsable: la casilla no se marca.
+- **IT-05, ejecutado (`EJECUTADO_SUPERVISADO`).** La caída ambigua de C1 (motor muerto a mitad de una petición, una sola entrega, repetición rechazada con `SESSION_MISMATCH` sin tocar el contador, petición nueva correcta) completa la repetición y el conflicto de `request_id` de §9 (1.0.74). IT-05 sale de la lista de pendientes de la casilla 10.
+- **Causa del foco en la ventana (análisis, sin corrida viva).** En egui 0.36.2 el redirect del señuelo se hacía al pulsar, y al soltar, un clic fuera, el campo de destino perdía el foco; el árbol publicaba entonces ningún campo enfocado. Corregido en `testeditor` con pruebas headless (PR #73); esa corrección no se ha ejercido en vivo.
+- **Primer plano y guarda.** La tercera corrida se rechazó con `POLICY_DENIED` en el motor, sin entrega; la quinta se paró antes de su primera petición, sin evidencia de accesibilidad. El cliente comprueba, sólo en lectura, antes de cada petición viva del señuelo, que la ventana del editor está en primer plano, tiene el foco UIA y no está minimizada; si no, no envía, avisa en stderr y espera al operador, como máximo tres veces por caso (PR #73).
+- **Hallazgo de diseño (propuesta, sin decidir).** La frescura compara la pantalla completa con exactitud: cualquier cambio visible rechaza la acción, también los que no tocan el objetivo. Queda propuesto un ADR de frescura por región (§10.7 de S3); no se decide aquí.
+- **Estado sin cambio.** BDD-28 y BDD-35 en el lado del actuador real, y SEC-05, siguen en parte. El recuento de casillas sigue en 5 de 10.
+
 ## 1.0.76 — 2026-10-15: el caso señuelo de BDD-35 no se ejecuta sin foco de teclado en la ventana del editor: precondición de solo lectura, señuelo que siempre cede el foco y categorías de foco precisas (rama `fix/box4-decoy-focus`)
 
 Herramientas y pruebas. El motor no cambia. Ningún requisito, contrato, escenario ni estado de matriz cambia, y ninguna casilla se marca.

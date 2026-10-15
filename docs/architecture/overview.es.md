@@ -338,11 +338,11 @@ BDD-28..32 (otra aplicación que pasa a primer plano antes de escribir, verifica
 indeterminada sin reintento, un `request_id` repetido, texto en pantalla que pide más
 permisos, el archivo de parada del operador durante una secuencia) del mismo modo sobre un
 doble de prueba del actuador real que registra lo que recibe y no envía nada. Muestran la
-parte del motor de SEC-05, IT-04, IT-05, SEC-03 y SEC-02, que siguen necesitando corridas
-supervisadas con el actuador real (SEC-02, la parada del operador, se ejecutó en vivo el 15 de octubre de 2026, CHANGELOG 1.0.74); la comprobación del foco de teclado dentro de la
+parte del motor de SEC-05, IT-04, SEC-03 y SEC-02, que siguen necesitando corridas
+supervisadas con el actuador real (SEC-02, la parada del operador, se ejecutó en vivo el 15 de octubre de 2026, CHANGELOG 1.0.74; IT-05, el conflicto de `request_id` y la caída ambigua, se ejecutaron en vivo el 15 de octubre de 2026, CHANGELOG 1.0.74 y 1.0.77); la comprobación del foco de teclado dentro de la
 aplicación permitida es del actuador `SendInput`, y ninguna prueba lo ejecuta. El `type`
 en dos fases de la ADR-0018 (foco confirmado por el motor en el elemento objetivo, BDD-34 y
-BDD-35) corre sobre dobles del actuador y del proveedor de accesibilidad. El alcance del
+BDD-35) corre sobre dobles del actuador y del proveedor de accesibilidad. Su contraparte en vivo (seis corridas del caso señuelo el 15 de octubre de 2026, CHANGELOG 1.0.77) no cumplió: UI Automation no situó el foco de teclado en el campo de destino; véase [S3 §10](../thesis/S3_CORRIDAS_SUPERVISADAS.md). El alcance del
 operador por ventanas ([ADR-0020](../adr/0020-operator-scope-on-windows.md), aprobada: clases
 de ventana y una ventana registrada, para poder permitir `explorer.exe` sin el escritorio ni la
 barra de tareas) son BDD-36 y BDD-37, sobre el mismo doble del actuador; su parte de Windows sólo

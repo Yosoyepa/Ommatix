@@ -94,7 +94,7 @@ la [visión general de la arquitectura](docs/architecture/overview.es.md).
   `tools/s3/mcp_driver.py`. Cuatro clics reales sobre el menú Archivo llegaron al SO; la
   parada del operador, la comprobación de vigencia y la política rechazaron el resto sin
   enviar nada. SEC-01 queda ejecutada, y SEC-02 también desde la ronda de regresión en vivo del 15 de
-  octubre de 2026 ([CHANGELOG 1.0.74](docs/thesis/CHANGELOG.md)); IT-01, IT-03, IT-05 y SEC-05, en parte. Un
+  octubre de 2026 ([CHANGELOG 1.0.74](docs/thesis/CHANGELOG.md)); IT-01, IT-03 y SEC-05, en parte; IT-05 ejecutado en vivo (CHANGELOG 1.0.74 y 1.0.77). Un
   resultado `indeterminate` dice ahora si el actuador entregó la entrada. Desde entonces se
   corrigieron dos hallazgos, y una segunda corrida supervisada (con el detector en DirectML)
   confirmó los dos en vivo: la comprobación del efecto espera el redibujado dentro de un
