@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-15T13:20:37.295958+00:00",
+  "timestamp_utc": "2026-10-15T14:01:24.894350+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -14,9 +14,9 @@
     "requirements": 28,
     "planned_tests": 104,
     "references": 24,
-    "adrs": 28
+    "adrs": 29
   },
-  "checks_run": 537,
+  "checks_run": 542,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -348,7 +348,7 @@
     {
       "check": "adrs_encontradas",
       "passed": true,
-      "detail": "28"
+      "detail": "29"
     },
     {
       "check": "referencias:00_AUDITORIA_TECNICA.md",
@@ -552,6 +552,11 @@
     },
     {
       "check": "referencias:0028-operator-purge-file.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0029-accepted-by-scope-requirement-status.md",
       "passed": true,
       "detail": "[]"
     },
@@ -1783,7 +1788,7 @@
     {
       "check": "doc01_adr_existen:RNF-02",
       "passed": true,
-      "detail": "ADR-0003; ADR-0009"
+      "detail": "ADR-0003; ADR-0009; ADR-0029"
     },
     {
       "check": "doc01_propietario:RNF-02",
@@ -1803,7 +1808,7 @@
     {
       "check": "doc01_adr_existen:RNF-03",
       "passed": true,
-      "detail": "ADR-0007; ADR-0008"
+      "detail": "ADR-0007; ADR-0008; ADR-0029"
     },
     {
       "check": "doc01_propietario:RNF-03",
@@ -1883,7 +1888,7 @@
     {
       "check": "doc01_adr_existen:RNF-07",
       "passed": true,
-      "detail": "ADR-0008"
+      "detail": "ADR-0008; ADR-0029"
     },
     {
       "check": "doc01_propietario:RNF-07",
@@ -2162,6 +2167,11 @@
     },
     {
       "check": "doc01_adr_pruebas:0028-operator-purge-file.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "doc01_adr_pruebas:0029-accepted-by-scope-requirement-status.md",
       "passed": true,
       "detail": "[]"
     },
@@ -2698,7 +2708,22 @@
     {
       "check": "doc01_estado_de_requisitos",
       "passed": true,
-      "detail": ""
+      "detail": "[]"
+    },
+    {
+      "check": "doc01_nota_de_alcance:RNF-02",
+      "passed": true,
+      "detail": "EV-01 sin ejecutar: el corpus de 300 capturas no existe (docs/thesis/09_EVALUACION_EXPERIMENTAL.md); fuera del MVP por el alcance reducido (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado c). Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c)"
+    },
+    {
+      "check": "doc01_nota_de_alcance:RNF-03",
+      "passed": true,
+      "detail": "Protocolo reducido de S4 (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado b): E2E-01, E2E-02, E2E-03, S4R-02 y S4R-03, diez de diez corridas puntuadas cada uno y sin falsos éxitos (docs/thesis/S4_ACEPTACION_REDUCIDA.md). EV-02 (450 corridas) sin ejecutar: pasa al próximo corte. Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c)"
+    },
+    {
+      "check": "doc01_nota_de_alcance:RNF-07",
+      "passed": true,
+      "detail": "IT-07 sin ejecutar; fuera del MVP (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado c). Perfil medido: docs/thesis/plantillas/hardware_profile.s0.json; sesión preparada: docs/thesis/S4_SESIONES_PENDIENTES.md §C y tools/perf/dpi_probe.py. Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c)"
     },
     {
       "check": "reporte_oraculo_aprobado",
