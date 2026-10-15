@@ -89,3 +89,17 @@ EV-01,Grounding,"Precisión más cobertura, por aplicación/DPI",NO_EJECUTADO,PE
 EV-02,Tareas,450 corridas planificadas con verificador independiente,NO_EJECUTADO,PENDIENTE_PRODUCTO
 REL-01,Reproducibilidad,Lockfile/hashes/licencias/hardware/corpus,NO_EJECUTADO,PENDIENTE_PRODUCTO
 DOC-01,Trazabilidad,Cada requisito ligado a prueba/evidencia y ADR,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S4
+IDX-01,Borde o esquina en contacto,Superconjunto de candidatos; el filtro de área positiva rechaza el contacto.,ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-02,IoC igual a cero,Recorrido completo: el índice no omite controles disjuntos.,ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-03,Panel," botón y texto anidados,Mismo propietario específico con ambos enumeradores.",ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-04,Dos propietarios con igual área,Misma abstención.,ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-05,Etiquetas con costo próximo,"Misma ambigüedad, sin truncamiento a top-k.",ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-06,Corredor bloqueado,"Mismas exclusiones del propio control, de contenedores y del corredor.",ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-07,Duplicados y orden,Multiplicidad conservada y posiciones en orden de origen.,ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-08,Palabra mucho más alta,La caja de la palabra es la ventana: no se pierde el candidato.,ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-09,Revisión o época distinta,La vista de una revisión no resuelve posiciones de otra.,ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-10,Fallo antes del commit,Evidencia publicada y resultado coherentes tras el fallo.,ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-11,Cadena de soportes,Cierre completo o refresco completo por presupuesto (A1 sin índice).,ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-12,Relación con hueco grande,La envolvente no activa la relación (A1 sin índice).,ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-13,Solapamiento total,Corrección conservada aunque no haya ventaja.,ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL
+IDX-14,Fusión integrada apareada,"Mismos resultados integrados, no sólo mismos recuentos.",ADR-0027,IMPLEMENTADO_EN_RUST_EXPERIMENTAL

@@ -13,6 +13,7 @@ use thiserror::Error;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::bbox::BBox;
+use crate::candidates::{CandidateSearch, ControlSearch};
 
 #[derive(Debug, Error, Clone, Copy, PartialEq)]
 pub enum FusionError {
@@ -105,16 +106,18 @@ fn is_close(a: f64, b: f64) -> bool {
 }
 
 /// Index of the control that owns `word`, if any: among the controls whose IoC over the word
-/// reaches `threshold`, the smallest; two of (nearly) equal area abstain.
-fn owner_of(controls: &[BBox], word: &Word, threshold: f64) -> Option<usize> {
-    let mut candidates: Vec<(f64, usize)> = controls
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.ioc(&word.bbox) >= threshold)
-        .map(|(i, c)| (c.area(), i))
-        .collect();
-    candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-    match candidates.as_slice() {
+/// reaches `threshold`, the smallest; two of (nearly) equal area abstain. The candidates come
+/// from `search`; the IoC filter and the order are the same whichever enumerator found them.
+fn owner_of(search: &ControlSearch<'_>, word: &Word, threshold: f64) -> Option<usize> {
+    let boxes = search.boxes();
+    let mut claims: Vec<(f64, usize)> = Vec::new();
+    search.owner_candidates(&word.bbox, threshold, |i| {
+        if boxes[i].ioc(&word.bbox) >= threshold {
+            claims.push((boxes[i].area(), i));
+        }
+    });
+    claims.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    match claims.as_slice() {
         [] => None,
         [first, second, ..] if is_close(first.0, second.0) => None,
         [first, ..] => Some(first.1),
@@ -122,16 +125,29 @@ fn owner_of(controls: &[BBox], word: &Word, threshold: f64) -> Option<usize> {
 }
 
 /// The words each control owns, in reading order, indexed like `controls`. A panel does not
-/// take text from a control inside it; equal claims abstain.
+/// take text from a control inside it; equal claims abstain. Scans every control (the
+/// reference).
 pub fn internal_owners(
     controls: &[BBox],
     words: &[Word],
     threshold: f64,
 ) -> Result<Vec<Vec<Word>>, FusionError> {
+    internal_owners_with(controls, words, threshold, CandidateSearch::Scan)
+}
+
+/// [`internal_owners`] with the candidates enumerated by `candidates` (ADR-0027). The result
+/// is the same for every enumerator.
+pub fn internal_owners_with(
+    controls: &[BBox],
+    words: &[Word],
+    threshold: f64,
+    candidates: CandidateSearch,
+) -> Result<Vec<Vec<Word>>, FusionError> {
     check_threshold(threshold)?;
+    let search = ControlSearch::new(controls, candidates);
     let mut owned = vec![Vec::new(); controls.len()];
     for word in words {
-        if let Some(i) = owner_of(controls, word, threshold) {
+        if let Some(i) = owner_of(&search, word, threshold) {
             owned[i].push(word.clone());
         }
     }
@@ -200,19 +216,34 @@ pub fn choose_external_label(
     other_controls: &[BBox],
     margin: f64,
 ) -> Result<LabelChoice, FusionError> {
+    let search = ControlSearch::new(other_controls, CandidateSearch::Scan);
+    choose_label(control, words, &search, margin)
+}
+
+/// [`choose_external_label`] over the controls of one fusion, whose obstacles are enumerated by
+/// `search` (ADR-0027). Words are read in source order, and the same predicate decides each
+/// obstacle whichever enumerator finds it: another control, not one containing `control`, that
+/// overlaps the corridor with positive area.
+fn choose_label(
+    control: &BBox,
+    words: &[Word],
+    search: &ControlSearch<'_>,
+    margin: f64,
+) -> Result<LabelChoice, FusionError> {
     if !(margin.is_finite() && margin >= 0.0) {
         return Err(FusionError::InvalidMargin(margin));
     }
-    let blockers: Vec<&BBox> = other_controls
-        .iter()
-        .filter(|r| *r != control && !r.contains(control))
-        .collect();
+    let boxes = search.boxes();
     let mut candidates: Vec<(f64, &Word)> = words
         .iter()
         .filter_map(|word| {
             let cost = label_cost(control, &word.bbox)?;
-            let blocked = corridor(&word.bbox, control)
-                .is_some_and(|gap| blockers.iter().any(|b| b.overlaps(&gap)));
+            let blocked = corridor(&word.bbox, control).is_some_and(|gap| {
+                search.any_overlapping(&gap, |i| {
+                    let other = &boxes[i];
+                    other != control && !other.contains(control) && other.overlaps(&gap)
+                })
+            });
             (!blocked).then_some((cost, word))
         })
         .collect();
@@ -344,6 +375,9 @@ pub struct FusionParams {
     /// IoU at which a detector box and an accessibility element are the same control
     /// (ADR-0017, [P]; containment uses `ioc_threshold`).
     pub accessibility_iou: f64,
+    /// How owners and corridor obstacles are enumerated (ADR-0027). It changes how the
+    /// candidates are found, never the result: [`CandidateSearch::Scan`] by default.
+    pub candidate_search: CandidateSearch,
 }
 
 impl Default for FusionParams {
@@ -352,6 +386,7 @@ impl Default for FusionParams {
             ioc_threshold: 0.75,
             label_margin: 0.15,
             accessibility_iou: 0.5,
+            candidate_search: CandidateSearch::Scan,
         }
     }
 }
@@ -374,9 +409,11 @@ pub fn fuse(
 ) -> Result<Fusion, FusionError> {
     let boxes: Vec<BBox> = controls.iter().map(|c| c.bbox).collect();
     check_threshold(params.ioc_threshold)?;
+    // Built once for this fusion, over the reconciled controls: owners and obstacles share it.
+    let search = ControlSearch::new(&boxes, params.candidate_search);
     let owners: Vec<Option<usize>> = words
         .iter()
-        .map(|w| owner_of(&boxes, w, params.ioc_threshold))
+        .map(|w| owner_of(&search, w, params.ioc_threshold))
         .collect();
     let free: Vec<Word> = words
         .iter()
@@ -388,10 +425,10 @@ pub fn fuse(
     let mut labels = Vec::with_capacity(controls.len());
     for control in controls {
         labels.push(if control.role.takes_external_label() {
-            Some(choose_external_label(
+            Some(choose_label(
                 &control.bbox,
                 &free,
-                &boxes,
+                &search,
                 params.label_margin,
             )?)
         } else {
@@ -487,8 +524,10 @@ fn accessible_match(
         [first, ..] => return Some(first.1),
         [] => {}
     }
+    // Reconciliation stays on the reference scan (ADR-0027 covers owners and obstacles only).
     let containers: Vec<BBox> = accessible.iter().map(|a| a.control.bbox).collect();
-    owner_of(&containers, &Word::new("", *visual), params.ioc_threshold)
+    let search = ControlSearch::new(&containers, CandidateSearch::Scan);
+    owner_of(&search, &Word::new("", *visual), params.ioc_threshold)
 }
 
 /// Reconciles detector boxes with accessibility elements (ADR-0017, an extension of
@@ -902,6 +941,461 @@ mod tests {
         assert_eq!(
             reconcile_accessibility(&[], &[], bad),
             Err(FusionError::InvalidThreshold(1.5))
+        );
+    }
+
+    // ---- ADR-0027: the candidate index. Every IDX test runs both enumerators on one fixture
+    // and must get the reference's answer. Every mutant drops one check of the reference and
+    // must then answer differently on the same fixture: that shows the check is needed.
+
+    const BOTH: [CandidateSearch; 2] = [CandidateSearch::Scan, CandidateSearch::RStar];
+
+    /// The index of the single owner among `owned` (every fixture here has one word).
+    fn owner_index(owned: &[Vec<Word>]) -> Option<usize> {
+        owned.iter().position(|w| !w.is_empty())
+    }
+
+    /// The checks of the owner decision that a mutant may drop or change.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum OwnerMutant {
+        /// No `ioc >= threshold` filter: every control the window meets claims the word.
+        WithoutIoc,
+        /// Ties go to the first claim instead of abstaining.
+        FirstOnTie,
+        /// Identical boxes count once (deduplication by geometry).
+        GeometryDedupe,
+        /// The window is the word's centre point instead of its box.
+        CentreWindow,
+        /// At a zero threshold the window is used (no fallback to every control).
+        ZeroWindow,
+        /// The largest claim wins instead of the smallest.
+        LargestFirst,
+    }
+
+    fn owner_mutant(
+        boxes: &[BBox],
+        word: &BBox,
+        threshold: f64,
+        mutant: OwnerMutant,
+    ) -> Option<usize> {
+        let (cx, cy) = word.center();
+        let meets_window = |c: &BBox| {
+            c.x0() <= word.x1() && word.x0() <= c.x1() && c.y0() <= word.y1() && word.y0() <= c.y1()
+        };
+        let mut positions: Vec<usize> = (0..boxes.len())
+            .filter(|&i| match mutant {
+                OwnerMutant::CentreWindow => {
+                    let c = &boxes[i];
+                    c.x0() <= cx && cx < c.x1() && c.y0() <= cy && cy < c.y1()
+                }
+                OwnerMutant::ZeroWindow if threshold == 0.0 => meets_window(&boxes[i]),
+                _ => true,
+            })
+            .collect();
+        if mutant == OwnerMutant::GeometryDedupe {
+            let mut seen: Vec<BBox> = Vec::new();
+            positions.retain(|&i| {
+                let first = !seen.contains(&boxes[i]);
+                seen.push(boxes[i]);
+                first
+            });
+        }
+        let mut claims: Vec<(f64, usize)> = positions
+            .into_iter()
+            .filter(|&i| mutant == OwnerMutant::WithoutIoc || boxes[i].ioc(word) >= threshold)
+            .map(|i| (boxes[i].area(), i))
+            .collect();
+        claims.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        if mutant == OwnerMutant::LargestFirst {
+            return claims.last().map(|c| c.1);
+        }
+        match claims.as_slice() {
+            [] => None,
+            [first, ..] if mutant == OwnerMutant::FirstOnTie => Some(first.1),
+            [first, second, ..] if is_close(first.0, second.0) => None,
+            [first, ..] => Some(first.1),
+        }
+    }
+
+    /// The checks of the obstacle predicate and of the label order that a mutant may change.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum LabelMutant {
+        /// Touching the corridor's edge counts as blocking.
+        AnyContact,
+        /// A control containing the labelled control blocks the corridor (a background panel).
+        ContainerBlocks,
+        /// The corridor is replaced by the envelope of the word and the control.
+        EnvelopeCorridor,
+        /// Only the best candidate is kept: no runner-up, so no ambiguity.
+        TopOne,
+    }
+
+    fn touches(a: &BBox, b: &BBox) -> bool {
+        a.x0() <= b.x1() && b.x0() <= a.x1() && a.y0() <= b.y1() && b.y0() <= a.y1()
+    }
+
+    fn label_mutant(
+        control: &BBox,
+        words: &[Word],
+        others: &[BBox],
+        margin: f64,
+        mutant: LabelMutant,
+    ) -> LabelChoice {
+        let mut candidates: Vec<(f64, &Word)> = words
+            .iter()
+            .filter_map(|word| {
+                let cost = label_cost(control, &word.bbox)?;
+                let blocked = match corridor(&word.bbox, control) {
+                    None => false,
+                    Some(gap) => others.iter().any(|b| {
+                        if b == control {
+                            return false;
+                        }
+                        match mutant {
+                            LabelMutant::AnyContact => !b.contains(control) && touches(b, &gap),
+                            LabelMutant::ContainerBlocks => b.overlaps(&gap),
+                            LabelMutant::EnvelopeCorridor => {
+                                !b.contains(control) && b.overlaps(&word.bbox.union(control))
+                            }
+                            LabelMutant::TopOne => !b.contains(control) && b.overlaps(&gap),
+                        }
+                    }),
+                };
+                (!blocked).then_some((cost, word))
+            })
+            .collect();
+        candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.text.cmp(&b.1.text)));
+        match candidates.as_slice() {
+            [] => LabelChoice::NoCandidate,
+            [best, second, ..] if mutant != LabelMutant::TopOne && second.0 - best.0 < margin => {
+                LabelChoice::Ambiguous
+            }
+            [best, ..] => LabelChoice::Label(best.1.clone()),
+        }
+    }
+
+    fn label_of(control: &BBox, words: &[Word], others: &[BBox], margin: f64) -> LabelChoice {
+        choose_external_label(control, words, others, margin).unwrap()
+    }
+
+    /// IDX-03 (RF-06): a panel, a button and a text that nest; the most specific control owns
+    /// the text, whatever the enumerator and the input order. Without the order by area the
+    /// panel would own it.
+    #[test]
+    fn idx_03_the_most_specific_owner_is_the_same_for_both_enumerators() {
+        let panel = bx(0.0, 0.0, 200.0, 200.0);
+        let button = bx(10.0, 10.0, 100.0, 40.0);
+        let word = Word::new("OK", bx(20.0, 15.0, 30.0, 25.0));
+        for strategy in BOTH {
+            let owned = internal_owners_with(
+                &[panel, button],
+                std::slice::from_ref(&word),
+                0.75,
+                strategy,
+            )
+            .unwrap();
+            assert_eq!(owner_index(&owned), Some(1), "{strategy:?}");
+            let owned = internal_owners_with(
+                &[button, panel],
+                std::slice::from_ref(&word),
+                0.75,
+                strategy,
+            )
+            .unwrap();
+            assert_eq!(owner_index(&owned), Some(0), "{strategy:?}");
+        }
+        assert_eq!(
+            owner_mutant(
+                &[panel, button],
+                &word.bbox,
+                0.75,
+                OwnerMutant::LargestFirst
+            ),
+            Some(0)
+        );
+    }
+
+    /// IDX-03 (mutation): without the IoC filter, a small control that only grazes the word
+    /// (IoC 0.01) would own it, because the window meets it.
+    #[test]
+    fn idx_03_without_the_ioc_filter_a_grazing_control_owns_the_word() {
+        let word = bx(0.0, 0.0, 100.0, 100.0);
+        let grazing = bx(90.0, 90.0, 110.0, 110.0);
+        let whole = bx(0.0, 0.0, 100.0, 100.0);
+        let boxes = [grazing, whole];
+        assert_eq!(
+            owner_mutant(&boxes, &word, 0.75, OwnerMutant::WithoutIoc),
+            Some(0)
+        );
+        for strategy in BOTH {
+            let owned =
+                internal_owners_with(&boxes, &[Word::new("x", word)], 0.75, strategy).unwrap();
+            assert_eq!(owner_index(&owned), Some(1), "{strategy:?}");
+        }
+    }
+
+    /// IDX-04 (RF-06): two equal claims abstain, for both enumerators.
+    #[test]
+    fn idx_04_equal_area_owners_abstain_for_both_enumerators() {
+        let b = bx(0.0, 0.0, 100.0, 100.0);
+        let word = Word::new("OK", bx(10.0, 10.0, 30.0, 20.0));
+        for strategy in BOTH {
+            let owned =
+                internal_owners_with(&[b, b], std::slice::from_ref(&word), 0.75, strategy).unwrap();
+            assert_eq!(owner_index(&owned), None, "{strategy:?}");
+        }
+        assert_eq!(
+            owner_mutant(&[b, b], &word.bbox, 0.75, OwnerMutant::FirstOnTie),
+            Some(0)
+        );
+    }
+
+    /// IDX-07 (RF-06): identical boxes are two controls, so they are two claims and abstain.
+    /// Deduplicating by geometry would keep one and give it the word.
+    #[test]
+    fn idx_07_identical_boxes_are_two_claims_not_one() {
+        let b = bx(0.0, 0.0, 100.0, 100.0);
+        let word = Word::new("OK", bx(10.0, 10.0, 30.0, 20.0));
+        assert_eq!(
+            owner_mutant(&[b, b], &word.bbox, 0.75, OwnerMutant::GeometryDedupe),
+            Some(0)
+        );
+        for strategy in BOTH {
+            let owned =
+                internal_owners_with(&[b, b], std::slice::from_ref(&word), 0.75, strategy).unwrap();
+            assert_eq!(owner_index(&owned), None, "{strategy:?}");
+        }
+    }
+
+    /// IDX-02 (ADR-0027): at an IoC threshold of zero a disjoint control still qualifies, so
+    /// the owner is the smallest control of the whole fusion, found by a full pass.
+    #[test]
+    fn idx_02_zero_threshold_keeps_the_reference_owner() {
+        let large = bx(100.0, 100.0, 110.0, 110.0);
+        let small = bx(0.0, 0.0, 5.0, 5.0);
+        let boxes = [large, small];
+        let word = bx(10.0, 10.0, 20.0, 20.0);
+        for strategy in BOTH {
+            let owned =
+                internal_owners_with(&boxes, &[Word::new("x", word)], 0.0, strategy).unwrap();
+            assert_eq!(owner_index(&owned), Some(1), "{strategy:?}");
+        }
+        assert_eq!(
+            owner_mutant(&boxes, &word, 0.0, OwnerMutant::ZeroWindow),
+            None
+        );
+    }
+
+    /// IDX-08 (RF-06): the window of a word is the word's whole box. A centre-point window
+    /// loses a control that covers 40 % of the word, which is still an owner at 0.25.
+    #[test]
+    fn idx_08_a_centre_point_window_loses_partial_owners() {
+        let word = bx(0.0, 0.0, 10.0, 10.0);
+        let partial = bx(0.0, 0.0, 10.0, 4.0);
+        assert_eq!(partial.ioc(&word), 0.4);
+        assert_eq!(
+            owner_mutant(&[partial], &word, 0.25, OwnerMutant::CentreWindow),
+            None
+        );
+        for strategy in BOTH {
+            let owned =
+                internal_owners_with(&[partial], &[Word::new("x", word)], 0.25, strategy).unwrap();
+            assert_eq!(owner_index(&owned), Some(0), "{strategy:?}");
+        }
+    }
+
+    /// IDX-05 (RF-06): two labels at the same cost stay ambiguous. The first one is not taken,
+    /// and no top-k of the enumeration may hide the runner-up.
+    #[test]
+    fn idx_05_close_label_costs_stay_ambiguous_without_truncation() {
+        let field = bx(100.0, 100.0, 300.0, 135.0);
+        let words = [
+            Word::new("Correo", bx(100.0, 72.0, 170.0, 92.0)),
+            Word::new("Teléfono", bx(100.0, 72.0, 190.0, 92.0)),
+        ];
+        assert_eq!(
+            label_of(&field, &words, &[field], 0.15),
+            LabelChoice::Ambiguous
+        );
+        assert_eq!(
+            label_mutant(&field, &words, &[field], 0.15, LabelMutant::TopOne),
+            LabelChoice::Label(words[0].clone())
+        );
+        for strategy in BOTH {
+            let fusion = fuse(
+                &[control(field, Role::Input, Actionability::Unknown)],
+                &words,
+                FusionParams {
+                    candidate_search: strategy,
+                    ..FusionParams::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                fusion.controls[0].label,
+                Some(LabelChoice::Ambiguous),
+                "{strategy:?}"
+            );
+        }
+    }
+
+    /// IDX-01 (RF-06): a control that only touches the corridor's top edge is not an obstacle.
+    /// The corridor between the word and the field is x in [50, 100], y in [105, 115]; the
+    /// blocker touches it along y = 105 and overlaps it nowhere.
+    #[test]
+    fn idx_01_corridor_edge_contact_does_not_block() {
+        let field = bx(100.0, 100.0, 200.0, 120.0);
+        let word = Word::new("Nombre", bx(0.0, 105.0, 50.0, 115.0));
+        let touching = bx(40.0, 100.0, 60.0, 105.0);
+        assert_eq!(
+            corridor(&word.bbox, &field),
+            Some(bx(50.0, 105.0, 100.0, 115.0))
+        );
+        assert_eq!(
+            label_mutant(
+                &field,
+                std::slice::from_ref(&word),
+                &[field, touching],
+                0.15,
+                LabelMutant::AnyContact
+            ),
+            LabelChoice::NoCandidate
+        );
+        for strategy in BOTH {
+            let scene = [field, touching];
+            let search = ControlSearch::new(&scene, strategy);
+            let label = choose_label(&field, std::slice::from_ref(&word), &search, 0.15).unwrap();
+            assert_eq!(label, LabelChoice::Label(word.clone()), "{strategy:?}");
+        }
+    }
+
+    /// IDX-06 (RF-06): a panel that contains the labelled control and crosses its corridor is
+    /// not an obstacle; a control that really crosses the corridor is one, for both enumerators.
+    #[test]
+    fn idx_06_a_panel_around_the_control_is_not_a_blocker() {
+        let field = bx(100.0, 100.0, 200.0, 120.0);
+        let panel = bx(-10.0, 0.0, 300.0, 200.0);
+        let word = Word::new("Nombre", bx(0.0, 105.0, 50.0, 115.0));
+        let words = std::slice::from_ref(&word);
+        assert_eq!(
+            label_mutant(
+                &field,
+                words,
+                &[field, panel],
+                0.15,
+                LabelMutant::ContainerBlocks
+            ),
+            LabelChoice::NoCandidate
+        );
+        let crossing = bx(70.0, 104.0, 80.0, 116.0);
+        for strategy in BOTH {
+            for (scene, expected) in [
+                (vec![field, panel], LabelChoice::Label(word.clone())),
+                (vec![field, crossing], LabelChoice::NoCandidate),
+            ] {
+                let search = ControlSearch::new(&scene, strategy);
+                assert_eq!(
+                    choose_label(&field, words, &search, 0.15).unwrap(),
+                    expected,
+                    "{strategy:?}"
+                );
+            }
+        }
+    }
+
+    /// IDX-06 (RF-06): the corridor is the gap between the facing edges, never the rectangle
+    /// that contains the word and the control. A control inside that rectangle, outside the gap,
+    /// does not block the label.
+    #[test]
+    fn idx_06_the_corridor_is_not_the_envelope_of_its_ends() {
+        let field = bx(100.0, 100.0, 200.0, 120.0);
+        let word = Word::new("Nombre", bx(0.0, 105.0, 50.0, 115.0));
+        let inside_envelope = bx(10.0, 106.0, 20.0, 114.0);
+        assert!(word.bbox.union(&field).overlaps(&inside_envelope));
+        assert_eq!(
+            label_mutant(
+                &field,
+                std::slice::from_ref(&word),
+                &[field, inside_envelope],
+                0.15,
+                LabelMutant::EnvelopeCorridor
+            ),
+            LabelChoice::NoCandidate
+        );
+        for strategy in BOTH {
+            let scene = [field, inside_envelope];
+            let search = ControlSearch::new(&scene, strategy);
+            let label = choose_label(&field, std::slice::from_ref(&word), &search, 0.15).unwrap();
+            assert_eq!(label, LabelChoice::Label(word.clone()), "{strategy:?}");
+        }
+    }
+
+    /// IDX-13 (RF-06): every control overlaps the word. The index keeps all of them, the owner
+    /// abstains as the reference does, and the fusion is the same.
+    #[test]
+    fn idx_13_total_overlap_abstains_for_both_enumerators() {
+        let same = bx(0.0, 0.0, 100.0, 100.0);
+        let controls = vec![control(same, Role::Button, Actionability::Confirmed); 500];
+        let boxes: Vec<BBox> = controls.iter().map(|c| c.bbox).collect();
+        let words = [Word::new("OK", bx(1.0, 1.0, 2.0, 2.0))];
+        let reference = fuse(&controls, &words, FusionParams::default()).unwrap();
+        assert!(reference.controls.iter().all(|c| c.inner_words.is_empty()));
+        assert_eq!(
+            owner_mutant(&boxes, &words[0].bbox, 0.75, OwnerMutant::FirstOnTie),
+            Some(0)
+        );
+        let indexed = fuse(
+            &controls,
+            &words,
+            FusionParams {
+                candidate_search: CandidateSearch::RStar,
+                ..FusionParams::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(indexed, reference);
+    }
+
+    /// IDX-14 (RF-06): a small fusion gives the same whole result for both enumerators, not just
+    /// the same owners: labels, orphans and the order of every list.
+    #[test]
+    fn idx_14_a_small_fusion_is_the_same_for_both_enumerators() {
+        let panel = control(
+            bx(0.0, 0.0, 400.0, 90.0),
+            Role::Unknown,
+            Actionability::Unknown,
+        );
+        let button = control(
+            bx(20.0, 20.0, 140.0, 50.0),
+            Role::Button,
+            Actionability::Confirmed,
+        );
+        let field = control(
+            bx(100.0, 100.0, 300.0, 135.0),
+            Role::Input,
+            Actionability::Unknown,
+        );
+        let controls = [panel, button, field];
+        let words = [
+            Word::new("Aceptar", bx(40.0, 25.0, 110.0, 45.0)),
+            Word::new("Nombre", bx(30.0, 105.0, 90.0, 128.0)),
+            Word::new("Formulario", bx(0.0, 0.0, 120.0, 20.0)),
+        ];
+        let scan = fuse(&controls, &words, FusionParams::default()).unwrap();
+        let tree = fuse(
+            &controls,
+            &words,
+            FusionParams {
+                candidate_search: CandidateSearch::RStar,
+                ..FusionParams::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(tree, scan);
+        assert_eq!(scan.controls[1].inner_words, vec![words[0].clone()]);
+        assert_eq!(
+            scan.controls[2].label,
+            Some(LabelChoice::Label(words[1].clone()))
         );
     }
 }

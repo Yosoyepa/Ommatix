@@ -1,0 +1,2729 @@
+{
+  "build": "release",
+  "cell_time_cap_seconds": 900,
+  "cells": [
+    {
+      "controls": 32,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SparseGrid",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 5500.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.323699421965318,
+        -0.2748538011695907
+      ],
+      "reduction_median": -0.30232558139534893,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 4400.0,
+          "p95_ns": 5300.0
+        },
+        "query": {
+          "median_ns": 3900.0,
+          "p95_ns": 4500.0
+        },
+        "refine_and_order": {
+          "median_ns": 13800.0,
+          "p95_ns": 14600.0
+        },
+        "total": {
+          "median_ns": 22400.0,
+          "p95_ns": 23200.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 200.0
+        },
+        "refine_and_order": {
+          "median_ns": 17100.0,
+          "p95_ns": 17600.0
+        },
+        "total": {
+          "median_ns": 17200.0,
+          "p95_ns": 17700.0
+        }
+      },
+      "size_requested": 32,
+      "status": "measured",
+      "target_family": true,
+      "words": 41
+    },
+    {
+      "controls": 128,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SparseGrid",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -12200.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.0094836670179137,
+        0.05460060667340749
+      ],
+      "reduction_median": 0.014629049111807735,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 16600.0,
+          "p95_ns": 19000.0
+        },
+        "query": {
+          "median_ns": 13600.0,
+          "p95_ns": 15100.0
+        },
+        "refine_and_order": {
+          "median_ns": 63500.0,
+          "p95_ns": 75200.0
+        },
+        "total": {
+          "median_ns": 94300.0,
+          "p95_ns": 104600.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "refine_and_order": {
+          "median_ns": 95600.0,
+          "p95_ns": 116700.0
+        },
+        "total": {
+          "median_ns": 95700.0,
+          "p95_ns": 116800.0
+        }
+      },
+      "size_requested": 128,
+      "status": "measured",
+      "target_family": true,
+      "words": 128
+    },
+    {
+      "controls": 512,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SparseGrid",
+      "g4_pass": true,
+      "g5_review": false,
+      "p95_delta_ns": -374400.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.34251162790697676,
+        0.4025145604141629
+      ],
+      "reduction_median": 0.388668180098373,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 95600.0,
+          "p95_ns": 124200.0
+        },
+        "query": {
+          "median_ns": 82700.0,
+          "p95_ns": 84300.0
+        },
+        "refine_and_order": {
+          "median_ns": 466700.0,
+          "p95_ns": 540300.0
+        },
+        "total": {
+          "median_ns": 646300.0,
+          "p95_ns": 732200.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 300.0,
+          "p95_ns": 400.0
+        },
+        "refine_and_order": {
+          "median_ns": 1056700.0,
+          "p95_ns": 1106300.0
+        },
+        "total": {
+          "median_ns": 1057200.0,
+          "p95_ns": 1106600.0
+        }
+      },
+      "size_requested": 512,
+      "status": "measured",
+      "target_family": true,
+      "words": 539
+    },
+    {
+      "controls": 2048,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SparseGrid",
+      "g4_pass": true,
+      "g5_review": false,
+      "p95_delta_ns": -8823600.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.6230260503717364,
+        0.6381878705167919
+      ],
+      "reduction_median": 0.6293009048469829,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 421400.0,
+          "p95_ns": 528200.0
+        },
+        "query": {
+          "median_ns": 380600.0,
+          "p95_ns": 391200.0
+        },
+        "refine_and_order": {
+          "median_ns": 4352400.0,
+          "p95_ns": 4463100.0
+        },
+        "total": {
+          "median_ns": 5145600.0,
+          "p95_ns": 5328200.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 200.0
+        },
+        "query": {
+          "median_ns": 900.0,
+          "p95_ns": 1000.0
+        },
+        "refine_and_order": {
+          "median_ns": 13879900.0,
+          "p95_ns": 14150900.0
+        },
+        "total": {
+          "median_ns": 13880800.0,
+          "p95_ns": 14151800.0
+        }
+      },
+      "size_requested": 2048,
+      "status": "measured",
+      "target_family": true,
+      "words": 2126
+    },
+    {
+      "controls": 8192,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SparseGrid",
+      "g4_pass": true,
+      "g5_review": false,
+      "p95_delta_ns": -209527200.0,
+      "p95_review_limit_ns": 2943310.0,
+      "reduction_ci95": [
+        0.6795893914392968,
+        0.7617991058517876
+      ],
+      "reduction_median": 0.738528210855802,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 1680400.0,
+          "p95_ns": 2158200.0
+        },
+        "query": {
+          "median_ns": 1725500.0,
+          "p95_ns": 2203600.0
+        },
+        "refine_and_order": {
+          "median_ns": 62730100.0,
+          "p95_ns": 81340200.0
+        },
+        "total": {
+          "median_ns": 66042100.0,
+          "p95_ns": 84803800.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 200.0,
+          "p95_ns": 300.0
+        },
+        "query": {
+          "median_ns": 3800.0,
+          "p95_ns": 8400.0
+        },
+        "refine_and_order": {
+          "median_ns": 252574400.0,
+          "p95_ns": 294323100.0
+        },
+        "total": {
+          "median_ns": 252578300.0,
+          "p95_ns": 294331000.0
+        }
+      },
+      "size_requested": 8192,
+      "status": "measured",
+      "target_family": true,
+      "words": 8562
+    },
+    {
+      "controls": 32,
+      "corridor_queries": 63,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "MultiColumnForm",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 1600.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.04761904761904767,
+        -0.02348993288590595
+      ],
+      "reduction_median": -0.03703703703703698,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 3100.0,
+          "p95_ns": 3300.0
+        },
+        "query": {
+          "median_ns": 6400.0,
+          "p95_ns": 7500.0
+        },
+        "refine_and_order": {
+          "median_ns": 21000.0,
+          "p95_ns": 21700.0
+        },
+        "total": {
+          "median_ns": 30800.0,
+          "p95_ns": 31500.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "refine_and_order": {
+          "median_ns": 29500.0,
+          "p95_ns": 29800.0
+        },
+        "total": {
+          "median_ns": 29700.0,
+          "p95_ns": 29900.0
+        }
+      },
+      "size_requested": 32,
+      "status": "measured",
+      "target_family": true,
+      "words": 52
+    },
+    {
+      "controls": 128,
+      "corridor_queries": 246,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "MultiColumnForm",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -66700.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.15943799633475875,
+        0.18113547611895464
+      ],
+      "reduction_median": 0.17471333735666872,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 14300.0,
+          "p95_ns": 19700.0
+        },
+        "query": {
+          "median_ns": 41700.0,
+          "p95_ns": 42800.0
+        },
+        "refine_and_order": {
+          "median_ns": 216500.0,
+          "p95_ns": 239400.0
+        },
+        "total": {
+          "median_ns": 273500.0,
+          "p95_ns": 294000.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 200.0,
+          "p95_ns": 300.0
+        },
+        "refine_and_order": {
+          "median_ns": 331300.0,
+          "p95_ns": 360600.0
+        },
+        "total": {
+          "median_ns": 331400.0,
+          "p95_ns": 360700.0
+        }
+      },
+      "size_requested": 128,
+      "status": "measured",
+      "target_family": true,
+      "words": 198
+    },
+    {
+      "controls": 512,
+      "corridor_queries": 998,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "MultiColumnForm",
+      "g4_pass": true,
+      "g5_review": false,
+      "p95_delta_ns": -975900.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.27010032061226597,
+        0.32482767212025576
+      ],
+      "reduction_median": 0.2829499211028984,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 82800.0,
+          "p95_ns": 91800.0
+        },
+        "query": {
+          "median_ns": 218500.0,
+          "p95_ns": 227200.0
+        },
+        "refine_and_order": {
+          "median_ns": 3158900.0,
+          "p95_ns": 3735900.0
+        },
+        "total": {
+          "median_ns": 3453600.0,
+          "p95_ns": 4039700.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 600.0,
+          "p95_ns": 800.0
+        },
+        "refine_and_order": {
+          "median_ns": 4815700.0,
+          "p95_ns": 5015000.0
+        },
+        "total": {
+          "median_ns": 4816400.0,
+          "p95_ns": 5015600.0
+        }
+      },
+      "size_requested": 512,
+      "status": "measured",
+      "target_family": true,
+      "words": 801
+    },
+    {
+      "controls": 2048,
+      "corridor_queries": 3867,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "MultiColumnForm",
+      "g4_pass": true,
+      "g5_review": false,
+      "p95_delta_ns": -65109400.0,
+      "p95_review_limit_ns": 1450711.0,
+      "reduction_ci95": [
+        0.24724745071973442,
+        0.5911851834556985
+      ],
+      "reduction_median": 0.4397711046038546,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 379100.0,
+          "p95_ns": 617400.0
+        },
+        "query": {
+          "median_ns": 1087800.0,
+          "p95_ns": 1541100.0
+        },
+        "refine_and_order": {
+          "median_ns": 61330700.0,
+          "p95_ns": 77819900.0
+        },
+        "total": {
+          "median_ns": 63479200.0,
+          "p95_ns": 79961700.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 200.0
+        },
+        "query": {
+          "median_ns": 2400.0,
+          "p95_ns": 5100.0
+        },
+        "refine_and_order": {
+          "median_ns": 113304300.0,
+          "p95_ns": 145065900.0
+        },
+        "total": {
+          "median_ns": 113309400.0,
+          "p95_ns": 145071100.0
+        }
+      },
+      "size_requested": 2048,
+      "status": "measured",
+      "target_family": true,
+      "words": 3059
+    },
+    {
+      "controls": 8192,
+      "corridor_queries": 15424,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "MultiColumnForm",
+      "g4_pass": true,
+      "g5_review": false,
+      "p95_delta_ns": -699808200.0,
+      "p95_review_limit_ns": 21132577.0,
+      "reduction_ci95": [
+        0.1946340497683824,
+        0.4179350777604569
+      ],
+      "reduction_median": 0.3037340207263123,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 2125400.0,
+          "p95_ns": 2388600.0
+        },
+        "query": {
+          "median_ns": 7386300.0,
+          "p95_ns": 8125000.0
+        },
+        "refine_and_order": {
+          "median_ns": 1228112200.0,
+          "p95_ns": 1403153300.0
+        },
+        "total": {
+          "median_ns": 1235018700.0,
+          "p95_ns": 1413449500.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 500.0
+        },
+        "query": {
+          "median_ns": 8800.0,
+          "p95_ns": 19300.0
+        },
+        "refine_and_order": {
+          "median_ns": 1773765500.0,
+          "p95_ns": 2113239800.0
+        },
+        "total": {
+          "median_ns": 1773774300.0,
+          "p95_ns": 2113257700.0
+        }
+      },
+      "size_requested": 8192,
+      "status": "measured",
+      "target_family": true,
+      "words": 12200
+    },
+    {
+      "controls": 2,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "ManyTextsPerControl",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 2900.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.33009708737864085,
+        -0.2777777777777777
+      ],
+      "reduction_median": -0.32692307692307687,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 200.0
+        },
+        "query": {
+          "median_ns": 3400.0,
+          "p95_ns": 3500.0
+        },
+        "refine_and_order": {
+          "median_ns": 10200.0,
+          "p95_ns": 10300.0
+        },
+        "total": {
+          "median_ns": 13800.0,
+          "p95_ns": 13900.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "refine_and_order": {
+          "median_ns": 10400.0,
+          "p95_ns": 10900.0
+        },
+        "total": {
+          "median_ns": 10400.0,
+          "p95_ns": 11000.0
+        }
+      },
+      "size_requested": 32,
+      "status": "measured",
+      "target_family": false,
+      "words": 34
+    },
+    {
+      "controls": 8,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "ManyTextsPerControl",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 13200.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.3317865429234339,
+        -0.2889390519187358
+      ],
+      "reduction_median": -0.3142201834862386,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 1300.0,
+          "p95_ns": 1600.0
+        },
+        "query": {
+          "median_ns": 15800.0,
+          "p95_ns": 16100.0
+        },
+        "refine_and_order": {
+          "median_ns": 40000.0,
+          "p95_ns": 40700.0
+        },
+        "total": {
+          "median_ns": 57300.0,
+          "p95_ns": 57600.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 200.0,
+          "p95_ns": 200.0
+        },
+        "refine_and_order": {
+          "median_ns": 43400.0,
+          "p95_ns": 44200.0
+        },
+        "total": {
+          "median_ns": 43600.0,
+          "p95_ns": 44400.0
+        }
+      },
+      "size_requested": 128,
+      "status": "measured",
+      "target_family": false,
+      "words": 136
+    },
+    {
+      "controls": 32,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "ManyTextsPerControl",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 33000.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.10557684120902522,
+        -0.056572379367720416
+      ],
+      "reduction_median": -0.06624737945492654,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 5200.0,
+          "p95_ns": 5800.0
+        },
+        "query": {
+          "median_ns": 73400.0,
+          "p95_ns": 73800.0
+        },
+        "refine_and_order": {
+          "median_ns": 176200.0,
+          "p95_ns": 195200.0
+        },
+        "total": {
+          "median_ns": 254300.0,
+          "p95_ns": 274000.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 500.0,
+          "p95_ns": 800.0
+        },
+        "refine_and_order": {
+          "median_ns": 238000.0,
+          "p95_ns": 240400.0
+        },
+        "total": {
+          "median_ns": 238500.0,
+          "p95_ns": 241000.0
+        }
+      },
+      "size_requested": 512,
+      "status": "measured",
+      "target_family": false,
+      "words": 544
+    },
+    {
+      "controls": 128,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "ManyTextsPerControl",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -698000.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.3143620299979454,
+        0.35185185185185186
+      ],
+      "reduction_median": 0.32504045307443363,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 25100.0,
+          "p95_ns": 27000.0
+        },
+        "query": {
+          "median_ns": 337100.0,
+          "p95_ns": 344500.0
+        },
+        "refine_and_order": {
+          "median_ns": 975800.0,
+          "p95_ns": 987300.0
+        },
+        "total": {
+          "median_ns": 1334800.0,
+          "p95_ns": 1352000.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 2000.0,
+          "p95_ns": 2800.0
+        },
+        "refine_and_order": {
+          "median_ns": 1975500.0,
+          "p95_ns": 2048100.0
+        },
+        "total": {
+          "median_ns": 1977600.0,
+          "p95_ns": 2050000.0
+        }
+      },
+      "size_requested": 2048,
+      "status": "measured",
+      "target_family": false,
+      "words": 2176
+    },
+    {
+      "controls": 512,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "ManyTextsPerControl",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -14758000.0,
+      "p95_review_limit_ns": 250320.0,
+      "reduction_ci95": [
+        0.5874146643123916,
+        0.5972989714248456
+      ],
+      "reduction_median": 0.5959052602409245,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 123500.0,
+          "p95_ns": 288600.0
+        },
+        "query": {
+          "median_ns": 1487400.0,
+          "p95_ns": 1526500.0
+        },
+        "refine_and_order": {
+          "median_ns": 8313900.0,
+          "p95_ns": 8500900.0
+        },
+        "total": {
+          "median_ns": 9916000.0,
+          "p95_ns": 10274000.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 200.0,
+          "p95_ns": 400.0
+        },
+        "query": {
+          "median_ns": 7800.0,
+          "p95_ns": 8500.0
+        },
+        "refine_and_order": {
+          "median_ns": 24530200.0,
+          "p95_ns": 25023900.0
+        },
+        "total": {
+          "median_ns": 24538800.0,
+          "p95_ns": 25032000.0
+        }
+      },
+      "size_requested": 8192,
+      "status": "measured",
+      "target_family": false,
+      "words": 8704
+    },
+    {
+      "controls": 35,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "NestedContainers",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 7300.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.539568345323741,
+        -0.5106382978723405
+      ],
+      "reduction_median": -0.5285714285714285,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 5900.0,
+          "p95_ns": 6000.0
+        },
+        "query": {
+          "median_ns": 3500.0,
+          "p95_ns": 3900.0
+        },
+        "refine_and_order": {
+          "median_ns": 12000.0,
+          "p95_ns": 12200.0
+        },
+        "total": {
+          "median_ns": 21400.0,
+          "p95_ns": 21500.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "refine_and_order": {
+          "median_ns": 13900.0,
+          "p95_ns": 14100.0
+        },
+        "total": {
+          "median_ns": 14000.0,
+          "p95_ns": 14200.0
+        }
+      },
+      "size_requested": 32,
+      "status": "measured",
+      "target_family": false,
+      "words": 20
+    },
+    {
+      "controls": 133,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "NestedContainers",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 8000.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.08483563096500535,
+        -0.02238805970149249
+      ],
+      "reduction_median": -0.0583864118895967,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 26300.0,
+          "p95_ns": 26600.0
+        },
+        "query": {
+          "median_ns": 17200.0,
+          "p95_ns": 17900.0
+        },
+        "refine_and_order": {
+          "median_ns": 56200.0,
+          "p95_ns": 59200.0
+        },
+        "total": {
+          "median_ns": 99700.0,
+          "p95_ns": 102800.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 200.0
+        },
+        "refine_and_order": {
+          "median_ns": 94000.0,
+          "p95_ns": 94700.0
+        },
+        "total": {
+          "median_ns": 94200.0,
+          "p95_ns": 94800.0
+        }
+      },
+      "size_requested": 128,
+      "status": "measured",
+      "target_family": false,
+      "words": 76
+    },
+    {
+      "controls": 518,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "NestedContainers",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -328800.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.34491396209976044,
+        0.400125825731362
+      ],
+      "reduction_median": 0.363268349845531,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 114600.0,
+          "p95_ns": 123000.0
+        },
+        "query": {
+          "median_ns": 91500.0,
+          "p95_ns": 92700.0
+        },
+        "refine_and_order": {
+          "median_ns": 389300.0,
+          "p95_ns": 423500.0
+        },
+        "total": {
+          "median_ns": 597700.0,
+          "p95_ns": 628800.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 300.0,
+          "p95_ns": 400.0
+        },
+        "refine_and_order": {
+          "median_ns": 938200.0,
+          "p95_ns": 957200.0
+        },
+        "total": {
+          "median_ns": 938700.0,
+          "p95_ns": 957600.0
+        }
+      },
+      "size_requested": 512,
+      "status": "measured",
+      "target_family": false,
+      "words": 296
+    },
+    {
+      "controls": 2051,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "NestedContainers",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -7716300.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.6052995483793613,
+        0.6194729437058349
+      ],
+      "reduction_median": 0.6118639226948892,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 507800.0,
+          "p95_ns": 596500.0
+        },
+        "query": {
+          "median_ns": 402000.0,
+          "p95_ns": 414900.0
+        },
+        "refine_and_order": {
+          "median_ns": 3952000.0,
+          "p95_ns": 4047600.0
+        },
+        "total": {
+          "median_ns": 4892300.0,
+          "p95_ns": 4987800.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 1100.0,
+          "p95_ns": 1200.0
+        },
+        "refine_and_order": {
+          "median_ns": 12603400.0,
+          "p95_ns": 12703000.0
+        },
+        "total": {
+          "median_ns": 12604600.0,
+          "p95_ns": 12704100.0
+        }
+      },
+      "size_requested": 2048,
+      "status": "measured",
+      "target_family": false,
+      "words": 1172
+    },
+    {
+      "controls": 8197,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "NestedContainers",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -148139100.0,
+      "p95_review_limit_ns": 1759257.0,
+      "reduction_ci95": [
+        0.7722764116967773,
+        0.8208295552573917
+      ],
+      "reduction_median": 0.7736636237830714,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 1500200.0,
+          "p95_ns": 1687500.0
+        },
+        "query": {
+          "median_ns": 1468600.0,
+          "p95_ns": 1499100.0
+        },
+        "refine_and_order": {
+          "median_ns": 21354500.0,
+          "p95_ns": 24786900.0
+        },
+        "total": {
+          "median_ns": 24320500.0,
+          "p95_ns": 27786600.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 300.0
+        },
+        "query": {
+          "median_ns": 2100.0,
+          "p95_ns": 4500.0
+        },
+        "refine_and_order": {
+          "median_ns": 107450500.0,
+          "p95_ns": 175921000.0
+        },
+        "total": {
+          "median_ns": 107452900.0,
+          "p95_ns": 175925700.0
+        }
+      },
+      "size_requested": 8192,
+      "status": "measured",
+      "target_family": false,
+      "words": 4684
+    },
+    {
+      "controls": 32,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "ExtremeOverlap",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 17600.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.898477157360406,
+        -0.845
+      ],
+      "reduction_median": -0.8737373737373737,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 3100.0,
+          "p95_ns": 3200.0
+        },
+        "query": {
+          "median_ns": 14600.0,
+          "p95_ns": 15100.0
+        },
+        "refine_and_order": {
+          "median_ns": 19400.0,
+          "p95_ns": 19900.0
+        },
+        "total": {
+          "median_ns": 37100.0,
+          "p95_ns": 37700.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "refine_and_order": {
+          "median_ns": 19700.0,
+          "p95_ns": 20100.0
+        },
+        "total": {
+          "median_ns": 19800.0,
+          "p95_ns": 20100.0
+        }
+      },
+      "size_requested": 32,
+      "status": "measured",
+      "target_family": false,
+      "words": 32
+    },
+    {
+      "controls": 128,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "ExtremeOverlap",
+      "g4_pass": false,
+      "g5_review": true,
+      "p95_delta_ns": 221300.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.9119638826185101,
+        -0.7845836200963523
+      ],
+      "reduction_median": -0.8333924140375752,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 17000.0,
+          "p95_ns": 19100.0
+        },
+        "query": {
+          "median_ns": 222500.0,
+          "p95_ns": 229100.0
+        },
+        "refine_and_order": {
+          "median_ns": 276700.0,
+          "p95_ns": 295000.0
+        },
+        "total": {
+          "median_ns": 517200.0,
+          "p95_ns": 530900.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "refine_and_order": {
+          "median_ns": 281900.0,
+          "p95_ns": 309400.0
+        },
+        "total": {
+          "median_ns": 282100.0,
+          "p95_ns": 309600.0
+        }
+      },
+      "size_requested": 128,
+      "status": "measured",
+      "target_family": false,
+      "words": 128
+    },
+    {
+      "controls": 512,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "ExtremeOverlap",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 3213300.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.6233628250202836,
+        -0.5846060098259511
+      ],
+      "reduction_median": -0.61980491942324,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 90100.0,
+          "p95_ns": 119800.0
+        },
+        "query": {
+          "median_ns": 3380700.0,
+          "p95_ns": 3426500.0
+        },
+        "refine_and_order": {
+          "median_ns": 4887700.0,
+          "p95_ns": 5018800.0
+        },
+        "total": {
+          "median_ns": 8402900.0,
+          "p95_ns": 8475300.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 300.0,
+          "p95_ns": 300.0
+        },
+        "refine_and_order": {
+          "median_ns": 5187200.0,
+          "p95_ns": 5261700.0
+        },
+        "total": {
+          "median_ns": 5187600.0,
+          "p95_ns": 5262000.0
+        }
+      },
+      "size_requested": 512,
+      "status": "measured",
+      "target_family": false,
+      "words": 512
+    },
+    {
+      "controls": 2048,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "ExtremeOverlap",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 77958700.0,
+      "p95_review_limit_ns": 1152627.0,
+      "reduction_ci95": [
+        -0.5920379989870077,
+        -0.43459194736251816
+      ],
+      "reduction_median": -0.5133215550490193,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 394100.0,
+          "p95_ns": 415100.0
+        },
+        "query": {
+          "median_ns": 57712200.0,
+          "p95_ns": 68689300.0
+        },
+        "refine_and_order": {
+          "median_ns": 93705400.0,
+          "p95_ns": 135661600.0
+        },
+        "total": {
+          "median_ns": 153495600.0,
+          "p95_ns": 193221400.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 400.0
+        },
+        "query": {
+          "median_ns": 900.0,
+          "p95_ns": 1900.0
+        },
+        "refine_and_order": {
+          "median_ns": 101428500.0,
+          "p95_ns": 115261400.0
+        },
+        "total": {
+          "median_ns": 101429600.0,
+          "p95_ns": 115262700.0
+        }
+      },
+      "size_requested": 2048,
+      "status": "measured",
+      "target_family": false,
+      "words": 2048
+    },
+    {
+      "controls": 8192,
+      "corridor_queries": 0,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "ExtremeOverlap",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 740781900.0,
+      "p95_review_limit_ns": 23493245.0,
+      "reduction_ci95": [
+        -0.5097812601604932,
+        -0.3153169772843216
+      ],
+      "reduction_median": -0.5097812601604932,
+      "repetitions": 3,
+      "repetitions_planned": 3,
+      "rstar": {
+        "build": {
+          "median_ns": 2513800.0,
+          "p95_ns": 2574000.0
+        },
+        "query": {
+          "median_ns": 1231741300.0,
+          "p95_ns": 1356000300.0
+        },
+        "refine_and_order": {
+          "median_ns": 1651368800.0,
+          "p95_ns": 1855851300.0
+        },
+        "total": {
+          "median_ns": 3009943100.0,
+          "p95_ns": 3090106400.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 200.0,
+          "p95_ns": 200.0
+        },
+        "query": {
+          "median_ns": 7300.0,
+          "p95_ns": 8000.0
+        },
+        "refine_and_order": {
+          "median_ns": 1993625100.0,
+          "p95_ns": 2349316300.0
+        },
+        "total": {
+          "median_ns": 1993628600.0,
+          "p95_ns": 2349324500.0
+        }
+      },
+      "size_requested": 8192,
+      "status": "measured",
+      "target_family": false,
+      "words": 8192
+    },
+    {
+      "controls": 32,
+      "corridor_queries": 144,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "IdenticalBoxes",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 18000.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.9278350515463918,
+        -0.8860103626943006
+      ],
+      "reduction_median": -0.9222797927461139,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 2800.0,
+          "p95_ns": 2900.0
+        },
+        "query": {
+          "median_ns": 21400.0,
+          "p95_ns": 21500.0
+        },
+        "refine_and_order": {
+          "median_ns": 13000.0,
+          "p95_ns": 13300.0
+        },
+        "total": {
+          "median_ns": 37100.0,
+          "p95_ns": 37700.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 200.0
+        },
+        "refine_and_order": {
+          "median_ns": 19300.0,
+          "p95_ns": 19500.0
+        },
+        "total": {
+          "median_ns": 19300.0,
+          "p95_ns": 19700.0
+        }
+      },
+      "size_requested": 32,
+      "status": "measured",
+      "target_family": false,
+      "words": 17
+    },
+    {
+      "controls": 128,
+      "corridor_queries": 2112,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "IdenticalBoxes",
+      "g4_pass": false,
+      "g5_review": true,
+      "p95_delta_ns": 585400.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -1.032701958879715,
+        -1.017676361883336
+      ],
+      "reduction_median": -1.0291073738680465,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 13200.0,
+          "p95_ns": 15800.0
+        },
+        "query": {
+          "median_ns": 939700.0,
+          "p95_ns": 943600.0
+        },
+        "refine_and_order": {
+          "median_ns": 303300.0,
+          "p95_ns": 320700.0
+        },
+        "total": {
+          "median_ns": 1254800.0,
+          "p95_ns": 1273200.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 600.0,
+          "p95_ns": 1000.0
+        },
+        "refine_and_order": {
+          "median_ns": 617600.0,
+          "p95_ns": 687100.0
+        },
+        "total": {
+          "median_ns": 618400.0,
+          "p95_ns": 687800.0
+        }
+      },
+      "size_requested": 128,
+      "status": "measured",
+      "target_family": false,
+      "words": 65
+    },
+    {
+      "controls": 512,
+      "corridor_queries": 33024,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "IdenticalBoxes",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 66009500.0,
+      "p95_review_limit_ns": 674917.0,
+      "reduction_ci95": [
+        -1.5421685184945093,
+        -0.39836218141729063
+      ],
+      "reduction_median": -0.9414295160182029,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 83500.0,
+          "p95_ns": 137900.0
+        },
+        "query": {
+          "median_ns": 59018800.0,
+          "p95_ns": 104615200.0
+        },
+        "refine_and_order": {
+          "median_ns": 17429900.0,
+          "p95_ns": 68038500.0
+        },
+        "total": {
+          "median_ns": 74872200.0,
+          "p95_ns": 133501200.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 8800.0,
+          "p95_ns": 28400.0
+        },
+        "refine_and_order": {
+          "median_ns": 38556600.0,
+          "p95_ns": 67476400.0
+        },
+        "total": {
+          "median_ns": 38565500.0,
+          "p95_ns": 67491700.0
+        }
+      },
+      "size_requested": 512,
+      "status": "measured",
+      "target_family": false,
+      "words": 257
+    },
+    {
+      "controls": 2048,
+      "corridor_queries": 525312,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "IdenticalBoxes",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 3399469500.0,
+      "p95_review_limit_ns": 28695495.0,
+      "reduction_ci95": [
+        -1.6115673058173723,
+        -1.1338820964831435
+      ],
+      "reduction_median": -1.3358015519861346,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 333600.0,
+          "p95_ns": 518100.0
+        },
+        "query": {
+          "median_ns": 4372444900.0,
+          "p95_ns": 5670325200.0
+        },
+        "refine_and_order": {
+          "median_ns": 1519352800.0,
+          "p95_ns": 1896212100.0
+        },
+        "total": {
+          "median_ns": 5777789200.0,
+          "p95_ns": 6269019000.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 113700.0,
+          "p95_ns": 253000.0
+        },
+        "refine_and_order": {
+          "median_ns": 2473465100.0,
+          "p95_ns": 2869324900.0
+        },
+        "total": {
+          "median_ns": 2473578800.0,
+          "p95_ns": 2869549500.0
+        }
+      },
+      "size_requested": 2048,
+      "status": "measured",
+      "target_family": false,
+      "words": 1025
+    },
+    {
+      "controls": 8192,
+      "corridor_queries": 8392704,
+      "equivalence": {
+        "checks": 4,
+        "completed": 2,
+        "differences": 0
+      },
+      "family": "IdenticalBoxes",
+      "repetitions_done": 0,
+      "repetitions_planned": 3,
+      "size_requested": 8192,
+      "status": "not measured (time cap)",
+      "target_family": false,
+      "words": 4097
+    },
+    {
+      "controls": 32,
+      "corridor_queries": 182,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SharedLabels",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -26700.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.04357798165137616,
+        -0.011494252873563315
+      ],
+      "reduction_median": -0.020689655172413834,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 2700.0,
+          "p95_ns": 6200.0
+        },
+        "query": {
+          "median_ns": 17300.0,
+          "p95_ns": 24600.0
+        },
+        "refine_and_order": {
+          "median_ns": 24500.0,
+          "p95_ns": 25900.0
+        },
+        "total": {
+          "median_ns": 44400.0,
+          "p95_ns": 48000.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 300.0
+        },
+        "refine_and_order": {
+          "median_ns": 43300.0,
+          "p95_ns": 74300.0
+        },
+        "total": {
+          "median_ns": 43500.0,
+          "p95_ns": 74700.0
+        }
+      },
+      "size_requested": 32,
+      "status": "measured",
+      "target_family": false,
+      "words": 64
+    },
+    {
+      "controls": 128,
+      "corridor_queries": 758,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SharedLabels",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -158200.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.19965934897804694,
+        0.311604334148899
+      ],
+      "reduction_median": 0.2615736330729663,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 13100.0,
+          "p95_ns": 16900.0
+        },
+        "query": {
+          "median_ns": 100000.0,
+          "p95_ns": 100500.0
+        },
+        "refine_and_order": {
+          "median_ns": 275000.0,
+          "p95_ns": 413800.0
+        },
+        "total": {
+          "median_ns": 387600.0,
+          "p95_ns": 526800.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 300.0,
+          "p95_ns": 400.0
+        },
+        "refine_and_order": {
+          "median_ns": 524500.0,
+          "p95_ns": 684600.0
+        },
+        "total": {
+          "median_ns": 524900.0,
+          "p95_ns": 685000.0
+        }
+      },
+      "size_requested": 128,
+      "status": "measured",
+      "target_family": false,
+      "words": 256
+    },
+    {
+      "controls": 512,
+      "corridor_queries": 3062,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SharedLabels",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -7586300.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.3323690639699537,
+        0.4573831671586921
+      ],
+      "reduction_median": 0.41752893985569217,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 77800.0,
+          "p95_ns": 147400.0
+        },
+        "query": {
+          "median_ns": 595200.0,
+          "p95_ns": 662300.0
+        },
+        "refine_and_order": {
+          "median_ns": 4165200.0,
+          "p95_ns": 5406200.0
+        },
+        "total": {
+          "median_ns": 4835500.0,
+          "p95_ns": 6079200.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 1200.0,
+          "p95_ns": 2700.0
+        },
+        "refine_and_order": {
+          "median_ns": 8300400.0,
+          "p95_ns": 13664200.0
+        },
+        "total": {
+          "median_ns": 8301700.0,
+          "p95_ns": 13665500.0
+        }
+      },
+      "size_requested": 512,
+      "status": "measured",
+      "target_family": false,
+      "words": 1024
+    },
+    {
+      "controls": 2048,
+      "corridor_queries": 12278,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SharedLabels",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -49153000.0,
+      "p95_review_limit_ns": 1265214.0,
+      "reduction_ci95": [
+        0.4318685309752187,
+        0.45720952035274065
+      ],
+      "reduction_median": 0.4530633565758043,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 281500.0,
+          "p95_ns": 337600.0
+        },
+        "query": {
+          "median_ns": 3244200.0,
+          "p95_ns": 3311800.0
+        },
+        "refine_and_order": {
+          "median_ns": 63196800.0,
+          "p95_ns": 73819200.0
+        },
+        "total": {
+          "median_ns": 66696900.0,
+          "p95_ns": 77368400.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 400.0
+        },
+        "query": {
+          "median_ns": 4500.0,
+          "p95_ns": 7900.0
+        },
+        "refine_and_order": {
+          "median_ns": 121941900.0,
+          "p95_ns": 126516800.0
+        },
+        "total": {
+          "median_ns": 121946300.0,
+          "p95_ns": 126521400.0
+        }
+      },
+      "size_requested": 2048,
+      "status": "measured",
+      "target_family": false,
+      "words": 4096
+    },
+    {
+      "controls": 8192,
+      "corridor_queries": 49142,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SharedLabels",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -856215500.0,
+      "p95_review_limit_ns": 26146023.0,
+      "reduction_ci95": [
+        0.3720189384537578,
+        0.5175513360337518
+      ],
+      "reduction_median": 0.40502214420063865,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 1367900.0,
+          "p95_ns": 2200300.0
+        },
+        "query": {
+          "median_ns": 17567700.0,
+          "p95_ns": 26938100.0
+        },
+        "refine_and_order": {
+          "median_ns": 1242378000.0,
+          "p95_ns": 1739595600.0
+        },
+        "total": {
+          "median_ns": 1271476900.0,
+          "p95_ns": 1758386800.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 600.0
+        },
+        "query": {
+          "median_ns": 17800.0,
+          "p95_ns": 27100.0
+        },
+        "refine_and_order": {
+          "median_ns": 2136988300.0,
+          "p95_ns": 2614584400.0
+        },
+        "total": {
+          "median_ns": 2137015500.0,
+          "p95_ns": 2614602300.0
+        }
+      },
+      "size_requested": 8192,
+      "status": "measured",
+      "target_family": false,
+      "words": 16384
+    },
+    {
+      "controls": 32,
+      "corridor_queries": 9,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SupportChains",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 1600.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.17708333333333326,
+        -0.12690355329949243
+      ],
+      "reduction_median": -0.1578947368421053,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 3000.0,
+          "p95_ns": 4600.0
+        },
+        "query": {
+          "median_ns": 3800.0,
+          "p95_ns": 4400.0
+        },
+        "refine_and_order": {
+          "median_ns": 15100.0,
+          "p95_ns": 15300.0
+        },
+        "total": {
+          "median_ns": 22000.0,
+          "p95_ns": 22800.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "refine_and_order": {
+          "median_ns": 19000.0,
+          "p95_ns": 21000.0
+        },
+        "total": {
+          "median_ns": 19000.0,
+          "p95_ns": 21200.0
+        }
+      },
+      "size_requested": 32,
+      "status": "measured",
+      "target_family": false,
+      "words": 50
+    },
+    {
+      "controls": 128,
+      "corridor_queries": 32,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SupportChains",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -27700.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.17362924281984338,
+        0.18506493506493504
+      ],
+      "reduction_median": 0.1788511749347258,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 13500.0,
+          "p95_ns": 13900.0
+        },
+        "query": {
+          "median_ns": 22700.0,
+          "p95_ns": 23400.0
+        },
+        "refine_and_order": {
+          "median_ns": 90100.0,
+          "p95_ns": 90600.0
+        },
+        "total": {
+          "median_ns": 125800.0,
+          "p95_ns": 126600.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 200.0
+        },
+        "query": {
+          "median_ns": 200.0,
+          "p95_ns": 200.0
+        },
+        "refine_and_order": {
+          "median_ns": 153000.0,
+          "p95_ns": 154100.0
+        },
+        "total": {
+          "median_ns": 153200.0,
+          "p95_ns": 154300.0
+        }
+      },
+      "size_requested": 128,
+      "status": "measured",
+      "target_family": false,
+      "words": 195
+    },
+    {
+      "controls": 512,
+      "corridor_queries": 131,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SupportChains",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -837800.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.41374837872892345,
+        0.43810444874274657
+      ],
+      "reduction_median": 0.4332172515403161,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 60300.0,
+          "p95_ns": 146600.0
+        },
+        "query": {
+          "median_ns": 127800.0,
+          "p95_ns": 133400.0
+        },
+        "refine_and_order": {
+          "median_ns": 865600.0,
+          "p95_ns": 996800.0
+        },
+        "total": {
+          "median_ns": 1057900.0,
+          "p95_ns": 1186300.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 400.0,
+          "p95_ns": 600.0
+        },
+        "refine_and_order": {
+          "median_ns": 1866100.0,
+          "p95_ns": 2023600.0
+        },
+        "total": {
+          "median_ns": 1866500.0,
+          "p95_ns": 2024100.0
+        }
+      },
+      "size_requested": 512,
+      "status": "measured",
+      "target_family": false,
+      "words": 774
+    },
+    {
+      "controls": 2048,
+      "corridor_queries": 493,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SupportChains",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -20095600.0,
+      "p95_review_limit_ns": 425430.0,
+      "reduction_ci95": [
+        0.40815108128423405,
+        0.6966869319962394
+      ],
+      "reduction_median": 0.6274641425307459,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 301000.0,
+          "p95_ns": 476800.0
+        },
+        "query": {
+          "median_ns": 634200.0,
+          "p95_ns": 1024400.0
+        },
+        "refine_and_order": {
+          "median_ns": 11170200.0,
+          "p95_ns": 21033200.0
+        },
+        "total": {
+          "median_ns": 12098400.0,
+          "p95_ns": 22447400.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 200.0
+        },
+        "query": {
+          "median_ns": 1500.0,
+          "p95_ns": 3200.0
+        },
+        "refine_and_order": {
+          "median_ns": 32474200.0,
+          "p95_ns": 42539700.0
+        },
+        "total": {
+          "median_ns": 32475800.0,
+          "p95_ns": 42543000.0
+        }
+      },
+      "size_requested": 2048,
+      "status": "measured",
+      "target_family": false,
+      "words": 3051
+    },
+    {
+      "controls": 8192,
+      "corridor_queries": 2036,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "SupportChains",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -315293000.0,
+      "p95_review_limit_ns": 5081948.0,
+      "reduction_ci95": [
+        0.5724684730507219,
+        0.6124158322772575
+      ],
+      "reduction_median": 0.5856317473377228,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 1173600.0,
+          "p95_ns": 1329800.0
+        },
+        "query": {
+          "median_ns": 3194600.0,
+          "p95_ns": 3330900.0
+        },
+        "refine_and_order": {
+          "median_ns": 178785100.0,
+          "p95_ns": 188597500.0
+        },
+        "total": {
+          "median_ns": 183119400.0,
+          "p95_ns": 192901800.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 200.0,
+          "p95_ns": 400.0
+        },
+        "query": {
+          "median_ns": 5800.0,
+          "p95_ns": 12200.0
+        },
+        "refine_and_order": {
+          "median_ns": 441918400.0,
+          "p95_ns": 508188600.0
+        },
+        "total": {
+          "median_ns": 441924300.0,
+          "p95_ns": 508194800.0
+        }
+      },
+      "size_requested": 8192,
+      "status": "measured",
+      "target_family": false,
+      "words": 12287
+    },
+    {
+      "controls": 32,
+      "corridor_queries": 70,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "FractionalCoordinates",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": 1500.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        -0.07224334600760463,
+        -0.03703703703703698
+      ],
+      "reduction_median": -0.04444444444444451,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 3000.0,
+          "p95_ns": 3200.0
+        },
+        "query": {
+          "median_ns": 6300.0,
+          "p95_ns": 7600.0
+        },
+        "refine_and_order": {
+          "median_ns": 18900.0,
+          "p95_ns": 19300.0
+        },
+        "total": {
+          "median_ns": 28200.0,
+          "p95_ns": 29200.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 100.0,
+          "p95_ns": 100.0
+        },
+        "refine_and_order": {
+          "median_ns": 26800.0,
+          "p95_ns": 27600.0
+        },
+        "total": {
+          "median_ns": 27000.0,
+          "p95_ns": 27700.0
+        }
+      },
+      "size_requested": 32,
+      "status": "measured",
+      "target_family": false,
+      "words": 46
+    },
+    {
+      "controls": 128,
+      "corridor_queries": 249,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "FractionalCoordinates",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -123200.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.19321717485998757,
+        0.2348058108508746
+      ],
+      "reduction_median": 0.20277349768875197,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 14400.0,
+          "p95_ns": 17800.0
+        },
+        "query": {
+          "median_ns": 36500.0,
+          "p95_ns": 38000.0
+        },
+        "refine_and_order": {
+          "median_ns": 208000.0,
+          "p95_ns": 221300.0
+        },
+        "total": {
+          "median_ns": 258700.0,
+          "p95_ns": 274000.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 0.0,
+          "p95_ns": 100.0
+        },
+        "query": {
+          "median_ns": 200.0,
+          "p95_ns": 200.0
+        },
+        "refine_and_order": {
+          "median_ns": 324400.0,
+          "p95_ns": 397000.0
+        },
+        "total": {
+          "median_ns": 324500.0,
+          "p95_ns": 397200.0
+        }
+      },
+      "size_requested": 128,
+      "status": "measured",
+      "target_family": false,
+      "words": 170
+    },
+    {
+      "controls": 512,
+      "corridor_queries": 1031,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "FractionalCoordinates",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -1434700.0,
+      "p95_review_limit_ns": 200000.0,
+      "reduction_ci95": [
+        0.29756126790101267,
+        0.3301376155951026
+      ],
+      "reduction_median": 0.3278196090996476,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 72500.0,
+          "p95_ns": 79400.0
+        },
+        "query": {
+          "median_ns": 200400.0,
+          "p95_ns": 203400.0
+        },
+        "refine_and_order": {
+          "median_ns": 3086500.0,
+          "p95_ns": 3347400.0
+        },
+        "total": {
+          "median_ns": 3356600.0,
+          "p95_ns": 3619800.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 100.0,
+          "p95_ns": 200.0
+        },
+        "query": {
+          "median_ns": 600.0,
+          "p95_ns": 1300.0
+        },
+        "refine_and_order": {
+          "median_ns": 4992900.0,
+          "p95_ns": 5053800.0
+        },
+        "total": {
+          "median_ns": 4993600.0,
+          "p95_ns": 5054500.0
+        }
+      },
+      "size_requested": 512,
+      "status": "measured",
+      "target_family": false,
+      "words": 686
+    },
+    {
+      "controls": 2048,
+      "corridor_queries": 3935,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "FractionalCoordinates",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -30409400.0,
+      "p95_review_limit_ns": 841644.0,
+      "reduction_ci95": [
+        0.34522538051901597,
+        0.35871978468476384
+      ],
+      "reduction_median": 0.35082852085804506,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 296400.0,
+          "p95_ns": 438500.0
+        },
+        "query": {
+          "median_ns": 961600.0,
+          "p95_ns": 974100.0
+        },
+        "refine_and_order": {
+          "median_ns": 51236400.0,
+          "p95_ns": 52494800.0
+        },
+        "total": {
+          "median_ns": 52484800.0,
+          "p95_ns": 53755000.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 200.0,
+          "p95_ns": 500.0
+        },
+        "query": {
+          "median_ns": 2100.0,
+          "p95_ns": 2100.0
+        },
+        "refine_and_order": {
+          "median_ns": 80846300.0,
+          "p95_ns": 84162100.0
+        },
+        "total": {
+          "median_ns": 80848900.0,
+          "p95_ns": 84164400.0
+        }
+      },
+      "size_requested": 2048,
+      "status": "measured",
+      "target_family": false,
+      "words": 2678
+    },
+    {
+      "controls": 8192,
+      "corridor_queries": 15560,
+      "equivalence": {
+        "checks": 4,
+        "completed": 4,
+        "differences": 0
+      },
+      "family": "FractionalCoordinates",
+      "g4_pass": false,
+      "g5_review": false,
+      "p95_delta_ns": -592204300.0,
+      "p95_review_limit_ns": 16292644.0,
+      "reduction_ci95": [
+        0.3188227175853571,
+        0.3597508685974665
+      ],
+      "reduction_median": 0.33036393914583506,
+      "repetitions": 9,
+      "repetitions_planned": 9,
+      "rstar": {
+        "build": {
+          "median_ns": 1194200.0,
+          "p95_ns": 1298800.0
+        },
+        "query": {
+          "median_ns": 5205400.0,
+          "p95_ns": 5628700.0
+        },
+        "refine_and_order": {
+          "median_ns": 963719100.0,
+          "p95_ns": 1030701800.0
+        },
+        "total": {
+          "median_ns": 970253300.0,
+          "p95_ns": 1037060100.0
+        }
+      },
+      "scan": {
+        "build": {
+          "median_ns": 200.0,
+          "p95_ns": 600.0
+        },
+        "query": {
+          "median_ns": 8000.0,
+          "p95_ns": 8200.0
+        },
+        "refine_and_order": {
+          "median_ns": 1448917600.0,
+          "p95_ns": 1629255900.0
+        },
+        "total": {
+          "median_ns": 1448926300.0,
+          "p95_ns": 1629264400.0
+        }
+      },
+      "size_requested": 8192,
+      "status": "measured",
+      "target_family": false,
+      "words": 10649
+    }
+  ],
+  "commit": "5c28ec4",
+  "deviations": [
+    "Each cell has a time cap of 15 minutes (the coordinator's rule for this run): a cell still running at the cap is recorded as not measured, with the repetitions completed.",
+    "The 8192-control cells of the quadratic families (IdenticalBoxes, ExtremeOverlap) take 3 repetitions instead of the 9 of the protocol."
+  ],
+  "equivalence_differences": 0,
+  "experiment": "ADR-0027 candidate enumeration: scan against the R*-tree",
+  "label_margin": 0.15,
+  "repetitions_planned": 9,
+  "resamples": 2000,
+  "sizes": [
+    32,
+    128,
+    512,
+    2048,
+    8192
+  ],
+  "target_families": [
+    "SparseGrid",
+    "MultiColumnForm"
+  ],
+  "threshold": 0.75,
+  "warm_up_repetitions": 2
+}

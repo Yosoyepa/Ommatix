@@ -104,6 +104,8 @@ El punto candidato se calcula dentro de la parte visible y válida del control, 
 
 Una implementación ingenua cuesta O(N·M). El índice reduce la enumeración de candidatos en cargas favorables, con coste dependiente de intersecciones devueltas K; no garantiza O(M log N) en cualquier distribución [S19]. Para cientos de cajas se compara también un bucle vectorizado/cache-friendly. El criterio es tiempo observado y equivalencia de resultados, no preferencia estética por el árbol.
 
+Un enumerador experimental de candidatos con R*-tree ([ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md), `[engine] candidate_search = "rstar"`, desactivado por defecto) construye una vez por fusión un índice sobre los controles ya reconciliados y sólo enumera candidatos: los propietarios de una palabra, con la caja de la palabra como ventana, cuando el umbral es positivo; y los obstáculos del corredor, con el hueco del corredor como ventana. Cada candidato pasa por los mismos predicados, orden y abstenciones del recorrido. Con umbral cero se recorre todo, porque no se puede probar que ningún control quede fuera. No se indexan las palabras, la reconciliación con accesibilidad ni el cierre de soportes. La medición y la decisión están en [`INDICE_A2_RESULTADOS.md`](INDICE_A2_RESULTADOS.md): el recorrido sigue siendo la referencia y el valor por defecto.
+
 Se prueban contenedores anidados, OCR permutado, etiquetas multilineales, paneles de fondo, duplicados, ambigüedad simétrica, controles sin rol, placeholder, coordenadas inválidas y cambios de DPI. Los errores de asociación se clasifican por tipo, no sólo por una media de IoC.
 
 ## 4.4 Algoritmo 3A: caché perceptual con rechazo
