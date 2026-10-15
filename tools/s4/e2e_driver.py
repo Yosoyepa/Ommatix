@@ -66,8 +66,11 @@ failed runs do. Any other failure lets the next run start.
 ``--ambiguous-crash`` (IT-05, the test application only, one case, three live requests) is the
 ambiguous crash of the dossier: one click on ``Sumar`` is requested through the gate, and the
 client kills the engine process it started (``KillAfter``: that Popen handle and nothing else)
-``--crash-after-ms`` (40 by default, between 20 and 50) after the request was written, before
-its answer. The engine is started again without a fixed session identifier. The test
+after the request was written and before its answer, ``--crash-after-ms`` later (or
+``--crash-after-from``: the delay the rule of ``measurement_window`` gives for the last
+``--measure-click`` record of a results file). ``--measure-click`` (C0, one live request, nothing
+killed) is that measurement: one ordinary click on ``Sumar`` in a fresh engine, its action timings
+and its round trip. The engine is started again without a fixed session identifier. The test
 application's title counts its clicks (``valor=``), so the OS side says whether the killed click
 was delivered (0 or 1, both honest), then the client checks, with no request in between, that the
 counter does not move; it repeats the old request_id in the new session (it must be refused,
@@ -1506,18 +1509,21 @@ E2E_ID = {"testapp": "E2E-01", "calculator": "E2E-02", "notepad": "E2E-03"}
 # (recorded evidence refers to it) and carry `flow_id` going forward.
 FLOW_ID = {"testapp": "E2E-01", "calculator": "S4R-02", "notepad": "S4R-03"}
 
-# ---- the ambiguous crash (IT-05) -----------------------------------------------------------
+# ---- the ambiguous crash (IT-05) and its measurement (C0) ----------------------------------
 # One click on the test application's Sumar, the engine killed while the request is open. The
-# measured round trips of clicks with a visual effect were 68 to 100 ms (S3 section 9 and S4
-# reports), and the delivery comes 15 to 30 ms after the request (action_freshness 14 to 27 ms,
-# action_delivery about 2 ms). The kill comes at 40 ms, between the two: the click is expected to
-# have left in most runs, and the answer is expected not to have come. Whether the click left is
-# not known to the client; the test application's counter says it afterwards, and both outcomes
-# are honest. A run where the answer comes first is reported as not exercised and never retried
-# (the live request is already spent).
+# kill delay is not a constant: it is derived from one measured ordinary click (C0,
+# --measure-click), as the midpoint between the moment that click left and the moment its answer
+# came back:
+#   delivered_ms = action_gate + action_freshness + action_delivery (+ action_focus), engine side
+#   rtt_ms       = the client's round trip of the same request
+#   kill delay   = round((delivered_ms + rtt_ms) / 2), accepted only when delivered_ms < delay < rtt_ms
+# The kill then lands after the click left (the counter says whether it did) and before the answer.
+# The guard range covers the measured envelope (S3 section 9 and the S4 reports): deliveries of
+# 14 to 30 ms and round trips of clicks of 68 to 100 ms. A delay outside it is refused. A run where
+# the answer comes first is reported as not exercised and never retried (the request is spent).
 CRASH_TARGET = "Sumar"
-CRASH_AFTER_MS = 40
-CRASH_AFTER_MS_RANGE = (20, 50)
+CRASH_AFTER_MS_RANGE = (15, 100)
+MEASURE_LIVE_REQUESTS = 1  # C0: one ordinary click, nothing killed
 CRASH_LIVE_REQUESTS = 3  # the crashed click, its repetition in the new session, one new click
 CRASH_STABLE_SAMPLES = 3  # one read per second with no request in between
 SESSION_END = "session ended"
@@ -1528,6 +1534,54 @@ def testapp_valor(title: str) -> int | None:
     """The click counter of the test application, from its window title (``valor=N``)."""
     match = TESTAPP_VALOR.search(title)
     return int(match.group(1)) if match else None
+
+
+DELIVERY_STAGES = ("action_gate", "action_freshness", "action_delivery")  # before the click leaves
+
+
+def measurement_window(stages: dict, rtt_ms: float | None) -> dict:
+    """The kill window of IT-05 from one measured ordinary click (C0). The click has left when
+    the engine finished its gate, its freshness capture and its delivery (`action_focus` is 0 for
+    a click and is added when reported); the answer comes at the client's round trip. Their
+    midpoint is the kill delay: the request was written, the click left, and the answer has not
+    come. `delivered_ms` is None when the engine did not report the stages."""
+    if rtt_ms is None or not all(name in stages for name in DELIVERY_STAGES):
+        return {"delivered_ms": None, "rtt_ms": None if rtt_ms is None else round(rtt_ms, 1),
+                "suggested_ms": None, "window_ok": False}
+    delivered = round(sum(stages[name] for name in DELIVERY_STAGES)
+                      + stages.get("action_focus", 0.0), 3)
+    suggested = int(round((delivered + rtt_ms) / 2))
+    low, high = CRASH_AFTER_MS_RANGE
+    return {"delivered_ms": delivered, "rtt_ms": round(rtt_ms, 1), "suggested_ms": suggested,
+            "window_ok": delivered < suggested < rtt_ms and low <= suggested <= high}
+
+
+def crash_delay_from(record: dict) -> int:
+    """The kill delay of IT-05, taken from a C0 record: the suggested delay of a measurement that
+    was a normal click (effect observed, delivered, the counter from 0 to 1) and whose window
+    holds. Anything else gives no delay and is refused before any live request."""
+    measurement = record.get("measurement") or {}
+    if record.get("kind") != "measure-click":
+        raise Abort("the record is not a measurement of a click")
+    if not record.get("success"):
+        raise Abort("the measuring click did not behave as a normal click; measure again")
+    if not measurement.get("window_ok"):
+        raise Abort(f"the measured window does not hold (delivered {measurement.get('delivered_ms')}"
+                    f" ms, round trip {measurement.get('rtt_ms')} ms)")
+    return int(measurement["suggested_ms"])
+
+
+def last_measurement(path: Path) -> dict:
+    """The last C0 record of a results file (JSON lines); Abort when the file has none."""
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise Abort(f"the measurement file cannot be read: {type(error).__name__}") from error
+    records = [json.loads(line) for line in lines if line.strip()]
+    measures = [record for record in records if record.get("kind") == "measure-click"]
+    if not measures:
+        raise Abort("the measurement file holds no measure-click record")
+    return measures[-1]
 
 
 def kill_window(answered: bool, fired: bool) -> str:
@@ -2910,11 +2964,11 @@ class Protocol:
             time.sleep(0.25)
         return None
 
-    def crash_case(self, res: dict, argv: list[str]) -> None:
-        """Starts the test application, clicks Sumar through the gate and kills the engine after
-        ``--crash-after-ms``, before its answer; then restarts the engine without a session id and
-        checks the counter, the repetition and one new click. Sets `failure` and sends nothing more
-        at the first stage that cannot be reached."""
+    def reach_sumar(self, res: dict, request_id: str):
+        """The first stage of IT-05 and of C0: starts the test application, waits for it in the
+        foreground at valor 0, and grounds one click on Sumar by identity before its point
+        (ADR-0022). Returns (window, observation, target, request), or None with `failure` set when
+        nothing may be sent."""
         res["steps"] = 1
         pid = self.crash_pid = self.launch()
         ok, requests = self.wait_foreground(pid)
@@ -2922,7 +2976,7 @@ class Protocol:
         res.update(activation_fields(self.activation))
         if not ok:
             res["failure"] = "the test application did not reach the foreground maximized"
-            return
+            return None
         hwnd = self.app_window(pid)
         time.sleep(self.args.settle)
         for _ in range(6):
@@ -2933,26 +2987,37 @@ class Protocol:
             time.sleep(0.5)
         else:
             res["failure"] = "initial state not visible by OCR"
-            return
+            return None
         before = res["valor_before"] = self.counter(hwnd)
         if before != 0:
             res["failure"] = "the test application does not start at valor 0"
-            return
+            return None
         fg = self.require_foreground()
         target = self.target(elements, CRASH_TARGET)
         if target is None:
             res["failure"] = "the Sumar target is not confirmed exactly once"
-            return
+            return None
         ident = self.identify_before(res, fg, CRASH_TARGET, target)
         if ident is None:
-            return
+            return None
         pre = self.pre_click_grounding(1, fg, CRASH_TARGET, target, ident)
         res.setdefault("pre_grounded", []).append({"attempt": 1, **pre})
         if not pre["grounded"]:
             res["failure"] = f"no request, the target point is not grounded ({pre['status']})"
+            return None
+        return hwnd, snap, target, self.click_request(snap, target, request_id)
+
+    def crash_case(self, res: dict, argv: list[str]) -> None:
+        """Starts the test application, clicks Sumar through the gate and kills the engine after
+        ``--crash-after-ms`` (derived from C0, see crash_delay_from), before its answer; then
+        restarts the engine without a session id and checks the counter, the repetition and one new
+        click. Sets `failure` and sends nothing more at the first stage that cannot be reached."""
+        reached = self.reach_sumar(res, f"s4-it05-r{res['run']}-1")
+        if reached is None:
             return
+        hwnd, snap, target, request = reached
+        before = res["valor_before"]
         old = self.srv
-        request = self.click_request(snap, target, f"s4-it05-r{res['run']}-1")
         res["crash_after_ms"] = self.args.crash_after_ms
         self.spend_live()  # before the timer: a refused spend must not leave a kill armed
         res["actions_requested"] += 1
@@ -3035,14 +3100,43 @@ class Protocol:
         res["failure"] = res.get("failure") or ("; ".join(problems) or None)
         res["success"] = res["failure"] is None
 
-    def run_crash(self, argv: list[str]) -> None:
-        """IT-05 as the invocation's only case. Its record is appended like a run's, the test
-        application is closed, and a safety event engages the operator's stop, as in run()."""
-        res = new_result("IT-05-plan", 1, "IT-05")
+    def measure_click(self, res: dict, argv: list[str]) -> None:
+        """C0: one ordinary click on Sumar through the gate, nothing killed. The click's action
+        timings say when it left (gate, freshness, delivery), and the client's round trip says when
+        its answer came; IT-05's kill delay is their midpoint (measurement_window). It is the first
+        action of a fresh engine, as IT-05's first click is, so the two are measured alike. One live
+        request; the counter must read 1 afterwards, or the measurement is not a normal click."""
+        reached = self.reach_sumar(res, f"s4-c0-r{res['run']}-1")
+        if reached is None:
+            return
+        hwnd, _, _, request = reached
+        self.spend_live()
+        res["actions_requested"] += 1
+        out, _, meta, rtt = self.srv.call("execute_action", request)
+        stages = stage_ms(meta)
+        window = measurement_window(stages, rtt)
+        res["answer"] = {"status": out.get("status"),
+                         "error": (out.get("error") or {}).get("code"),
+                         "input_delivered": out.get("input_delivered"),
+                         "verified": out.get("verified")}
+        res["measurement"] = {**window, "stages_ms": stages}
+        time.sleep(0.5)  # the title may lag the repaint of the click
+        after = self.counter(hwnd)
+        res["valor"] = {"before": 0, "after": after}
+        ok = (out.get("status") == "effect_observed" and out.get("input_delivered") is True
+              and after == 1 and window["delivered_ms"] is not None)
+        res["failure"] = None if ok else ("the measuring click did not behave as a normal click "
+                                          "(status, delivery, counter or timings)")
+        res["success"] = ok
+
+    def run_single(self, res: dict, body, argv: list[str]) -> None:
+        """One case of an invocation (IT-05 or C0). Its record is appended like a run's, the test
+        application is closed, and a safety event or an abort engages the operator's stop, as in
+        run()."""
         ledger_start = self.ledger_total()
         started = time.perf_counter()
         try:
-            self.crash_case(res, argv)
+            body(res, argv)
         except Abort as error:
             res["aborted"] = str(error)
             raise
@@ -3056,9 +3150,21 @@ class Protocol:
                 observations=len(res["observations"]))
             event = self.safety_event(res)
             if event is not None:
-                self.engage_stop(f"safety event in the crash case: {event}")
+                self.engage_stop(f"safety event in the {res['kind']} case: {event}")
             elif "aborted" in res and not self.stop_engaged:
-                self.write_stop(f"abort in the crash case: {res['aborted']}")
+                self.write_stop(f"abort in the {res['kind']} case: {res['aborted']}")
+
+    def run_crash(self, argv: list[str]) -> None:
+        """IT-05 as the invocation's only case (see crash_case)."""
+        res = new_result("IT-05-plan", 1, "IT-05")
+        res["kind"] = "crash"
+        self.run_single(res, self.crash_case, argv)
+
+    def run_measure(self, argv: list[str]) -> None:
+        """C0 as the invocation's only case (see measure_click)."""
+        res = new_result("C0-plan", 1, "C0")
+        res["kind"] = "measure-click"
+        self.run_single(res, self.measure_click, argv)
 
 
 def argument_problem(args, live: bool) -> str | None:
@@ -3077,6 +3183,17 @@ def argument_problem(args, live: bool) -> str | None:
             return "--calc-standard needs --app calculator and run mode"
         if args.max_live < 1:
             return "--calc-standard needs --max-live of at least 1 (it clicks)"
+    if args.measure_click:
+        if args.ambiguous_crash:
+            return "--measure-click and --ambiguous-crash are separate invocations"
+        if args.app != "testapp" or not live:
+            return "--measure-click needs --app testapp and run mode"
+        if args.runs != 1:
+            return "--measure-click is one click: give --runs 1"
+        if args.max_live < MEASURE_LIVE_REQUESTS:
+            return f"--measure-click needs --max-live of at least {MEASURE_LIVE_REQUESTS}"
+        if args.crash_after_ms is not None or args.crash_after_from is not None:
+            return "--measure-click takes no kill delay"
     if args.ambiguous_crash:
         if args.app != "testapp" or not live:
             return "--ambiguous-crash needs --app testapp and run mode"
@@ -3084,9 +3201,12 @@ def argument_problem(args, live: bool) -> str | None:
             return "--ambiguous-crash is one case: give --runs 1"
         if args.max_live < CRASH_LIVE_REQUESTS:
             return f"--ambiguous-crash needs --max-live of at least {CRASH_LIVE_REQUESTS}"
-        low, high = CRASH_AFTER_MS_RANGE
-        if not low <= args.crash_after_ms <= high:
-            return f"--crash-after-ms must be between {low} and {high}"
+        if (args.crash_after_ms is None) == (args.crash_after_from is None):
+            return "--ambiguous-crash needs exactly one of --crash-after-ms, --crash-after-from"
+        if args.crash_after_ms is not None:
+            low, high = CRASH_AFTER_MS_RANGE
+            if not low <= args.crash_after_ms <= high:
+                return f"--crash-after-ms must be between {low} and {high}"
     return None
 
 
@@ -3131,9 +3251,16 @@ def main() -> int:
                    help="IT-05: one click on Sumar through the gate, the engine this client started "
                         "killed before its answer, then the restart checks (--app testapp, run "
                         "mode, --runs 1, --max-live 3 or more; see the module docstring)")
-    p.add_argument("--crash-after-ms", type=int, default=CRASH_AFTER_MS,
-                   help=f"--ambiguous-crash only: when the kill comes, after the request was "
-                        f"written ({CRASH_AFTER_MS_RANGE[0]} to {CRASH_AFTER_MS_RANGE[1]} ms)")
+    p.add_argument("--measure-click", action="store_true",
+                   help="C0: one ordinary click on Sumar, nothing killed; its action timings give "
+                        "the kill delay of --ambiguous-crash (--app testapp, run mode, --runs 1)")
+    p.add_argument("--crash-after-ms", type=int, default=None,
+                   help="--ambiguous-crash only: when the kill comes, after the request was written "
+                        f"({CRASH_AFTER_MS_RANGE[0]} to {CRASH_AFTER_MS_RANGE[1]} ms); or give "
+                        "--crash-after-from")
+    p.add_argument("--crash-after-from", type=Path, default=None,
+                   help="--ambiguous-crash only: the results file of a --measure-click run; the "
+                        "delay is the rule's value for its last measure-click record")
     p.add_argument("--testapp-exe", default=str(HERE / "testapp" / "target" / "release" / "ommatix-testapp.exe"))
     p.add_argument("--session-id", default=None,
                    help="probe runs only: the engine's session identifier (a live run takes none)")
@@ -3191,10 +3318,16 @@ def main() -> int:
     if live and not config.get("safety", {}).get("actuation_enabled"):
         log("abort", reason="run mode needs the live configuration")
         return 2
-    if args.ambiguous_crash:
+    if args.ambiguous_crash or args.measure_click:
         problems = crash_config_problems(config)
         if problems:
-            log("abort", reason="the configuration does not fit the crash case", problems=problems)
+            log("abort", reason="the configuration does not fit the click cases", problems=problems)
+            return 2
+    if args.ambiguous_crash and args.crash_after_from is not None:
+        try:  # the delay comes from the measurement, before any live request
+            args.crash_after_ms = crash_delay_from(last_measurement(args.crash_after_from))
+        except Abort as error:
+            log("abort", reason=str(error))
             return 2
     try:
         argv = serve_argv(args.exe, args.output, args.config, live, args.session_id)
@@ -3216,6 +3349,8 @@ def main() -> int:
         log("metrics", mode=m.get("mode"), models_loaded=m.get("models_loaded"))
         if args.ambiguous_crash:
             proto.run_crash(argv)
+        elif args.measure_click:
+            proto.run_measure(argv)
         elif args.calc_standard:
             code = 0 if proto.calc_standard()["switched"] else 1
         else:
