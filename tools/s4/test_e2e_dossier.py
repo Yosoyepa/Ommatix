@@ -274,12 +274,12 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(flow["steps"][1][2],
                          "Ommatix S4 editor [caracteres=10 guardado=si]|file:ok")
 
-    def test_the_explorer_flow_is_three_single_clicks_and_nothing_else(self):
+    def test_the_explorer_flow_is_up_up_back_as_three_single_clicks(self):
         flow = dossier.explorer_flow("run1")
         self.assertTrue(dossier.is_click_only(flow))
-        self.assertEqual([str(s[0]) for s in flow["steps"]], ["carpeta-a", "carpeta-b", "run1"])
+        self.assertEqual([str(s[0]) for s in flow["steps"]], ["carpeta-a", "run1", "Atrás"])
         self.assertEqual([s[2] for s in flow["steps"]],
-                         [("carpeta-a",), ("carpeta-a", "carpeta-b"), ()])
+                         [("carpeta-a",), (), ("carpeta-a",)])
         self.assertTrue(all(len(s) == 3 for s in flow["steps"]), "no typing step")
         self.assertEqual(flow["exe"], "explorer.exe")
 
@@ -288,12 +288,26 @@ class FlowTest(unittest.TestCase):
         flow["steps"].append(("carpeta-a", driver.NOT_BY_OCR, (), "x"))
         self.assertFalse(dossier.is_click_only(flow))
 
-    def test_the_navigation_targets_name_their_control_types_and_zones(self):
-        a, b, back = (s[0] for s in dossier.explorer_flow("run1")["steps"])
-        self.assertEqual((a.control_types, a.zone), (("TreeItem",), "left_sidebar"))
-        self.assertEqual((b.control_types, b.zone), (("TreeItem",), "left_sidebar"))
-        self.assertEqual((back.control_types, back.zone), (("Button", "SplitButton"), "top_bar"))
+    def test_the_navigation_targets_name_their_control_types_and_the_roles_they_stand_for(self):
+        a, root, back = (s[0] for s in dossier.explorer_flow("run1")["steps"])
+        self.assertEqual(a.control_types, ("Button", "SplitButton"))
+        self.assertEqual(root.control_types, ("Button", "SplitButton"))
+        self.assertEqual(back.control_types, ("Button",))
+        for target in (a, root, back):
+            self.assertEqual(target.roles, ("button",))
+            self.assertNotIn("TreeItem", target.control_types)
+            self.assertNotIn("ListItem", target.control_types)
         self.assertEqual(a, "carpeta-a")  # still a plain string for the shared code
+
+    def test_a_list_item_or_a_tree_item_stands_for_the_unknown_role_only(self):
+        self.assertEqual(dossier.NavLabel("x", ("ListItem",), "z").roles, ("unknown",))
+        self.assertEqual(dossier.NavLabel("x", ("TreeItem",), "z").roles, ("unknown",))
+
+    def test_the_back_button_name_and_identifier_are_parameters(self):
+        flow = dossier.explorer_flow("run1", "Back", "BackButton")
+        back = flow["steps"][2][0]
+        self.assertEqual((str(back), back.automation_id), ("Back", "BackButton"))
+        self.assertIsNone(dossier.explorer_flow("run1")["steps"][2][0].automation_id)
 
 
 class NoteStateTest(QuietTest):
@@ -529,16 +543,18 @@ OURS, OWNERS, DESKTOP = 900, 901, 4
 
 
 class FakeExplorerDesk(dossier.DossierProtocol):
-    """A Protocol on a fake Explorer: a tree view with ``carpeta-a`` and ``carpeta-b``, a file
-    list that shows the same names (a decoy: a single click there selects, it does not
-    navigate), a breadcrumb, and the owner's own Explorer window next to the one the client
-    opened. It records the clicks the gate would have delivered."""
+    """A Protocol on a fake Explorer window that starts on ``carpeta-b``: the breadcrumb (a
+    Button per parent folder), the Back button, and the decoys that share the targets' names
+    with another control type and role (a tab title, a navigation-pane tree item, a file-list
+    item). The engine gives every navigation element zone ``unknown``, as in the ninth round.
+    The owner's own Explorer window sits next to the one the client opened. It records the clicks
+    the gate would have delivered."""
 
     def __init__(self, tmp, temp_root, pin_file, max_live=10, mode="run"):
         self.args = SimpleNamespace(
             app="explorer", max_live=max_live, settle=0.0, results=tmp / "results.jsonl",
             debug_grounding=False, restart="each", mode=mode, editor_exe="editor.exe",
-            explorer_launch="root", foreground_wait=1.0, foreground_wait_explorer=1.0,
+            explorer_launch="e", foreground_wait=1.0, foreground_wait_explorer=1.0,
             first_run=1, runs=1, pause=0.0)
         self.srv = self
         self.stop_file = None
@@ -560,7 +576,9 @@ class FakeExplorerDesk(dossier.DossierProtocol):
         self.root_name = None
         # the fake desktop
         self.root = None
+        self.start = None
         self.location = None  # the folder of our window, as a path
+        self.history = []  # the folders Back returns to
         self.fg_hwnd = OURS
         self.under = OURS  # the top-level window under the click point
         self.windows = {OURS, OWNERS}
@@ -569,43 +587,52 @@ class FakeExplorerDesk(dossier.DossierProtocol):
         self.reused_handle = False
         self.killed = []
         self.pin_seen = []
+        self.opened_with = []
         self.clicks = []  # (target_id, label, zone)
         self.cursor = None
-        self.twin_in_sidebar = False
+        self.twin_crumb = False
         self.navigate = True
         self.damage = None  # a function that damages the tree after the nth click
         self.on_screen = True
         self.front_ok = True
 
-    # the layout of the window, by target id
+    def folder_name(self):
+        return self.location.name
+
+    # the layout of the window: engine elements by target id
     def elements(self):
-        names = {"a": "carpeta-a", "b": "carpeta-b"}
+        def el(label, role, target_id, zone="unknown"):
+            return {"label": label, "role": role, "actionability": "confirmed",
+                    "label_source": "accessibility", "target_id": target_id, "revision": 1,
+                    "zone": zone}
+
+        root = self.root_name or ""
         found = [
-            {"label": "carpeta-a", "role": "unknown", "actionability": "confirmed",
-             "label_source": "accessibility", "target_id": "tree-a", "revision": 1,
-             "zone": "left_sidebar"},
-            {"label": "carpeta-b", "role": "unknown", "actionability": "confirmed",
-             "label_source": "accessibility", "target_id": "tree-b", "revision": 1,
-             "zone": "left_sidebar"},
-            # the file list shows the same names: a click there only selects
-            {"label": "carpeta-a", "role": "unknown", "actionability": "confirmed",
-             "label_source": "accessibility", "target_id": "list-a", "revision": 1,
-             "zone": "center_main"},
-            {"label": "carpeta-b", "role": "unknown", "actionability": "confirmed",
-             "label_source": "accessibility", "target_id": "list-b", "revision": 1,
-             "zone": "center_main"},
-            {"label": self.root_name or "", "role": "button", "actionability": "confirmed",
-             "label_source": "accessibility", "target_id": "crumb-root", "revision": 1,
-             "zone": "top_bar"},
+            el(self.folder_name(), "unknown", "tab"),  # the tab title: the current folder
+            el("carpeta-a", "unknown", "tree-a"),  # the navigation pane, rooted at the tree
+            el(root, "unknown", "tree-root"),
+            el("Atrás", "button", "back"),
         ]
-        if self.twin_in_sidebar:
-            found.append(dict(found[0], target_id="tree-a-twin"))
-        del names
+        if self.location == self.root:
+            found.append(el("carpeta-a", "unknown", "list-a"))  # the file list
+        if self.location == self.root / "carpeta-a":
+            found.append(el("carpeta-b", "unknown", "list-b"))
+        if self.location is not None and self.location != self.root:
+            found.append(el(root, "button", "crumb-root"))
+        if self.location == self.root / "carpeta-a" / "carpeta-b":
+            found.append(el("carpeta-a", "button", "crumb-a"))
+            if self.twin_crumb:
+                found.append(el("carpeta-a", "button", "crumb-a-twin"))
         return found
 
     def observe(self):
         return ({"session_id": "s", "snapshot_id": "s1", "geometry_epoch": 1},
                 self.elements(), {})
+
+    def go(self, where):
+        if where != self.location:
+            self.history.append(self.location)
+            self.location = where
 
     def call(self, tool, args):
         assert tool == "execute_action" and args["dry_run"] is False
@@ -615,32 +642,41 @@ class FakeExplorerDesk(dossier.DossierProtocol):
         self.pin_seen.append(self.pin_file.read_text() if self.pin_file.exists() else None)
         self.cursor = target["target_id"]
         if self.navigate:
-            root = self.root
-            where = {"tree-a": root / "carpeta-a", "tree-b": root / "carpeta-a" / "carpeta-b",
-                     "crumb-root": root}.get(target["target_id"])
-            if where is not None:
-                self.location = where
+            if target["target_id"] == "crumb-a":
+                self.go(self.root / "carpeta-a")
+            elif target["target_id"] == "crumb-root":
+                self.go(self.root)
+            elif target["target_id"] == "back" and self.history:
+                self.location = self.history.pop()
         if self.damage is not None:
             self.damage(len(self.clicks))
         out = {"status": "effect_observed", "input_delivered": True, "verified": True,
                "observed_effect": "visual_change"}
         return out, False, {}, 5.0
 
-    # UI Automation
-    IDENTITY = {("carpeta-a", "TreeItem"): row("9.1", "TreeA", "TreeItem"),
-                ("carpeta-b", "TreeItem"): row("9.2", "TreeB", "TreeItem"),
-                ("carpeta-a", "ListItem"): row("9.3", "ListA", "ListItem"),
-                ("carpeta-b", "ListItem"): row("9.4", "ListB", "ListItem")}
+    # UI Automation: (name, control type) -> row
+    def uia_rows(self):
+        root = self.root_name or ""
+        rows = {("carpeta-a", "TreeItem"): row("9.1", "TreeA", "TreeItem"),
+                (root, "TreeItem"): row("9.6", "TreeRoot", "TreeItem"),
+                ("Atrás", "Button"): row("9.7", "BackButton", "Button"),
+                (self.folder_name(), "TabItem"): row("9.2", "Tab", "TabItem")}
+        if self.location == self.root:
+            rows[("carpeta-a", "ListItem")] = row("9.3", "ListA", "ListItem")
+        if self.location == self.root / "carpeta-a":
+            rows[("carpeta-b", "ListItem")] = row("9.4", "ListB", "ListItem")
+        if self.location != self.root:
+            rows[(root, "SplitButton")] = row("9.9", "CrumbRoot", "SplitButton")
+        if self.location == self.root / "carpeta-a" / "carpeta-b":
+            rows[("carpeta-a", "Button")] = row("9.5", "CrumbA", "Button")
+        return rows
 
     def identify(self, hwnd, label, control_types):
         assert hwnd == OURS, "UI Automation reads only the recorded window"
-        label = str(label)
-        found = [dict(r) for (name, ctype), r in self.IDENTITY.items()
-                 if name == label and ctype in control_types]
-        if label == self.root_name and ({"Button", "SplitButton"} & set(control_types)):
-            found.append(row("9.9", "Crumb", "Button"))
-        if self.twin_in_sidebar and label == "carpeta-a" and "TreeItem" in control_types:
-            found.append(row("9.8", "TreeATwin", "TreeItem"))
+        found = [dict(r) for (name, ctype), r in self.uia_rows().items()
+                 if name == str(label) and ctype in control_types]
+        if self.twin_crumb and str(label) == "carpeta-a" and "Button" in control_types:
+            found.append(row("9.8", "CrumbATwin", "Button"))
         return found
 
     def element_centre(self, hwnd, label, control_types):
@@ -648,16 +684,22 @@ class FakeExplorerDesk(dossier.DossierProtocol):
 
     def cursor_chain(self):
         by_target = {"tree-a": row("9.1", "TreeA", "TreeItem"),
-                     "tree-b": row("9.2", "TreeB", "TreeItem"),
+                     "tree-root": row("9.6", "TreeRoot", "TreeItem"),
+                     "tab": row("9.2", "Tab", "TabItem"),
                      "list-a": row("9.3", "ListA", "ListItem"),
                      "list-b": row("9.4", "ListB", "ListItem"),
-                     "crumb-root": row("9.9", "Crumb", "Button")}
+                     "crumb-a": row("9.5", "CrumbA", "Button"),
+                     "crumb-root": row("9.9", "CrumbRoot", "SplitButton"),
+                     "back": row("9.7", "BackButton", "Button")}
         return [by_target[self.cursor]]
 
     # the OS
-    def open_explorer(self, root):
-        self.root = root
-        self.location = root
+    def open_explorer(self, start):
+        self.opened_with.append(start)
+        self.start = start
+        self.root = start.parent.parent
+        self.location = start
+        self.history = []
         return OURS
 
     def location_of(self, hwnd):
@@ -698,34 +740,55 @@ class ExplorerRunTest(QuietTest):
     def desk(self, **kwargs):
         return FakeExplorerDesk(self.tmp, self.temp_root, self.pin, **kwargs)
 
-    def test_the_run_navigates_with_three_clicks_and_checks_the_folder_after_each(self):
+    def test_the_window_opens_directly_on_carpeta_b(self):
         desk = self.desk()
         res = desk.run_once(1)
+        self.assertEqual(len(desk.opened_with), 1)
+        self.assertEqual(desk.opened_with[0].parts[-2:], ("carpeta-a", "carpeta-b"))
         self.assertTrue(res["success"], res)
-        self.assertEqual([(c[1], c[2]) for c in desk.clicks],
-                         [("carpeta-a", "left_sidebar"), ("carpeta-b", "left_sidebar"),
-                          (desk.root_name, "top_bar")])
-        self.assertEqual(desk.location, desk.root, "back at the root")
+
+    def test_the_run_goes_up_twice_then_back_and_checks_the_folder_after_each_click(self):
+        desk = self.desk()
+        folders = []
+        original = desk.call
+
+        def spy(tool, args):
+            out = original(tool, args)
+            folders.append(dossier.relative_parts(desk.root, str(desk.location)))
+            return out
+
+        desk.call = spy
+        res = desk.run_once(1)
+        self.assertTrue(res["success"], res)
+        self.assertEqual([(c[1], c[0]) for c in desk.clicks],
+                         [("carpeta-a", "crumb-a"), (desk.root_name, "crumb-root"),
+                          ("Atrás", "back")])
+        self.assertEqual(folders, [("carpeta-a",), (), ("carpeta-a",)])
         self.assertEqual((res["independent_checks"], res["independent_failed"]), (3, 0))
         self.assertEqual((res["grounding"], res["grounding_wrong"]), ([True, True, True], 0))
         self.assertEqual((res["actions_requested"], res["delivered"]), (3, 3))
         self.assertTrue(res["tree_unchanged"])
         self.assertEqual(res["e2e"], "E2E-03-plan")
 
-    def test_the_decoy_in_the_file_list_is_never_clicked(self):
+    def test_the_targets_are_chosen_by_control_type_and_role_never_by_zone(self):
+        desk = self.desk()
+        res = desk.run_once(1)
+        self.assertTrue(res["success"], res)
+        self.assertEqual({c[2] for c in desk.clicks}, {"unknown"},
+                         "the engine's zone was unknown for every target and nothing depended on it")
+        for target in res["targets"]:
+            self.assertEqual(target["roles_expected"], ["button"])
+            self.assertEqual(target["zones"], {"unknown": 1}, "recorded as an observation")
+            self.assertGreaterEqual(target["candidates"], 1, "decoys of other roles count here")
+
+    def test_the_decoys_with_the_same_name_are_never_clicked(self):
         desk = self.desk()
         desk.run_once(1)
-        self.assertEqual([c[0] for c in desk.clicks], ["tree-a", "tree-b", "crumb-root"])
+        clicked = {c[0] for c in desk.clicks}
+        self.assertEqual(clicked, {"crumb-a", "crumb-root", "back"})
+        self.assertFalse(clicked & {"tab", "tree-a", "tree-root", "list-a", "list-b"})
 
-    def test_two_elements_with_the_name_in_the_same_zone_stop_the_protocol(self):
-        desk = self.desk()
-        desk.twin_in_sidebar = True
-        with self.assertRaises(driver.Abort):
-            desk.run_once(1)
-        self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0))
-        self.assertEqual(desk.closed_windows, [OURS], "the window it opened is still closed")
-
-    def test_the_identity_of_a_tree_item_is_looked_up_among_tree_items_only(self):
+    def test_the_identity_is_looked_up_among_buttons_never_among_items_or_tabs(self):
         desk = self.desk()
         seen = []
         original = desk.identify
@@ -735,9 +798,51 @@ class ExplorerRunTest(QuietTest):
             return original(hwnd, label, control_types)
 
         desk.identify = spy
-        desk.run_once(1)
-        self.assertIn(("carpeta-a", ("TreeItem",)), seen)
-        self.assertNotIn("ListItem", {t for _, types in seen for t in types})
+        res = desk.run_once(1)
+        self.assertIn(("carpeta-a", ("Button", "SplitButton")), seen)
+        self.assertIn(("Atrás", ("Button",)), seen)
+        self.assertEqual({t for _, types in seen for t in types}, {"Button", "SplitButton"})
+        self.assertEqual([i["control_type"] for i in res["identity"]],
+                         ["Button", "SplitButton", "Button"])
+        self.assertEqual([i["runtime_id"] for i in res["identity"]], ["9.5", "9.9", "9.7"])
+
+    def test_two_buttons_with_the_name_stop_the_protocol_before_any_click(self):
+        desk = self.desk()
+        desk.twin_crumb = True
+        with self.assertRaises(driver.Abort):
+            desk.run_once(1)
+        self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0))
+        self.assertEqual(desk.closed_windows, [OURS], "the window it opened is still closed")
+
+    def test_two_ui_automation_buttons_with_the_name_send_nothing(self):
+        desk = self.desk()
+        original = desk.identify
+        desk.identify = lambda hwnd, label, types: (
+            original(hwnd, label, types) + [row("9.8", "Twin", "Button")])
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertIn("ambiguous", res["failure"])
+        self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0))
+
+    def test_the_back_button_may_be_required_to_carry_its_automation_id(self):
+        desk = self.desk()
+        desk.args.explorer_back_id = "BackButton"
+        res = desk.run_once(1)
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["identity"][2]["automation_id"], "BackButton")
+        other = self.desk()
+        other.args.explorer_back_id = "NotTheBackButton"
+        res = other.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(len(other.clicks), 2, "the third click was not sent")
+        self.assertIn("not_found", res["failure"])
+
+    def test_the_back_button_name_is_an_option(self):
+        desk = self.desk()
+        desk.args.explorer_back_name = "Back"
+        res = desk.run_once(1)
+        self.assertFalse(res["success"], "a Back button under another name is not found")
+        self.assertEqual(len(desk.clicks), 2)
 
     def test_the_pin_holds_the_recorded_handle_while_clicking_and_is_gone_after(self):
         desk = self.desk()
@@ -798,9 +903,25 @@ class ExplorerRunTest(QuietTest):
         self.assertEqual(res["independent_failed"], 1)
         self.assertEqual(res["engine_false_success"], 1, "effect_observed, folder unchanged")
 
+    def test_a_back_that_does_not_return_to_carpeta_a_fails_the_run(self):
+        desk = self.desk()
+        desk.history = []
+        original = desk.call
+
+        def call(tool, args):
+            if args["target_id"] == "back":
+                desk.navigate = False
+            return original(tool, args)
+
+        desk.call = call
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(len(desk.clicks), 3)
+        self.assertEqual(res["independent_failed"], 1)
+
     def test_a_click_that_reached_another_element_ends_the_run(self):
         desk = self.desk()
-        desk.cursor_chain = lambda: [row("9.3", "ListA", "ListItem")]
+        desk.cursor_chain = lambda: [row("9.2", "Tab", "TabItem")]
         res = desk.run_once(1)
         self.assertFalse(res["success"])
         self.assertEqual(res["grounding_wrong"], 1)
@@ -843,9 +964,23 @@ class ExplorerRunTest(QuietTest):
         self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0))
         self.assertEqual(desk.closed_windows, [OURS])
 
+    def test_a_window_that_does_not_start_on_carpeta_b_gets_no_input(self):
+        desk = self.desk()
+        original = desk.open_explorer
+
+        def open_on_root(start):
+            handle = original(start)
+            desk.location = desk.root
+            return handle
+
+        desk.open_explorer = open_on_root
+        res = desk.run_once(1)
+        self.assertIn("does not start on carpeta-b", res["failure"])
+        self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0))
+
     def test_the_window_that_cannot_be_told_apart_gets_no_input(self):
         desk = self.desk()
-        desk.open_explorer = lambda root: None
+        desk.open_explorer = lambda start: None
         res = desk.run_once(1)
         self.assertIn("could not be told apart", res["failure"])
         self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0))
@@ -856,12 +991,29 @@ class ExplorerRunTest(QuietTest):
         desk = self.desk(mode="probe")
         desk.probe_print = lambda elements: None
         probes = []
-        with mock.patch.object(driver, "log", side_effect=lambda event, **f: probes.append(event)):
+        with mock.patch.object(driver, "log",
+                               side_effect=lambda event, **f: probes.append((event, f))):
             res = desk.run_once(1)
         self.assertEqual((desk.clicks, desk.ledger_total(), res["steps"]), ([], 0, 0))
-        self.assertEqual(probes.count("explorer_probe"), 3)
+        events = [e for e, _ in probes]
+        self.assertEqual(events.count("explorer_probe"), 3)
+        for event, fields in probes:
+            if event == "explorer_probe":
+                self.assertIn("uia_identifiers", fields)
+                self.assertIn("engine_usable", fields)
         self.assertEqual(desk.closed_windows, [OURS])
         self.assertFalse(desk.root.exists())
+
+    def test_the_probe_records_the_back_buttons_identifiers_and_never_a_name(self):
+        desk = self.desk(mode="probe")
+        desk.probe_print = lambda elements: None
+        seen = {}
+        with mock.patch.object(driver, "log", side_effect=lambda event, **f: seen.setdefault(
+                (event, f.get("target")), f)):
+            desk.run_once(1)
+        back = next(f for (event, target), f in seen.items()
+                    if event == "explorer_probe" and target == "Atrás")
+        self.assertEqual(back["uia_identifiers"], [["Button", "BackButton"]])
 
     def test_a_run_that_aborts_closes_the_window_and_removes_the_pin_and_the_tree(self):
         desk = self.desk(max_live=1)
@@ -880,6 +1032,11 @@ class ExplorerRunTest(QuietTest):
         for secret in (str(desk.root), str(self.temp_root), "900"):
             self.assertNotIn(secret.replace("\\", "\\\\"), text)
             self.assertNotIn(secret, text)
+
+    def test_the_default_launch_shows_the_whole_path(self):
+        import inspect
+        source = inspect.getsource(dossier.main)
+        self.assertIn('"--explorer-launch", choices=["root", "e"], default="e"', source)
 
 
 class ExplorerActivationTest(QuietTest):

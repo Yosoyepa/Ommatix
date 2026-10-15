@@ -45,18 +45,76 @@ const TEXT_LIMIT_CHARS: usize = 1024;
 /// The largest file the editor writes (a character is at most 4 bytes of UTF-8).
 const MAX_NOTE_BYTES: usize = 4 * TEXT_LIMIT_CHARS;
 
-/// How long after start the editor keeps asking for the keyboard focus.
-const FRONT_REQUEST_WINDOW: Duration = Duration::from_secs(2);
-/// How often it repaints while it is asking, so that the request is sent at all.
+/// How often the window repaints while it looks for the keyboard focus, so that the sequence
+/// moves along without events.
 const FRONT_REQUEST_PERIOD: Duration = Duration::from_millis(100);
 
-/// Whether the editor still asks the OS for the foreground. A window started by a background
-/// process is not brought to the front by the OS (its taskbar button flashes instead), and UI
-/// Automation, like the engine, reads the foreground application. The request is sent early and
-/// for a short time only: the OS grants it when the user has not touched the machine for a
-/// while, and never takes it from someone who is working. It sends no input.
-fn asks_for_front(since_start: Duration) -> bool {
-    since_start < FRONT_REQUEST_WINDOW
+/// How long after start the editor waits for the OS to give its window the keyboard focus before
+/// it shows itself again.
+const FOCUS_GRACE: Duration = Duration::from_millis(600);
+/// How long it keeps looking for the keyboard focus; after that it stops for good.
+const FOCUS_SEEK_WINDOW: Duration = Duration::from_secs(8);
+/// How long the window stays hidden in one re-show.
+const RESHOW_HIDDEN: Duration = Duration::from_millis(150);
+/// The least time between two re-shows.
+const RESHOW_PERIOD: Duration = Duration::from_millis(1500);
+/// The most re-shows after start.
+const MAX_RESHOWS: u8 = 3;
+
+/// One half of a re-show: the window is hidden, then shown again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reshow {
+    Hide,
+    Show,
+}
+
+/// Gets the window the Win32 keyboard focus. A window the OS made the foreground window without
+/// activating it itself (the usual case for one started by a background process, which only
+/// flashes its taskbar button until `Focus` raises it) has no focus window at all: UI Automation
+/// then reports the desktop as the owner of the keyboard focus and the engine, which attests the
+/// application by that element, reads no accessibility evidence from the editor (S4 ninth round,
+/// finding 10). Showing the window again activates it and gives it the focus; the egui window
+/// reports it in its viewport focus state. Safe code only: it hides and shows the window, it
+/// sends no input, and it stops once the window has the focus, after [`MAX_RESHOWS`] tries or
+/// after [`FOCUS_SEEK_WINDOW`].
+#[derive(Debug, Default)]
+struct FocusSeeker {
+    reshows: u8,
+    hidden_since: Option<Duration>,
+    last_hide: Option<Duration>,
+}
+
+impl FocusSeeker {
+    /// What to do now, `since_start` after start, given whether the window has the focus. A
+    /// hidden window is always shown again, focused or not.
+    fn step(&mut self, since_start: Duration, focused: bool) -> Option<Reshow> {
+        if let Some(since) = self.hidden_since {
+            if since_start.saturating_sub(since) < RESHOW_HIDDEN {
+                return None;
+            }
+            self.hidden_since = None;
+            return Some(Reshow::Show);
+        }
+        let due = self
+            .last_hide
+            .is_none_or(|last| since_start.saturating_sub(last) >= RESHOW_PERIOD);
+        if !focused
+            && due
+            && self.reshows < MAX_RESHOWS
+            && (FOCUS_GRACE..FOCUS_SEEK_WINDOW).contains(&since_start)
+        {
+            self.reshows += 1;
+            self.hidden_since = Some(since_start);
+            self.last_hide = Some(since_start);
+            return Some(Reshow::Hide);
+        }
+        None
+    }
+
+    /// Whether the editor still needs to repaint to move the sequence along.
+    fn is_seeking(&self, since_start: Duration) -> bool {
+        self.hidden_since.is_some() || since_start < FOCUS_SEEK_WINDOW
+    }
 }
 
 /// Why a folder is not a folder the editor saves into.
@@ -261,20 +319,31 @@ struct EditorApp {
     editor: Editor,
     started: Instant,
     maximized: bool,
+    seeker: FocusSeeker,
 }
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let before = self.editor.title();
-        if asks_for_front(self.started.elapsed()) {
-            let ctx = ui.ctx().clone();
-            if !self.maximized {
-                // Once: the window maximizes itself like the test application does.
-                self.maximized = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
-            }
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            ctx.request_repaint_after(FRONT_REQUEST_PERIOD);
+        if !self.maximized {
+            // Once: the window maximizes itself like the test application does.
+            self.maximized = true;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+        let since_start = self.started.elapsed();
+        let focused = ui.ctx().input(|i| i.viewport().focused.unwrap_or(false));
+        match self.seeker.step(since_start, focused) {
+            Some(Reshow::Hide) => ui
+                .ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Visible(false)),
+            Some(Reshow::Show) => ui
+                .ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Visible(true)),
+            None => {}
+        }
+        if self.seeker.is_seeking(since_start) {
+            ui.ctx().request_repaint_after(FRONT_REQUEST_PERIOD);
         }
         egui::CentralPanel::default().show(ui, |ui| {
             ui.add_space(60.0);
@@ -341,6 +410,7 @@ fn main() -> eframe::Result {
                 editor,
                 started: Instant::now(),
                 maximized: false,
+                seeker: FocusSeeker::default(),
             }))
         }),
     )
@@ -351,13 +421,95 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    /// The foreground and the keyboard focus are never requested through the toolkit: its window
+    /// focus command sends a synthetic Alt key through `SendInput` when the window is not in
+    /// front, and so does creating a window in the toolkit's exclusive-screen mode. That is input
+    /// outside the engine's gate (AGENTS.md rule 6). The forbidden names are built from pieces so
+    /// that this test does not contain them.
     #[test]
-    fn the_editor_asks_for_the_front_early_and_only_for_a_short_time() {
-        assert!(asks_for_front(Duration::ZERO));
-        assert!(asks_for_front(Duration::from_millis(1999)));
-        assert!(!asks_for_front(FRONT_REQUEST_WINDOW));
-        assert!(!asks_for_front(Duration::from_secs(60)));
-        assert!(FRONT_REQUEST_PERIOD < FRONT_REQUEST_WINDOW);
+    fn the_source_never_asks_the_toolkit_for_the_foreground() {
+        let source = include_str!("main.rs");
+        for forbidden in [
+            ["ViewportCommand", "::Focus"].concat(),
+            ["focus", "_window"].concat(),
+            ["Full", "screen"].concat(),
+            ["full", "screen"].concat(),
+        ] {
+            assert!(
+                !source.contains(&forbidden),
+                "the source contains {forbidden}"
+            );
+        }
+    }
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    #[test]
+    fn a_window_that_never_gets_the_keyboard_focus_shows_itself_again() {
+        // Finding 10: foreground but without a focus window, UI Automation reports the desktop.
+        let mut seeker = FocusSeeker::default();
+        assert_eq!(
+            seeker.step(ms(0), false),
+            None,
+            "the OS gets its grace time first"
+        );
+        assert_eq!(seeker.step(ms(599), false), None);
+        assert_eq!(seeker.step(ms(600), false), Some(Reshow::Hide));
+        assert_eq!(seeker.step(ms(700), false), None, "hidden for a moment");
+        assert_eq!(seeker.step(ms(750), false), Some(Reshow::Show));
+        assert_eq!(seeker.step(ms(800), false), None, "not again at once");
+    }
+
+    #[test]
+    fn a_window_that_has_the_focus_is_left_alone() {
+        let mut seeker = FocusSeeker::default();
+        for t in (0..10_000).step_by(50) {
+            assert_eq!(seeker.step(ms(t), true), None, "{t} ms");
+        }
+        assert_eq!(seeker.reshows, 0);
+    }
+
+    #[test]
+    fn a_hidden_window_is_always_shown_again_whatever_the_focus_says() {
+        let mut seeker = FocusSeeker::default();
+        assert_eq!(seeker.step(ms(600), false), Some(Reshow::Hide));
+        assert_eq!(seeker.step(ms(760), true), Some(Reshow::Show));
+        assert!(seeker.hidden_since.is_none());
+    }
+
+    #[test]
+    fn the_seeker_gives_up_after_a_few_tries_and_after_its_window() {
+        let mut seeker = FocusSeeker::default();
+        let mut hides = 0;
+        let mut t = 0;
+        while t < 20_000 {
+            match seeker.step(ms(t), false) {
+                Some(Reshow::Hide) => hides += 1,
+                Some(Reshow::Show) => assert!(t < 20_000),
+                None => {}
+            }
+            t += 50;
+        }
+        assert_eq!(hides, MAX_RESHOWS, "{hides} re-shows");
+        assert!(!seeker.is_seeking(ms(20_000)));
+        assert!(seeker.is_seeking(Duration::ZERO));
+        // Past its window it never hides again, even with attempts left.
+        let mut late = FocusSeeker::default();
+        assert_eq!(late.step(FOCUS_SEEK_WINDOW, false), None);
+    }
+
+    #[test]
+    fn two_re_shows_are_a_period_apart() {
+        let mut seeker = FocusSeeker::default();
+        assert_eq!(seeker.step(ms(600), false), Some(Reshow::Hide));
+        assert_eq!(seeker.step(ms(800), false), Some(Reshow::Show));
+        assert_eq!(seeker.step(ms(600) + RESHOW_PERIOD - ms(1), false), None);
+        assert_eq!(
+            seeker.step(ms(600) + RESHOW_PERIOD, false),
+            Some(Reshow::Hide)
+        );
     }
 
     /// A fresh directory standing for the system's temporary directory.

@@ -50,14 +50,22 @@ under the point (ISLAND_HOST_CLASSES, ``descend``; sixth round, finding 1). An
 ``effect_observed`` whose OS-side or grounding check fails is counted as an engine false
 success; there must be none.
 
+``--check-mode`` (Calculator only) is read-only: it starts the Calculator, waits for the
+foreground, reads the mode through UI Automation (polled for 2 s) and closes the process it
+started; exit 0 when Standard, 1 otherwise. It starts no engine, sends no input and no live
+request, and never creates the stop file. ``--calc-standard --max-live 0`` is refused when the
+arguments are parsed.
+
 ``--calc-standard`` is a separate invocation, run once before the S4R-02 series: it switches
 the Calculator to Standard mode with two gated clicks, each with identity grounding: the
 navigation toggle, then the pane's Standard item. After the first click it polls UI Automation
 (read-only, 3 s in steps of 150 ms) for the one on-screen element with AutomationId ``Standard``
-of a list-item-like control type, accepts its name only from a closed set (``Estándar``,
-``Calculadora estándar``; any other name is never recorded), selects the engine's element by
+of a list-item-like control type, never records its name, selects the engine's element by
 that exact name and requires the click to reach that very element. It verifies the mode through
-UI Automation, also when it stops, and closes the Calculator it started.
+UI Automation, polled for 2 s after the last click (also when it stops), records the
+``grounding_wrong`` and ``engine_false_success`` counters, and closes the Calculator it started.
+The mode is Standard when the header's NFC-casefolded name contains «estándar» or «standard» and
+no Scientific-only control is on screen; the header's name is recorded only then.
 
 Live input goes only through the engine's gate; this script never injects input itself.
 It types only into the test application's field. It starts the test application and the
@@ -572,15 +580,19 @@ foreach ($e in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
 [Console]::Out.Write(($rows -join "`n"))
 """
 
-# The Calculator's mode, read through UI Automation: the header's name (AutomationId
-# "Header") and how many of the Scientific-only controls are on screen.
+# The Calculator's mode, read through UI Automation: the header (AutomationId "Header"; the first
+# on-screen one, else the first), its control type, how many Header elements there are, and how
+# many of the Scientific-only controls are on screen.
 CALC_MODE_PS = r"""
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND__)
-$header = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
+$headers = @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
   (New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'Header')))
+    [System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'Header'))))
+$header = $null
+foreach ($h in $headers) { if (-not $h.Current.IsOffscreen) { $header = $h; break } }
+if (-not $header -and $headers.Count -gt 0) { $header = $headers[0] }
 $sci = 0
 foreach ($b in '__SCIENTIFIC__'.Split(',')) {
   $name = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b))
@@ -590,8 +602,11 @@ foreach ($b in '__SCIENTIFIC__'.Split(',')) {
     if (-not $e.Current.IsOffscreen) { $sci++ }
   }
 }
-if ($header) { [Console]::Out.Write("1`t" + $header.Current.Name + "`t" + $sci) }
-else { [Console]::Out.Write("0`t`t" + $sci) }
+if ($header) {
+  $type = $header.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  [Console]::Out.Write("1`t" + $header.Current.Name + "`t" + $sci + "`t" + $type + "`t" + $headers.Count)
+}
+else { [Console]::Out.Write("0`t`t" + $sci + "`t`t0") }
 """
 
 # The elements of a window with an exact AutomationId, as ``RuntimeId, AutomationId, ControlType,
@@ -721,8 +736,9 @@ def uia_standard_items(hwnd) -> list[dict] | None:
     return parse_standard_item_rows(out)
 
 
-def read_calc_mode(hwnd) -> str:
-    """The Calculator's mode through UI Automation (see calc_mode): standard, other, unknown."""
+def read_calc_signals(hwnd) -> dict:
+    """The Calculator's mode and the signals it comes from, through UI Automation (see
+    calc_signals). An OS-side read: no input."""
     script = (CALC_MODE_PS.replace("__HWND__", str(int(hwnd)))
               .replace("__SCIENTIFIC__", ",".join(
                   base64.b64encode(n.encode("utf-8")).decode("ascii") for n in SCIENTIFIC_ONLY)))
@@ -731,9 +747,13 @@ def read_calc_mode(hwnd) -> str:
                              capture_output=True, text=True, encoding="utf-8", errors="replace",
                              check=False, creationflags=CREATE_NO_WINDOW, timeout=60).stdout
     except subprocess.TimeoutExpired:
-        return "unknown"
-    parsed = parse_calc_mode(out)
-    return "unknown" if parsed is None else calc_mode(*parsed)
+        return calc_signals(None)
+    return calc_signals(parse_calc_mode(out))
+
+
+def read_calc_mode(hwnd) -> str:
+    """The Calculator's mode through UI Automation (see calc_mode): standard, other, unknown."""
+    return read_calc_signals(hwnd)["mode"]
 
 
 # The element UI Automation reports with keyboard focus, as ``pid TAB class TAB control type TAB
@@ -928,6 +948,7 @@ CLEAR_CONTROLS = ("Borrar", "Borrar todo", "Borrar entrada")
 # (Spanish Windows names). Scientific-only controls (present only in that mode) and the header
 # texts that stand for Standard mode.
 CALC_NAV_LABEL = "Abrir navegación"
+CALC_HEADER_AUTOMATION_ID = "Header"
 # The pane's Standard item is found by its AutomationId in UI Automation (seventh round, finding
 # C1), never by its text alone: its Name is accepted only from a closed set, and only a control
 # type of a closed list of list-item-like controls counts. Its Name is not a condition (eighth
@@ -940,7 +961,14 @@ STANDARD_ITEM_TYPES = ("ListItem", "TreeItem", "TabItem", "MenuItem", "RadioButt
 STANDARD_POLL_WINDOW_S = 3.0
 STANDARD_POLL_STEP_S = 0.15
 SCIENTIFIC_ONLY = ("Alternar grados", "Notación científica")
-STANDARD_HEADERS = ("estándar", "calculadora estándar")
+# The header is application chrome, not user data. The mode is Standard when its NFC-casefolded
+# name CONTAINS one of these (the owner switched the Calculator by hand and the exact-name list
+# still read `other`) and no Scientific-only control is on screen.
+STANDARD_HEADER_FRAGMENTS = ("estándar", "standard")
+# After the last click the mode is polled, bounded: the Calculator redraws and saves its mode
+# with a delay, so a single read right after the click is not conclusive.
+CALC_MODE_POLL_S = 2.0
+CALC_MODE_POLL_STEP_S = 0.5
 CARDINALS = ("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve")
 NOTEPAD_MENU = "Editar"
 # UI Automation ExpandCollapseState of the menu bar item: the OS-side truth of "open" and
@@ -1220,24 +1248,59 @@ def nfc_fold(text: str) -> str:
     return unicodedata.normalize("NFC", text).casefold()
 
 
-def parse_calc_mode(output: str) -> tuple[str | None, int] | None:
-    """(header name or None when there is no header, Scientific-only controls on screen) from
-    the CALC_MODE_PS read; None when the output is not of that shape."""
+def parse_calc_mode(output: str) -> dict | None:
+    """The CALC_MODE_PS read as ``{"header": the name, or None when there is no header,
+    "scientific_controls": ..., "control_type": the header's, or None, "headers": how many Header
+    elements}``; None when the output is not of that shape."""
     parts = output.strip("\r\n").split("\t")
-    if len(parts) != 3 or parts[0] not in ("0", "1") or not parts[2].strip().isdigit():
+    if (len(parts) != 5 or parts[0] not in ("0", "1") or not parts[2].strip().isdigit()
+            or not parts[4].strip().isdigit()):
         return None
-    return (parts[1] if parts[0] == "1" else None), int(parts[2])
+    present = parts[0] == "1"
+    control_type = parts[3].strip().removeprefix("ControlType.") or None
+    return {"header": parts[1] if present else None, "scientific_controls": int(parts[2]),
+            "control_type": control_type if present else None, "headers": int(parts[4])}
+
+
+def header_matches(header: str | None) -> bool:
+    """Whether the header's NFC-casefolded name contains a STANDARD_HEADER_FRAGMENTS entry."""
+    if not header or not header.strip():
+        return False
+    folded = nfc_fold(header.strip())
+    return any(fragment in folded for fragment in STANDARD_HEADER_FRAGMENTS)
 
 
 def calc_mode(header: str | None, scientific_controls: int) -> str:
     """The Calculator's mode from the two UI Automation signals: ``standard`` only when the
-    header says so and no Scientific-only control is on screen; ``other`` when the header names
-    another mode; ``unknown`` when the header is missing or the signals disagree."""
+    header says so (header_matches) and no Scientific-only control is on screen; ``other``
+    when the header names another mode; ``unknown`` when the header is missing or the signals
+    disagree."""
     if not header or not header.strip():
         return "unknown"
-    if nfc_fold(header.strip()) in STANDARD_HEADERS:
+    if header_matches(header):
         return "standard" if scientific_controls == 0 else "unknown"
     return "other"
+
+
+def calc_signals(reading: dict | None) -> dict:
+    """The mode and the record of the signals it comes from (a parse_calc_mode result; None
+    when the read failed). The header's control type and AutomationId, how many Header elements
+    exist and the length of its name are always recorded; the header's name only when it matches
+    the closed rule (``header_matched``): any other name is never recorded."""
+    if reading is None:
+        return {"mode": "unknown", "readable": False}
+    header = reading["header"]
+    record = {"mode": calc_mode(header, reading["scientific_controls"]), "readable": True,
+              "header_present": header is not None,
+              "header_automation_id": CALC_HEADER_AUTOMATION_ID if header is not None else None,
+              "header_control_type": reading["control_type"],
+              "headers": reading["headers"],
+              "header_name_chars": len(header.strip()) if header is not None else None,
+              "header_matched": header_matches(header),
+              "scientific_controls": reading["scientific_controls"]}
+    if record["header_matched"]:
+        record["header_name"] = unicodedata.normalize("NFC", header.strip())
+    return record
 
 
 def value_check(v: int) -> dict:
@@ -1470,11 +1533,16 @@ class Protocol:
         self.placements = 0
         self.activation: dict = new_activation()
 
+    # While set (--check-mode) the protocol only reads: it never creates the operator's stop file,
+    # never spends a live request and has no engine to send anything to.
+    read_only: bool = False
+
     # -- safety
     def engage_stop(self, reason: str) -> None:
-        if self.stop_file is not None:
+        if self.stop_file is not None and not self.read_only:
             self.stop_file.write_text("", encoding="utf-8")
-        log("operator_stop_engaged", reason=reason)
+        log("operator_stop_read_only" if self.read_only else "operator_stop_engaged",
+            reason=reason)
         raise Abort(reason)
 
     def ledger_total(self) -> int:
@@ -1486,6 +1554,8 @@ class Protocol:
         return self.ledger_total() - self.round_start
 
     def spend_live(self) -> None:
+        if self.read_only:
+            raise Abort("a read-only check never sends a live request")
         total = self.ledger_total()
         if self.live_sent >= self.args.max_live or total - self.round_start >= LIVE_CAP:
             self.engage_stop("live action budget exhausted")
@@ -1888,8 +1958,11 @@ class Protocol:
     def descent_record(descent: dict | None) -> dict:
         return dict(descent) if descent else dict(NO_DESCENT)
 
+    def calc_signals(self, hwnd) -> dict:
+        return read_calc_signals(hwnd)
+
     def calc_mode(self, hwnd) -> str:
-        return read_calc_mode(hwnd)
+        return self.calc_signals(hwnd)["mode"]
 
     def current_hwnd(self):
         return foreground()["hwnd"]
@@ -2065,6 +2138,8 @@ class Protocol:
                    "mode_before": None, "nav_label": None, "standard_item": None,
                    "foreground_wait_s": None, "activation_requests": None,
                    "window_placements": None, "clicks": [], "mode_after": None,
+                   "mode_signals_before": None, "mode_signals_after": None,
+                   "mode_after_reads": None, "grounding_wrong": 0, "engine_false_success": 0,
                    "switched": False, "failure": None}
         pid = None
         hwnd = None
@@ -2080,7 +2155,8 @@ class Protocol:
             hwnd = self.app_window(pid)
             self.app_hwnd = hwnd
             time.sleep(self.args.settle)
-            summary["mode_before"] = self.calc_mode(hwnd)
+            summary["mode_signals_before"] = self.calc_signals(hwnd)
+            summary["mode_before"] = summary["mode_signals_before"]["mode"]
             if summary["mode_before"] == "standard":
                 summary["switched"] = True  # nothing to do, and nothing clicked
                 return summary
@@ -2097,19 +2173,20 @@ class Protocol:
                 self.calc_click(res, summary, "standard", item["name"], hwnd, pid)
             finally:
                 self.pinned_runtime_id = None
-            for _ in range(8):
-                summary["mode_after"] = self.calc_mode(hwnd)
-                if summary["mode_after"] == "standard":
-                    break
-                time.sleep(0.5)
+            self.await_mode_after(hwnd, summary, CALC_MODE_POLL_S)
             summary["switched"] = summary["mode_after"] == "standard"
             if not summary["switched"]:
                 summary["failure"] = "the Calculator is not in Standard mode after the clicks"
         except Abort as error:
             summary["failure"] = str(error)
         finally:
-            if summary["mode_after"] is None:  # a stop records the mode too (read-only)
-                summary["mode_after"] = self.mode_now(hwnd)
+            if summary["mode_after"] is None:
+                # A stop records the mode too (read-only), polled like the success path when a
+                # click was delivered: one read right after the click is not conclusive.
+                self.await_mode_after(hwnd, summary,
+                                      CALC_MODE_POLL_S if res["delivered"] else 0.0)
+            summary["grounding_wrong"] = res["grounding_wrong"]
+            summary["engine_false_success"] = res["engine_false_success"]
             if summary["clicks"]:
                 time.sleep(self.args.settle)  # let the Calculator save its mode before it closes
             self.close(pid)  # only a process this step started
@@ -2122,15 +2199,68 @@ class Protocol:
                 fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
         return summary
 
-    def mode_now(self, hwnd) -> str:
-        """The Calculator's mode when the step ends, or ``unknown`` when there is no window to
-        read or the read fails. A read-only query: it never stops the step's own record."""
+    def signals_now(self, hwnd) -> dict:
+        """The Calculator's mode and signals right now, or ``unknown`` when there is no window
+        to read or the read fails. A read-only query: it never ends the step on its own."""
         if hwnd is None:
-            return "unknown"
+            return {"mode": "unknown", "readable": False}
         try:
-            return self.calc_mode(hwnd)
+            return self.calc_signals(hwnd)
         except (OSError, subprocess.SubprocessError):
-            return "unknown"
+            return {"mode": "unknown", "readable": False}
+
+    def await_mode_after(self, hwnd, summary: dict, window_s: float) -> None:
+        """Reads the mode and, while it is not Standard, again every CALC_MODE_POLL_STEP_S until
+        `window_s` seconds have passed (0 reads once). The last reading is recorded as
+        ``mode_after``, ``mode_signals_after`` and ``mode_after_reads``. Read-only."""
+        started = self.mono()
+        reads = 0
+        while True:
+            signals = self.signals_now(hwnd)
+            reads += 1
+            if signals["mode"] == "standard" or self.mono() - started >= window_s:
+                break
+            self.pause(CALC_MODE_POLL_STEP_S)
+        summary.update(mode_after=signals["mode"], mode_signals_after=signals,
+                       mode_after_reads=reads)
+
+    def check_mode(self) -> dict:
+        """--check-mode (Calculator only): starts the Calculator, waits for it to reach the
+        foreground, reads its mode (polled like the end of --calc-standard) and closes only the
+        process it started. Read-only: no click, no input, no engine, no live request and no
+        stop file (``read_only``: engage_stop and spend_live cannot act). The answer is
+        ``standard`` in the summary; the exit code is 0 for Standard and 1 otherwise."""
+        self.read_only = True
+        summary = {"step": "calc_check_mode", "flow_id": FLOW_ID["calculator"],
+                   "ledger": self.ledger_total(), "foreground_wait_s": None,
+                   "activation_requests": None, "mode": None, "mode_signals": None,
+                   "mode_reads": None, "standard": False, "closed": None, "failure": None}
+        pid = None
+        hwnd = None
+        try:
+            waiting = time.perf_counter()
+            pid = self.launch()
+            ok, requests = self.wait_foreground(pid)
+            summary.update(foreground_wait_s=round(time.perf_counter() - waiting, 2),
+                           activation_requests=requests, **activation_fields(self.activation))
+            if not ok:
+                raise Abort("the Calculator did not reach the foreground maximized")
+            hwnd = self.app_window(pid)
+            time.sleep(self.args.settle)
+            reading: dict = {}
+            self.await_mode_after(hwnd, reading, CALC_MODE_POLL_S)
+            summary.update(mode=reading["mode_after"], mode_signals=reading["mode_signals_after"],
+                           mode_reads=reading["mode_after_reads"])
+            summary["standard"] = summary["mode"] == "standard"
+        except Abort as error:
+            summary["failure"] = str(error)
+        finally:
+            self.close(pid)  # only a process this check started
+            summary["closed"] = pid is None or pid not in self.started
+            log("calc_check_mode", **summary)
+            with open(self.args.results, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
+        return summary
 
     def restore_click(self, res: dict, target: dict, snap: dict) -> dict:
         """One live click through the engine's gate and nothing else (no retry)."""
@@ -2417,6 +2547,38 @@ class Protocol:
             time.sleep(self.args.pause)
 
 
+def argument_problem(args, live: bool) -> str | None:
+    """Why the arguments cannot run, before anything starts. ``--calc-standard`` clicks, so it
+    needs run mode and a live budget (with ``--max-live 0`` its first click would engage the
+    operator's stop, which belongs to the whole round); ``--check-mode`` is read-only and
+    stands alone."""
+    if args.check_mode:
+        if args.app != "calculator":
+            return "--check-mode needs --app calculator"
+        if args.calc_standard:
+            return "--check-mode and --calc-standard are separate invocations"
+        return None
+    if args.calc_standard:
+        if args.app != "calculator" or not live:
+            return "--calc-standard needs --app calculator and run mode"
+        if args.max_live < 1:
+            return "--calc-standard needs --max-live of at least 1 (it clicks)"
+    return None
+
+
+def run_check_mode(args, stop_file: Path, ledger: Path) -> int:
+    """--check-mode: no engine, no input, no live request. See Protocol.check_mode."""
+    log("start", app=args.app, mode="check_mode", live_input=False, ledger_start=read_ledger(ledger))
+    proto = Protocol(args, None, stop_file, FLOWS[args.app](), ledger)
+    try:
+        summary = proto.check_mode()
+    finally:
+        for pid in list(proto.started):
+            proto.close(pid)
+    log("end", live_requests=0, ledger_end=read_ledger(ledger))
+    return 0 if summary["standard"] else 1
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exe", required=True)
@@ -2436,6 +2598,10 @@ def main() -> int:
                    help="switch the Calculator to Standard mode (two gated clicks with identity "
                         "grounding, verified through UI Automation) and exit; run once before "
                         "the S4R-02 series (--app calculator, run mode)")
+    p.add_argument("--check-mode", action="store_true",
+                   help="read-only: start the Calculator, read its mode through UI Automation "
+                        "and close it; exit 0 when it is Standard, 1 otherwise. Sends no input, "
+                        "no live request and never creates the stop file (--app calculator)")
     p.add_argument("--results", type=Path, required=True, help="JSONL file to append runs to")
     p.add_argument("--testapp-exe", default=str(HERE / "testapp" / "target" / "release" / "ommatix-testapp.exe"))
     p.add_argument("--session-id", default="s4r2")
@@ -2474,9 +2640,13 @@ def main() -> int:
         log("abort", reason="the stop file exists before the run")
         return 2
     live = args.mode == "run"
-    if args.calc_standard and (args.app != "calculator" or not live):
-        log("abort", reason="--calc-standard needs --app calculator and run mode")
+    problem = argument_problem(args, live)
+    if problem:
+        log("abort", reason=problem)
         return 2
+    if args.check_mode:
+        args.max_live = 0
+        return run_check_mode(args, stop_file, args.ledger)
     if args.calc_standard:
         args.max_live = min(args.max_live, CALC_STANDARD_MAX_LIVE)
     ledger_now = read_ledger(args.ledger)

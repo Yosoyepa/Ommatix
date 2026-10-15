@@ -121,9 +121,6 @@ impl State {
     }
 }
 
-/// How long after start the measurement mode keeps asking for the keyboard focus.
-const FOCUS_REQUEST_WINDOW: Duration = Duration::from_secs(2);
-
 const BUTTON_SIZE: [f32; 2] = [340.0, 110.0];
 const BUTTON_TEXT: f32 = 52.0;
 const VALUE_TEXT: f32 = 64.0;
@@ -221,13 +218,9 @@ impl TestApp {
         if !animation.flash && animation.labels > 1 {
             draw("tick-b", screen.max - egui::vec2(220.0, 64.0), true);
         }
-        // A window started by a background process is not brought to the front by the OS, and
-        // UI Automation (like the engine) reads the foreground application. Ask for the focus
-        // once, early: the OS grants it only when the user has not touched the machine for a
-        // while, and never takes it from someone who is working.
-        if self.started.elapsed() < FOCUS_REQUEST_WINDOW {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-        }
+        // The window never asks the OS for the foreground itself: the toolkit's request sends a
+        // synthetic Alt key. The client brings it to the front by its handle (window management,
+        // no input) and the test below keeps the request out of this source.
         ctx.request_repaint_after(animation.period);
     }
 }
@@ -354,6 +347,27 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The foreground and the keyboard focus are never requested through the toolkit: its window
+    /// focus command sends a synthetic Alt key through `SendInput` when the window is not in
+    /// front, and so does creating a window in the toolkit's exclusive-screen mode. That is input
+    /// outside the engine's gate (AGENTS.md rule 6). The forbidden names are built from pieces so
+    /// that this test does not contain them.
+    #[test]
+    fn the_source_never_asks_the_toolkit_for_the_foreground() {
+        let source = include_str!("main.rs");
+        for forbidden in [
+            ["ViewportCommand", "::Focus"].concat(),
+            ["focus", "_window"].concat(),
+            ["Full", "screen"].concat(),
+            ["full", "screen"].concat(),
+        ] {
+            assert!(
+                !source.contains(&forbidden),
+                "the source contains {forbidden}"
+            );
+        }
+    }
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|a| (*a).to_owned()).collect()

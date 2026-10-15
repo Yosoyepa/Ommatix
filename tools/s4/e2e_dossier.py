@@ -20,14 +20,19 @@ unchanged.
                     exactly one file, ``nota.txt``, whose bytes equal the typed text.
 ``--app explorer``  ``explorer.exe``, but only in the one window this client opens. The client
                     creates ``%TEMP%\\ommatix-e2e\\<run id>`` with ``carpeta-a\\carpeta-b`` and
-                    dummy files, opens ONE File Explorer window on its root, records its handle
-                    and writes it to the operator's pin file (``[safety] window_pin_file``,
-                    ADR-0020). Three single clicks: ``carpeta-a`` and ``carpeta-b`` in the
-                    navigation pane, then the root folder in the breadcrumb. No double click,
-                    delete, rename, drag, context menu, shortcut or typing exists in the flow.
-                    After every click the window's current folder (``Shell.Application``,
-                    read-only) must be the expected one; at the end the tree must hold the same
-                    files and sizes. The window is closed by its handle (``WM_CLOSE``, never by
+                    dummy files, opens ONE File Explorer window directly on ``carpeta-b``,
+                    records its handle and writes it to the operator's pin file
+                    (``[safety] window_pin_file``, ADR-0020). Three single clicks, all in the
+                    window's address bar and toolbar: the breadcrumb ``carpeta-a`` (up), the
+                    breadcrumb of the root folder (up), then the Back button (``Atrás``), which
+                    returns to ``carpeta-a``. Targets are told apart by their UI Automation
+                    control type (breadcrumb Button/SplitButton, Back Button) and the engine's
+                    role for it, and identified by RuntimeId; the engine's zone is only recorded
+                    (it was ``unknown`` for the navigation targets in the ninth round). No double
+                    click, delete, rename, drag, context menu, shortcut or typing exists in the
+                    flow. After every click the window's current folder
+                    (``Shell.Application``, read-only) must be the expected one; at the end the
+                    tree must hold the same files and sizes. The window is closed by its handle (``WM_CLOSE``, never by
                     killing ``explorer.exe``) and only the tree this run created is deleted.
 
 Safety (AGENTS.md rules 6 and 7, ADR-0007, ADR-0012, ADR-0020):
@@ -81,6 +86,9 @@ EDITOR_TEXT = driver.TYPED_TEXT  # synthetic: "prueba 123"
 
 EXPLORER_EXE = "explorer.exe"
 EXPLORER_CLASS = "CabinetWClass"
+# The Back button's UI Automation name on the reference machine (Spanish Windows 11); another
+# language or a name with the shortcut appended is given with --explorer-back-name.
+EXPLORER_BACK = "Atrás"
 FOLDER_A, FOLDER_B = "carpeta-a", "carpeta-b"
 ROOT_FILE = ("leeme.txt", b"Ommatix E2E: archivo de prueba de la carpeta raiz.\n")
 DEEP_FILE = ("dummy.txt", b"Ommatix E2E: archivo de prueba.\n")
@@ -343,31 +351,45 @@ def editor_flow() -> dict:
 
 
 class NavLabel(str):
-    """A navigation target: its exact UI Automation name, the control types that stand for it
-    in the window, and the engine zone it lies in. The zone tells apart the elements that
-    share a name (the folder in the navigation pane, the breadcrumb and the file list); the
-    control types do the same on the UI Automation side."""
+    """A navigation target: its exact UI Automation name, the control types that stand for it in
+    the window, the engine zone it was expected in and, optionally, its AutomationId.
 
-    def __new__(cls, name: str, control_types: tuple[str, ...], zone: str):
+    The control types decide which UI Automation element is meant (``identity_lookup``) and,
+    through the inverse of the accessibility adapter's role mapping, which of the engine's
+    elements that share the name can be it (``roles``): a breadcrumb is a Button or SplitButton
+    (role ``button``), a tab title or a file-list item is not. The zone is NOT a condition: in
+    the ninth round the engine gave zone ``unknown`` to the navigation targets, so it is only
+    recorded as an observation."""
+
+    def __new__(cls, name: str, control_types: tuple[str, ...], zone: str,
+                automation_id: str | None = None):
         obj = super().__new__(cls, name)
         obj.control_types = control_types
         obj.zone = zone
+        obj.automation_id = automation_id
+        obj.roles = tuple(sorted(role for role, types in driver.ROLE_CONTROL_TYPES.items()
+                                 if set(types) & set(control_types)))
         return obj
 
 
-def explorer_flow(root_name: str) -> dict:
-    """E2E-03: root -> carpeta-a -> carpeta-b -> root, single clicks only. The first two in
-    the navigation pane (a tree item), the last in the breadcrumb (a button). The OS-side check
-    after each click is the window's current folder below the root."""
+BREADCRUMB_TYPES = ("Button", "SplitButton")
+
+
+def explorer_flow(root_name: str, back_name: str = EXPLORER_BACK,
+                  back_automation_id: str | None = None) -> dict:
+    """E2E-03: the window starts on ``carpeta-b``; breadcrumb ``carpeta-a`` (up), breadcrumb of
+    the root (up), then Back (to ``carpeta-a``). Single clicks only. The OS-side check after
+    each click is the window's current folder below the root."""
     return {
         "exe": EXPLORER_EXE,
         "initial": NOT_BY_OCR,
         "steps": [
-            (NavLabel(FOLDER_A, ("TreeItem",), "left_sidebar"), NOT_BY_OCR, (FOLDER_A,)),
-            (NavLabel(FOLDER_B, ("TreeItem",), "left_sidebar"), NOT_BY_OCR, (FOLDER_A, FOLDER_B)),
-            (NavLabel(root_name, ("Button", "SplitButton"), "top_bar"), NOT_BY_OCR, ()),
+            (NavLabel(FOLDER_A, BREADCRUMB_TYPES, "top_bar"), NOT_BY_OCR, (FOLDER_A,)),
+            (NavLabel(root_name, BREADCRUMB_TYPES, "top_bar"), NOT_BY_OCR, ()),
+            (NavLabel(back_name, ("Button",), "top_bar", back_automation_id), NOT_BY_OCR,
+             (FOLDER_A,)),
         ],
-        "vocabulary": {FOLDER_A, FOLDER_B, root_name},
+        "vocabulary": {FOLDER_A, FOLDER_B, root_name, back_name},
     }
 
 
@@ -465,12 +487,13 @@ class DossierProtocol(driver.Protocol):
     def location_of(self, hwnd) -> str | None:
         return explorer_location(hwnd)
 
-    def open_explorer(self, root: Path) -> int | None:
-        """Opens ONE File Explorer window on `root` and returns its handle: the only new
-        window whose current folder is `root`. None when it cannot be told."""
+    def open_explorer(self, start: Path) -> int | None:
+        """Opens ONE File Explorer window on `start` and returns its handle: the only new
+        window whose current folder is `start`. None when it cannot be told."""
         before = explorer_windows()
-        launch = ["explorer.exe", f"/root,{root}"] if self.args.explorer_launch == "root" \
-            else ["explorer.exe", f"/e,{root}"]
+        root = start
+        launch = ["explorer.exe", f"/root,{start}"] if self.args.explorer_launch == "root" \
+            else ["explorer.exe", f"/e,{start}"]
         subprocess.Popen(launch)
         deadline = time.monotonic() + self.args.foreground_wait_explorer
         while time.monotonic() < deadline:
@@ -525,14 +548,21 @@ class DossierProtocol(driver.Protocol):
             self.engage_stop("the foreground is not the Explorer window the client opened")
         return fg
 
+    @staticmethod
+    def nav_candidates(elements, spec) -> list[dict]:
+        """The engine's elements a navigation target can be: the exact name and the role that
+        the target's UI Automation control types stand for (a breadcrumb is a ``button``; a tab
+        title or a file-list item is not). The engine's zone is not a condition."""
+        return [e for e in elements
+                if e.get("label", "").strip() == str(spec) and e.get("role") in spec.roles]
+
     def find_target(self, elements, spec):
         if not isinstance(spec, NavLabel):
             return super().find_target(elements, spec)
-        found = [e for e in elements
-                 if e.get("label", "").strip() == str(spec) and e.get("zone") == spec.zone]
+        found = self.nav_candidates(elements, spec)
         if len(found) > 1:
             self.engage_stop(f"ambiguous label: {len(found)} elements share the step's label "
-                             "in its zone")
+                             "and role")
         if found and found[0]["actionability"] == "confirmed":
             return spec, found[0]
         return spec, None
@@ -541,6 +571,8 @@ class DossierProtocol(driver.Protocol):
         if not isinstance(label, NavLabel):
             return super().identity_lookup(hwnd, label, target)
         rows = self.identify(hwnd, str(label), label.control_types)
+        if label.automation_id and rows is not None:
+            rows = [r for r in rows if r["automation_id"] == label.automation_id]
         status, found = driver.identity_decision(rows)
         record = {"status": status,
                   "candidates": sum(1 for r in rows or [] if not r["offscreen"]),
@@ -557,6 +589,14 @@ class DossierProtocol(driver.Protocol):
                 record.update(runtime_id=found["runtime_id"], automation_id=found["automation_id"],
                               control_type=found["control_type"])
         return record, found
+
+    def record_target(self, res, elements, spec, hwnd, stopped=False):
+        super().record_target(res, elements, spec, hwnd, stopped)
+        if isinstance(spec, NavLabel):
+            # The engine's zone for the candidates, as an observation only (fixed vocabulary).
+            res["targets"][-1]["zones"] = dict(sorted(Counter(
+                str(e.get("zone")) for e in self.nav_candidates(elements, spec)).items()))
+            res["targets"][-1]["roles_expected"] = list(spec.roles)
 
     # -- one run
     def run_once(self, n: int) -> dict:
@@ -651,8 +691,10 @@ class DossierProtocol(driver.Protocol):
         tree.add_file(f"{FOLDER_A}/{FOLDER_B}/{DEEP_FILE[0]}", DEEP_FILE[1])
         before = tree.snapshot()
         res["tree_entries"] = len(before)
-        self.flow = explorer_flow(root.name)
-        hwnd = self.open_explorer(root)
+        self.flow = explorer_flow(root.name, getattr(self.args, "explorer_back_name", EXPLORER_BACK),
+                                  getattr(self.args, "explorer_back_id", None) or None)
+        start = root / FOLDER_A / FOLDER_B
+        hwnd = self.open_explorer(start)
         if hwnd is None:
             res["failure"] = "the Explorer window could not be told apart"
             return
@@ -669,8 +711,8 @@ class DossierProtocol(driver.Protocol):
             return
         time.sleep(self.args.settle)
         snap, elements, _ = self.settle_observation(res, NOT_BY_OCR)
-        if relative_parts(root, self.location_of(hwnd)) != ():
-            res["failure"] = "the Explorer window does not start on the root folder"
+        if relative_parts(root, self.location_of(hwnd)) != (FOLDER_A, FOLDER_B):
+            res["failure"] = "the Explorer window does not start on carpeta-b"
             return
         if self.args.mode == "probe":
             self.probe_print(elements)
@@ -690,12 +732,19 @@ class DossierProtocol(driver.Protocol):
             label = step[0]
             engine = Counter((e.get("zone"), e.get("role"), e.get("actionability"))
                              for e in elements if e.get("label", "").strip() == str(label))
+            usable = self.nav_candidates(elements, label)
             rows = self.identify(hwnd, str(label), driver.ANY_CONTROL_TYPE) or []
             uia = Counter((r["control_type"], r["offscreen"]) for r in rows)
-            driver.log("explorer_probe", target=str(label), zone=label.zone,
-                       control_types=list(label.control_types),
+            # The identifiers (never names) of the on-screen elements of the target's own
+            # control types: what an AutomationId for the target would be.
+            ids = sorted({(r["control_type"], r["automation_id"]) for r in rows
+                          if r["control_type"] in label.control_types and not r["offscreen"]})
+            driver.log("explorer_probe", target=str(label), zone_expected=label.zone,
+                       control_types=list(label.control_types), roles=list(label.roles),
                        engine=[[*key, n] for key, n in sorted(engine.items(), key=str)],
-                       uia=[[*key, n] for key, n in sorted(uia.items(), key=str)])
+                       engine_usable=[[e.get("zone"), e.get("actionability")] for e in usable],
+                       uia=[[*key, n] for key, n in sorted(uia.items(), key=str)],
+                       uia_identifiers=[list(pair) for pair in ids])
 
     def wait_explorer_front(self, hwnd: int) -> bool:
         """The recorded window in front and maximized on the primary monitor, asked for by its
@@ -773,9 +822,16 @@ def main() -> int:
     p.add_argument("--results", type=Path, required=True, help="JSONL file to append runs to")
     p.add_argument("--editor-exe",
                    default=str(HERE / "testeditor" / "target" / "release" / "ommatix-testeditor.exe"))
-    p.add_argument("--explorer-launch", choices=["root", "e"], default="root",
-                   help="explorer.exe /root,<folder> (the navigation pane starts at the folder) "
-                        "or /e,<folder>")
+    p.add_argument("--explorer-launch", choices=["root", "e"], default="e",
+                   help="explorer.exe /e,<folder> (the default: the address bar shows the whole "
+                        "path, so the breadcrumb of every parent exists) or /root,<folder> "
+                        "(the navigation pane is rooted at the folder; whether it hides the "
+                        "parents in the breadcrumb is not verified)")
+    p.add_argument("--explorer-back-name", default=EXPLORER_BACK,
+                   help="the exact UI Automation name of the Back button")
+    p.add_argument("--explorer-back-id", default="",
+                   help="the Back button's AutomationId, once the probe has recorded it "
+                        "(optional; when set the Back button must also carry it)")
     p.add_argument("--session-id", default="s4d")
     p.add_argument("--output", type=int, default=0)
     p.add_argument("--foreground-wait", type=float, default=60.0)

@@ -373,6 +373,12 @@ def control(label, role, key, rid, aid, ctype):
     return {"label": label, "role": role, "key": key, "rid": rid, "aid": aid, "ctype": ctype}
 
 
+def fake_signals(mode):
+    """What the signals record holds for a Calculator in `mode` (no header name in it)."""
+    return {"mode": mode, "readable": mode != "unknown", "header_present": True,
+            "header_matched": mode == "standard", "scientific_controls": 0}
+
+
 class FakeCalculator(driver.Protocol):
     """A Protocol on a fake Calculator: no server, no windows, no UI Automation, no input. It
     records the clicks the engine's gate would have delivered."""
@@ -482,8 +488,8 @@ class FakeCalculator(driver.Protocol):
                 {"runtime_id": "42.0", "automation_id": "", "control_type": "Pane",
                  "offscreen": False}]
 
-    def calc_mode(self, hwnd):
-        return self.mode
+    def calc_signals(self, hwnd):
+        return fake_signals(self.mode)
 
     def launch(self):
         self.started.add(4242)
@@ -713,7 +719,7 @@ class CalcStandardTest(QuietTest):
 
     def test_a_mode_that_is_not_standard_afterwards_is_reported_not_retried(self):
         desk = FakeCalculator(self.tmp)
-        desk.calc_mode = lambda hwnd: "other"
+        desk.calc_signals = lambda hwnd: fake_signals("other")
         summary = desk.calc_standard()
         self.assertEqual(len(desk.clicks), 2, "no third click")
         self.assertFalse(summary["switched"])
@@ -862,8 +868,8 @@ class StandardItemPollTest(QuietTest):
     def test_the_mode_is_read_before_the_calculator_is_closed(self):
         desk = FakeCalculator(self.tmp, pane_delay=10_000)
         order = []
-        read = desk.calc_mode
-        desk.calc_mode = lambda hwnd: (order.append("mode"), read(hwnd))[1]
+        read = desk.calc_signals
+        desk.calc_signals = lambda hwnd: (order.append("mode"), read(hwnd))[1]
         close = desk.close
         desk.close = lambda pid: (order.append("close"), close(pid))[1]
         desk.calc_standard()
@@ -884,6 +890,173 @@ class StandardItemPollTest(QuietTest):
         self.assertIsInstance(summary["foreground_wait_s"], float)
         self.assertEqual(summary["mode_after"], "unknown", "no window: nothing to read")
         self.assertEqual(desk.clicks, [])
+
+
+class CalcStandardRecordTest(QuietTest):
+    """Ninth round, findings 2, 3 and 8: the summary says what the run path counted, the mode
+    after the last click is polled instead of read once, and the signals are recorded."""
+
+    def run_step(self, **kwargs):
+        desk = FakeCalculator(self.tmp, **kwargs)
+        return desk, desk.calc_standard()
+
+    def test_the_summary_prints_the_grounding_and_false_success_counters(self):
+        _, ok = self.run_step()
+        self.assertEqual((ok["grounding_wrong"], ok["engine_false_success"]), (0, 0))
+        desk = FakeCalculator(self.tmp)
+        original = desk.cursor_chain
+
+        def wrong_second_click():
+            if desk.last["key"].startswith("std"):
+                return [{"runtime_id": "7.7", "automation_id": "Other", "control_type": "Button",
+                         "offscreen": False}]
+            return original()
+
+        desk.cursor_chain = wrong_second_click
+        summary = desk.calc_standard()
+        self.assertEqual([c["grounded"] for c in summary["clicks"]], [True, False])
+        self.assertEqual((summary["grounding_wrong"], summary["engine_false_success"]), (1, 1))
+        record = json.loads((self.tmp / "results.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual((record["grounding_wrong"], record["engine_false_success"]), (1, 1))
+
+    def test_a_stop_after_a_delivered_click_polls_the_mode_until_it_settles(self):
+        desk = FakeCalculator(self.tmp)
+        reads = []
+        modes = iter(["other", "other", "other", "standard"])  # before, then three after
+
+        def signals(hwnd):
+            mode = next(modes)
+            reads.append((mode, desk.now))
+            return fake_signals(mode)
+
+        desk.calc_signals = signals
+        original = desk.cursor_chain
+        desk.cursor_chain = lambda: ([{"runtime_id": "7.7", "automation_id": "Other",
+                                       "control_type": "Button", "offscreen": False}]
+                                     if desk.last["key"].startswith("std") else original())
+        summary = desk.calc_standard()  # the second click is delivered, not grounded: it stops
+        self.assertIn("calc-standard stops", summary["failure"])
+        self.assertEqual(summary["mode_after"], "standard", "the late mode is seen")
+        self.assertEqual(summary["mode_after_reads"], 3)
+        self.assertEqual(len(reads), 1 + summary["mode_after_reads"])
+        self.assertEqual(summary["mode_signals_after"]["mode"], "standard")
+
+    def test_the_poll_after_the_clicks_is_bounded(self):
+        desk = FakeCalculator(self.tmp)
+        desk.calc_signals = lambda hwnd: fake_signals("other")
+        summary = desk.calc_standard()
+        window = driver.CALC_MODE_POLL_S
+        self.assertEqual(summary["mode_after"], "other")
+        self.assertLessEqual(window, 3.0)
+        self.assertLessEqual(desk.now, window + driver.CALC_MODE_POLL_STEP_S)
+        self.assertEqual(summary["mode_after_reads"],
+                         int(window / driver.CALC_MODE_POLL_STEP_S) + 1)
+
+    def test_a_stop_before_any_click_reads_the_mode_once(self):
+        desk, summary = self.run_step(mode="unknown")
+        self.assertEqual((summary["mode_after"], summary["mode_after_reads"]), ("unknown", 1))
+        self.assertEqual(desk.now, 0.0, "nothing to wait for")
+
+    def test_the_mode_signals_are_recorded_before_and_after(self):
+        _, summary = self.run_step()
+        self.assertEqual(summary["mode_signals_before"]["mode"], "other")
+        self.assertEqual(summary["mode_signals_after"]["mode"], "standard")
+        record = json.loads((self.tmp / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertIn("mode_signals_before", record)
+
+
+class CalcCheckModeTest(QuietTest):
+    """Ninth round, finding 9: a read-only mode check that cannot reach the run path, and a
+    --calc-standard that refuses a zero budget instead of engaging the operator's stop."""
+
+    def desk(self, **kwargs):
+        desk = FakeCalculator(self.tmp, **kwargs)
+        desk.stop_file = self.tmp / "stop.flag"
+        desk.args.settle = 0.0
+        desk.spend_live = mock.Mock(side_effect=AssertionError("spend_live reached"))
+        desk.call = mock.Mock(side_effect=AssertionError("the engine was called"))
+        desk.observe = mock.Mock(side_effect=AssertionError("the engine was observed"))
+        return desk
+
+    def test_a_standard_calculator_answers_standard_and_is_closed(self):
+        desk = self.desk(mode="standard")
+        summary = desk.check_mode()
+        self.assertTrue(summary["standard"])
+        self.assertEqual((summary["mode"], summary["closed"], desk.closed), ("standard", True, [4242]))
+        self.assertEqual(desk.clicks, [])
+
+    def test_another_mode_is_not_standard_and_nothing_is_clicked(self):
+        desk = self.desk(mode="other")
+        summary = desk.check_mode()
+        self.assertFalse(summary["standard"])
+        self.assertEqual(summary["mode"], "other")
+        self.assertEqual(summary["mode_reads"], int(driver.CALC_MODE_POLL_S
+                                                    / driver.CALC_MODE_POLL_STEP_S) + 1)
+        self.assertEqual((desk.clicks, desk.closed), ([], [4242]))
+
+    def test_it_never_creates_the_stop_file_nor_touches_the_ledger(self):
+        for mode in ("standard", "other", "unknown"):
+            desk = self.desk(mode=mode)
+            desk.check_mode()
+            self.assertFalse(desk.stop_file.exists(), mode)
+            self.assertFalse(desk.ledger.exists(), mode)
+        desk = self.desk()
+        desk.wait_foreground = lambda pid: (False, 3)
+        summary = desk.check_mode()
+        self.assertIn("foreground", summary["failure"])
+        self.assertFalse(desk.stop_file.exists(), "even when the window never arrives")
+        self.assertEqual(desk.closed, [4242])
+
+    def test_the_stop_cannot_be_engaged_while_the_check_reads(self):
+        desk = self.desk()
+        desk.read_only = True
+        with self.assertRaises(driver.Abort):
+            desk.engage_stop("a Calculator the protocol did not start is running")
+        self.assertFalse(desk.stop_file.exists())
+        with self.assertRaises(driver.Abort):
+            desk.spend_live = driver.Protocol.spend_live.__get__(desk)
+            desk.spend_live()
+        self.assertFalse(desk.ledger.exists())
+
+    def test_a_calculator_the_check_did_not_start_stops_it_without_the_stop_file(self):
+        desk = self.desk()
+        desk.launch = lambda: driver.Protocol.launch(desk)
+        desk.flow = driver.calculator_flow()
+        with mock.patch.object(driver, "pids_of", return_value={99}):
+            summary = desk.check_mode()
+        self.assertIn("did not start", summary["failure"])
+        self.assertFalse(desk.stop_file.exists())
+        self.assertFalse(summary["standard"])
+
+    def test_the_summary_is_written_without_screen_text(self):
+        self.desk(mode="standard").check_mode()
+        record = json.loads((self.tmp / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(record["step"], "calc_check_mode")
+        self.assertNotIn("header_name", record["mode_signals"], "the fake's header is not matched")
+
+    def test_the_check_is_a_calculator_only_invocation_of_its_own(self):
+        def args(**kw):
+            base = dict(app="calculator", calc_standard=False, check_mode=True, max_live=0)
+            base.update(kw)
+            return SimpleNamespace(**base)
+
+        self.assertIsNone(driver.argument_problem(args(), live=False))
+        self.assertIsNone(driver.argument_problem(args(), live=True))
+        self.assertIn("calculator", driver.argument_problem(args(app="notepad"), live=True))
+        self.assertIn("separate", driver.argument_problem(args(calc_standard=True), live=True))
+
+    def test_calc_standard_with_no_live_budget_is_refused_when_the_arguments_are_parsed(self):
+        def args(**kw):
+            base = dict(app="calculator", calc_standard=True, check_mode=False, max_live=2)
+            base.update(kw)
+            return SimpleNamespace(**base)
+
+        self.assertIsNone(driver.argument_problem(args(), live=True))
+        self.assertIsNone(driver.argument_problem(args(max_live=1), live=True))
+        self.assertIn("--max-live", driver.argument_problem(args(max_live=0), live=True))
+        self.assertIn("run mode", driver.argument_problem(args(), live=False))
+        self.assertIn("calculator", driver.argument_problem(args(app="testapp"), live=True))
+        self.assertIsNone(driver.argument_problem(args(calc_standard=False, max_live=0), live=True))
 
 
 class FlowIdTest(QuietTest):
@@ -1002,19 +1175,62 @@ class CalcModeTest(unittest.TestCase):
         self.assertEqual(driver.calc_mode("  Estándar ", 0), "standard")
         self.assertEqual(driver.calc_mode("Estándar", 2), "unknown", "the signals disagree")
 
+    def test_a_header_that_contains_estandar_is_standard_whatever_surrounds_it(self):
+        # Ninth round, finding 8: the owner switched the Calculator to Standard by hand and the
+        # exact-name list still read `other`.
+        for name in ("Calculadora Estándar", "ESTÁNDAR", "Modo estándar de la calculadora",
+                     "Standard", "Standard Calculator", "Estándar"):  # NFD accent
+            self.assertEqual(driver.calc_mode(name, 0), "standard", name)
+            self.assertEqual(driver.calc_mode(name, 1), "unknown", f"{name}: signals disagree")
+
     def test_another_header_is_another_mode_and_no_header_is_unknown(self):
         self.assertEqual(driver.calc_mode("Científica", 2), "other")
         self.assertEqual(driver.calc_mode("Científica", 0), "other")
+        self.assertEqual(driver.calc_mode("Programador", 0), "other")
         self.assertEqual(driver.calc_mode(None, 0), "unknown")
         self.assertEqual(driver.calc_mode("", 0), "unknown")
 
     def test_the_mode_read_is_parsed_strictly(self):
-        self.assertEqual(driver.parse_calc_mode("1\tEstándar\t0"), ("Estándar", 0))
-        self.assertEqual(driver.parse_calc_mode("0\t\t3"), (None, 3))
-        for bad in ("", "1\tEstándar", "2\tx\t0", "1\tx\tmany"):
+        self.assertEqual(driver.parse_calc_mode("1\tEstándar\t0\tText\t1"),
+                         {"header": "Estándar", "scientific_controls": 0,
+                          "control_type": "Text", "headers": 1})
+        self.assertEqual(driver.parse_calc_mode("0\t\t3\t\t0"),
+                         {"header": None, "scientific_controls": 3, "control_type": None,
+                          "headers": 0})
+        for bad in ("", "1\tEstándar", "1\tEstándar\t0", "2\tx\t0\tText\t1",
+                    "1\tx\tmany\tText\t1", "1\tx\t0\tText\tmany", "1\tx\t0\tText\t1\textra"):
             self.assertIsNone(driver.parse_calc_mode(bad), bad)
 
+    def test_the_header_name_is_recorded_only_when_it_matches_the_closed_rule(self):
+        matched = driver.calc_signals(driver.parse_calc_mode("1\tCalculadora Estándar\t0\tText\t1"))
+        self.assertEqual((matched["mode"], matched["header_matched"]), ("standard", True))
+        self.assertEqual(matched["header_name"], "Calculadora Estándar")
+        self.assertEqual((matched["header_automation_id"], matched["header_control_type"],
+                          matched["headers"], matched["scientific_controls"]),
+                         ("Header", "Text", 1, 0))
+        other = driver.calc_signals(driver.parse_calc_mode("1\tMi nombre privado\t0\tText\t2"))
+        self.assertEqual((other["mode"], other["header_matched"]), ("other", False))
+        self.assertNotIn("header_name", other)
+        self.assertNotIn("privado", json.dumps(other, ensure_ascii=False))
+        self.assertEqual((other["header_control_type"], other["header_automation_id"],
+                          other["headers"], other["header_name_chars"]),
+                         ("Text", "Header", 2, len("Mi nombre privado")))
 
+    def test_signals_that_disagree_or_are_missing_are_unknown_and_say_why(self):
+        disagree = driver.calc_signals(driver.parse_calc_mode("1\tEstándar\t2\tText\t1"))
+        self.assertEqual((disagree["mode"], disagree["header_matched"],
+                          disagree["scientific_controls"]), ("unknown", True, 2))
+        missing = driver.calc_signals(driver.parse_calc_mode("0\t\t0\t\t0"))
+        self.assertEqual((missing["mode"], missing["header_present"],
+                          missing["header_matched"]), ("unknown", False, False))
+        self.assertEqual(driver.calc_signals(None), {"mode": "unknown", "readable": False})
+
+    def test_the_mode_script_reads_the_header_type_and_count_and_no_value(self):
+        script = driver.CALC_MODE_PS
+        self.assertIn("ControlType.ProgrammaticName", script)
+        self.assertIn("$headers.Count", script)
+        self.assertNotIn("Invoke", script)
+        self.assertNotIn("ValuePattern", script)
 # ---- S4 fifth-round findings 1 to 3 --------------------------------------------------------------
 
 
