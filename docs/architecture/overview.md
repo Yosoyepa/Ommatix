@@ -315,11 +315,11 @@ the engine and the MCP adapter over the simulated and fixture desktops, and BDD-
 without retry, a repeated `request_id`, on-screen text asking for more permission, the
 operator's stop file during a sequence) the same way over a test double of the live
 actuator that records what it is handed and sends nothing. They show the engine's side of
-SEC-05, IT-04, IT-05, SEC-03 and SEC-02, which still need supervised runs with the real
-actuator (SEC-02, the operator's stop, ran live on 15 October 2026, CHANGELOG 1.0.74); the keyboard-focus check inside the allowed application is the `SendInput`
+SEC-05, IT-04, SEC-03 and SEC-02, which still need supervised runs with the real
+actuator (SEC-02, the operator's stop, ran live on 15 October 2026, CHANGELOG 1.0.74; IT-05, the request_id conflict and the ambiguous crash, ran live on 15 October 2026, CHANGELOG 1.0.74 and 1.0.77); the keyboard-focus check inside the allowed application is the `SendInput`
 actuator's, and no test drives it. The two-phase `type` of ADR-0018 (focus confirmed on the
 target element by the engine, BDD-34 and BDD-35) runs over doubles of the actuator and of
-the accessibility provider. The operator's scope on windows ([ADR-0020](../adr/0020-operator-scope-on-windows.md),
+the accessibility provider. Its live counterpart (six decoy runs on 15 October 2026, CHANGELOG 1.0.77) did not pass: UI Automation did not place the keyboard focus on the target field; see [S3 §10](../thesis/S3_CORRIDAS_SUPERVISADAS.md). The operator's scope on windows ([ADR-0020](../adr/0020-operator-scope-on-windows.md),
 accepted: window classes and a pinned window, so that `explorer.exe` can be allowed without the
 desktop and the taskbar) is BDD-36 and BDD-37, over the same actuator double; its Win32 half is
 only compiled and linted, not run live.

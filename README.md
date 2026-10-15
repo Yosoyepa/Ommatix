@@ -86,7 +86,7 @@ unless the agent and a local policy both allow them. More in the
   MCP by `tools/s3/mcp_driver.py`. Four live clicks on the File menu reached the OS; the
   operator's stop, the freshness check and the policy refused the rest without sending
   anything. SEC-01 is executed, and SEC-02 too since the live regression round of 15 October 2026
-  ([CHANGELOG 1.0.74](docs/thesis/CHANGELOG.md)); IT-01, IT-03, IT-05 and SEC-05 in part. An
+  ([CHANGELOG 1.0.74](docs/thesis/CHANGELOG.md)); IT-01, IT-03 and SEC-05 in part; IT-05 executed live (CHANGELOG 1.0.74 and 1.0.77). An
   `indeterminate` result now says whether the actuator delivered the input. Two findings
   were fixed since and a second supervised run (with the DirectML detector) confirmed both
   live: the effect check waits a bounded settle window for the redraw (`[engine]

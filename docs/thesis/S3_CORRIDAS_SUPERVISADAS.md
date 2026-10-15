@@ -326,3 +326,91 @@ python tools\s3\mcp_driver.py --exe <ommatix.exe> --config live_a.toml --scenari
 python tools\s3\mcp_driver.py --exe <ommatix.exe> --config live_c.toml --scenario live --steps it04 --max-live 5 --observations 2 --menu-labels Editar,Edit
 python tools\s3\mcp_driver.py --exe <ommatix.exe> --config live_b.toml --scenario live --steps sec05m --max-live 1 --observations 2 --owner-wait-s 90 --menu-labels Editar,Edit
 ```
+
+## 10. Ronda de box 4: caso señuelo (BDD-35), caída ambigua (IT-05) y primer plano (15 de octubre de 2026)
+
+**Fecha y autorización.** 15 de octubre de 2026, con el responsable presente en la máquina de referencia (DPI 100 %). El responsable autorizó entrada real para esta sesión y sólo para ella: clics sobre el campo «Campo auxiliar» de `ommatix-testeditor.exe` (BDD-35, con `--decoy-focus`) y clics sobre «Sumar» de `ommatix-testapp.exe` (la medición C0 y la caída de IT-05 en C1). El responsable hizo a mano todo lo que no es lectura: traer las ventanas al primer plano, minimizarlas y dar el foco. El libro de la ronda empezó en 0 y terminó en 17 (`ledger.txt`). No se guardó ningún fotograma, ninguna etiqueta ni texto de pantalla; los registros crudos quedaron fuera del repositorio.
+
+**Objetivo y criterio.** Ejercer en vivo tres casos que el dossier dejaba sin ejecutar: BDD-35 (el foco de teclado de `type` tiene que quedar en Campo de destino tras el clic de un campo que lo cede), la caída ambigua de IT-05 (el motor muere a mitad de una petición) y SEC-05 con un cambio de primer plano. El criterio de BDD-35 es el de `decoy_problems` en `tools/s4/e2e_dossier.py`, fijado antes de las corridas: `indeterminate` con `INDETERMINATE_EFFECT`; clic de enfoque entregado y no verificado, con `reconcile_effect`; el clic cayó en Campo auxiliar por identidad; UI Automation sitúa el foco en Campo de destino; la repetición devuelve el resultado guardado sin entrega nueva; ninguna tecla en ningún campo; carpeta de la corrida vacía.
+
+### 10.1 Entorno
+
+| Campo | Valor |
+|---|---|
+| Motor | `ommatix.exe`, SHA-256 `3617b33d…`, compilado desde `main` a6b67ab con `--features dxgi,sendinput,directml,winrt-ocr,uia`. No cambió durante la ronda |
+| Aplicación de prueba | `ommatix-testapp.exe`, SHA-256 `5860750e…`, botón «Sumar» (C0 y C1) |
+| Editor de prueba | `ommatix-testeditor.exe` con `--decoy-focus`. Primera corrida D1: `bb51f195…`. Segunda: `af1e0924…`, recompilado desde `main` 65c94e6 con PR #70. Tercera: `be48e071…`, desde `main` 1d8d31d con PR #72. Las corridas cuarta a sexta no constan en este documento |
+| Configuraciones | `decoy.toml` y `testapp.toml` son copias de `live_a.toml` con una sola línea cambiada (`allowed_applications`); `max_snapshot_age_ms = 10000`; `stop_file` y `purge_file` en una carpeta fuera del repositorio. SHA-256 `883f81b3…` y `8b64aaec…` |
+| Modelos | Los de la configuración viva de S4: manifiesto `f8b04be9…`, ONNX Runtime `e7eedec6…`, DirectML `9c9e6d82…` |
+
+### 10.2 Corridas
+
+Orden por el libro. «Peticiones» son las que llevan `dry_run: false` y se gastan en el libro, la repetición incluida.
+
+| Corrida (registro) | Libro | Resultado | Entrega y nota |
+|---|---|---|---|
+| D1 primera (`d1-first`) | 0 → 2 | `indeterminate`, `INDETERMINATE_EFFECT`; repetición con resultado guardado; UI Automation sitúa el foco fuera de la ventana (`elsewhere`) | Clic de enfoque entregado sobre Campo auxiliar, identidad correcta. No cumple: la ventana del editor no tenía el foco del sistema (`activation_requests` 0). Motivo corregido en PR #70 |
+| C0 primera (`c0-stale1`) | 2 → 3 | `rejected`, `STALE_SNAPSHOT`, sin entrega | El registro calculó una medición de un clic que no se entregó. Corregido en PR #71 |
+| C0 (`c0`) | 3 → 4 | `effect_observed`, valor 0 → 1 en «Sumar» | Clic entregado: 9,875 ms de entrega y 68,9 ms de ida y vuelta, con la ventana atestiguada. Cumple |
+| C1 (`c1`) | 4 → 7 | Motor muerto a mitad de la petición (`crashed_mid_request`), entrega única (`delivered_once`, valor 0 → 1). Repetición tras el reinicio: `SESSION_MISMATCH`, sin entrega ni cambio del contador. Clic nuevo entregado (valor final 2) | Cumple (IT-05, caída ambigua). El motor muerto no escribió su fin de sesión; el reiniciado terminó con código 0. El registro, escrito antes de PR #71, contaba 2 peticiones y se gastaron 3 |
+| D1 segunda (`d1-second`) | 7 → 9 | `rejected`, `STALE_SNAPSHOT`, sin entrega (el clic de enfoque no se entregó) | Tras la espera, UI Automation situó el foco en el campo principal (`editor`). No cumple |
+| D1 tercera (`d1-third`) | 9 → 11 | `rejected`, `POLICY_DENIED` («foreground application is not on the local allowlist») | Sin entrega. El primer plano ya no era el editor (`outside`). Según el responsable, minimizó el editor con un segundo clic: BDD-28 apareció de forma no planificada y no es el caso planificado. Observación a acción: 4.610 ms. No cumple |
+| D1 cuarta (`d1-fourth`) | 11 → 14 | Tres `STALE_SNAPSHOT` seguidos, cada uno con observación nueva | Sin entrega. Observación a acción: 4.156, 4.219 y 4.171 ms. El tercer rechazo dice que la evidencia de accesibilidad es más antigua que `max_snapshot_age_ms`. Primer uso del reintento acotado (PR #72). No cumple |
+| D1 quinta (`d1-fifth`) | 14 → 14 | Parada antes de la primera petición: «no accessibility evidence for the decoy fields» | Sin libro gastado. Según el coordinador, la terminal de Orca, minimizada, dejó otra ventana delante; el registro no identifica esa ventana. No cumple (caso no ejecutado) |
+| D1 sexta (`d1`) | 14 → 17 | Intento 1: `STALE_SNAPSHOT` (4.000 ms). Intento 2: `indeterminate`, `INDETERMINATE_EFFECT`, clic de enfoque entregado sobre Campo auxiliar con identidad correcta; repetición con resultado guardado | Sin teclas. UI Automation situó el foco en la ventana del editor (`in_editor`, `Window`), no en Campo de destino. Es el único criterio que falla. Observación a acción del intento 2: 3.937 ms. No cumple |
+
+### 10.3 Recuento y lectura
+
+- **Peticiones y entregas.** 17 peticiones con `dry_run: false` (1 + 1 + 3 + 2 + 2 + 2 + 3 + 0 + 3). Cinco clics entregados al sistema operativo: uno del caso señuelo en la primera D1, uno sobre «Sumar» en C0, dos en C1 (el del motor que murió y el nuevo) y uno del caso señuelo en la sexta D1. **Ninguna tecla**: los títulos leídos del caso señuelo marcan cero caracteres en los tres campos, y la carpeta de cada corrida que llegó a leerla quedó vacía.
+- **Rechazos sin entrega.** `STALE_SNAPSHOT` en C0 primera, D1 segunda, D1 cuarta (tres veces) y D1 sexta (un intento); `POLICY_DENIED` en D1 tercera; `SESSION_MISMATCH` en la repetición tras el reinicio de C1.
+- **BDD-35 en vivo: seis corridas y ninguna cumple el criterio.** Las cinco primeras no llegan a cumplirlo: foco fuera de la ventana (primera), rechazo por frescura (segunda y cuarta), primer plano perdido (tercera) y sin evidencia de accesibilidad (quinta). La sexta llega al clic de enfoque, entrega la identidad correcta, no envía teclas y la repetición devuelve lo guardado, pero el foco de UI Automation queda en la ventana.
+
+### 10.4 Causa del foco en la ventana (análisis de código, sin corrida viva)
+
+Las fuentes instaladas (egui 0.36.2, accesskit_consumer 0.35.0, accesskit_windows 0.32.1) explican la secuencia de la sexta corrida. (1) egui publica en cada pasada el foco de su memoria (`TreeUpdate.focus`, `egui/src/context.rs`), así que no hay retraso de un fotograma. (2) El campo del señuelo toma el foco al pulsar, y el redirect a Campo de destino ocurría en ese mismo fotograma, antes de que el clic terminara. (3) Al soltar, un clic fuera de un widget con foco se lo quita: el comportamiento por defecto es `SurrenderFocusOn::Clicks` (`context.rs`, líneas 1550 a 1565). Campo de destino perdió el foco, el árbol publicó la raíz y UI Automation leyó la ventana.
+
+Lo reproduce una prueba headless de `testeditor` que falla antes del cambio (el foco de memoria queda en `None` tras la liberación) y pasa después. La corrección de PR #73 traslada la entrega del foco al momento en que el botón del señuelo está levantado. **Ninguna corrida viva la ha ejercido.** El registro de la sexta corrida no guardaba estos datos: la explicación es del código y de la prueba, no de la ronda.
+
+### 10.5 Tiempos y primer plano
+
+- **Tiempos.** Entre la observación y la petición (`observe_to_action_ms`) hubo 4.610 ms en la tercera corrida, 4.156, 4.219 y 4.171 ms en la cuarta, y 4.000 y 3.937 ms en la sexta. La comprobación de foco del precondicionamiento va antes de la observación, así que la distancia desde ella es mayor. El registro no la guardaba; desde PR #73 se registra como `since_focus_ms`. En ese intervalo el cliente lee la identidad y el anclaje con UI Automation, por PowerShell.
+- **Tercera corrida.** El motor la rechazó en su puerta de política (`action_gate` 0,17 ms) y no ejecutó la comprobación de frescura (`action_freshness` 0,0 ms). El primer plano ya había salido del editor antes de que la petición llegara al motor, dentro de esos 4,6 s. El registro no dice qué lo sacó. Según el responsable, minimizó el editor con un segundo clic. La guarda de PR #73 lee el estado justo antes de cada petición y lo detectaría si ocurre antes de esa lectura. Un cambio en los milisegundos entre la guarda y la puerta del motor sigue llegando al motor, que lo rechaza sin entregar nada.
+- **Quinta corrida.** Se paró antes de su primera petición sin evidencia de accesibilidad de los dos campos: no se envió nada y no se gastó libro.
+
+### 10.6 Hallazgo de diseño: la frescura de pantalla completa
+
+El motor compara el fotograma entero (1920×1080) con la captura base, con exactitud por píxel (§9.6). La frescura rechazó la acción en cuatro corridas: la primera C0, la segunda D1, la cuarta D1 (tres veces) y el primer intento de la sexta D1. Los candidatos a cambio que no es del objetivo son la terminal de Orca visible en la pantalla, el reloj de la barra de tareas y el marco de foco al cambiar de ventana. **Son hipótesis.** El registro no tiene datos por tile, así que no se atribuye ningún rechazo a un cambio concreto. Lo que sí se ve es el patrón: cuando algo se mueve en la pantalla, la comprobación completa falla aunque la acción sea correcta, y la ventana de observación a acción de unos 4 s es lo bastante ancha para que eso ocurra.
+
+### 10.7 Propuesta de diseño: ADR de frescura por región (sin número, sin decidir)
+
+La comprobación actual protege contra actuar sobre una pantalla que ya no es la observada, y eso es correcto. El problema es el alcance: cualquier píxel cuenta. [02 §2.6](02_SDD_ARQUITECTURA_MVP.md) prevé validar «por región inalterada, tras demostrar su corrección» como mejora posterior. Alternativas: (a) comparar sólo los tiles de la región del objetivo, con una prueba que demuestre que un cambio bajo el objetivo sigue rechazando la acción; (b) mantener la comparación completa y acortar la ventana de observación a acción, hoy de unos 4 s, sobre todo en lecturas de UI Automation por PowerShell; (c) en el cliente, una observación de reposo antes de actuar, que no cambia la seguridad. La recomendación de esta sección es medir (b) primero y decidir (a) después, con la medición de tiles de §9.6. **La decisión corresponde al responsable y al arquitecto**; aquí no se escribe ningún ADR.
+
+### 10.8 Estado en la matriz y en §6.7
+
+| Prueba | Estado | Justificación |
+|---|---|---|
+| IT-05 | `EJECUTADO_SUPERVISADO` (`plan_pruebas.csv`) | Repetición y conflicto de `request_id` en vivo (§9, 1.0.74); caída ambigua en C1 de esta ronda: una entrega, repetición rechazada con `SESSION_MISMATCH`, petición nueva correcta |
+| BDD-35 (actuador real) | en parte; ningún caso cumplido | Seis corridas sin cumplir el criterio (§10.3) |
+| BDD-28 (actuador real) | en parte | Visto de forma no planificada en la tercera corrida (`POLICY_DENIED` sin entrega); no es el caso planificado |
+| SEC-05 | `EJECUTADO_SUPERVISADO_PARCIAL`, sin cambio | El cambio de primer plano apareció dos veces sin plan (tercera y quinta corridas); el caso con foco de `type` no se ha ejercido |
+
+En [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md): la **casilla 4 queda sin marcar** (decisión del responsable: el criterio pre-registrado de BDD-35 no se cumplió). La **casilla 10** deja de listar IT-05 y sigue con IT-01 a IT-04. Por decisión del arquitecto, BDD-35 y el lado real de BDD-28 figuran en esa lista, dentro de SEC-05.
+
+### 10.9 Qué no cubre esta ronda
+
+- BDD-35 no cumplió: no hay evidencia viva de que UI Automation sitúe el foco en Campo de destino tras el clic del señuelo.
+- La corrección de PR #73 y la guarda del cliente no se han ejercido en vivo.
+- El registro no dice qué ejecutable estaba en primer plano en las corridas que lo perdieron, ni qué tile cambió en los rechazos por frescura.
+- El motor no registra el intervalo entre su observación y la acción: sólo se conoce el del cliente.
+
+### 10.10 Cómo repetirlo
+
+Desde la raíz del repositorio, con las configuraciones de §10.1, `--round-start 0` y un envoltorio que **no** convierta stderr en error. `<run>` es la carpeta de la ronda, fuera del repositorio.
+
+```text
+python tools\s4\e2e_driver.py --exe <ommatix.exe> --config <run>\testapp.toml --app testapp --mode run --runs 1 --max-live 1 --ledger <run>\ledger.txt --round-start 0 --results <run>\c0.jsonl --measure-click --testapp-exe <ommatix-testapp.exe> --settle 1.5
+python tools\s4\e2e_driver.py --exe <ommatix.exe> --config <run>\testapp.toml --app testapp --mode run --runs 1 --max-live 3 --ledger <run>\ledger.txt --round-start 0 --results <run>\c1.jsonl --ambiguous-crash --crash-after-from <run>\c0.jsonl --testapp-exe <ommatix-testapp.exe> --settle 1.5
+python tools\s4\e2e_dossier.py --exe <ommatix.exe> --config <run>\decoy.toml --app decoy --mode run --runs 1 --max-live 4 --ledger <run>\ledger.txt --round-start 0 --results <run>\d1.jsonl --editor-exe <ommatix-testeditor.exe> --settle 1.5 --pause 1 --operator-focus
+```
+
+Con `--operator-focus` el responsable da el foco a mano, con un clic en el botón del editor en la barra de tareas y sin escribir. `--max-live 4` es el mínimo del caso señuelo: tres intentos y la repetición (PR #72). Si la ventana sale del primer plano, la guarda no envía nada y espera al responsable (tres veces por caso como máximo).
