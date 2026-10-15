@@ -41,7 +41,7 @@ use ommatix_domain::incremental::{BgraFrame, Evidence, RegionPlan, Work, plan_re
 
 use super::accessibility::accessible_control;
 use super::icons::{self, IconLabel, Scope};
-use super::{Engine, EngineConfig, Ports, aged_out};
+use super::{Engine, Ports, aged_out};
 use crate::PortError;
 use crate::contract::{ErrorCode, LabelSource, StageTimings, ToolError};
 use crate::ports::{AccessibilityProvider, Clock, TextRecognizer, VisionDetector};
@@ -364,14 +364,19 @@ fn fuse_and_track(
     frame: &BgraFrame,
     planned: &Work,
     previous: Option<&Published>,
-    config: &EngineConfig,
+    engine: &Engine,
     clock: &dyn Clock,
 ) -> Option<Tracked> {
+    let config = &engine.config;
     let fresh;
     let (base, kept_icons) = if let Some(p) = previous {
         (&p.registry, &p.icons[..])
     } else {
-        fresh = Registry::new(config.session_id.clone(), frame.geometry_epoch());
+        // After a purge the counters of the snapshot it deleted carry on: no ID is issued twice.
+        fresh = engine
+            .purged_identity
+            .clone()
+            .unwrap_or_else(|| Registry::new(config.session_id.clone(), frame.geometry_epoch()));
         (&fresh, &[][..])
     };
     // Icons are resolved again where the detector looked again, and everywhere when there
@@ -574,7 +579,7 @@ impl Engine {
             &frame,
             &plan.work,
             previous,
-            &self.config,
+            self,
             clock.as_ref(),
         );
         let t_track = clock.now();

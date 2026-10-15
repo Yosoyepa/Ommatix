@@ -1,7 +1,7 @@
 //! The MCP server: the engine behind a mutex plus the connection loop over a byte stream.
 
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ommatix_application::Engine;
 use rmcp::model::Tool;
@@ -68,8 +68,30 @@ impl McpServer {
     /// Serves one connection over any byte stream: one JSON-RPC message per line in each
     /// direction, handled in arrival order. Returns at end of input or on an I/O error.
     ///
-    /// Tool calls run the engine synchronously on the calling task.
+    /// Tool calls run the engine synchronously on the calling task. The connection is the
+    /// engine's session: when it ends, however it ends, the engine deletes its state and cache
+    /// ([`McpServer::purge`]).
     pub async fn serve<R, W>(self, reader: R, mut writer: W) -> io::Result<()>
+    where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        let outcome = self.exchange(reader, &mut writer).await;
+        self.purge();
+        outcome
+    }
+
+    /// Deletes the engine's state and cache (chapter 08 §8.4): the snapshot, its evidence and
+    /// base frame, the pending regions and the request journal. The engine stays usable and
+    /// publishes nothing until the next observation; identifiers are never issued again.
+    pub fn purge(&self) {
+        self.engine
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .purge();
+    }
+
+    async fn exchange<R, W>(&self, reader: R, writer: &mut W) -> io::Result<()>
     where
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,

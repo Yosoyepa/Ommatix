@@ -1,6 +1,6 @@
 # Estado del proyecto y relevo / Project status and handoff
 
-Fecha: 2026-10-15 (versión 1.0.52). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
+Fecha: 2026-10-15 (versión 1.0.53). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
 persona o agente continúe sin rehacer nada. La especificación es el dossier de
 [`docs/thesis/`](thesis/README.md); las reglas del repositorio están en
 [`AGENTS.md`](../AGENTS.md).
@@ -53,8 +53,9 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | Preparación de la evidencia que exige la máquina del responsable (rama `feat/dod-machine-evidence-prep`, CHANGELOG 1.0.47, sin ejecutar nada ni enviar entrada): guía de instalación y reversión ([`S4_INSTALACION_Y_REVERSION.md`](thesis/S4_INSTALACION_Y_REVERSION.md), REL-01), `tools/perf/soak.py` (PERF-03 / RNF-06: recursos y soak de 2 h) y `tools/perf/dpi_probe.py` (IT-07: DPI 100/125/150 %), ambas de sólo lectura y con pruebas sobre dobles, y [`S4_SESIONES_PENDIENTES.md`](thesis/S4_SESIONES_PENDIENTES.md) con lo que cada sesión supervisada necesita del responsable. Prueba `rel_01_the_install_guide_points_at_files_that_exist` y `tools/repro/test_install_guide.py`. Ninguna fila de las matrices ni casilla cambia. | PR abierto |
 | — | Alcance del MVP y licencia (rama `docs/mvp-scope-and-licence`, CHANGELOG 1.0.52, [ADR-0023](adr/0023-licence-and-reduced-mvp-scope.md), decisiones del responsable del 15 de octubre de 2026): código `MIT OR Apache-2.0` y documentos CC BY 4.0 (`LICENSE-MIT`, `LICENSE-APACHE`, `LICENSE-DOCS`); propietario de los 28 requisitos; RNF-05 aceptado como incumplimiento documentado; el protocolo reducido de S4 sustituye las 450 corridas de EV-02 para este MVP; EV-01, EV-02, IT-07 y el corpus de REL-01 pasan al próximo corte; reevaluación de la Definition of Done con 2 de 10 casillas marcadas y su evidencia (capítulo 06 §6.7). Prueba `rel_01_the_repository_declares_its_licences`. Ninguna matriz cambia. | PR abierto |
 | — | INC-03, vigencia del snapshot y de la evidencia de accesibilidad (rama `feat/inc03-ttl`, CHANGELOG 1.0.49, [ADR-0025](adr/0025-bound-authorisations-by-snapshot-and-evidence-age.md), aprobada el 15 de octubre de 2026 con la aprobación previa del responsable para el siguiente corte): `max_snapshot_age_ms` se aplica en la puerta, también en simulación, y antes de cada entrada real (antes del clic y, en `type`, antes de las teclas), con 10 000 ms por defecto; vencido el plazo, `STALE_SNAPSHOT` y observar de nuevo. Una publicación nueva no renueva una lectura de accesibilidad antigua; la siguiente observación relee las regiones caducadas. UT-46 a UT-54 y BDD-38; cada comprobación, quitada, hace fallar sus pruebas. **Sin ejecución en vivo ni entrada**; la medición de la relectura y la calibración del valor quedan para el responsable. | Abierto (medición pendiente) |
+| — | Borrado de estado y prueba diferencial (rama `feat/dod-deletion-and-differential`, CHANGELOG 1.0.53): al terminar la sesión MCP el motor borra su snapshot, evidencia, cuadro base, regiones pendientes y diario de `request_id`, sin reutilizar identificadores (SEC-07, BDD-39; capítulo 08 §8.4). La prueba diferencial `ut_08_differential_tile_diff_matches_scalar_reference_on_generated_frames` compara `tile_changed` con una referencia escalar y no encuentra defectos (capítulo 05 §5.5). §6.7: se marca la casilla 5; la 7 sigue abierta (SEC-02 en parte y borrado bajo demanda). |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.52)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.53)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
@@ -266,12 +267,12 @@ La tercera continuación de la undécima ronda (1.0.46, rama `docs/s4-eleventh-r
 
 ## Qué sigue
 
-**Estado al 15 de octubre de 2026 (1.0.52, alcance reducido del MVP).** Para cerrar el MVP con el alcance reducido queda:
+**Estado al 15 de octubre de 2026 (1.0.53, alcance reducido del MVP).** Para cerrar el MVP con el alcance reducido queda:
 
 1. **E2E-03 (Explorador)**, serie de diez corridas puntuadas: en `main` tiene 3 de 10. Hace falta una autorización nueva del responsable para reanudar desde el cuaderno 530 (corridas 5 a 11), con la compuerta de la undécima ronda, y la pregunta de si la entrada entre las 00:56 y las 00:58 fue suya. No cuenta hasta su 10 de 10 en `main`; RF-18 y las casillas que dependen de ella no se marcan antes.
 2. **Sesión A**: instalar, verificar y revertir siguiendo [`S4_INSTALACION_Y_REVERSION.md`](thesis/S4_INSTALACION_Y_REVERSION.md) en una máquina limpia, y archivar el `environment.json`. Es la evidencia de REL-01; la casilla de documentación ya está marcada.
 3. **Sesión B**: el soak de 2 h (PERF-03, RNF-06). Antes, el responsable fija el umbral de RNF-06, que el repositorio no tiene.
-4. **Pendientes que no están en el alcance cedido**: el borrado de estado y caché (capítulo 08 §8.4, sin implementación); la prueba diferencial del diferenciador optimizado contra un baseline escalar (capítulo 05 §5.5); la parte de percepción de PERF-02 (p99 y variantes de caché); y SEC-02, SEC-05 e IT-01 a IT-05 en parte.
+4. **Pendientes que no están en el alcance cedido**: el borrado bajo demanda del operador, sin terminar la sesión (capítulo 08 §8.4; el borrado al terminar la sesión existe desde 1.0.53, SEC-07); la parte de percepción de PERF-02 (p99 y variantes de caché); y SEC-02, SEC-05 e IT-01 a IT-05 en parte. La prueba diferencial del diferenciador (capítulo 05 §5.5) está hecha desde 1.0.53.
 5. **Próximo corte** (fuera de este MVP): EV-01, EV-02, IT-07 y el corpus de REL-01, con el plan del paquete Paper (INC-00 a INC-09; no se copia aquí). RNF-05 sigue como incumplimiento documentado.
 
 **Lo que ya no hace falta decidir:** la licencia del código y de los documentos (15 de octubre de 2026) y el propietario de los requisitos.

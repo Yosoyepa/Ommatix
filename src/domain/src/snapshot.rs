@@ -146,6 +146,18 @@ impl<P> SnapshotStore<P> {
         self.pending_dirty.extend(dirty.iter().copied());
         self.degraded = true;
     }
+
+    /// Deletes the published payload, the committed base and the pending work (chapter 08
+    /// §8.4), and returns the deleted payload. The base frame is overwritten when the store
+    /// holds its only copy. The revision stays: it counts commits, and it never goes back.
+    pub fn purge(&mut self) -> Option<P> {
+        if let Some(mut base) = self.base.take() {
+            base.overwrite();
+        }
+        self.pending_dirty.clear();
+        self.degraded = false;
+        self.published.take()
+    }
 }
 
 #[cfg(test)]
@@ -226,5 +238,25 @@ mod tests {
         );
         assert_eq!(store.published(), Some(&vec!["a"]));
         assert_eq!(store.revision(), 1);
+    }
+
+    /// SEC-07 (chapter 08 §8.4): a purge deletes the publication, the base and the pending
+    /// work; the revision keeps counting.
+    #[test]
+    fn sec_07_purge_deletes_the_publication_the_base_and_the_pending_work() {
+        let mut store = SnapshotStore::new();
+        let f = blank();
+        store.commit(store.stage(f.clone(), vec!["e1"])).unwrap();
+        store.record_failure(&BTreeSet::from([TileCoord::new(0, 0)]));
+
+        assert_eq!(store.purge(), Some(vec!["e1"]));
+        assert!(store.base().is_none());
+        assert!(store.published().is_none());
+        assert!(store.pending_dirty().is_empty());
+        assert_eq!(store.state(), StoreState::Empty);
+        assert_eq!(store.purge(), None);
+
+        assert_eq!(store.commit(store.stage(f, vec!["e2"])), Ok(2));
+        assert_eq!(store.revision(), 2);
     }
 }

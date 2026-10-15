@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ommatix_domain::fusion::FusionParams;
-use ommatix_domain::identity::AssociationPolicy;
+use ommatix_domain::identity::{AssociationPolicy, Registry};
 use ommatix_domain::incremental::{PlanParams, connected_components};
 use ommatix_domain::snapshot::SnapshotStore;
 
@@ -160,6 +160,9 @@ pub struct Engine {
     /// Stage durations of the last action the gate ran (`None` for a replay or a request
     /// refused before the gate).
     action_timings: Option<ActionTimings>,
+    /// The identity counters of the snapshot the last purge deleted, without its tracks: the
+    /// next observation builds on them, so no snapshot or target ID is issued twice.
+    purged_identity: Option<Registry>,
 }
 
 impl Engine {
@@ -172,7 +175,25 @@ impl Engine {
             counters: Counters::default(),
             snapshot_spent: false,
             action_timings: None,
+            purged_identity: None,
         }
+    }
+
+    /// Deletes the engine's state and cache (chapter 08 §8.4): the published snapshot with its
+    /// tracks, evidence, icon labels and timings, the committed base frame (overwritten when
+    /// nothing else holds it), the pending regions and the request journal. Nothing is
+    /// published until the next observation, and actions are refused until then.
+    ///
+    /// Kept: the configuration and the operator's files, which are not the engine's state, and
+    /// the identity counters (session, geometry epoch, snapshot and target counters), so that
+    /// no snapshot or target identifier is ever issued again. Those are numbers, not screen
+    /// content; the action counters of `get_engine_metrics` are kept too.
+    pub fn purge(&mut self) {
+        if let Some(published) = self.store.purge() {
+            self.purged_identity = Some(published.registry.purged());
+        }
+        self.journal = Journal::new(JOURNAL_CAPACITY);
+        self.action_timings = None;
     }
 
     pub fn session_id(&self) -> &str {

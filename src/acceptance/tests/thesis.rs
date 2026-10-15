@@ -63,7 +63,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-10", "BDD-11", "BDD-12", "BDD-13", "BDD-14", "BDD-15", "BDD-16", "BDD-17", "BDD-18",
     "BDD-19", "BDD-20", "BDD-21", "BDD-22", "BDD-23", "BDD-24", "BDD-25", "BDD-26", "BDD-27",
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
-    "BDD-37", "BDD-38",
+    "BDD-37", "BDD-38", "BDD-39",
 ];
 
 #[derive(Debug, Default, World)]
@@ -798,6 +798,8 @@ impl PolicyStore for FixedPolicy {
 /// An MCP client connected to an engine that observes a [`FixtureDesktop`].
 struct Agent {
     conn: Connection,
+    /// The server the connection belongs to: the session can end through it.
+    server: McpServer,
     desktop: FixtureDesktop,
     /// The engine's clock: only the engine's own waits advance it.
     clock: Arc<ManualClock>,
@@ -1131,8 +1133,10 @@ impl Agent {
                 clock: clock.clone(),
             },
         );
+        let server = McpServer::new(engine, config);
         Self {
-            conn: McpServer::new(engine, config).connect(),
+            conn: server.connect(),
+            server,
             desktop,
             clock,
             policy,
@@ -1154,6 +1158,18 @@ impl Agent {
     /// The default deny-all policy and only the modern profile.
     fn modern(scene: FixtureScene) -> Self {
         Self::new(scene, LocalPolicy::default(), McpConfig::default())
+    }
+
+    /// The MCP client closes its input: the session ends, and the engine deletes its state and
+    /// cache (chapter 08 §8.4). The connection stays, as the engine it shares does.
+    async fn end_session(&self) {
+        let mut output = Vec::new();
+        self.server
+            .clone()
+            .serve(&b""[..], &mut output)
+            .await
+            .expect("in-memory I/O does not fail");
+        assert!(output.is_empty(), "no reply to an empty input");
     }
 
     /// Sends one message; parses the reply line, if any.
@@ -1783,6 +1799,60 @@ fn the_recorded_result_without_new_events(e: &mut Engine) {
         "REQUEST_CONFLICT"
     );
     assert_eq!(agent.desktop.handed_actions().len(), 1);
+}
+
+// ---- BDD-39: the end of the session deletes the state (chapter 08 §8.4) ----
+
+#[given("un agente con una observación publicada y un elemento confirmado")]
+fn an_agent_with_a_published_element(e: &mut Engine) {
+    live_form(e);
+}
+
+#[when("la sesión MCP termina")]
+async fn the_mcp_session_ends(e: &mut Engine) {
+    e.agent().end_session().await;
+}
+
+#[then(
+    "el motor no conserva ninguna observación y rechaza una acción sobre el elemento anterior sin entregar nada"
+)]
+fn the_engine_keeps_no_observation(e: &mut Engine) {
+    let agent = e.agent();
+    let element = agent.target().clone();
+    let args = agent.live_click_args(&element, "bdd39-old", "none");
+    let refused = agent.tool_result("execute_action", args);
+    assert_eq!(
+        refused["structuredContent"]["error"]["code"], "STALE_SNAPSHOT",
+        "{refused}"
+    );
+    assert_eq!(refused["structuredContent"]["input_delivered"], false);
+    assert_eq!(
+        agent.desktop.handed_actions().len(),
+        0,
+        "no event reached the OS"
+    );
+    assert_eq!(agent.metric("delivered_actions"), 0);
+}
+
+#[then(
+    "una observación posterior no reutiliza ningún identificador de elemento ni de snapshot anterior"
+)]
+fn a_later_observation_reuses_no_identifier(e: &mut Engine) {
+    let agent = e.agent();
+    let old_snapshot = agent.page()["snapshot_id"].clone();
+    let old_ids: Vec<Value> = agent.page()["elements"]
+        .as_array()
+        .expect("elements")
+        .iter()
+        .map(|element| element["target_id"].clone())
+        .collect();
+    let page = agent.observe(json!({}));
+    assert_ne!(page["snapshot_id"], old_snapshot);
+    let fresh = page["elements"].as_array().expect("elements");
+    assert_ne!(fresh.len(), 0, "the new observation sees the screen");
+    for element in fresh {
+        assert!(!old_ids.contains(&element["target_id"]), "{element}");
+    }
 }
 
 /// What the injected text on screen asks for.
