@@ -4,24 +4,27 @@
 //! Nothing is downloaded at build time: `ort` is built with `load-dynamic`, and the
 //! operator points the configuration at an ONNX Runtime library pinned by SHA-256. Loading
 //! goes in this order, and any failure refuses the detector (there is no fallback model
-//! and no fallback provider):
+//! and no fallback provider). Steps 1 to 4 are
+//! [`verify`](crate::model::artifacts::verify): every file is read once (bounded) and
+//! hashed before any library is mapped into the process (SEC-06), and the bytes that were
+//! hashed are the bytes that are used:
 //!
-//! 1. the manifest is read (bounded) and its SHA-256 checked against the operator's pin;
+//! 1. the manifest's SHA-256 is checked against the operator's pin;
 //! 2. its detector entry is validated ([`DetectorSpec`]), and the configured execution
 //!    provider must be one the manifest lists as validated;
 //! 3. for DirectML (feature `directml`), the operator's `DirectML.dll` is checked against
-//!    its pin and loaded by absolute path *before* ONNX Runtime, so that ONNX Runtime binds
-//!    to it and not to another `DirectML.dll` the system search would find;
-//! 4. the runtime library's SHA-256 is checked, then the library is loaded by its absolute
-//!    path (the check and the load are two steps: the library must sit in a directory only
-//!    the operator can write);
-//! 5. the weights are read into memory (bounded), their SHA-256 checked against the
-//!    manifest, and the session is built from those same bytes with the configured
-//!    provider. DirectML is registered with `error_on_failure`, sequential execution and
-//!    the memory pattern disabled, as its documentation requires, and with ONNX Runtime's
-//!    CPU fallback disabled (`session.disable_cpu_ep_fallback`): if the provider cannot be
-//!    created, or any node would run on the CPU instead, the detector is refused instead
-//!    of silently running on the CPU.
+//!    its pin, and the ONNX Runtime library against its own;
+//! 4. the weights' SHA-256 is checked against the manifest;
+//! 5. the DirectML library is loaded by absolute path *before* ONNX Runtime, so that ONNX
+//!    Runtime binds to it and not to another `DirectML.dll` the system search would find,
+//!    then the runtime library by its absolute path (the check and the load are two steps:
+//!    the library must sit in a directory only the operator can write), and the session is
+//!    built from the verified weights with the configured provider. DirectML is registered
+//!    with `error_on_failure`, sequential execution and the memory pattern disabled, as its
+//!    documentation requires, and with ONNX Runtime's CPU fallback disabled
+//!    (`session.disable_cpu_ep_fallback`): if the provider cannot be created, or any node
+//!    would run on the CPU instead, the detector is refused instead of silently running on
+//!    the CPU.
 //!
 //! Per region, the crop is letterboxed into the input ([`Letterbox`]), the output is
 //! decoded and suppressed ([`decode`], [`nms`]), and the boxes are taken back to the frame
@@ -39,7 +42,7 @@
 //! each, at load, in parallel: the first observation does not pay for the shapes it did not
 //! use. A model with a fixed input has one session and works as before.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ommatix_application::{PortError, VisionDetector};
 use ommatix_domain::bbox::BBox;
@@ -50,38 +53,15 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::value::Tensor;
 
 use crate::crop::{PixelRect, crop_bgra};
+use crate::model::artifacts::{
+    MAX_INTRA_THREADS, OnnxDetectorSource, VerifiedDetector, model_error, verify,
+};
+use crate::model::controls_from_candidates;
 use crate::model::decode::{Candidate, decode, nms};
-use crate::model::integrity::{Sha256Digest, read_verified};
 use crate::model::letterbox::{Letterbox, PAD_VALUE, best_fit};
-use crate::model::manifest::{DetectorSpec, ExecutionProvider, MAX_MANIFEST_BYTES};
-use crate::model::{ModelError, controls_from_candidates};
+use crate::model::manifest::{DetectorSpec, ExecutionProvider};
 
 const NAME: &str = "onnx";
-
-/// Largest weights file loaded, in bytes.
-pub const MAX_MODEL_BYTES: u64 = 1024 * 1024 * 1024;
-
-/// Largest ONNX Runtime (or DirectML) library hashed, in bytes.
-pub const MAX_RUNTIME_BYTES: u64 = 512 * 1024 * 1024;
-
-/// Most intra-op threads the detector accepts.
-pub const MAX_INTRA_THREADS: usize = 64;
-
-/// Where the detector comes from, each file pinned by the operator, and how it runs.
-#[derive(Debug, Clone)]
-pub struct OnnxDetectorSource {
-    pub manifest_path: PathBuf,
-    pub manifest_sha256: String,
-    pub runtime_path: PathBuf,
-    pub runtime_sha256: String,
-    /// The provider to run on; the manifest must list it.
-    pub execution_provider: ExecutionProvider,
-    /// `DirectML.dll` and its SHA-256: required with DirectML, refused with the CPU.
-    pub directml: Option<(PathBuf, String)>,
-    /// Intra-op threads, `1..=MAX_INTRA_THREADS`; `0` lets ONNX Runtime choose (its
-    /// default is the number of physical cores).
-    pub intra_threads: usize,
-}
 
 /// A YOLO-style detector whose weights passed every check. It exists only after a
 /// verified load, so [`VisionDetector::models_loaded`] is always `true`.
@@ -105,19 +85,6 @@ impl std::fmt::Debug for OnnxVisionDetector {
 
 fn port(message: impl Into<String>) -> PortError {
     PortError::new(NAME, message)
-}
-
-fn model_error(e: ModelError) -> PortError {
-    port("model refused").with_source(e)
-}
-
-/// Checks a library against its pin and returns its absolute path.
-fn verified_library(what: &str, path: &Path, sha256: &str) -> Result<PathBuf, PortError> {
-    let digest = Sha256Digest::parse(sha256).map_err(model_error)?;
-    let path = std::path::absolute(path)
-        .map_err(|e| port(format!("cannot resolve the {what} path")).with_source(e))?;
-    read_verified(what, &path, &digest, MAX_RUNTIME_BYTES).map_err(model_error)?;
-    Ok(path)
 }
 
 /// Loads the operator's `DirectML.dll` by absolute path, so that ONNX Runtime binds to it.
@@ -150,69 +117,26 @@ impl OnnxVisionDetector {
     pub fn load(source: &OnnxDetectorSource) -> Result<Self, PortError> {
         if source.intra_threads > MAX_INTRA_THREADS {
             return Err(port(format!(
-                "intra-op threads must be between 0 (ONNX Runtime's default) and \
-                 {MAX_INTRA_THREADS}"
+                "intra-op threads must be between 0 (ONNX Runtime's default) and                  {MAX_INTRA_THREADS}"
             )));
         }
-        let manifest_sha = Sha256Digest::parse(&source.manifest_sha256).map_err(model_error)?;
-        let manifest = read_verified(
-            "detector manifest",
-            &source.manifest_path,
-            &manifest_sha,
-            MAX_MANIFEST_BYTES,
-        )
-        .map_err(model_error)?;
-        let text = std::str::from_utf8(&manifest)
-            .map_err(|_| port("the detector manifest is not UTF-8"))?;
-        let dir = source.manifest_path.parent().unwrap_or(Path::new("."));
-        let spec = DetectorSpec::from_manifest(text, dir).map_err(model_error)?;
-
+        // Every file is hashed before any library is loaded (steps 1 to 5 of the module
+        // documentation); `verify` loads nothing.
+        let VerifiedDetector {
+            spec,
+            directml,
+            runtime,
+            weights,
+        } = verify(source)?;
         let provider = source.execution_provider;
-        if !spec.execution_providers.contains(&provider) {
-            return Err(port(format!(
-                "the model manifest does not list the {} execution provider as validated \
-                 (it lists {})",
-                provider.name(),
-                spec.execution_providers
-                    .iter()
-                    .map(|p| p.name())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )));
+        if let Some(path) = directml {
+            preload_directml(&path)?;
         }
-        match (provider, &source.directml) {
-            (ExecutionProvider::DirectMl, Some((path, sha256))) => {
-                let path = verified_library("DirectML library", path, sha256)?;
-                preload_directml(&path)?;
-            }
-            (ExecutionProvider::DirectMl, None) => {
-                return Err(port(
-                    "the DirectML execution provider needs a pinned DirectML.dll",
-                ));
-            }
-            (ExecutionProvider::Cpu, Some(_)) => {
-                return Err(port("a DirectML library is pinned but the provider is cpu"));
-            }
-            (ExecutionProvider::Cpu, None) => {}
-        }
-
-        let runtime = verified_library(
-            "ONNX Runtime library",
-            &source.runtime_path,
-            &source.runtime_sha256,
-        )?;
         // A second call in the same process keeps the library already loaded.
         let _ = ort::init_from(&runtime)
             .map_err(|e| port("cannot load the ONNX Runtime library").with_source(e))?
             .commit();
 
-        let weights = read_verified(
-            "detector weights",
-            &spec.path,
-            &spec.sha256,
-            MAX_MODEL_BYTES,
-        )
-        .map_err(model_error)?;
         let sessions = Self::sessions(provider, source.intra_threads, &spec, &weights)?;
         let first = &sessions[0];
         let [input] = first.inputs() else {
@@ -506,88 +430,5 @@ impl VisionDetector for OnnxVisionDetector {
         });
         controls.dedup();
         Ok(controls)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn source(dir: &Path) -> OnnxDetectorSource {
-        OnnxDetectorSource {
-            manifest_path: dir.join("manifest.json"),
-            manifest_sha256: Sha256Digest::of(b"{}").to_hex(),
-            runtime_path: dir.join("onnxruntime.dll"),
-            runtime_sha256: Sha256Digest::of(b"").to_hex(),
-            execution_provider: ExecutionProvider::Cpu,
-            directml: None,
-            intra_threads: 1,
-        }
-    }
-
-    fn error(source: &OnnxDetectorSource) -> String {
-        let err = OnnxVisionDetector::load(source).unwrap_err();
-        ommatix_application::error_chain(&err)
-    }
-
-    fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ommatix-onnx-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[test]
-    fn nothing_loads_without_a_verified_manifest() {
-        let dir = temp_dir("manifest");
-        let mut src = source(&dir);
-        assert!(error(&src).contains("cannot read"));
-
-        std::fs::write(&src.manifest_path, b"{\"tampered\": true}").unwrap();
-        assert!(error(&src).contains("SHA-256 mismatch"));
-
-        src.manifest_sha256 = "not a digest".into();
-        assert!(error(&src).contains("invalid SHA-256"));
-
-        let template = include_str!("../../../../docs/thesis/plantillas/model_manifest.json");
-        std::fs::write(&src.manifest_path, template).unwrap();
-        src.manifest_sha256 = Sha256Digest::of(template.as_bytes()).to_hex();
-        assert!(error(&src).contains("no model has been selected"));
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    /// The configured provider must be one the manifest validated, DirectML needs its
-    /// pinned library, and nothing falls back to the CPU: every case is refused before
-    /// ONNX Runtime is loaded.
-    #[test]
-    fn the_execution_provider_fails_closed() {
-        let dir = temp_dir("provider");
-        let s0 = include_str!("../../../../docs/thesis/plantillas/model_manifest.s0.json");
-        let cpu_only = s0.replace(
-            "\"execution_provider\": \"cpu,directml\"",
-            "\"execution_provider\": \"cpu\"",
-        );
-        assert!(cpu_only.contains("\"execution_provider\": \"cpu\""));
-        let mut src = source(&dir);
-        std::fs::write(&src.manifest_path, &cpu_only).unwrap();
-        src.manifest_sha256 = Sha256Digest::of(cpu_only.as_bytes()).to_hex();
-        src.execution_provider = ExecutionProvider::DirectMl;
-        assert!(error(&src).contains("does not list the directml execution provider"));
-
-        std::fs::write(&src.manifest_path, s0).unwrap();
-        src.manifest_sha256 = Sha256Digest::of(s0.as_bytes()).to_hex();
-        assert!(error(&src).contains("needs a pinned DirectML.dll"));
-
-        let dll = dir.join("DirectML.dll");
-        std::fs::write(&dll, b"not a library").unwrap();
-        src.directml = Some((dll.clone(), Sha256Digest::of(b"another").to_hex()));
-        assert!(error(&src).contains("SHA-256 mismatch"));
-
-        src.execution_provider = ExecutionProvider::Cpu;
-        assert!(error(&src).contains("provider is cpu"));
-
-        src.directml = None;
-        src.intra_threads = MAX_INTRA_THREADS + 1;
-        assert!(error(&src).contains("intra-op threads"));
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

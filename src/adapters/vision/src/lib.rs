@@ -33,8 +33,9 @@ mod text;
 mod winrt_ocr;
 
 pub use flat_region::{FlatRegionConfig, FlatRegionDetector};
+pub use model::artifacts::{MAX_MODEL_BYTES, MAX_RUNTIME_BYTES, OnnxDetectorSource};
 #[cfg(feature = "onnx")]
-pub use onnx::{MAX_MODEL_BYTES, MAX_RUNTIME_BYTES, OnnxDetectorSource, OnnxVisionDetector};
+pub use onnx::OnnxVisionDetector;
 pub use text::NullTextRecognizer;
 #[cfg(all(windows, feature = "winrt-ocr"))]
 pub use winrt_ocr::{DEFAULT_LANGUAGE, WinRtTextRecognizer, installed_languages};
