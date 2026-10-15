@@ -6,13 +6,17 @@ tree lives in a private directory of the test. Run with:
 python -m unittest discover -s tools/s4 -p "test_*.py"
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from unittest import mock
 
 HERE = Path(__file__).resolve().parent
@@ -378,6 +382,9 @@ class FakeEditorDesk(dossier.DossierProtocol):
         self.closed = []
         self.actions = []
         self.ambiguous = False
+        self.centre_of = None
+        self.pre_chain = None  # what the point query returns before a click, instead of the target
+        self.under = 77  # the top-level window under the target point
 
     # the engine
     def observe(self):
@@ -421,6 +428,21 @@ class FakeEditorDesk(dossier.DossierProtocol):
                  "Guardar": row("7.2", "Save", "Button")}
         found = table.get(label)
         return [found] if found and found["control_type"] in control_types else []
+
+    def element_centre(self, hwnd, label, control_types):
+        self.centre_of = label
+        return (100, 200)
+
+    def point_chain(self, x, y):  # the pre-click read: the control about to be clicked
+        if self.pre_chain is not None:
+            return self.pre_chain
+        return [self.identify(77, self.centre_of, ("Edit", "Button"))[0]]
+
+    def island_walk(self, x, y, host_runtime_id):
+        return None
+
+    def window_under(self, point):
+        return self.under
 
     def cursor_chain(self):
         target = self.actions[-1]["target"]
@@ -492,6 +514,28 @@ class EditorRunTest(QuietTest):
         self.assertFalse(res["success"])
         self.assertEqual([a["action"] for a in desk.actions], ["type"], "Guardar was not clicked")
         self.assertEqual(desk.ledger_total(), 1)
+
+    def test_a_point_that_is_not_the_field_sends_no_request_and_the_editor_never_navigates(self):
+        # ADR-0022 rule 1 applies to every flow; the editor has no navigating step.
+        self.assertNotIn("navigating", dossier.editor_flow())
+        for setup in ({"pre_chain": [row("7.2", "Save", "Button")]}, {"under": 5}):
+            desk = FakeEditorDesk(self.tmp, self.temp_root)
+            for key, value in setup.items():
+                setattr(desk, key, value)
+            res = desk.run_once(1)
+            self.assertFalse(res["success"], setup)
+            self.assertEqual((desk.actions, desk.ledger_total()), ([], 0), setup)
+            self.assertEqual(res["pre_grounded"][0]["grounded"], False)
+
+    def test_an_editor_click_that_reached_another_control_is_still_grounding_wrong(self):
+        desk = FakeEditorDesk(self.tmp, self.temp_root)
+        desk.cursor_chain = lambda: [row("7.9", "Other", "Button")]
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["grounding"], [False])
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
+        self.assertNotIn("post_grounded", res)
+        self.assertEqual(len(desk.actions), 1)
 
     def test_a_second_file_in_the_folder_fails_the_run_and_is_never_deleted(self):
         desk = self.desk()
@@ -595,6 +639,8 @@ class FakeExplorerDesk(dossier.DossierProtocol):
         self.damage = None  # a function that damages the tree after the nth click
         self.on_screen = True
         self.front_ok = True
+        self.centre_of = None
+        self.pre_chain = None  # what the point query returns before a click, instead of the target
 
     def folder_name(self):
         return self.location.name
@@ -680,7 +726,17 @@ class FakeExplorerDesk(dossier.DossierProtocol):
         return found
 
     def element_centre(self, hwnd, label, control_types):
+        self.centre_of = (str(label), tuple(control_types))
         return (100, 200) if self.on_screen else None
+
+    def point_chain(self, x, y):  # the pre-click read: the control about to be clicked
+        if self.pre_chain is not None:
+            return self.pre_chain
+        label, types = self.centre_of
+        return [self.identify(OURS, label, types)[0]]
+
+    def island_walk(self, x, y, host_runtime_id):
+        return None
 
     def cursor_chain(self):
         by_target = {"tree-a": row("9.1", "TreeA", "TreeItem"),
@@ -765,7 +821,12 @@ class ExplorerRunTest(QuietTest):
                           ("Atrás", "back")])
         self.assertEqual(folders, [("carpeta-a",), (), ("carpeta-a",)])
         self.assertEqual((res["independent_checks"], res["independent_failed"]), (3, 0))
-        self.assertEqual((res["grounding"], res["grounding_wrong"]), ([True, True, True], 0))
+        self.assertEqual(res["grounding_wrong"], 0)
+        self.assertEqual([(p["step"], p["grounded"], p["status"]) for p in res["pre_grounded"]],
+                         [(1, True, "ok"), (2, True, "ok"), (3, True, "ok")])
+        self.assertEqual([(p["step"], p["identity_hit"], p["os_check"])
+                          for p in res["post_grounded"]],
+                         [(1, True, True), (2, True, True), (3, True, True)])
         self.assertEqual((res["actions_requested"], res["delivered"]), (3, 3))
         self.assertTrue(res["tree_unchanged"])
         self.assertEqual(res["e2e"], "E2E-03-plan")
@@ -902,6 +963,7 @@ class ExplorerRunTest(QuietTest):
         self.assertEqual(len(desk.clicks), 1, "the second click was not sent")
         self.assertEqual(res["independent_failed"], 1)
         self.assertEqual(res["engine_false_success"], 1, "effect_observed, folder unchanged")
+        self.assertEqual(res["grounding_wrong"], 1, "the OS-side check is the grounding")
 
     def test_a_back_that_does_not_return_to_carpeta_a_fails_the_run(self):
         desk = self.desk()
@@ -919,13 +981,152 @@ class ExplorerRunTest(QuietTest):
         self.assertEqual(len(desk.clicks), 3)
         self.assertEqual(res["independent_failed"], 1)
 
-    def test_a_click_that_reached_another_element_ends_the_run(self):
+    # ---- ADR-0022: the grounding rule for clicks that rebuild their own control -------------
+    def test_a_navigating_click_whose_control_was_recreated_is_grounded_by_the_os_check(self):
+        # The tenth round's pilot: the folder changed, and the control under the cursor
+        # afterwards is another one (the breadcrumb was drawn again). The OS side decides.
         desk = self.desk()
         desk.cursor_chain = lambda: [row("9.2", "Tab", "TabItem")]
         res = desk.run_once(1)
+        self.assertTrue(res["success"], res)
+        self.assertEqual(len(desk.clicks), 3)
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (0, 0))
+        self.assertEqual([p["identity_hit"] for p in res["post_grounded"]], [False] * 3)
+        self.assertEqual([p["os_check"] for p in res["post_grounded"]], [True] * 3)
+        self.assertNotIn("grounding", res, "no click needed its identity after the click")
+
+    def test_a_navigating_click_whose_os_check_fails_is_grounding_wrong_and_stops(self):
+        desk = self.desk()
+        desk.navigate = False
+        desk.cursor_chain = lambda: [row("9.2", "Tab", "TabItem")]
+        res = desk.run_once(1)
         self.assertFalse(res["success"])
-        self.assertEqual(res["grounding_wrong"], 1)
+        self.assertEqual(len(desk.clicks), 1, "no further request after the failed check")
+        self.assertEqual(desk.ledger_total(), 1)
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
+        self.assertEqual(res["post_grounded"][0]["os_check"], False)
+        self.assertIn("navigating click", res["failure"])
+
+    def test_a_navigating_click_that_reached_the_same_control_still_needs_the_os_check(self):
+        # Identity alone is not the criterion for these steps either way round.
+        desk = self.desk()
+        desk.navigate = False  # the cursor chain is the right control, the folder did not change
+        res = desk.run_once(1)
+        self.assertEqual(res["post_grounded"][0]["identity_hit"], True)
+        self.assertEqual((res["success"], res["grounding_wrong"]), (False, 1))
+
+    def test_a_step_that_is_not_on_the_list_still_needs_its_identity_after_the_click(self):
+        # The list is closed: with Explorer's steps off it, the same changed identity is the
+        # old grounding_wrong, even though the folder did change.
+        with mock.patch.object(driver, "NAVIGATING_STEPS", MappingProxyType({"explorer": ()})):
+            desk = self.desk()
+            desk.cursor_chain = lambda: [row("9.2", "Tab", "TabItem")]
+            res = desk.run_once(1)
+        self.assertFalse(res["success"])
         self.assertEqual(len(desk.clicks), 1)
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
+        self.assertEqual(res["grounding"], [False])
+        self.assertNotIn("post_grounded", res)
+        self.assertIn("not the element", res["failure"])
+
+    def test_a_pre_click_mismatch_sends_no_request(self):
+        for name, chain in (("another control", [row("9.2", "Tab", "TabItem")]),
+                            ("an empty chain", [])):
+            desk = self.desk()
+            desk.pre_chain = chain
+            res = desk.run_once(1)
+            self.assertFalse(res["success"], name)
+            self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0), name)
+            self.assertEqual(res["actions_requested"], 0, name)
+            self.assertEqual(res["pre_grounded"][0]["status"], "identity_mismatch", name)
+            self.assertIn("not grounded", res["failure"], name)
+
+    def test_a_pre_click_window_that_is_not_the_foreground_one_sends_no_request(self):
+        desk = self.desk()
+        asked = []
+
+        def under(point):  # the identity lookup asks first, the pre-click read second
+            asked.append(point)
+            return OURS if len(asked) == 1 else OWNERS
+
+        desk.window_under = under
+        res = desk.run_once(1)
+        self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0))
+        self.assertEqual(res["pre_grounded"][0]["status"], "window_mismatch")
+        self.assertIs(res["pre_grounded"][0]["window_ok"], False)
+
+    def test_a_pre_click_read_that_fails_sends_no_request(self):
+        desk = self.desk()
+
+        def broken(x, y):
+            raise subprocess.TimeoutExpired("powershell", 30)
+
+        desk.point_chain = broken
+        res = desk.run_once(1)
+        self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0))
+        self.assertEqual(res["pre_grounded"][0]["status"], "unreadable")
+
+    def test_the_pre_click_grounding_immediately_precedes_every_request(self):
+        desk = self.desk()
+        order = []
+        point_chain, call = desk.point_chain, desk.call
+        desk.point_chain = lambda x, y: (order.append("point"), point_chain(x, y))[1]
+        desk.call = lambda tool, args: (order.append("request"), call(tool, args))[1]
+        res = desk.run_once(1)
+        self.assertTrue(res["success"], res)
+        self.assertEqual(order.count("request"), 3)
+        for index, event in enumerate(order):
+            if event == "request":
+                self.assertEqual(order[index - 1], "point")
+
+    def test_the_records_of_the_rule_hold_no_name_and_no_runtime_id(self):
+        desk = self.desk()
+        desk.cursor_chain = lambda: [row("9.2", "Tab", "TabItem")]
+        res = desk.run_once(1)
+        text = json.dumps({k: res[k] for k in ("pre_grounded", "post_grounded")},
+                          ensure_ascii=False)
+        for secret in ("carpeta-a", "carpeta-b", "Atrás", desk.root_name, "9.5", "9.9", "9.7",
+                       "9.2"):
+            self.assertNotIn(secret, text)
+        for key in ('"name"', '"runtime_id"', '"rect"'):
+            self.assertNotIn(key, text)
+
+    def test_the_list_of_navigating_steps_is_closed_and_not_a_command_line_option(self):
+        self.assertEqual(dict(driver.NAVIGATING_STEPS), {"explorer": (1, 2, 3)})
+        with self.assertRaises(TypeError):
+            driver.NAVIGATING_STEPS["calculator"] = (1,)
+        self.assertEqual(dossier.explorer_flow("r")["navigating"], (1, 2, 3))
+        for flow in (dossier.editor_flow(), driver.calculator_flow(), driver.notepad_flow(),
+                     driver.testapp_flow(), driver.single_click_flow("x")):
+            self.assertNotIn("navigating", flow)
+        for main, app in ((dossier.main, "explorer"), (driver.main, "calculator")):
+            for option in ("--navigating-steps", "--navigating"):
+                argv = ["prog", "--exe", "x", "--config", "c", "--app", app, "--ledger", "l",
+                        "--results", "r", option, "1,2"]
+                with mock.patch.object(sys, "argv", argv), \
+                        contextlib.redirect_stderr(io.StringIO()), \
+                        self.assertRaises(SystemExit) as raised:
+                    main()
+                self.assertEqual(raised.exception.code, 2, (app, option))
+
+    def test_a_navigating_step_without_an_os_check_sends_nothing(self):
+        desk = self.desk()
+        label = dossier.NavLabel("carpeta-a", dossier.BREADCRUMB_TYPES, "top_bar")
+        desk.flow = {"exe": "explorer.exe", "initial": driver.NOT_BY_OCR, "vocabulary": set(),
+                     "navigating": (1,), "steps": [(label, driver.NOT_BY_OCR, None)]}
+        desk.root_name = "r"
+        desk.location = Path("x") / "carpeta-a" / "carpeta-b"
+        desk.root = Path("x")
+        res = driver.new_result("E2E-03-plan", 1)
+        snap, elements, _ = desk.observe()
+        desk.steps(res, snap, elements, OURS, None)
+        self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0))
+        self.assertIn("OS-side check", res["failure"])
+
+    def test_the_s4_document_names_the_closed_list(self):
+        doc = (HERE.parents[1] / "docs" / "thesis" / "S4_ACEPTACION_REDUCIDA.md").read_text(
+            encoding="utf-8")
+        self.assertIn('NAVIGATING_STEPS = {"explorer": (1, 2, 3)}', doc)
 
     def test_a_tree_that_changed_fails_the_run(self):
         desk = self.desk()

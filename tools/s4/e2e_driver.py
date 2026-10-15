@@ -50,6 +50,14 @@ under the point (ISLAND_HOST_CLASSES, ``descend``; sixth round, finding 1). An
 ``effect_observed`` whose OS-side or grounding check fails is counted as an engine false
 success; there must be none.
 
+Two rules sit on top of that (ADR-0022). Before EVERY request that can deliver input, the same
+point query (and descent) is read at the centre of the identified element: it must be that
+element or have it as parent, and the top-level window there must be the foreground window the
+protocol had just required, or nothing is sent (``pre_grounded``). And for the steps on the
+CLOSED list ``NAVIGATING_STEPS`` (Explorer's two breadcrumb clicks and Back; no option extends
+it), whose click rebuilds the control it clicked, the identity after the click is only recorded
+(``post_grounded``): the step's OS-side check is required and decides it.
+
 ``--check-mode`` (Calculator only) is read-only: it starts the Calculator, waits for the
 foreground, reads the mode through UI Automation (polled for 2 s) and closes the process it
 started; exit 0 when Standard, 1 otherwise. It starts no engine, sends no input and no live
@@ -100,6 +108,7 @@ import unicodedata
 from collections import Counter
 from ctypes import wintypes
 from pathlib import Path
+from types import MappingProxyType
 
 HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("s3_driver", HERE.parent / "s3" / "mcp_driver.py")
@@ -706,6 +715,23 @@ def cursor() -> tuple[int, int]:
     return int(pt.x), int(pt.y)
 
 
+GA_ROOT = 2
+user32.WindowFromPoint.argtypes = [wintypes.POINT]
+user32.WindowFromPoint.restype = wintypes.HWND
+user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+user32.GetAncestor.restype = wintypes.HWND
+
+
+def root_window_at(point: tuple[int, int]) -> int | None:
+    """The top-level window that receives a click at `point` (WindowFromPoint, GA_ROOT). A
+    read-only query."""
+    hwnd = user32.WindowFromPoint(wintypes.POINT(int(point[0]), int(point[1])))
+    if not hwnd:
+        return None
+    root = user32.GetAncestor(hwnd, GA_ROOT)
+    return int(root or hwnd)
+
+
 def uia_identify(hwnd, label: str, control_types: tuple[str, ...]) -> list[dict] | None:
     """The elements of window `hwnd` named exactly `label` whose UI Automation control type is
     one of `control_types`, as identity rows (see parse_identity_rows); None when the read
@@ -1109,6 +1135,34 @@ def identity_hit(expected: dict, chain: list[dict]) -> bool:
         elif expected["automation_id"] and expected["automation_id"] == row["automation_id"]:
             return True
     return False
+
+
+# ---- navigating clicks (ADR-0022; S4 tenth round, finding 13) ----------------------------------
+#
+# A click that navigates rebuilds the control it clicked (E2E-03's breadcrumb: the folder changes
+# and the address bar is drawn again), so the element under the cursor afterwards may have another
+# RuntimeId or sit deeper than the parent that identity_hit reads. For such a step the identity
+# after the click is recorded (``post_grounded``) but not required; the step's OS-side check
+# (the window's folder) is required and is its success criterion. The list of those steps is CLOSED
+# and written here, per flow, by step number: no option, flag or configuration extends it, and
+# docs/thesis/S4_ACEPTACION_REDUCIDA.md names the same list. Every other step keeps the identity
+# check after the click exactly as before. Before ANY click, navigating or not, the point is
+# grounded (``Protocol.pre_click_grounding``).
+NAVIGATING_STEPS = MappingProxyType({"explorer": (1, 2, 3)})
+CHAIN_RECORD_ROWS = 6
+
+
+def chain_record(chain: list[dict], expected: dict) -> list[dict]:
+    """The recorded form of a grounding chain: per element its depth (0 is the element under the
+    point), control type, AutomationId, class name and whether it is the identified element
+    (identity_hit's comparison). No name and no RuntimeId is recorded."""
+    rows = []
+    for depth, row in enumerate(chain[:CHAIN_RECORD_ROWS]):
+        rows.append({"depth": depth, "control_type": row.get("control_type", ""),
+                     "automation_id": row.get("automation_id", ""),
+                     "class_name": row.get("class_name", ""),
+                     "is_identified": identity_hit(expected, [row])})
+    return rows
 
 
 # ---- XAML islands (S4 sixth round, finding 1; docs/reviews/2026-10-14-s4-fifth-round.md) ----
@@ -1944,15 +1998,60 @@ class Protocol:
     def element_centre(self, hwnd, label: str, control_types: tuple[str, ...]):
         return uia_element_centre(hwnd, label, control_types)
 
+    def window_under(self, point: tuple[int, int]) -> int | None:
+        """The top-level window that receives a click at `point` (read-only)."""
+        return root_window_at(point)
+
+    def chain_at(self, point: tuple[int, int]) -> list[dict]:
+        """The chain that grounds a click at `point`: the control there and its ancestors;
+        inside a XAML island, the deepest on-screen element at the point and its ancestors up to
+        the host (ground_chain). How the descent ended is left in `last_descent`."""
+        self.last_descent = None
+        chain, self.last_descent = ground_chain(point, self.point_chain, self.island_walk)
+        return chain
+
     def cursor_chain(self) -> list[dict]:
         """The chain that grounds the click just delivered: the control under the cursor (where
-        SendInput left it) and its ancestors; inside a XAML island, the deepest on-screen
-        element under the cursor and its ancestors up to the host (ground_chain). How the
-        descent ended is left in `last_descent`."""
-        self.last_descent = None
-        chain, self.last_descent = ground_chain(self.cursor_point(), self.point_chain,
-                                                self.island_walk)
-        return chain
+        SendInput left it) and its ancestors (see chain_at)."""
+        return self.chain_at(self.cursor_point())
+
+    def label_control_types(self, label, target: dict) -> tuple[str, ...]:
+        """The UI Automation control types that stand for the step's target."""
+        return ROLE_CONTROL_TYPES.get(target.get("role", ""), ())
+
+    def pre_click_grounding(self, step: int, fg: dict, label, target: dict, ident: dict) -> dict:
+        """The point grounding that precedes EVERY request that can deliver input (ADR-0022,
+        rule 1). It runs immediately before ``execute_action``: the element at the target's
+        point (the centre of the identified element, read by UI Automation) must be the
+        identified element or have it as parent (``identity_hit``: the same RuntimeId, or the
+        same AutomationId when a RuntimeId is unavailable; the island descent applies as for the
+        click), and the top-level window at that point must be the foreground window the
+        protocol just required. Any other outcome, and any read that fails, is not grounded and
+        the request is not sent. The record holds statuses, control types, AutomationIds and
+        class names, never a name or a RuntimeId. Read-only: no input."""
+        record = {"step": step, "grounded": False, "status": "unreadable", "window_ok": None,
+                  "identity_hit": None, "descent": dict(NO_DESCENT), "chain": []}
+        try:
+            centre = self.element_centre(fg["hwnd"], str(label),
+                                         self.label_control_types(label, target))
+            if centre is None:
+                record["status"] = "no_point"
+                return record
+            chain = self.chain_at(centre)
+            record["descent"] = self.descent_record(self.last_descent)
+            under = self.window_under(centre)
+        except (OSError, subprocess.SubprocessError):
+            return record
+        record["chain"] = chain_record(chain, ident)
+        record["window_ok"] = under is not None and int(under) == int(fg["hwnd"])
+        record["identity_hit"] = identity_hit(ident, chain)
+        if not record["window_ok"]:
+            record["status"] = "window_mismatch"
+        elif not record["identity_hit"]:
+            record["status"] = "identity_mismatch"
+        else:
+            record["status"], record["grounded"] = "ok", True
+        return record
 
     @staticmethod
     def descent_record(descent: dict | None) -> dict:
@@ -2305,6 +2404,14 @@ class Protocol:
             log("menu_restore_skipped", run=res["run"],
                 reason=f"the Editar identity is {record['status']}")
             return False
+        # ... and the same point grounding as every other request (ADR-0022, rule 1).
+        fg = {"hwnd": self.current_hwnd()}
+        pre = self.pre_click_grounding(res.get("steps", 0), fg, NOTEPAD_MENU, target, ident)
+        restore["pre_grounded"] = pre
+        if not pre["grounded"]:
+            log("menu_restore_skipped", run=res["run"],
+                reason=f"the target point is not grounded ({pre['status']})")
+            return False
         out = self.restore_click(res, target, snap)
         restore["clicked"] = bool(out.get("input_delivered"))
         restore["status"] = out.get("status")
@@ -2364,6 +2471,13 @@ class Protocol:
             label, ocr_check, independent, *rest = step
             text = rest[0] if rest else None  # a typing step has its text
             res["steps"] += 1
+            # The closed list (NAVIGATING_STEPS): the flow can only repeat what is written there.
+            navigating = res["steps"] in self.flow.get("navigating", ())
+            if navigating and (independent is None or text is not None):
+                # Its OS-side check is its success criterion: without one, nothing is sent.
+                res["failure"] = (f"step {res['steps']}: a navigating step is a click with an "
+                                  "OS-side check")
+                return
             spec = label  # a name, or ordered alternatives (the clear control)
             target = None
             for _ in range(3):
@@ -2407,6 +2521,14 @@ class Protocol:
                         lambda: self.diag_at_element(fg["hwnd"], label, types),
                         ident["runtime_id"])}
                     diagnostic["before_descent"] = self.descent_record(self.last_descent)
+                # Immediately before the request (ADR-0022, rule 1): the element at the target
+                # point is the identified one in the expected window, or nothing is sent.
+                pre = self.pre_click_grounding(res["steps"], fg, label, target, ident)
+                res.setdefault("pre_grounded", []).append({"attempt": attempt + 1, **pre})
+                if not pre["grounded"]:
+                    res["failure"] = (f"step {res['steps']}: no click, the target point is not "
+                                      f"grounded ({pre['status']})")
+                    return
                 self.spend_live()
                 res["actions_requested"] += 1
                 kind = "click" if text is None else "type"
@@ -2470,9 +2592,17 @@ class Protocol:
                     res.setdefault("descent", []).append({"step": res["steps"], **descent})
                 elif not chain:
                     res["grounding_chain_empty"] = res.get("grounding_chain_empty", 0) + 1
-                res.setdefault("grounding", []).append(hit)
-                if not hit:
-                    res["grounding_wrong"] += 1
+                if navigating:
+                    # Recorded, not required (ADR-0022, rule 2): the clicked control may have
+                    # been rebuilt. The step's OS-side check decides (below).
+                    res.setdefault("post_grounded", []).append({
+                        "step": res["steps"], "identity_hit": hit,
+                        "chain": chain_record(chain, ident),
+                        "descent": self.descent_record(descent), "os_check": None})
+                else:
+                    res.setdefault("grounding", []).append(hit)
+                    if not hit:
+                        res["grounding_wrong"] += 1
                 if self.args.debug_grounding:
                     log("grounding_chain", step=res["steps"], hit=hit,
                         chain=[(row["automation_id"], row["control_type"]) for row in chain])
@@ -2499,7 +2629,17 @@ class Protocol:
                 indep_ok = self.os_check(hwnd, independent)
                 if not indep_ok:
                     res["independent_failed"] += 1
-            grounded = (res.get("grounding") or [None])[-1] if out.get("input_delivered") else None
+            if navigating and out.get("input_delivered"):
+                # The OS-side check is the grounding of a navigating step: if the folder is not
+                # the expected one the click went elsewhere or did nothing (ADR-0022, rule 2).
+                grounded = indep_ok
+                res["post_grounded"][-1]["os_check"] = indep_ok
+                if not indep_ok:
+                    res["grounding_wrong"] += 1
+            elif out.get("input_delivered"):
+                grounded = (res.get("grounding") or [None])[-1]
+            else:
+                grounded = None
             # A false success: the engine reported the effect while the OS-side evidence or
             # the control under the cursor says the intended effect did not happen.
             if out.get("status") == "effect_observed" and (not indep_ok or grounded is False):
@@ -2515,8 +2655,11 @@ class Protocol:
                     matched=sum(1 for k in self.words(elements) if k in vocab))
             if grounded is False:
                 # The click may have reached another control: no further input in this run.
-                res["failure"] = (f"step {res['steps']}: the control under the cursor is not the "
-                                  "element found before the click")
+                res["failure"] = (
+                    f"step {res['steps']}: the navigating click did not reach the expected "
+                    "state (OS-side check)" if navigating else
+                    f"step {res['steps']}: the control under the cursor is not the element "
+                    "found before the click")
                 return
             if not passed or not indep_ok:
                 if not passed:

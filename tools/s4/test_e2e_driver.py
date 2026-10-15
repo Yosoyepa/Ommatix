@@ -139,6 +139,8 @@ class FakeNotepad(driver.Protocol):
         self.stops = []
         self.ident_rows = [dict(EDITAR_ROW)]  # what UI Automation finds under the name
         self.chain = [dict(EDITAR_ROW)]  # what is under the cursor after the click
+        self.pre_chain = [dict(EDITAR_ROW)]  # what is under the target point before the click
+        self.under = 77  # the top-level window under the target point
         self.identify_calls = []
 
     def menu_state(self, hwnd):
@@ -153,6 +155,18 @@ class FakeNotepad(driver.Protocol):
 
     def cursor_chain(self):
         return self.chain
+
+    def element_centre(self, hwnd, label, control_types):
+        return (10, 20)
+
+    def point_chain(self, x, y):  # the pre-click read
+        return self.pre_chain
+
+    def island_walk(self, x, y, host_runtime_id):
+        return None
+
+    def window_under(self, point):
+        return self.under
 
     def soft_foreground_ok(self):
         return self.foreground_ok
@@ -418,6 +432,10 @@ class FakeCalculator(driver.Protocol):
         self.chain_override = None
         self.identify_calls = []
         self.statuses = []  # scripted engine statuses, then effect_observed
+        self.centre_of = None  # the label whose centre the pre-click read asked for
+        self.pre_chain = None  # what the point query returns before a click, instead of the target
+        self.under = 77  # the top-level window under the target point
+        self.point_reads = []
 
     def controls(self):
         nav = "Cerrar navegación" if self.pane_open else "Abrir navegación"
@@ -478,6 +496,26 @@ class FakeCalculator(driver.Protocol):
         return [{"runtime_id": c["rid"], "automation_id": c["aid"], "control_type": c["ctype"],
                  "offscreen": False}
                 for c in self.controls() if c["label"] == label and c["ctype"] in control_types]
+
+    def element_centre(self, hwnd, label, control_types):
+        self.centre_of = label
+        return (10, 20)
+
+    def point_chain(self, x, y):  # the pre-click read: the control about to be clicked
+        self.point_reads.append((x, y))
+        if self.pre_chain is not None:
+            return self.pre_chain
+        top = next(c for c in self.controls() if c["label"] == self.centre_of)
+        return [{"runtime_id": top["rid"], "automation_id": top["aid"],
+                 "control_type": top["ctype"], "class_name": "", "offscreen": False},
+                {"runtime_id": "42.0", "automation_id": "", "control_type": "Pane",
+                 "class_name": "", "offscreen": False}]
+
+    def island_walk(self, x, y, host_runtime_id):
+        return None
+
+    def window_under(self, point):
+        return self.under
 
     def cursor_chain(self):
         if self.chain_override is not None:
@@ -601,6 +639,213 @@ class GroundingByIdentityTest(QuietTest):
         res = self.run_steps(desk, driver.single_click_flow("Abrir navegación"))
         self.assertEqual(res["actions"][0]["stages_ms"], {"action_total": 82.8,
                                                           "action_gate": 0.2})
+
+
+def pane_row(rid="42.0"):
+    return {"runtime_id": rid, "automation_id": "", "control_type": "Pane", "class_name": "",
+            "offscreen": False}
+
+
+class PreClickGroundingTest(QuietTest):
+    """ADR-0022, rule 1: immediately before the request, the element at the target point is the
+    identified one (or has it as parent) in the expected window, in every flow."""
+
+    def run_steps(self, desk, flow=None):
+        desk.flow = flow or driver.single_click_flow("Abrir navegación")
+        res = driver.new_result("E2E-02", 1)
+        snap, elements, _ = desk.observe()
+        desk.steps(res, snap, elements, 77, 4242)
+        return res
+
+    def test_the_point_is_read_and_recorded_before_the_request(self):
+        desk = FakeCalculator(self.tmp)
+        res = self.run_steps(desk)
+        self.assertEqual(desk.clicks, ["Abrir navegación"])
+        pre = res["pre_grounded"][0]
+        self.assertEqual((pre["step"], pre["attempt"], pre["grounded"], pre["status"]),
+                         (1, 1, True, "ok"))
+        self.assertEqual((pre["window_ok"], pre["identity_hit"]), (True, True))
+        self.assertEqual([r["is_identified"] for r in pre["chain"]], [True, False])
+        self.assertEqual(desk.point_reads, [(10, 20)])
+
+    def test_the_element_at_the_point_may_be_a_child_of_the_identified_one_no_deeper(self):
+        # identity_hit's rule is unchanged: the element or its PARENT, not an ancestor above.
+        desk = FakeCalculator(self.tmp)
+        target = {"runtime_id": "42.1", "automation_id": "TogglePaneButton",
+                  "control_type": "Button", "class_name": "", "offscreen": False}
+        child = {"runtime_id": "42.1.1", "automation_id": "", "control_type": "Text",
+                 "class_name": "", "offscreen": False}
+        desk.pre_chain = [child, target, pane_row()]
+        res = self.run_steps(desk)
+        self.assertEqual(desk.clicks, ["Abrir navegación"])
+        self.assertEqual([r["is_identified"] for r in res["pre_grounded"][0]["chain"]],
+                         [False, True, False])
+        other = FakeCalculator(self.tmp)
+        other.pre_chain = [child, pane_row(), target]
+        res = self.run_steps(other)
+        self.assertEqual((other.clicks, res["actions_requested"]), ([], 0))
+        self.assertEqual(res["pre_grounded"][0]["status"], "identity_mismatch")
+
+    def test_another_element_at_the_point_sends_no_request(self):
+        for name, chain in (("another control", [pane_row("99.1")]), ("nothing", []),
+                            ("same AutomationId, other RuntimeId", [
+                                {"runtime_id": "99.1", "automation_id": "TogglePaneButton",
+                                 "control_type": "Button", "class_name": "", "offscreen": False}])):
+            desk = FakeCalculator(self.tmp)
+            desk.pre_chain = chain
+            res = self.run_steps(desk)
+            self.assertEqual((desk.clicks, desk.ledger_total(), res["actions_requested"]),
+                             ([], 0, 0), name)
+            self.assertEqual(res["pre_grounded"][0]["status"], "identity_mismatch", name)
+            self.assertIn("not grounded", res["failure"], name)
+            self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (0, 0), name)
+
+    def test_another_window_at_the_point_sends_no_request(self):
+        desk = FakeCalculator(self.tmp)
+        desk.under = 5  # the desktop, the taskbar or another window
+        res = self.run_steps(desk)
+        self.assertEqual((desk.clicks, desk.ledger_total()), ([], 0))
+        self.assertEqual((res["pre_grounded"][0]["status"], res["pre_grounded"][0]["window_ok"]),
+                         ("window_mismatch", False))
+        no_window = FakeCalculator(self.tmp)
+        no_window.under = None
+        self.run_steps(no_window)
+        self.assertEqual(no_window.clicks, [])
+
+    def test_an_unreadable_point_or_a_failed_read_sends_no_request(self):
+        desk = FakeCalculator(self.tmp)
+        desk.element_centre = lambda hwnd, label, types: None
+        res = self.run_steps(desk)
+        self.assertEqual((desk.clicks, res["pre_grounded"][0]["status"]), ([], "no_point"))
+        for error in (OSError("gone"), timeout_error()):
+            broken = FakeCalculator(self.tmp)
+
+            def read(x, y, error=error):
+                raise error
+
+            broken.point_chain = read
+            res = self.run_steps(broken)
+            self.assertEqual((broken.clicks, res["pre_grounded"][0]["status"]),
+                             ([], "unreadable"))
+
+    def test_the_grounding_runs_again_before_a_retry_after_a_stale_snapshot(self):
+        desk = FakeCalculator(self.tmp)
+        original = desk.call
+        calls = []
+
+        def call(tool, args):
+            if not calls:
+                calls.append(1)
+                return ({"status": "rejected", "input_delivered": False,
+                         "error": {"code": "STALE_SNAPSHOT"}}, False, {}, 5.0)
+            return original(tool, args)
+
+        desk.call = call
+        res = self.run_steps(desk)
+        self.assertEqual([p["attempt"] for p in res["pre_grounded"]], [1, 2])
+        self.assertEqual(len(desk.point_reads), 2)
+
+    def test_a_calc_standard_navigation_click_at_a_wrong_point_is_not_sent(self):
+        desk = FakeCalculator(self.tmp)
+        desk.pre_chain = [pane_row("99.1")]
+        summary = desk.calc_standard()
+        self.assertEqual((desk.clicks, summary["switched"]), ([], False))
+        self.assertIn("not grounded", summary["failure"])
+
+    def test_the_restore_click_is_grounded_at_the_point_first_too(self):
+        for setup, status in (({"pre_chain": [pane_row("99.1")]}, "identity_mismatch"),
+                              ({"under": 5}, "window_mismatch")):
+            proto = FakeNotepad(["Expanded"])
+            for key, value in setup.items():
+                setattr(proto, key, value)
+            res = {"run": 1, "observations": []}
+            closed = proto.restore_menu(res, 1)
+            self.assertFalse(closed)
+            self.assertEqual(proto.clicks, [], status)
+            self.assertEqual(res["menu_restore"]["pre_grounded"]["status"], status)
+            self.assertFalse(res["menu_restore"]["clicked"])
+        proto = FakeNotepad(["Expanded", "Expanded"])
+        res = {"run": 1, "observations": []}
+        self.assertTrue(proto.restore_menu(res, 1))
+        self.assertEqual(res["menu_restore"]["pre_grounded"]["status"], "ok")
+
+    def test_the_records_hold_no_name_and_no_runtime_id(self):
+        desk = FakeCalculator(self.tmp)
+        res = self.run_steps(desk)
+        text = json.dumps(res["pre_grounded"], ensure_ascii=False)
+        for secret in ("Abrir navegación", "42.1", "42.0"):
+            self.assertNotIn(secret, text)
+        self.assertNotIn("runtime_id", text)
+
+
+class NavigatingStepTest(QuietTest):
+    """ADR-0022, rule 2, at the level of the generic steps(): a step on the closed list records
+    its identity after the click but is decided by its OS-side check."""
+
+    def run_steps(self, desk, os_ok, navigating=(1,), two_steps=False):
+        flow = driver.single_click_flow("Abrir navegación")
+        flow["steps"] = [("Abrir navegación", driver.NOT_BY_OCR, "expected")]
+        if two_steps:
+            flow["steps"].append(("Cerrar navegación", driver.NOT_BY_OCR, "expected"))
+        flow["navigating"] = navigating
+        desk.flow = flow
+        desk.os_check = lambda hwnd, expected: os_ok
+        res = driver.new_result("E2E-02", 1)
+        snap, elements, _ = desk.observe()
+        desk.steps(res, snap, elements, 77, 4242)
+        return res
+
+    def test_a_recreated_control_with_a_passing_os_check_is_grounded(self):
+        desk = FakeCalculator(self.tmp)
+        desk.chain_override = [pane_row("99.1")]  # not the identified control any more
+        res = self.run_steps(desk, os_ok=True)
+        self.assertTrue(res["success"], res)
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (0, 0))
+        post = res["post_grounded"][0]
+        self.assertEqual((post["identity_hit"], post["os_check"]), (False, True))
+        self.assertEqual([r["is_identified"] for r in post["chain"]], [False])
+        self.assertNotIn("grounding", res)
+
+    def test_a_failing_os_check_is_grounding_wrong_and_a_false_success_and_stops(self):
+        desk = FakeCalculator(self.tmp)
+        res = self.run_steps(desk, os_ok=False, navigating=(1, 2), two_steps=True)
+        self.assertFalse(res["success"])
+        self.assertEqual(desk.clicks, ["Abrir navegación"], "no further request")
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
+        self.assertIs(res["post_grounded"][0]["identity_hit"], True)
+        self.assertIs(res["post_grounded"][0]["os_check"], False)
+        self.assertIn("navigating click", res["failure"])
+
+    def test_the_false_success_of_a_navigating_step_needs_effect_observed(self):
+        desk = FakeCalculator(self.tmp)
+        desk.statuses = ["indeterminate"]
+        res = self.run_steps(desk, os_ok=False)
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 0))
+
+    def test_a_step_off_the_list_keeps_the_identity_check_after_the_click(self):
+        desk = FakeCalculator(self.tmp)
+        desk.chain_override = [pane_row("99.1")]
+        res = self.run_steps(desk, os_ok=True, navigating=())
+        self.assertFalse(res["success"])
+        self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
+        self.assertEqual(res["grounding"], [False])
+        self.assertNotIn("post_grounded", res)
+        self.assertIn("not the element", res["failure"])
+
+    def test_no_name_is_compared_after_a_navigating_click(self):
+        # A same-named control with another identity does not pass a failing OS check either.
+        desk = FakeCalculator(self.tmp)
+        desk.chain_override = [pane_row("99.1")]
+        res = self.run_steps(desk, os_ok=False)
+        self.assertEqual((res["success"], res["grounding_wrong"]), (False, 1))
+
+    def test_a_click_that_was_not_delivered_has_no_post_grounding_and_no_os_verdict(self):
+        desk = FakeCalculator(self.tmp)
+        desk.statuses = ["rejected"]
+        res = self.run_steps(desk, os_ok=True)
+        self.assertNotIn("post_grounded", res)
+        self.assertEqual(res["grounding_wrong"], 0)
+        self.assertIn("rejected", res["failure"])
 
 
 class ResultCountersTest(QuietTest):
@@ -1561,20 +1806,30 @@ class IslandReads:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.point_rows = host_point_chain()
+        self.point_rows = host_point_chain()  # what the reads return after the click
         self.walk_rows = island_tree()
         self.walk_truncated = False
         self.walk_readable = True
         self.walk_calls = []
+        # The reads that precede the click (ADR-0022): the world before the click is the good
+        # island unless the test says otherwise; a click changes it to the scenario above.
+        self.pre_point_rows = host_point_chain()
+        self.phase = "pre"
 
     def cursor_point(self):
         return POINT
 
+    def element_centre(self, hwnd, label, control_types):
+        self.phase = "pre"
+        return POINT
+
     def point_chain(self, x, y):
-        return self.point_rows
+        return self.pre_point_rows if self.phase == "pre" else self.point_rows
 
     def island_walk(self, x, y, host_rid):
         self.walk_calls.append((x, y, host_rid))
+        if self.phase == "pre":
+            return island_tree(), False
         if not self.walk_readable:
             return None
         return self.walk_rows, self.walk_truncated
@@ -1592,13 +1847,18 @@ def no_real_uia(case):
 class IslandRestore(IslandReads, FakeNotepad):
     cursor_chain = driver.Protocol.cursor_chain  # the real grounding, over the fake reads
 
+    def restore_click(self, res, target, snap):
+        self.phase = "post"
+        return super().restore_click(res, target, snap)
+
 
 class IslandRun(IslandReads, FakeNotepadRun):
     cursor_chain = driver.Protocol.cursor_chain
     diag_at_element = driver.Protocol.diag_at_element
 
-    def element_centre(self, hwnd, label, control_types):
-        return POINT
+    def call(self, tool, args):
+        self.phase = "post"
+        return super().call(tool, args)
 
 
 def timeout_error():
@@ -1774,7 +2034,7 @@ class IslandGroundingTest(QuietTest):
         self.assertTrue(res["success"])
         self.assertIsNone(res["failure"])
         self.assertEqual(desk.clicks, ["Editar", "Editar"])
-        self.assertEqual(len(desk.walk_calls), 2, "one walk per click, none before it")
+        self.assertEqual(len(desk.walk_calls), 4, "one walk before each click and one after")
         self.assertEqual(desk.walk_calls[0], (100, 25, HOST_RID))
         self.assertEqual([(d["step"], d["status"], d["depth"]) for d in res["descent"]],
                          [(1, "ok", 3), (2, "ok", 3)])
@@ -1788,7 +2048,7 @@ class IslandGroundingTest(QuietTest):
         self.assertEqual(res["grounding"], [False])
         self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
         self.assertIn("not the element", res["failure"])
-        self.assertEqual(len(desk.walk_calls), 1)
+        self.assertEqual(len(desk.walk_calls), 2, "the one before the click and the one after")
 
     # (c) two elements that contain the point and are not nested: ambiguous
     def test_an_ambiguous_descent_is_not_grounded_even_if_one_candidate_is_the_item(self):
@@ -1816,7 +2076,7 @@ class IslandGroundingTest(QuietTest):
 
     # (e) a chain outside an island behaves exactly as before
     def test_a_chain_that_is_not_an_island_is_grounded_as_before_and_never_walked(self):
-        desk, res = self.run_flow(point_rows=PLAIN_CHAIN)
+        desk, res = self.run_flow(point_rows=PLAIN_CHAIN, pre_point_rows=PLAIN_CHAIN)
         self.assertEqual(res["grounding"], [True, True])
         self.assertEqual(desk.walk_calls, [])
         self.assertNotIn("descent", res)
@@ -1824,7 +2084,7 @@ class IslandGroundingTest(QuietTest):
     def test_a_chain_that_is_not_an_island_and_is_another_element_fails_as_before(self):
         other = [{"runtime_id": "9.9", "automation_id": "Other", "control_type": "Button",
                   "class_name": "Button", "offscreen": False}]
-        desk, res = self.run_flow(point_rows=other)
+        desk, res = self.run_flow(point_rows=other, pre_point_rows=PLAIN_CHAIN)
         self.assertEqual((res["grounding"], desk.walk_calls), ([False], []))
         self.assertEqual((res["grounding_wrong"], res["engine_false_success"]), (1, 1))
 
@@ -1853,7 +2113,8 @@ class IslandGroundingTest(QuietTest):
                     "automation_id": "Edit", "max_elements": 500, "max_depth": 16}
         self.assertEqual(first["before_descent"], expected)
         self.assertEqual(first["after_descent"], expected)
-        self.assertEqual(len(desk.walk_calls), 4, "before and after, for each of the two clicks")
+        self.assertEqual(len(desk.walk_calls), 6, "diagnostic before, grounding before and "
+                                                  "diagnostic after, for each of the two clicks")
 
     def test_the_diagnostic_of_a_chain_without_an_island_says_there_was_no_descent(self):
         _, res = self.run_flow(diag=[dict(r, expand_state="") for r in PLAIN_CHAIN],
@@ -1889,7 +2150,7 @@ class IslandRestoreTest(QuietTest):
         self.assertEqual(record["descent"]["status"], "ok")
         self.assertEqual((res.get("grounding_wrong", 0), res.get("engine_false_success", 0)),
                          (0, 0))
-        self.assertEqual(proto.walk_calls, [(100, 25, HOST_RID)])
+        self.assertEqual(proto.walk_calls, [(100, 25, HOST_RID)] * 2, "before and after")
 
     def test_a_restore_click_whose_descent_finds_another_control_is_reported_not_retried(self):
         other = island_tree()
@@ -1909,7 +2170,7 @@ class IslandRestoreTest(QuietTest):
             self.assertEqual(record["descent"]["status"], status)
 
     def test_a_restore_without_an_island_has_no_descent_record(self):
-        proto, _, _, record = self.restore(point_rows=PLAIN_CHAIN)
+        proto, _, _, record = self.restore(point_rows=PLAIN_CHAIN, pre_point_rows=PLAIN_CHAIN)
         self.assertIs(record["grounded"], True)
         self.assertNotIn("descent", record)
         self.assertEqual(proto.walk_calls, [])
