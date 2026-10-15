@@ -6,7 +6,7 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use ommatix_application::contract::{ActionKind, ValidatedAction};
-use ommatix_application::{DeliveryReceipt, OsActuator, PortError};
+use ommatix_application::{DeliveryReceipt, OsActuator, PortError, TopLevelWindow};
 use ommatix_domain::DisplayMapping;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, POINT};
 use windows::Win32::Security::{
@@ -224,14 +224,34 @@ fn focus_facts(attested: u32, desktop: (i32, i32)) -> FocusFacts {
     facts
 }
 
+/// The top-level window that contains `hwnd` (the window itself when it is one).
+fn root_window(hwnd: HWND) -> HWND {
+    // SAFETY: `hwnd` is passed by value; a stale handle yields null, handled below.
+    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    if root.is_invalid() { hwnd } else { root }
+}
+
+/// What the operator's window scope needs to know about a top-level window: its class and
+/// its handle (ADR-0020). Never its title.
+fn attest_window(hwnd: HWND) -> Option<TopLevelWindow> {
+    Some(TopLevelWindow {
+        class: class_name(hwnd)?,
+        handle: top_level_handle(hwnd)?,
+    })
+}
+
+/// The handle as the number the operator writes in the pin file.
+fn top_level_handle(hwnd: HWND) -> Option<u64> {
+    let handle = u64::try_from(hwnd.0.addr()).ok()?;
+    (handle != 0).then_some(handle)
+}
+
 /// The application whose window is at virtual-desktop pixel `(x, y)`: the process of the
 /// top-level window there or, inside a frame host, of its hosted content, and none on the
 /// frame host's own windows (see [`point_application`]).
 fn process_at(desktop: (i32, i32)) -> Option<u32> {
     let hwnd = window_at(desktop)?;
-    // SAFETY: `hwnd` is passed by value; a stale handle yields null, handled below.
-    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
-    let root = if root.is_invalid() { hwnd } else { root };
+    let root = root_window(hwnd);
     let (top, content) = top_level(root)?;
     let in_content = content.is_some_and(|content| {
         // SAFETY: two window handle values by value; a stale one makes the call return
@@ -399,6 +419,11 @@ fn to_input(event: Event) -> INPUT {
 /// it). Otherwise no key is sent and `deliver` fails; the click was sent, so the engine
 /// reports the action as `indeterminate`, never as not delivered.
 ///
+/// For the operator's scope on windows (ADR-0020) the actuator also attests, and only
+/// attests, the top-level foreground window and the top-level window at a frame point,
+/// each as its class name and handle; the engine decides, at the gate and again right
+/// before delivery. Neither title nor text is read.
+///
 /// A click or a scroll is one `SendInput` call; `type` is two, the click and the keys. The
 /// receipt's `submitted` is the batch length and `inserted` what `SendInput` returned (it
 /// stops at the first event it cannot insert). Nothing is retried.
@@ -468,15 +493,20 @@ impl SendInputActuator {
     /// The virtual-desktop pixel of the action point and its normalised absolute
     /// coordinates.
     fn aim(&self, action: &ValidatedAction) -> Result<Aim, PortError> {
-        let mapping = (self.mapping)()?;
-        let pixel = frame_pixel(action.point())
-            .ok_or_else(|| refuse("the action point is not a frame pixel"))?;
-        let desktop = mapping.to_os(pixel);
+        let desktop = self.desktop_point(action.point())?;
         let screen =
             virtual_screen().ok_or_else(|| refuse("cannot read the virtual desktop size"))?;
         let at = normalise(desktop, screen)
             .ok_or_else(|| refuse("the action point is outside the virtual desktop"))?;
         Ok(Aim { desktop, at })
+    }
+
+    /// The virtual-desktop pixel of a frame point, through the capture's current mapping.
+    fn desktop_point(&self, point: (f64, f64)) -> Result<(i32, i32), PortError> {
+        let mapping = (self.mapping)()?;
+        let pixel =
+            frame_pixel(point).ok_or_else(|| refuse("the action point is not a frame pixel"))?;
+        Ok(mapping.to_os(pixel))
     }
 
     /// Every check that must pass before the batch is sent; returns the foreground
@@ -569,6 +599,20 @@ impl OsActuator for SendInputActuator {
         let name = process_exe_name(&open_process(pid?)?)?;
         *self.attested.lock().unwrap_or_else(PoisonError::into_inner) = pid;
         Some(name)
+    }
+
+    fn foreground_window(&self) -> Option<TopLevelWindow> {
+        // SAFETY: no arguments; returns a window handle value (null when none is active).
+        let foreground = unsafe { GetForegroundWindow() };
+        if foreground.is_invalid() {
+            return None;
+        }
+        attest_window(root_window(foreground))
+    }
+
+    fn window_at(&self, point: (f64, f64)) -> Option<TopLevelWindow> {
+        let desktop = self.desktop_point(point).ok()?;
+        attest_window(root_window(window_at(desktop)?))
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {

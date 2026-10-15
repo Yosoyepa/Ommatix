@@ -14,7 +14,10 @@
 //! ([`ConfigPolicy`] with a stop file in a temporary directory); BDD-28 covers a window
 //! of another application taking the foreground before the engine types; the check of
 //! keyboard focus inside the allowed application belongs to the `SendInput` actuator,
-//! which no test drives.
+//! which no test drives. BDD-36 and BDD-37 (ADR-0020) show the operator's scope on windows
+//! over the same double: it attests the class and handle of the foreground window and of
+//! the window under the click, and the engine refuses the desktop, the taskbar and a
+//! window the operator did not record; BDD-37 uses the product's pin file.
 
 // cucumber passes captured step parameters by value.
 #![allow(clippy::needless_pass_by_value)]
@@ -33,7 +36,7 @@ use ommatix_application::contract::{ActionKind, ValidatedAction};
 use ommatix_application::{
     AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, Clock,
     DeliveryReceipt, Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock,
-    NoAccessibility, OsActuator, PolicyStore, PortError, Ports, VerifyParams,
+    NoAccessibility, OsActuator, PolicyStore, PortError, Ports, TopLevelWindow, VerifyParams,
 };
 use ommatix_domain::appearance::{
     CachePolicy, DESCRIPTOR_VERSION, GRID_LEN, GradientDescriptor, IconCache, IconMatch, Prototype,
@@ -59,7 +62,8 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-01", "BDD-02", "BDD-03", "BDD-04", "BDD-05", "BDD-06", "BDD-07", "BDD-08", "BDD-09",
     "BDD-10", "BDD-11", "BDD-12", "BDD-13", "BDD-14", "BDD-15", "BDD-16", "BDD-17", "BDD-18",
     "BDD-19", "BDD-20", "BDD-21", "BDD-22", "BDD-23", "BDD-24", "BDD-25", "BDD-26", "BDD-27",
-    "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35",
+    "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
+    "BDD-37",
 ];
 
 #[derive(Debug, Default, World)]
@@ -805,6 +809,8 @@ struct Agent {
     typing: Arc<Mutex<Typing>>,
     /// The operator's stop file, in a directory of its own, when the scenario has one.
     stop_file: Option<PathBuf>,
+    /// The operator's window pin file, in a directory of its own, when the scenario has one.
+    pin_file: Option<PathBuf>,
     next_id: u64,
     /// The last observation page (`structuredContent`).
     page: Option<Value>,
@@ -823,8 +829,10 @@ struct Agent {
 
 impl Drop for Agent {
     fn drop(&mut self) {
-        if let Some(dir) = self.stop_file.as_deref().and_then(std::path::Path::parent) {
-            let _ = std::fs::remove_dir_all(dir);
+        for file in [&self.stop_file, &self.pin_file] {
+            if let Some(dir) = file.as_deref().and_then(std::path::Path::parent) {
+                let _ = std::fs::remove_dir_all(dir);
+            }
         }
     }
 }
@@ -883,6 +891,10 @@ struct Foreground {
     thief: Option<String>,
     /// Attestations so far.
     queries: usize,
+    /// The top-level window in front and the one under the click, as the [`LiveDouble`]
+    /// attests them for the operator's window scope (ADR-0020). `None`: it cannot.
+    window: Option<TopLevelWindow>,
+    window_at_point: Option<TopLevelWindow>,
 }
 
 impl Default for Foreground {
@@ -891,6 +903,8 @@ impl Default for Foreground {
             app: ALLOWED_APP.to_owned(),
             thief: None,
             queries: 0,
+            window: None,
+            window_at_point: None,
         }
     }
 }
@@ -942,6 +956,22 @@ impl OsActuator for LiveDouble {
             foreground.app = thief;
         }
         Some(attested)
+    }
+
+    fn foreground_window(&self) -> Option<TopLevelWindow> {
+        self.1
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .window
+            .clone()
+    }
+
+    fn window_at(&self, _point: (f64, f64)) -> Option<TopLevelWindow> {
+        self.1
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .window_at_point
+            .clone()
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
@@ -1109,6 +1139,7 @@ impl Agent {
             foreground,
             typing,
             stop_file: None,
+            pin_file: None,
             next_id: 0,
             page: None,
             pages: Vec::new(),
@@ -1978,6 +2009,174 @@ fn no_new_events_and_past_deliveries_are_reported(e: &mut Engine) {
     assert_eq!(agent.metric("delivered_actions"), 1);
     assert_eq!(agent.metric("rejected_actions"), 1);
     assert_eq!(agent.desktop.handed_actions().len(), 1);
+}
+
+// ---- 06_accion_segura.feature, the operator's scope on windows (ADR-0020) ----
+
+/// The class of a File Explorer window, the only one the operator allows for the
+/// application, and the handle of the window the harness opened.
+const EXPLORER_CLASS: &str = "CabinetWClass";
+const OPENED_WINDOW: u64 = 265_482;
+
+fn window(class: &str, handle: u64) -> TopLevelWindow {
+    TopLevelWindow {
+        class: class.to_owned(),
+        handle,
+    }
+}
+
+impl Agent {
+    /// Puts `front` in the foreground and `under_click` under the click, as the actuator
+    /// double attests them.
+    fn windows_are(&self, front: &TopLevelWindow, under_click: &TopLevelWindow) {
+        let mut foreground = self.foreground();
+        foreground.window = Some(front.clone());
+        foreground.window_at_point = Some(under_click.clone());
+    }
+
+    /// A live click on the Save button of a freshly observed page, as a tool result.
+    fn live_click_on_save(&mut self, request_id: &str) -> Value {
+        self.observe(json!({}));
+        let button = self.element("Guardar");
+        let args = self.live_click_args(&button, request_id, "none");
+        self.tool_result("execute_action", args)
+    }
+}
+
+fn assert_refused_by_the_window_scope(outcome: &Value, expected: &str) {
+    assert_eq!(outcome["status"], "rejected", "{outcome}");
+    assert_eq!(outcome["error"]["code"], "POLICY_DENIED");
+    assert_eq!(outcome["error"]["next_step"], "operator_review");
+    assert_eq!(outcome["error"]["retryable"], false);
+    assert_eq!(outcome["input_delivered"], false);
+    let message = outcome["error"]["message"].as_str().expect("a message");
+    assert!(message.contains(expected), "{message}");
+    // The message says nothing about which window it was.
+    for leak in [EXPLORER_CLASS, "Progman", "Shell_TrayWnd", "265482"] {
+        assert!(!message.contains(leak), "{message}");
+    }
+}
+
+#[given("una aplicación permitida cuya política local sólo admite ventanas de una clase")]
+fn an_application_scoped_to_a_window_class(e: &mut Engine) {
+    let policy = LocalPolicy {
+        window_classes: [(ALLOWED_APP.to_owned(), vec![EXPLORER_CLASS.to_owned()])].into(),
+        ..live_policy()
+    };
+    let agent = e.agent.insert(Agent::live(form_with_title(), policy));
+    // The window of the allowed class receives its click: the scope narrows, it does not
+    // block.
+    let explorer = window(EXPLORER_CLASS, OPENED_WINDOW);
+    agent.windows_are(&explorer, &explorer);
+    let first = agent.live_click_on_save("bdd36-allowed");
+    assert_eq!(
+        first["structuredContent"]["status"], "input_delivered",
+        "{first}"
+    );
+    assert_eq!(agent.desktop.handed_actions().len(), 1);
+}
+
+#[when("el escritorio o la barra de tareas de esa aplicación recibe el clic del agente")]
+fn the_desktop_or_the_taskbar_would_receive_the_click(e: &mut Engine) {
+    let agent = e.agent();
+    // The desktop is in front, and then the taskbar is under the click over an Explorer
+    // window: the process is the allowed one both times, the window is not.
+    let desktop = window("Progman", 1);
+    agent.windows_are(&desktop, &desktop);
+    let on_desktop = agent.live_click_on_save("bdd36-desktop");
+    agent.recorded = Some(on_desktop);
+    let taskbar = window("Shell_TrayWnd", 2);
+    agent.windows_are(&window(EXPLORER_CLASS, OPENED_WINDOW), &taskbar);
+    let on_taskbar = agent.live_click_on_save("bdd36-taskbar");
+    agent.response = Some(on_taskbar);
+}
+
+#[then("se rechaza la entrada con POLICY_DENIED y no se entrega ningún evento")]
+fn refused_with_policy_denied_and_nothing_delivered(e: &mut Engine) {
+    let agent = e.agent();
+    let on_desktop = agent.recorded.clone().expect("the desktop result");
+    assert_refused_by_the_window_scope(
+        &on_desktop["structuredContent"],
+        "not of a class the local policy allows",
+    );
+    let on_taskbar = agent.response.clone().expect("the taskbar result");
+    assert_refused_by_the_window_scope(
+        &on_taskbar["structuredContent"],
+        "not of a class the local policy allows",
+    );
+    assert_eq!(
+        agent.desktop.handed_actions().len(),
+        1,
+        "only the click in the allowed window reached the actuator"
+    );
+    assert_eq!(agent.metric("delivered_actions"), 1);
+    assert_eq!(agent.metric("rejected_actions"), 2);
+}
+
+#[given("una aplicación permitida con una ventana registrada por el operador")]
+fn an_application_with_a_window_pinned_by_the_operator(e: &mut Engine) {
+    let dir = std::env::temp_dir().join(format!("ommatix-bdd37-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("a temporary directory");
+    let pin_file = dir.join("window.pin");
+    // The product's operator policy: the class list and the pin file the harness writes.
+    let scoped = LocalPolicy {
+        window_classes: [(ALLOWED_APP.to_owned(), vec![EXPLORER_CLASS.to_owned()])].into(),
+        ..live_policy()
+    };
+    let policy = ConfigPolicy::new(scoped).with_window_pin_file(&pin_file);
+    let agent = e
+        .agent
+        .insert(Agent::live_with(form_with_title(), Arc::new(policy)));
+    agent.pin_file = Some(pin_file.clone());
+    // Until the harness records the window, a pin that names none allows no input.
+    let explorer = window(EXPLORER_CLASS, OPENED_WINDOW);
+    agent.windows_are(&explorer, &explorer);
+    let unrecorded = agent.live_click_on_save("bdd37-unrecorded");
+    assert_refused_by_the_window_scope(&unrecorded["structuredContent"], "none is pinned now");
+    std::fs::write(&pin_file, OPENED_WINDOW.to_string()).expect("the harness records the window");
+    let recorded = agent.live_click_on_save("bdd37-recorded");
+    assert_eq!(
+        recorded["structuredContent"]["status"], "input_delivered",
+        "{recorded}"
+    );
+    assert_eq!(agent.desktop.handed_actions().len(), 1);
+}
+
+#[when("el agente solicita un clic en otra ventana de la misma clase")]
+fn the_agent_clicks_in_another_window_of_the_same_class(e: &mut Engine) {
+    let agent = e.agent();
+    // The owner's own Explorer window: the right process and the right class.
+    let other = window(EXPLORER_CLASS, OPENED_WINDOW + 1);
+    agent.windows_are(&other, &other);
+    let outcome = agent.live_click_on_save("bdd37-other");
+    agent.response = Some(outcome);
+}
+
+#[then("se rechaza la entrada y sólo la ventana registrada recibe clics")]
+fn only_the_recorded_window_receives_clicks(e: &mut Engine) {
+    let agent = e.agent();
+    let outcome = agent.response.clone().expect("the result");
+    assert_refused_by_the_window_scope(
+        &outcome["structuredContent"],
+        "not the window the local policy pins",
+    );
+    assert_eq!(agent.desktop.handed_actions().len(), 1, "no new events");
+    // The recorded window still receives its clicks.
+    let explorer = window(EXPLORER_CLASS, OPENED_WINDOW);
+    agent.windows_are(&explorer, &explorer);
+    let again = agent.live_click_on_save("bdd37-again");
+    assert_eq!(
+        again["structuredContent"]["status"], "input_delivered",
+        "{again}"
+    );
+    assert_eq!(agent.desktop.handed_actions().len(), 2);
+    // The harness releases the window: the pin file goes, and nothing is allowed.
+    let pin_file = agent.pin_file.clone().expect("a pin file");
+    std::fs::remove_file(&pin_file).expect("the harness removes the pin file");
+    let released = agent.live_click_on_save("bdd37-released");
+    assert_refused_by_the_window_scope(&released["structuredContent"], "none is pinned now");
+    assert_eq!(agent.desktop.handed_actions().len(), 2);
 }
 
 // ---- 02_fusion.feature, accessibility evidence (ADR-0017) ----

@@ -17,6 +17,7 @@
 //! The file is the operator's: nothing the agent sends can change it, and no CLI flag
 //! loosens `[safety]`.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -124,6 +125,17 @@ pub struct SafetySection {
     /// input is sent. Relative to the configuration file. Empty: no stop file, and the
     /// only local stop is ending the process.
     pub stop_file: String,
+    /// Per application, the only window classes live input may go to (ADR-0020), for an
+    /// application whose process owns more than the window the operator means: for
+    /// `explorer.exe` that is `["CabinetWClass"]`, a File Explorer window, and not the
+    /// desktop, the taskbar or a pop-up. Keys are the lowercase executable names of
+    /// `allowed_applications`. Empty (the default): no application is restricted by class.
+    pub allowed_window_classes: BTreeMap<String, Vec<String>>,
+    /// The operator's pin on one window (ADR-0020): the path of a file that holds the
+    /// handle (decimal) of the only window live input may go to. Read on every action;
+    /// a missing, empty or malformed file allows no live input. Relative to the
+    /// configuration file. Empty (the default): no pin.
+    pub window_pin_file: String,
 }
 
 /// The OCR engine (`[models] ocr`).
@@ -533,6 +545,10 @@ impl Config {
             "[safety] stop_file must be a path, or empty for none",
         );
         check(
+            s.window_pin_file.is_empty() || !s.window_pin_file.trim().is_empty(),
+            "[safety] window_pin_file must be a path, or empty for none",
+        );
+        check(
             !s.allow_destructive,
             "[safety] allow_destructive = true cannot be honoured: this build does not \
              classify destructive actions",
@@ -543,6 +559,7 @@ impl Config {
              sends no screenshots",
         );
 
+        out.extend(window_class_problems(s));
         out.extend(self.models.problems());
         out.extend(self.cache.problems());
         out
@@ -571,6 +588,13 @@ impl Config {
     /// `[safety] stop_file` is empty.
     pub fn stop_file(&self) -> Option<PathBuf> {
         let path = &self.safety.stop_file;
+        (!path.is_empty()).then(|| self.resolve_path(path))
+    }
+
+    /// The window pin file (ADR-0020), resolved like every path in this file; `None` when
+    /// `[safety] window_pin_file` is empty.
+    pub fn window_pin_file(&self) -> Option<PathBuf> {
+        let path = &self.safety.window_pin_file;
         (!path.is_empty()).then(|| self.resolve_path(path))
     }
 
@@ -632,9 +656,68 @@ impl Config {
             actuation_enabled: self.safety.actuation_enabled,
             include_values: self.safety.include_values,
             allowed_applications: self.safety.allowed_applications.clone(),
+            window_classes: self.safety.allowed_window_classes.clone(),
+            // The pin names a window only while its file does: the policy store reads it.
+            window_pin: None,
             stopped: false,
         }
     }
+}
+
+/// The process that draws the frames of hosted (UWP) applications: its windows stand for
+/// every hosted application, so a scope on it would scope none of them (ADR-0020).
+const FRAME_HOST_EXE: &str = "applicationframehost.exe";
+
+/// Classes of the windows a restriction exists to keep input out of: the desktop and the
+/// taskbar, whose owner (`explorer.exe`) is also the owner of the windows to act on.
+const SHELL_CLASSES: [&str; 5] = [
+    "Progman",
+    "WorkerW",
+    "Shell_TrayWnd",
+    "Shell_SecondaryTrayWnd",
+    "#32769",
+];
+
+/// The problems of `[safety] allowed_window_classes`: an entry the engine could never match
+/// would silently leave its application unrestricted, so every mismatch is an error.
+fn window_class_problems(s: &SafetySection) -> Vec<String> {
+    let mut out = Vec::new();
+    for (application, classes) in &s.allowed_window_classes {
+        let key = format!("[safety] allowed_window_classes \"{application}\"");
+        if *application != application.trim().to_lowercase() || application.is_empty() {
+            out.push(format!(
+                "{key}: the key must be a lowercase executable name, as the actuator attests it"
+            ));
+        }
+        if application == FRAME_HOST_EXE {
+            out.push(format!(
+                "{key}: applicationframehost.exe draws the frames of every hosted application                  and is never allowed"
+            ));
+        }
+        if !s.allowed_applications.contains(application) {
+            out.push(format!(
+                "{key}: the application is not in allowed_applications, so the entry would                  never apply"
+            ));
+        }
+        if classes.is_empty() {
+            out.push(format!("{key}: list at least one window class"));
+        }
+        for class in classes {
+            if class.is_empty()
+                || class.chars().count() > 256
+                || class.chars().any(char::is_control)
+            {
+                out.push(format!(
+                    "{key}: window classes are non-empty names of at most 256 characters"
+                ));
+            } else if SHELL_CLASSES.contains(&class.as_str()) {
+                out.push(format!(
+                    "{key}: {class} is the desktop or the taskbar and cannot be allowed"
+                ));
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -797,6 +880,92 @@ concurrent_stages = false
         assert_eq!(config.stop_file(), Some(Path::new("operator").join("STOP")));
         // It never shows in the policy itself: the stop is read when the engine acts.
         assert!(!config.local_policy().stopped);
+    }
+
+    const EXPLORER_SCOPE: &str = "[safety]
+allowed_applications = [\"explorer.exe\"]
+                                  allowed_window_classes = { \"explorer.exe\" = [\"CabinetWClass\"] }
+";
+
+    #[test]
+    fn no_window_scope_is_configured_by_default() {
+        let config = Config::default();
+        assert!(config.safety.allowed_window_classes.is_empty());
+        assert_eq!(config.window_pin_file(), None);
+        let policy = config.local_policy();
+        assert!(policy.window_classes.is_empty() && policy.window_pin.is_none());
+    }
+
+    #[test]
+    fn the_operator_can_scope_an_application_to_window_classes() {
+        let config = Config::parse(EXPLORER_SCOPE).unwrap();
+        assert_eq!(
+            config.local_policy().window_classes,
+            BTreeMap::from([("explorer.exe".to_owned(), vec!["CabinetWClass".to_owned()])])
+        );
+        // The pin names a window only while its file does, so the policy starts without one.
+        assert_eq!(config.local_policy().window_pin, None);
+    }
+
+    #[test]
+    fn the_window_pin_file_is_optional_and_relative_to_the_configuration() {
+        let mut config = Config::parse(
+            "[safety]
+window_pin_file = \"window.pin\"
+",
+        )
+        .unwrap();
+        assert_eq!(config.window_pin_file(), Some(PathBuf::from("window.pin")));
+        config.base_dir = Some(PathBuf::from("operator"));
+        assert_eq!(
+            config.window_pin_file(),
+            Some(Path::new("operator").join("window.pin"))
+        );
+        assert!(
+            error(
+                "[safety]
+window_pin_file = \" \"
+"
+            )
+            .contains("window_pin_file")
+        );
+    }
+
+    /// An entry that could never match would leave its application unrestricted without
+    /// saying so, and some classes are exactly what the restriction keeps input out of.
+    #[test]
+    fn window_class_entries_that_cannot_work_are_rejected() {
+        let scoped = |entry: &str| {
+            format!(
+                "[safety]
+allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
+                 allowed_window_classes = {{ {entry} }}
+"
+            )
+        };
+        for (entry, expected) in [
+            ("\"Explorer.exe\" = [\"CabinetWClass\"]", "lowercase"),
+            (
+                "\"notepad.exe\" = [\"Notepad\"]",
+                "not in allowed_applications",
+            ),
+            ("\"explorer.exe\" = []", "at least one window class"),
+            ("\"explorer.exe\" = [\"\"]", "non-empty"),
+            (
+                "\"applicationframehost.exe\" = [\"ApplicationFrameWindow\"]",
+                "never allowed",
+            ),
+            ("\"explorer.exe\" = [\"Progman\"]", "desktop or the taskbar"),
+            (
+                "\"explorer.exe\" = [\"CabinetWClass\", \"Shell_TrayWnd\"]",
+                "taskbar",
+            ),
+            ("\"explorer.exe\" = [\"WorkerW\"]", "desktop"),
+        ] {
+            let message = error(&scoped(entry));
+            assert!(message.contains(expected), "{entry}: {message}");
+        }
+        assert!(Config::parse(&scoped("\"explorer.exe\" = [\"CabinetWClass\"]")).is_ok());
     }
 
     const DIGEST: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";

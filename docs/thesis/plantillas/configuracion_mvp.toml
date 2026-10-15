@@ -29,6 +29,16 @@ include_values = false
 # Parada local del operador (§8.2): mientras exista este archivo no se envía entrada nueva.
 # Vacío: sin archivo de parada; la parada local es terminar el proceso.
 stop_file = ""
+# Alcance por ventana (ADR-0020, aprobada): por aplicación permitida, las únicas clases de
+# ventana que reciben entrada real. Vacío: ninguna aplicación se restringe por clase. Ejemplo
+# para el explorador, que también es dueño del escritorio y de la barra de tareas:
+# allowed_window_classes = { "explorer.exe" = ["CabinetWClass"] }
+allowed_window_classes = {}
+# Ventana registrada por el operador (ADR-0020): ruta de un archivo que contiene el
+# identificador (decimal) de la única ventana que puede recibir entrada real. Se lee en cada
+# acción; si falta, está vacío o no es un identificador, no se permite ninguna entrada.
+# Vacío: sin ventana registrada.
+window_pin_file = ""
 
 [models]
 # El runtime futuro debe fallar de forma segura mientras no se configure S0.

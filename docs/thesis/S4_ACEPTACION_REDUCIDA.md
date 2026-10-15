@@ -1101,3 +1101,141 @@ El resumen añade `flow_id` (`S4R-02`), `standard_item` (`status`, `polls`, `wai
 ### Estado
 
 Hallazgos C1, C2 y C3: corregidos en el cliente y probados con dobles, **sin confirmar en vivo**. S4R-02 no se ejecutó. Cuaderno: 426, sin cambio.
+
+## Preparación de E2E-02 y E2E-03 del dossier
+
+**Fecha:** 14 de octubre de 2026. **Estado:** preparación. Es código, pruebas y documentación; **no se ejecutó nada en vivo y no se envió ninguna entrada**. Lo único que se lanzó fue el editor propio (`ommatix-testeditor.exe`), sin enviarle entrada, para comprobar que arranca, que rechaza una carpeta inválida y qué expone a UI Automation (§2). **Decisiones del responsable (14 de octubre de 2026):** E2E-02 corre en una aplicación propia; E2E-03 corre en `explorer.exe`, pero sólo en una ventana que abre el cliente sobre una carpeta de prueba que el cliente creó. Los flujos del protocolo reducido (la Calculadora y el Bloc de notas) son S4R-02 y S4R-03 y los lleva otra rama. Esta sección no cierra RF-18, RNF-03 ni RNF-05, ni ninguna casilla DoD (capítulo 06 §6.7).
+
+### 1. Qué se prepara
+
+`matrices/plan_pruebas.csv` define **E2E-02** como «Editor: escritura y guardado de archivo temporal» y **E2E-03** como «Explorador: navegar carpetas de prueba sin destrucción». Las secciones anteriores de este informe usaron esos identificadores con otro sentido (la Calculadora y el Bloc de notas, §1 de la primera ronda). Los registros del cliente nuevo dicen `E2E-02-plan` y `E2E-03-plan` para no confundirlos.
+
+| Pieza | Dónde | Qué es |
+|---|---|---|
+| Editor propio | [`tools/s4/testeditor`](../../tools/s4/testeditor) | Crate independiente (`eframe`/`egui`, la misma pila que la aplicación de prueba, sin `unsafe`), proceso `ommatix-testeditor.exe` |
+| Cliente | [`tools/s4/e2e_dossier.py`](../../tools/s4/e2e_dossier.py) | Extiende el `Protocol` de `e2e_driver.py`, que importa sin cambiarlo: mismo transporte MCP, misma compuerta, mismo anclaje por identidad |
+| Pruebas del cliente | [`tools/s4/test_e2e_dossier.py`](../../tools/s4/test_e2e_dossier.py) | 50 pruebas con motor, escritorio y aplicaciones falsos |
+| Alcance por ventana | `src/application/src/window_scope.rs`, [ADR-0020](../adr/0020-operator-scope-on-windows.md) (aprobada el 14 de octubre de 2026) | Lo que impide que `explorer.exe` alcance el escritorio o la barra de tareas |
+| Escenarios | BDD-36 y BDD-37 de `features/06_accion_segura.feature`, prueba UT-45 | Alcance por ventana sobre dobles del actuador |
+
+### 2. E2E-02: el editor
+
+**Un binario aparte.** RF-18 pide «flujos reales verificables en 3 aplicaciones permitidas»: otra ventana de `ommatix-testapp.exe` sería la misma aplicación. Por eso el editor es un crate y un proceso propios. Aparece en la lista de aplicaciones permitidas de la configuración de S4 (§5), nunca en los valores por defecto.
+
+**La aplicación.** Un campo de texto de varias líneas (`Editor de texto`, nombre de accesibilidad fijado en su nodo AccessKit, sin dibujarlo), un botón `Guardar` y una línea de estado (`Estado: pendiente`, `Estado: guardado`, `Estado: fallido`, palabras que no aparecen en ningún otro sitio). El título refleja el estado en forma fija: `Ommatix S4 editor [caracteres=N guardado=no|si]`.
+
+**El guardado está confinado.** El cliente pasa `--folder <carpeta>`; la aplicación sólo acepta una carpeta que, ya resuelta, sea exactamente `<directorio temporal>\ommatix-e2e\<id de la corrida>` (id de 1 a 64 letras, dígitos, `.`, `_` o `-`), de modo que ni `..` ni un enlace simbólico o una unión pueden sacarla de ahí. Con cualquier otra sale con el código 2 antes de abrir una ventana. El archivo se llama siempre `nota.txt`: nunca hay otro nombre ni otra ruta. Escribe los bytes del campo tal cual (UTF-8, sin BOM, sin conversión de fin de línea), sustituyendo lo guardado antes; no escribe si el destino existe y no es un archivo normal (un enlace, una carpeta), ni más de 4096 bytes. No lee ni escribe nada más en disco, red ni portapapeles.
+
+**El flujo** (dos pasos): `type` del texto sintético `prueba 123` en `Editor de texto` y clic en `Guardar`. El `type` del motor ya hace su clic de enfoque (ADR-0018, dos fases), así que no hay un clic previo sobre el campo: sumaría un cambio visual que falsearía la medición de `visual_change`. Comprobaciones del SO, que no dependen del motor:
+
+1. Tras escribir: el título dice `caracteres=10 guardado=no` y la carpeta está vacía.
+2. Tras `Guardar`: la carpeta contiene exactamente un archivo, `nota.txt`, archivo normal cuyos bytes son los del texto escrito (nada leído de la pantalla), y el título dice `guardado=si`.
+
+Un `effect_observed` con otro contenido, otro archivo o una carpeta con más entradas cuenta como falso éxito.
+
+**Comprobado sin entrada** (con el binario de `--release`): con una carpeta fuera de `...\ommatix-e2e\<id>` o sin argumento el proceso sale con el código 2 y no abre ventana. Con la carpeta del cliente arranca maximizado, con el título `[caracteres=0 guardado=no]`, deja la carpeta vacía y expone a UI Automation, de sólo lectura: `Editor de texto` como `Edit` habilitado y con `ValuePattern` escribible (el motor lo trata como `input`), `Guardar` como `Button` con `Invoke` y el texto de estado. Se cerró por su PID y se borró su carpeta.
+
+### 3. E2E-03: el explorador, y su diseño de seguridad
+
+**El riesgo.** `explorer.exe` es también el dueño del escritorio (`Progman`, `WorkerW`), de la barra de tareas (`Shell_TrayWnd`) y de los menús emergentes del shell. Permitir `explorer.exe` por nombre de proceso dejaría pasar un clic a cualquiera de ellos, o a una ventana del Explorador que abrió el propietario. Nunca se permite `applicationframehost.exe`.
+
+**La restricción por ventana** ([ADR-0020](../adr/0020-operator-scope-on-windows.md), aprobada el 14 de octubre de 2026; apagada por defecto):
+
+- `[safety] allowed_window_classes = { "explorer.exe" = ["CabinetWClass"] }`: por aplicación, las únicas clases de ventana que reciben entrada real.
+- `[safety] window_pin_file = "window.pin"`: un archivo con el identificador (decimal) de la única ventana permitida. Lo escribe el cliente cuando abre su ventana y lo borra al cerrarla; el agente no tiene forma de escribirlo, igual que el archivo de parada. Se lee en cada acción; faltante, vacío o malformado, no se permite ninguna entrada.
+- El motor comprueba **la ventana en primer plano y la ventana bajo el punto de la acción**, ambas atestiguadas por el actuador (clase e identificador, nunca el título), en la puerta, otra vez justo antes de entregar y, en `type`, entre el clic y las teclas. Con una lista de clases las dos ventanas deben tener una clase de la lista y ser la misma ventana; con ventana registrada, las dos deben ser ella. Lo que el actuador no pueda atestiguar queda fuera, y el rechazo es `POLICY_DENIED` con un mensaje fijo que no dice qué ventana era.
+- La configuración se valida: una clave que no sea un nombre de ejecutable en minúsculas o que no esté en `allowed_applications`, una lista vacía, `applicationframehost.exe` y las clases del escritorio y de la barra de tareas son errores, y arrancar con `explorer.exe` permitido sin lista de clases ni ventana registrada imprime un aviso. El indicador de control activo nombra el alcance.
+- Qué rechaza (pruebas, §6): el escritorio y la barra de tareas, en primer plano o bajo el punto; un menú emergente; otra ventana `CabinetWClass` bajo el punto; una ventana `CabinetWClass` que no es la registrada (BDD-37); un actuador que no atestigua; una ventana que cambia justo antes de entregar o entre el clic y las teclas.
+
+El cliente repite, sólo leyendo, lo que el motor comprueba: antes de cada clic exige que el primer plano sea la ventana registrada, maximizada en el monitor principal, y que la ventana de nivel superior bajo el centro del objetivo (`WindowFromPoint` + `GA_ROOT`) también lo sea; si no, no hay clic y el protocolo se detiene (`stop_file`).
+
+**El flujo.** Cada corrida:
+
+1. Crea `%TEMP%\ommatix-e2e\s4-e2e03-r<n>-<fecha>\` con `carpeta-a\carpeta-b\dummy.txt` y `leeme.txt` (contenido fijo y sintético), y anota los archivos y sus tamaños. La carpeta de la corrida se crea de forma exclusiva: nunca se adopta una que ya existe.
+2. Abre **una** ventana del Explorador sobre esa raíz (`explorer.exe /root,<raíz>`; `--explorer-launch e` usa `/e,`), reconoce su `HWND` como la única ventana nueva `CabinetWClass` cuya carpeta actual (`Shell.Application`, sólo lectura) es la raíz, la registra, la escribe en el archivo de la ventana registrada, la maximiza en el monitor principal y la lleva al frente (gestión de ventanas, sin entrada). Si no puede distinguirla, no hay entrada.
+3. Tres clics sencillos, nada más: `carpeta-a` (elemento de árbol del panel de navegación), `carpeta-b` (ídem) y la raíz en la ruta de navegación (botón). El contrato no tiene doble clic y no se añade. No hay borrado, renombrado, arrastre, menú contextual, atajo de teclado ni escritura.
+4. Tras cada clic, la carpeta actual de la ventana (lectura de sólo lectura) debe ser la esperada (`carpeta-a`; `carpeta-a\carpeta-b`; la raíz). Cada clic se ancla además por identidad como los demás flujos (el elemento bajo el cursor es el hallado antes, por `RuntimeId`), y el nombre se busca sólo entre elementos de la misma zona (`left_sidebar` o `top_bar`) y del tipo de control correspondiente (`TreeItem`; `Button` o `SplitButton`), porque el mismo nombre aparece también en la lista de archivos, donde un clic sencillo sólo selecciona.
+5. Al final, el árbol debe tener los mismos archivos y tamaños que al principio (`tree_unchanged`); si no, la corrida falla.
+6. Cierra **sólo** la ventana que abrió: `WM_CLOSE` a su `HWND`, tras comprobar que sigue siendo una ventana `CabinetWClass` de `explorer.exe`; jamás termina un proceso. Borra el archivo de la ventana registrada. Borra **sólo** el árbol que creó, ruta por ruta (`os.remove` y `os.rmdir`, sin borrado recursivo, y nunca una ruta fuera de la carpeta de la corrida); lo que no registró lo deja y lo informa. Si la ventana no se cierra, el árbol se conserva para el operador.
+
+El Explorador no se trata como anfitrión de una isla XAML: la lista de clases de anfitriones (`ISLAND_HOST_CLASSES`) no cambia y, si la consulta por posición devolviera uno, el descenso acotado del cliente se aplicaría como siempre. Esto no se ha verificado en vivo.
+
+### 4. Cómo ejecutarlo
+
+Desde la raíz del repositorio, con el binario de la rama (`cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia`) y el editor (`cargo build --release` en `tools/s4/testeditor`). Las configuraciones viven fuera del repositorio; el resto de `[models]` es el de `tools/s0/ommatix.s0.directml.toml`, con rutas absolutas.
+
+```toml
+# editor.toml (E2E-02)
+[engine]
+verify_timeout_ms = 500
+verify_poll_ms = 50
+[safety]
+actuation_enabled = true
+allowed_applications = ["ommatix-testeditor.exe"]
+include_values = false
+stop_file = "stop.flag"
+[models]
+accessibility = "uia"
+```
+
+```toml
+# explorer.toml (E2E-03)
+[engine]
+verify_timeout_ms = 500
+verify_poll_ms = 50
+[safety]
+actuation_enabled = true
+allowed_applications = ["explorer.exe"]
+allowed_window_classes = { "explorer.exe" = ["CabinetWClass"] }
+window_pin_file = "window.pin"
+include_values = false
+stop_file = "stop.flag"
+[models]
+accessibility = "uia"
+```
+
+```text
+python tools\s4\e2e_dossier.py --exe target\release\ommatix.exe --config editor.toml --app editor --mode probe --ledger <dir>\ledger.txt --results <dir>\dossier.jsonl
+python tools\s4\e2e_dossier.py --exe target\release\ommatix.exe --config editor.toml --app editor --mode run --runs 1 --max-live 8 --round-start <n> --ledger <dir>\ledger.txt --results <dir>\dossier.jsonl --session-id s4d-e2e02
+python tools\s4\e2e_dossier.py --exe target\release\ommatix.exe --config explorer.toml --app explorer --mode probe --ledger <dir>\ledger.txt --results <dir>\dossier.jsonl
+python tools\s4\e2e_dossier.py --exe target\release\ommatix.exe --config explorer.toml --app explorer --mode run --runs 1 --max-live 8 --round-start <n> --ledger <dir>\ledger.txt --results <dir>\dossier.jsonl --session-id s4d-e2e03
+```
+
+`--mode probe` (servidor sin actuación) crea el árbol, abre la ventana, observa, imprime por paso cuántos elementos halla el motor (por zona, rol y accionabilidad) y cuántos UI Automation (por tipo de control), y lo cierra y borra todo sin enviar entrada. Debe correrse antes de cualquier corrida en vivo. El modo `run` se niega a empezar si la configuración no es exactamente la que el flujo necesita (`config_problems`): para el Explorador, `explorer.exe` y nada más, sólo `CabinetWClass`, con ventana registrada y UI Automation; para el editor, su binario y nada de ventana registrada; en ambos, parada local y actuación habilitada. También se niega si existe el archivo de parada o el de la ventana registrada. Cada corrida cuenta contra el cuaderno de solicitudes (`--ledger`, tope de 400 por ronda) como las demás.
+
+**SHA-256 del cliente** (`tools/s4/e2e_dossier.py`): `cd959f59…57f306` (completo: `cd959f590fb02f7abc64f903fa1a7773fec25ed34ed8ad214b7409228157f306`. Importa `tools/s4/e2e_driver.py` sin cambiarlo; el del 1.0.27 es `60486d87…c214a`. **SHA-256 del editor compilado** (`--release`, `rustc 1.99.0`, en esta máquina): `776cd09e…0ca437` (completo: `776cd09e0e924ae637306ebccec0727ee33229fe86f86e6c5bad2b76210ca437`.
+
+### 5. Lo que no está verificado
+
+Nada de lo siguiente se ha ejecutado; lo dice el diseño y lo mostrarán el sondeo y la primera corrida en vivo:
+
+1. **La estructura del panel de navegación.** Que `explorer.exe /root,<carpeta>` muestre `carpeta-a` y `carpeta-b` como elementos `TreeItem` de la zona `left_sidebar`, que el segundo aparezca tras elegir el primero (o que la elección expanda el árbol) y que el botón de la raíz en la ruta de navegación sea `Button` o `SplitButton` en `top_bar`. Si no, el paso se detiene antes de cualquier clic (`target_stop`) o falla tras uno (carpeta distinta o anclaje erróneo), sin más entrada.
+2. **Que la ventana de nivel superior bajo el punto y la del primer plano sean `CabinetWClass`** en el Explorador de Windows 11 (parte de su interfaz es XAML). La ventana de la lista de archivos, la ruta y el panel son hijas de esa ventana; no se ha comprobado qué devuelven `WindowFromPoint` y `GetAncestor` allí.
+3. **Que `Shell.Application` informe la carpeta actual** de la ventana por su `HWND`, y que `explorer.exe /root,` funcione con una ruta con espacios (la del directorio temporal del propietario no los tiene).
+4. **La parte de Windows del alcance por ventana** (ADR-0020): sólo está comprobada por compilación y `clippy` (`--features dxgi,sendinput,directml,winrt-ocr,uia`); su lógica, por pruebas con dobles. No se envió entrada a nada para probarla.
+5. **El `type` en el editor** (campo de varias líneas de egui): es el mismo mecanismo de la aplicación de prueba (10 de 10 en la tercera ronda), pero no se ha ejecutado con este campo.
+
+### 6. Pruebas
+
+Todas con dobles; ninguna envía entrada ni lanza el Explorador (AGENTS.md, regla 6).
+
+| Conjunto | Resultado | Qué cubre |
+|---|---|---|
+| `window_scope::tests` y `engine::tests::window_scope` (`ommatix-application`) | 22 pruebas nuevas | La regla pura; el escritorio, la barra de tareas, un menú emergente, otra ventana de la misma clase, un actuador que no atestigua y una ventana que cambia justo antes de entregar o entre el clic y las teclas de `type`; la ventana registrada; sin alcance, sin consultas |
+| `config`, `policy` y `wiring` (`ommatix`) | 10 pruebas nuevas | Sin alcance por defecto; validación de las claves; el archivo de la ventana registrada sigue al archivo y falla cerrado; el indicador y el aviso de `explorer.exe` |
+| BDD-36 y BDD-37 (`ommatix-acceptance`) | 2 escenarios nuevos (37 de 37 pasan) | Fuera del alcance y ventana no registrada, con el archivo de la ventana registrada del producto |
+| `testeditor` | 15 pruebas | El confinamiento (forma `ommatix-e2e\<id>`, `..`, ids), los bytes exactos, un enlace, tamaño, carpeta cambiada, estado y título |
+| `tools/s4/test_e2e_dossier.py` | 50 pruebas (163 en `tools/s4`) | La carpeta de la corrida y su borrado (sólo lo registrado, nunca lo ajeno, ninguna ruta fuera); la configuración; los flujos de sólo clics; el editor (éxito, bytes distintos, teclas perdidas, archivo extra, aborto); el Explorador (tres clics, el señuelo de la lista de archivos, ventana del propietario al frente, escritorio o barra de tareas bajo el punto, carpeta que no cambia, árbol alterado, ventana que no se cierra, handle que ya no es del Explorador, aborto) |
+
+Las pruebas de seguridad se comprobaron por mutación: sin la comprobación de la ventana bajo el punto, sin la del primer plano registrado y sin las del motor, fallan las que las cubren.
+
+### 7. Estado en la matriz y decisiones pendientes
+
+- **UT-45** (alcance de ventana): nueva, `IMPLEMENTADO_EN_RUST_S4`. BDD-36 y BDD-37, `EJECUTADO_SOBRE_CONTRATO_S3_DOBLE` (corren sobre dobles del actuador).
+- **E2E-02 y E2E-03 de la matriz:** `PENDIENTE_PRODUCTO`, sin cambio. El cliente y el editor están listos, pero la prueba es de aceptación y exige la corrida supervisada; no existe un estado honesto entre ambas, y no se inventó uno. RF-18, RNF-03, RNF-05 y las casillas DoD no cambian.
+- **Antes de una corrida en vivo, el responsable decide:**
+  1. ~~Aprobar, cambiar o rechazar la ADR-0020~~: **aprobada** por el responsable el 14 de octubre de 2026.
+  2. **Si la navegación por el panel no es posible** (el sondeo mostrará qué ve el motor): o se acepta cambiar un ajuste del usuario del Explorador (por ejemplo «Expandir a la carpeta abierta», que el cliente no toca), o se amplía el contrato con un doble clic (cambio de contrato, fuera de esta rama), o se permite la clase del menú desplegable de la ruta de navegación (ensancha el alcance), o se reduce el flujo a un nivel.
+  3. **El cupo:** el valor de `--round-start` de la ronda y cuántas solicitudes se asignan (el editor usa 2 por corrida, el Explorador 3, más los reintentos tras `STALE_SNAPSHOT`; se sugiere `--max-live 8`).
+  4. **El entorno:** sin uso concurrente del equipo durante la corrida, sin otras ventanas del Explorador necesarias y con la ventana del propietario fuera de la zona de clics (el cliente la deja abierta y no la toca).
+  5. **El nombre:** si los informes siguen llamando E2E-02/E2E-03 a la Calculadora y el Bloc de notas (S4R-02/S4R-03) o pasan a los de la matriz.

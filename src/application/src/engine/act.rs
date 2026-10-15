@@ -11,6 +11,11 @@
 //! `indeterminate`, never an automatic retry. Any delivery spends the snapshot: the next
 //! action needs a new observation.
 //!
+//! The operator's scope on windows (ADR-0020) narrows the application allowlist to windows:
+//! when the policy lists window classes for the foreground application, or pins a window,
+//! the foreground window and the window under the action's point must be within it, checked
+//! at the gate and again in the last look. The actuator only attests the windows.
+//!
 //! `type` is delivered in two phases when accessibility evidence reads keyboard focus
 //! (ADR-0018, SDD §2.9): the focusing click, then a poll on the injected clock until UI
 //! Automation reports keyboard focus on the target element, then the keys. No focus in
@@ -35,6 +40,8 @@ use crate::contract::{
     ActionKind, ActionRequest, ActionResult, ActionTimings, ErrorCode, ExpectedEffect,
     ObservedEffect, ToolError, ValidatedAction, limits,
 };
+use crate::ports::LocalPolicy;
+use crate::window_scope::{window_scope_applies, window_scope_problem};
 
 /// Parses `s<n>` (`n >= 1`, no leading zeros) as the registry's snapshot number.
 fn parse_snapshot_id(text: &str) -> Option<u64> {
@@ -326,16 +333,21 @@ impl Engine {
         else {
             return Err(policy_denied());
         };
+        let point = bbox.center();
+        // The operator's scope on windows (ADR-0020): the allowlist names a process, and
+        // the scope narrows it to the windows of that process that may be acted on.
+        self.check_window_scope(&policy, foreground.as_deref(), point)?;
         let since = self.ports.clock.now();
-        let checked = self
-            .fresh_frame()
-            .and_then(|before| self.last_look(foreground.as_deref()).map(|()| before));
+        let checked = self.fresh_frame().and_then(|before| {
+            self.last_look(foreground.as_deref(), point)
+                .map(|()| before)
+        });
         self.spend(since, Stage::Freshness);
         let before = checked?;
         let validated = ValidatedAction {
             target_id,
             kind: request.action.clone(),
-            point: bbox.center(),
+            point,
         };
         if matches!(validated.kind, ActionKind::Type { .. }) && self.types_in_phases() {
             return Ok(self.deliver_typing(
@@ -379,7 +391,7 @@ impl Engine {
     /// delivery (SDD §2.9, chapter 08 §8.2): the operator's stop and consent, and the
     /// foreground application attested at the gate. A residual window between this look
     /// and the OS remains (§8.3); the live actuator narrows it with its own checks.
-    fn last_look(&self, foreground: Option<&str>) -> Result<(), ToolError> {
+    fn last_look(&self, foreground: Option<&str>, point: (f64, f64)) -> Result<(), ToolError> {
         let policy = self.ports.policy.current();
         if policy.stopped {
             return Err(operator_stopped());
@@ -393,12 +405,38 @@ impl Engine {
                 "the foreground application changed after it was checked; nothing was delivered",
             ));
         }
-        if !now.is_some_and(|app| policy.allowed_applications.contains(&app)) {
+        if !now
+            .as_ref()
+            .is_some_and(|app| policy.allowed_applications.contains(app))
+        {
             return Err(not_allowlisted(
                 "foreground application is not on the local allowlist",
             ));
         }
-        Ok(())
+        self.check_window_scope(&policy, now.as_deref(), point)
+    }
+
+    /// The operator's scope on windows (ADR-0020): refuses unless the foreground window and
+    /// the window under `point` are within the scope the policy sets for `application`.
+    /// The actuator is asked only when a scope applies, so the default policy costs nothing.
+    fn check_window_scope(
+        &self,
+        policy: &LocalPolicy,
+        application: Option<&str>,
+        point: (f64, f64),
+    ) -> Result<(), ToolError> {
+        let Some(application) = application else {
+            return Ok(());
+        };
+        if !window_scope_applies(policy, application) {
+            return Ok(());
+        }
+        let foreground = self.ports.actuator.foreground_window();
+        let at_point = self.ports.actuator.window_at(point);
+        match window_scope_problem(policy, application, foreground.as_ref(), at_point.as_ref()) {
+            Some(problem) => Err(not_allowlisted(problem)),
+            None => Ok(()),
+        }
     }
 
     /// Hands a validated action to the actuator and reports what is known, no more.
@@ -527,7 +565,7 @@ impl Engine {
         } else {
             None
         };
-        let unchanged = self.last_look(foreground).is_ok();
+        let unchanged = self.last_look(foreground, target.center()).is_ok();
         self.spend(since, Stage::Freshness);
         if !unchanged {
             return Outcome::uncertain(

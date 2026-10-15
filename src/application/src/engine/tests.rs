@@ -17,7 +17,7 @@ use crate::contract::{
 };
 use crate::ports::{
     AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame, DeliveryReceipt,
-    LocalPolicy,
+    LocalPolicy, TopLevelWindow,
 };
 use crate::{ManualClock, PortError};
 
@@ -90,6 +90,13 @@ struct World {
     fail_keys: bool,
     clicks: Vec<ValidatedAction>,
     keys: Vec<ValidatedAction>,
+    /// The foreground top-level window the actuator attests (ADR-0020), and the window at
+    /// the action's point. `None`: the actuator cannot attest it.
+    foreground_window: Option<TopLevelWindow>,
+    window_at_point: Option<TopLevelWindow>,
+    /// Answers to the next foreground-window reads, before `foreground_window` takes
+    /// over: a window that changes while the engine works.
+    foreground_window_script: VecDeque<Option<TopLevelWindow>>,
 }
 
 impl Default for World {
@@ -129,6 +136,9 @@ impl Default for World {
             fail_keys: false,
             clicks: Vec::new(),
             keys: Vec::new(),
+            foreground_window: None,
+            window_at_point: None,
+            foreground_window_script: VecDeque::new(),
         }
     }
 }
@@ -329,6 +339,21 @@ impl OsActuator for Actuator {
             Some(answer) => answer,
             None => w.foreground.clone(),
         }
+    }
+
+    fn foreground_window(&self) -> Option<TopLevelWindow> {
+        let mut w = lock(&self.0);
+        w.events.push("foreground_window");
+        match w.foreground_window_script.pop_front() {
+            Some(answer) => answer,
+            None => w.foreground_window.clone(),
+        }
+    }
+
+    fn window_at(&self, _point: (f64, f64)) -> Option<TopLevelWindow> {
+        let mut w = lock(&self.0);
+        w.events.push("window_at");
+        w.window_at_point.clone()
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
@@ -2109,3 +2134,4 @@ mod icons {
 mod accessibility;
 mod concurrency;
 mod typing;
+mod window_scope;
