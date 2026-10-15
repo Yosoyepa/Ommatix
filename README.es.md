@@ -412,7 +412,9 @@ tools/                     herramientas de medición y aceptación fuera del wor
 │                          las banderas ocultas `--animate` de las mediciones de RNF-05) y el
 │                          editor (`s4/testeditor`) y el cliente (`s4/e2e_dossier.py`) del
 │                          E2E-02 y E2E-03 del dossier
-└── perf/                  `measure_latency.py`: latencia por etapa contra la aplicación de prueba
+└── perf/                  `measure_latency.py`: latencia por etapa contra la aplicación de prueba;
+                           `soak.py` (PERF-03: recursos y soak de 2 h) y `dpi_probe.py` (IT-07: DPI
+                           100/125/150 %), de sólo lectura, sin entrada, escritas y aún sin ejecutar
 ```
 
 Cómo se reparten los componentes del SDD del dossier
@@ -456,6 +458,7 @@ Las reglas de contribución, para personas y agentes de IA, están en [AGENTS.md
 ## Documentación
 
 - [Dossier de la tesis](docs/thesis/README.md)
+- [Instalar, verificar y revertir](docs/thesis/S4_INSTALACION_Y_REVERSION.md) y [las sesiones supervisadas pendientes](docs/thesis/S4_SESIONES_PENDIENTES.md) (escritas, aún no ejecutadas en una máquina limpia)
 - [Visión general de la arquitectura](docs/architecture/overview.es.md) · [Architecture overview](docs/architecture/overview.md)
 - [Registros de decisiones (ADR)](docs/adr/README.md)
 - [Diagramas](docs/diagrams/README.md)

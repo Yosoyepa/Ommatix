@@ -54,6 +54,7 @@ The SDD defines twelve components ([diagram](../diagrams/components.md)).
 | OS Actuator | Event injection and delivery count | ValidatedAction → DeliveryReceipt | `ommatix-adapter-input` |
 | Effect Verifier | Check an expected effect, or report uncertainty | Before and after → Verification | `ommatix-application`: re-capture after delivery (partial; S3) |
 | Telemetry | Metrics and audit without sensitive text | Events and spans | `get_engine_metrics` and stage timings in MCP `_meta` (partial; S3) |
+| Evidence tooling | Resources and 2 h soak (PERF-03), DPI 100/125/150 % (IT-07), install and rollback (REL-01) | Written, not run: the read-only `tools/perf/soak.py` and `tools/perf/dpi_probe.py` (no input, no `execute_action`) and the [install and rollback guide](../thesis/S4_INSTALACION_Y_REVERSION.md); what each supervised session needs is in [`S4_SESIONES_PENDIENTES.md`](../thesis/S4_SESIONES_PENDIENTES.md) | S4 (sessions with the owner) |
 
 The core reaches the outside world only through the ports `FrameCapturer`, `VisionDetector`,
 `TextRecognizer`, `AccessibilityProvider`, `OsActuator`, `Clock` and `PolicyStore`, so every adapter can be replaced by

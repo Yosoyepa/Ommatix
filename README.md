@@ -392,7 +392,9 @@ tools/                     measurement and acceptance tools outside the workspac
 │                          the hidden `--animate` flags of the RNF-05 measurements) and the
 │                          editor (`s4/testeditor`) and client (`s4/e2e_dossier.py`) of the
 │                          dossier's E2E-02 and E2E-03
-└── perf/                  `measure_latency.py`: per-stage latency against the test application
+└── perf/                  `measure_latency.py`: per-stage latency against the test application;
+                           `soak.py` (PERF-03: resources and 2 h soak) and `dpi_probe.py` (IT-07: DPI
+                           100/125/150 %), read only, no input, written and not yet run
 ```
 
 How the dossier's SDD components ([chapter 02 §2.3](docs/thesis/02_SDD_ARQUITECTURA_MVP.md))
@@ -435,6 +437,7 @@ Contribution rules, for humans and AI agents alike, are in [AGENTS.md](AGENTS.md
 ## Documentation
 
 - [Thesis dossier](docs/thesis/README.md) (Spanish)
+- [Install, verify and roll back](docs/thesis/S4_INSTALACION_Y_REVERSION.md) and [the supervised sessions still pending](docs/thesis/S4_SESIONES_PENDIENTES.md) (Spanish; written, not yet run on a clean machine)
 - [Architecture overview](docs/architecture/overview.md) · [Visión general](docs/architecture/overview.es.md)
 - [Architecture decision records](docs/adr/README.md)
 - [Diagrams](docs/diagrams/README.md)

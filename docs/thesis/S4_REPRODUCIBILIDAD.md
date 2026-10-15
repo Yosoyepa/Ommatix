@@ -1,6 +1,6 @@
 # REL-01: reproducibilidad de las comprobaciones (RNF-08)
 
-**Fecha:** 14 de octubre de 2026 (`CHANGELOG.md`, 1.0.35). **Alcance:** qué se congela para que otra persona repita las comprobaciones del repositorio y obtenga lo mismo, dónde está cada dato y qué falta. Este documento no cierra RNF-08 ni la casilla de la Definition of Done que le corresponde (capítulo 06 §6.7: «Lockfiles, hashes, licencias, instalación, rollback y límites de compatibilidad están documentados»): faltan la instalación, el rollback y el corpus de aceptación (§6).
+**Fecha:** 14 de octubre de 2026 (`CHANGELOG.md`, 1.0.35). **Alcance:** qué se congela para que otra persona repita las comprobaciones del repositorio y obtenga lo mismo, dónde está cada dato y qué falta. Este documento no cierra RNF-08 ni la casilla de la Definition of Done que le corresponde (capítulo 06 §6.7: «Lockfiles, hashes, licencias, instalación, rollback y límites de compatibilidad están documentados»): falta ejecutar la instalación y el rollback en una máquina limpia (hay guía escrita desde 1.0.47) y el corpus de aceptación (§6).
 
 Cada afirmación de las tablas la comprueba una prueba de Rust (`src/acceptance/tests/repository.rs`, funciones `rel_01_*`) o el script `tools/repro/environment.py`; lo que sólo describe, lo dice.
 
@@ -95,7 +95,7 @@ El **corpus de aceptación** del capítulo 03 §3.5 (al menos 300 capturas etiqu
 
 1. **Corpus de aceptación congelado** (§5): construirlo, etiquetarlo y fijarlo por hash. Es trabajo del responsable y de corridas supervisadas.
 2. **Commit de entrega**: RNF-08 pide «commit … congelados». Un commit se congela en S4 al etiquetar la entrega; este PR sólo hace que cada medición lo registre.
-3. **Instalación, rollback y límites de compatibilidad** (casilla de la Definition of Done): no hay guía de instalación de un binario ni de vuelta atrás; el runbook (capítulo 10) describe la demostración, no una instalación.
+3. **Instalación, rollback y límites de compatibilidad** (casilla de la Definition of Done): desde 1.0.47 hay una guía escrita, [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md), con la compilación de cada conjunto de rasgos, los archivos del operador con su digest, la verificación, la conexión de un cliente MCP, la reversión y los límites de compatibilidad, y pruebas que comprueban que lo que nombra existe (`rel_01_the_install_guide_points_at_files_that_exist` y `tools/repro/test_install_guide.py`). **Nadie la ha seguido en una máquina limpia**: esa ejecución y su `environment.json` son la sesión A de [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md). Lo que dice sobre la escala (100, 125 y 150 %) tampoco está medido: IT-07 sigue sin ejecutar (sesión C).
 4. **Proveniencia más allá del hash**: S0 comprobó a mano la firma Authenticode de `onnxruntime.dll` (DirectML) y de `DirectML.dll`, y que los digests de los zips coinciden con los publicados; no hay una comprobación automática de firma.
 5. **Aprobación de licencias por el responsable**: el detector del producto (ADR-0009) y la distribución de `DirectML.dll` son decisiones suyas; la licencia del código del repositorio, también.
 
