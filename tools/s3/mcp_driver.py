@@ -507,13 +507,31 @@ class Run:
             rejected=m1["rejected_actions"] - m0["rejected_actions"])
 
 
+PROBE_SESSION_ID = "s3-supervised"
+
+
+def serve_argv(exe, output, config, live: bool, session_id: str | None) -> list:
+    """The command that starts the engine. A live run takes no fixed session id: the engine
+    refuses one with live input, because a restarted engine with the same identifier would
+    accept an earlier run's request (chapter 08 §8.4, CHANGELOG 1.0.67). Observe and dry
+    runs keep an identifier for reproducible output."""
+    argv = [str(exe), "serve", "--source", "dxgi", "--output", str(output), "--config", str(config)]
+    if not live:
+        return argv + ["--session-id", session_id or PROBE_SESSION_ID]
+    if session_id is not None:
+        raise ValueError("a live run takes no --session-id: the engine refuses a fixed "
+                         "identifier with live input; omit it")
+    return argv + ["--input", "sendinput"]
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exe", required=True)
     p.add_argument("--config", required=True, type=Path)
     p.add_argument("--scenario", choices=["observe", "dry", "live"], required=True)
     p.add_argument("--steps", default="it03,it05,sec02,sec05")
-    p.add_argument("--session-id", default="s3-supervised")
+    p.add_argument("--session-id", default=None,
+                   help="observe/dry only (default %s); a live run takes none" % PROBE_SESSION_ID)
     p.add_argument("--output", type=int, default=0)
     p.add_argument("--observations", type=int, default=3, help="warm-up observations")
     p.add_argument("--max-live", type=int, default=0, help="dry_run:false requests allowed")
@@ -529,10 +547,11 @@ def main() -> int:
         log("abort", reason="the stop file exists before the run")
         return 2
     live = args.scenario == "live"
-    argv = [args.exe, "serve", "--source", "dxgi", "--output", str(args.output),
-            "--config", str(args.config), "--session-id", args.session_id]
-    if live:
-        argv += ["--input", "sendinput"]
+    try:
+        argv = serve_argv(args.exe, args.output, args.config, live, args.session_id)
+    except ValueError as refusal:
+        log("abort", reason=str(refusal))
+        return 2
     log("start", scenario=args.scenario, live_input=live,
         config_sha256=hashlib.sha256(raw).hexdigest(), max_live=args.max_live)
     name, primary = foreground()

@@ -1,5 +1,9 @@
 # Historial documental
 
+## 1.0.68 — 2026-10-15: el cliente de S3 deja de pasar un identificador de sesión fijo a las corridas en vivo
+
+Sin cambio del motor. Desde 1.0.67 el motor rechaza al arrancar un `--session-id` fijo con entrada real (un motor reiniciado con el mismo identificador aceptaría una petición anterior; capítulo 08 §8.4). `tools/s3/mcp_driver.py` lo pasaba siempre (`s3-supervised`), así que su modo `live` habría sido rechazado: ahora una corrida en vivo no lo lleva y, si se da, el cliente se niega antes de arrancar el motor; `observe` y `dry` lo conservan. Pruebas nuevas en `tools/s3/test_mcp_driver.py` (fallan sin el cambio).
+
 ## 1.0.67 — 2026-10-15: con actuación viva, un `--session-id` fijo se rechaza al arrancar; los clientes S4 no lo pasan a las corridas en vivo (rama `fix/sec02-fixed-session-id`)
 
 Cambia código de arranque (la raíz de composición), los clientes de S4 (`tools/s4/e2e_driver.py` y `e2e_dossier.py`), pruebas, documentación y una revisión nueva. **No cambia ningún requisito, algoritmo, contrato MCP, esquema JSON ni código de error, no añade ninguna ADR, y no cambia el estado de ninguna fila de `plan_pruebas.csv`, `requisitos_trazabilidad.csv` o `gherkin_trazabilidad.csv`.** Sin entrada en vivo: las pruebas usan dobles, archivos temporales y el proceso compilado sin adaptadores de entrada.
