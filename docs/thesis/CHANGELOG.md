@@ -1,5 +1,9 @@
 # Historial documental
 
+## 1.0.30 — 2026-10-14: el responsable aprueba la ADR-0020 (alcance del operador por ventanas)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código. El responsable del proyecto aprueba el 14 de octubre de 2026 la [ADR-0020](../adr/0020-operator-scope-on-windows.md) (alcance del operador por ventanas: `[safety] allowed_window_classes` y `window_pin_file`, apagado por defecto), que 1.0.29 dejó propuesta. Con ella `explorer.exe` puede permitirse sólo en la ventana `CabinetWClass` que abre el cliente. El responsable autoriza también la octava ronda supervisada (S4R-02, E2E-02 y E2E-03, cupo de 200 solicitudes reales, sin usar el equipo). Se actualizan el estado de la ADR, su índice, AGENTS.md, los README y la visión general (EN y ES), el traspaso, el capítulo 08, la plantilla de configuración y el informe de S4.
+
 ## 1.0.29 — 2026-10-14: S4, preparación de E2E-02 (editor) y E2E-03 (Explorador) del dossier (rama `feat/e2e-editor-explorer`)
 
 No cambia ningún requisito, algoritmo ni el contrato MCP (`execute_action` sigue con `click`, `type` y `scroll`; no se añade el doble clic). **No se ejecutó nada en vivo ni se envió entrada.** Añade el alcance por ventana que ya pedían el capítulo 08 §8.2 («allowlist de aplicaciones y ventana») y RF-11 («ventana/foco»), el editor propio y el cliente de las dos pruebas. Decisiones del responsable del 14 de octubre de 2026: E2E-02 corre en nuestra aplicación; E2E-03, en `explorer.exe`, sólo en una ventana que abre el cliente sobre una carpeta temporal que el cliente creó. El informe está en la sección «Preparación de E2E-02 y E2E-03 del dossier» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md) y la decisión, en la [ADR-0020](../adr/0020-operator-scope-on-windows.md), **propuesta** (el responsable no la ha aprobado).

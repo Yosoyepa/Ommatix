@@ -273,7 +273,7 @@ puede activar ni retirar la parada. Terminar el proceso (Ctrl+C) también detien
 `stop_file`, es la única parada local.
 
 **Alcance del operador por ventanas** ([ADR-0020](docs/adr/0020-operator-scope-on-windows.md),
-propuesta; apagado por defecto). `allowed_applications` nombra un proceso, y `explorer.exe`
+aprobada; apagado por defecto). `allowed_applications` nombra un proceso, y `explorer.exe`
 es también dueño del escritorio y de la barra de tareas. `[safety] allowed_window_classes =
 { "explorer.exe" = ["CabinetWClass"] }` limita una aplicación a las clases de ventana de la
 lista, y `[safety] window_pin_file` nombra un archivo, que escribe el operador o el arnés que

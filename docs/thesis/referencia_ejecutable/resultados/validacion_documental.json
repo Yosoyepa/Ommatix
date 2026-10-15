@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-15T00:28:02.322788+00:00",
+  "timestamp_utc": "2026-10-15T00:37:00.905703+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -12,7 +12,7 @@
     "feature_files": 6,
     "gherkin_scenarios": 37,
     "requirements": 28,
-    "planned_tests": 78,
+    "planned_tests": 80,
     "references": 24,
     "adrs": 20
   },

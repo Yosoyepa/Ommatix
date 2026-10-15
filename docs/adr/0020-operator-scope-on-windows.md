@@ -1,10 +1,9 @@
 # 0020. The operator's scope on windows: window classes and a pinned window
 
-- **Status:** Proposed (2026-10-14)
+- **Status:** Accepted (2026-10-14)
 - **Date:** 2026-10-14
-- **Approval:** Pending. The project owner asked for this design on 2026-10-14 (E2E-03 may run
-  in `explorer.exe` only in a window the client opened); nothing here is accepted until the
-  owner says so, and this ADR is not edited into "Accepted" by anyone else
+- **Approval:** Accepted by the project owner on 2026-10-14 (E2E-03 may run in `explorer.exe`
+  only in a window the client opened)
 
 ## Context
 
@@ -155,7 +154,7 @@ E2E-03. Refines [ADR-0007](0007-fail-closed-actuation-and-honest-simulation.md) 
 ## Resumen (ES)
 
 La lista de aplicaciones permitidas nombra un proceso, y `explorer.exe` es dueño también del
-escritorio y de la barra de tareas. Propuesta, pendiente de la aprobación del responsable: un
+escritorio y de la barra de tareas. Aprobada por el responsable el 14 de octubre de 2026: un
 alcance opcional por ventana, apagado por defecto. `[safety] allowed_window_classes` lista, por
 aplicación, las únicas clases de ventana que reciben entrada real (para el explorador,
 `CabinetWClass`), y `[safety] window_pin_file` apunta a un archivo con el identificador de la

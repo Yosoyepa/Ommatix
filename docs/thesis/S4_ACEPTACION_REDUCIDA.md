@@ -1115,7 +1115,7 @@ Hallazgos C1, C2 y C3: corregidos en el cliente y probados con dobles, **sin con
 | Editor propio | [`tools/s4/testeditor`](../../tools/s4/testeditor) | Crate independiente (`eframe`/`egui`, la misma pila que la aplicación de prueba, sin `unsafe`), proceso `ommatix-testeditor.exe` |
 | Cliente | [`tools/s4/e2e_dossier.py`](../../tools/s4/e2e_dossier.py) | Extiende el `Protocol` de `e2e_driver.py`, que importa sin cambiarlo: mismo transporte MCP, misma compuerta, mismo anclaje por identidad |
 | Pruebas del cliente | [`tools/s4/test_e2e_dossier.py`](../../tools/s4/test_e2e_dossier.py) | 50 pruebas con motor, escritorio y aplicaciones falsos |
-| Alcance por ventana | `src/application/src/window_scope.rs`, [ADR-0020](../adr/0020-operator-scope-on-windows.md) (**propuesta**, sin aprobar) | Lo que impide que `explorer.exe` alcance el escritorio o la barra de tareas |
+| Alcance por ventana | `src/application/src/window_scope.rs`, [ADR-0020](../adr/0020-operator-scope-on-windows.md) (aprobada el 14 de octubre de 2026) | Lo que impide que `explorer.exe` alcance el escritorio o la barra de tareas |
 | Escenarios | BDD-36 y BDD-37 de `features/06_accion_segura.feature`, prueba UT-45 | Alcance por ventana sobre dobles del actuador |
 
 ### 2. E2E-02: el editor
@@ -1139,7 +1139,7 @@ Un `effect_observed` con otro contenido, otro archivo o una carpeta con más ent
 
 **El riesgo.** `explorer.exe` es también el dueño del escritorio (`Progman`, `WorkerW`), de la barra de tareas (`Shell_TrayWnd`) y de los menús emergentes del shell. Permitir `explorer.exe` por nombre de proceso dejaría pasar un clic a cualquiera de ellos, o a una ventana del Explorador que abrió el propietario. Nunca se permite `applicationframehost.exe`.
 
-**La restricción por ventana** ([ADR-0020](../adr/0020-operator-scope-on-windows.md), propuesta; apagada por defecto):
+**La restricción por ventana** ([ADR-0020](../adr/0020-operator-scope-on-windows.md), aprobada el 14 de octubre de 2026; apagada por defecto):
 
 - `[safety] allowed_window_classes = { "explorer.exe" = ["CabinetWClass"] }`: por aplicación, las únicas clases de ventana que reciben entrada real.
 - `[safety] window_pin_file = "window.pin"`: un archivo con el identificador (decimal) de la única ventana permitida. Lo escribe el cliente cuando abre su ventana y lo borra al cerrarla; el agente no tiene forma de escribirlo, igual que el archivo de parada. Se lee en cada acción; faltante, vacío o malformado, no se permite ninguna entrada.
@@ -1234,7 +1234,7 @@ Las pruebas de seguridad se comprobaron por mutación: sin la comprobación de l
 - **UT-45** (alcance de ventana): nueva, `IMPLEMENTADO_EN_RUST_S4`. BDD-36 y BDD-37, `EJECUTADO_SOBRE_CONTRATO_S3_DOBLE` (corren sobre dobles del actuador).
 - **E2E-02 y E2E-03 de la matriz:** `PENDIENTE_PRODUCTO`, sin cambio. El cliente y el editor están listos, pero la prueba es de aceptación y exige la corrida supervisada; no existe un estado honesto entre ambas, y no se inventó uno. RF-18, RNF-03, RNF-05 y las casillas DoD no cambian.
 - **Antes de una corrida en vivo, el responsable decide:**
-  1. **Aprobar, cambiar o rechazar la ADR-0020** (hoy *Proposed*; ningún agente la marca como aceptada). Sin ella, `explorer.exe` no debe permitirse.
+  1. ~~Aprobar, cambiar o rechazar la ADR-0020~~: **aprobada** por el responsable el 14 de octubre de 2026.
   2. **Si la navegación por el panel no es posible** (el sondeo mostrará qué ve el motor): o se acepta cambiar un ajuste del usuario del Explorador (por ejemplo «Expandir a la carpeta abierta», que el cliente no toca), o se amplía el contrato con un doble clic (cambio de contrato, fuera de esta rama), o se permite la clase del menú desplegable de la ruta de navegación (ensancha el alcance), o se reduce el flujo a un nivel.
   3. **El cupo:** el valor de `--round-start` de la ronda y cuántas solicitudes se asignan (el editor usa 2 por corrida, el Explorador 3, más los reintentos tras `STALE_SNAPSHOT`; se sugiere `--max-live 8`).
   4. **El entorno:** sin uso concurrente del equipo durante la corrida, sin otras ventanas del Explorador necesarias y con la ventana del propietario fuera de la zona de clics (el cliente la deja abierta y no la toca).

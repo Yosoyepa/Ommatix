@@ -156,7 +156,7 @@ Nothing MVP-related goes in the repository root except workspace configuration.
    delivery spends the snapshot until the next observation. An application whose process
    owns more than the window the operator means (`explorer.exe` also owns the desktop and
    the taskbar) is narrowed to windows with `[safety] allowed_window_classes` and
-   `window_pin_file` (ADR-0020, **proposed**, off by default): the engine checks the
+   `window_pin_file` (ADR-0020, accepted, off by default): the engine checks the
    foreground window and the window under the point at the gate and again in the last look,
    refuses what the actuator cannot attest, and never accepts a window title as evidence.
    Never add `applicationframehost.exe` to any allowlist. The operator's stop
@@ -249,9 +249,7 @@ Do not bypass them with `--no-verify` unless the PR says why.
 
 See `docs/adr/README.md`. ADR-0001..0012 come from the thesis; the project owner accepted
 them on 2026-10-14. ADR-0013 and 0014 are accepted too; ADR-0015, ADR-0016, ADR-0017,
-ADR-0018 and ADR-0019 were accepted on 2026-10-14 too. ADR-0020 (the operator's scope on
-windows) is only **proposed**: the owner has not accepted it, and it must not be marked
-Accepted by anyone else.
+ADR-0018, ADR-0019 and ADR-0020 were accepted on 2026-10-14 too.
 Highlights: Rust runtime with independent oracles (0001), MCP over stdio with explicit
 profiles (0002), conservative spatial fusion with IoC (0003), masked open-set icon cache
 (0004), persistent tracking instead of cell hashes (0005), transactional snapshots (0006),

@@ -29,7 +29,7 @@ include_values = false
 # Parada local del operador (§8.2): mientras exista este archivo no se envía entrada nueva.
 # Vacío: sin archivo de parada; la parada local es terminar el proceso.
 stop_file = ""
-# Alcance por ventana (ADR-0020, propuesta): por aplicación permitida, las únicas clases de
+# Alcance por ventana (ADR-0020, aprobada): por aplicación permitida, las únicas clases de
 # ventana que reciben entrada real. Vacío: ninguna aplicación se restringe por clase. Ejemplo
 # para el explorador, que también es dueño del escritorio y de la barra de tareas:
 # allowed_window_classes = { "explorer.exe" = ["CabinetWClass"] }

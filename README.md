@@ -255,7 +255,7 @@ already delivered keep their reported status (a replay of their `request_id` sti
 the process (Ctrl+C) also stops it; without a `stop_file`, that is the only local stop.
 
 **Operator scope on windows** ([ADR-0020](docs/adr/0020-operator-scope-on-windows.md),
-proposed; off by default). `allowed_applications` names a process, and `explorer.exe` also
+accepted; off by default). `allowed_applications` names a process, and `explorer.exe` also
 owns the desktop and the taskbar. `[safety] allowed_window_classes = { "explorer.exe" =
 ["CabinetWClass"] }` limits an application to the window classes listed, and `[safety]
 window_pin_file` names a file, written by the operator or the harness it runs, that holds
