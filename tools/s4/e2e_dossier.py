@@ -53,6 +53,11 @@ unchanged.
                     keyboard focus inside the editor's process (``--focus-wait`` seconds, read-only).
                     Without it nothing is sent, because no element of the window can hold the focus
                     then; ``--operator-focus`` lets the operator give the window the focus by hand.
+                    At launch only, this opt-in case grants foreground rights to the started PID
+                    (AllowSetForegroundWindow) and requests activation by its main-window handle
+                    (SetForegroundWindow); Windows can refuse either. Its activation path never
+                    attaches input queues, synthesizes input or changes user settings. The two
+                    startup API outcomes are recorded separately from the actual UIA focus reads.
 
 Safety (AGENTS.md rules 6 and 7, ADR-0007, ADR-0012, ADR-0020):
 
@@ -93,6 +98,8 @@ Abort = driver.Abort
 NOT_BY_OCR = driver.NOT_BY_OCR
 s3 = driver.s3
 user32 = driver.user32
+user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
+user32.AllowSetForegroundWindow.restype = wintypes.BOOL
 
 DOSSIER_PROBE_SESSION_ID = "s4d"
 
@@ -679,6 +686,43 @@ class DossierProtocol(driver.Protocol):
     def spawn(self, argv: list[str]) -> int:
         return subprocess.Popen(argv).pid
 
+    def grant_editor_foreground(self, pid: int) -> bool:
+        """Best-effort foreground rights for the decoy process this client just started.
+        Windows can refuse if this client has no foreground rights; never grant ASFW_ANY.
+        https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-allowsetforegroundwindow
+        """
+        if (self.args.app != "decoy" or pid != self.editor_pid or pid not in self.started
+                or not 0 < pid < 0xFFFFFFFF):
+            return False
+        try:
+            return bool(user32.AllowSetForegroundWindow(pid))
+        except OSError:
+            return False
+
+    def request_editor_foreground(self, hwnd) -> bool:
+        """Documented activation only, restricted to the started decoy's main window.
+        No toolkit Focus command: winit implements that with synthetic Alt input. The
+        return value is API acceptance, never evidence of keyboard focus (UIA checks that).
+        https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-setforegroundwindow
+        """
+        if (self.args.app != "decoy" or self.editor_pid not in self.started or not hwnd
+                or driver._pid(hwnd) != self.editor_pid
+                or driver.is_helper_class(driver._class(hwnd))):
+            return False
+        try:
+            return bool(user32.SetForegroundWindow(hwnd))
+        except OSError:
+            return False
+
+    def activate(self, hwnd) -> str | None:
+        if self.args.app != "decoy":
+            return super().activate(hwnd)
+        # Reuse the driver's bounded verification, with an explicit method list so none
+        # of its legacy input-queue attachment methods can run for this case.
+        return driver.activate_window(
+            hwnd, methods=(("set_foreground", self.request_editor_foreground),),
+            foreground_now=self.front_hwnd)
+
     def title_of(self, hwnd) -> str:
         return driver.window_title(hwnd)
 
@@ -902,14 +946,24 @@ class DossierProtocol(driver.Protocol):
         pid = self.editor_pid = self.spawn([self.args.editor_exe, "--folder", str(folder),
                                             DECOY_FLAG])
         self.started.add(pid)
+        res["foreground_granted"] = self.grant_editor_foreground(pid)
         ok, requests = self.wait_foreground(pid)
         res["activation_requests"] = requests
         res.update(driver.activation_fields(self.activation))
         if not ok:
-            res["failure"] = "the editor did not reach the foreground maximized"
-            return
+            if self.args.operator_focus:
+                # A denied foreground request is not a reason to force activation. The
+                # existing operator wait only reads focus; the operator acts by hand.
+                self.wait_editor_focus(pid, res)
+                ok = self.is_front(self.front(), pid)
+            if not ok:
+                res["failure"] = "the editor did not reach the foreground maximized"
+                return
         hwnd = self.app_window(pid)
         self.app_hwnd = hwnd
+        # Even an already-foreground window may lack keyboard activation (D1). Ask once
+        # by its handle, then leave the existing UIA focus wait and guards authoritative.
+        res["startup_focus_requested"] = self.request_editor_foreground(hwnd)
         time.sleep(self.args.settle)
         snap, elements, visible = self.settle_observation(res, self.flow["initial"])
         if not visible:

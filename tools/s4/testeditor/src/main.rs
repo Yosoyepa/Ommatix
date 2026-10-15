@@ -80,8 +80,10 @@ enum Reshow {
 /// flashes its taskbar button until `Focus` raises it) has no focus window at all: UI Automation
 /// then reports the desktop as the owner of the keyboard focus and the engine, which attests the
 /// application by that element, reads no accessibility evidence from the editor (S4 ninth round,
-/// finding 10). Showing the window again activates it and gives it the focus; the egui window
-/// reports it in its viewport focus state. Safe code only: it hides and shows the window, it
+/// finding 10). Showing the window again requests activation, which Windows may refuse (D1,
+/// 2026-10-15). The decoy client now grants foreground rights at launch and requests activation
+/// by handle; UI Automation still decides whether focus arrived. Safe code only here: it
+/// hides and shows the window, it
 /// sends no input, and it stops once the window has the focus, after [`MAX_RESHOWS`] tries or
 /// after [`FOCUS_SEEK_WINDOW`].
 #[derive(Debug, Default)]
