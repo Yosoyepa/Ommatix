@@ -1,5 +1,9 @@
 # Historial documental
 
+## 1.0.61 — 2026-10-15: el responsable aprueba la ADR-0028 (borrado bajo demanda del operador) y fija nuevas decisiones
+
+No cambia código. El responsable aprueba el 15 de octubre de 2026 la [ADR-0028](../adr/0028-operator-purge-file.md): el borrado bajo demanda es obligatorio y se hace con `[safety] purge_file` (1.0.60). Decisión pendiente 2 de §6.7 resuelta. Decide además, para los cambios siguientes: umbral de RNF-06 (crecimiento del conjunto de trabajo ≤ 10 MiB/h y sin crecimiento de manejadores en el soak de 2 h), autorización de INC-07 (política adaptativa entre frame completo y regiones) y un estado de requisito propio para lo aceptado por cambio de alcance (`ACEPTADO_POR_ALCANCE`). Se actualizan la ADR, su índice (EN y ES), §6.7, el traspaso y los README.
+
 ## 1.0.60 — 2026-10-15: borrado bajo demanda del operador (`[safety] purge_file`, apagado por defecto; SEC-07, BDD-53; capítulo 08 §8.4; ADR-0028 propuesta) (rama `feat/operator-purge`)
 
 Cambia código de producción (la frontera de cada petición y la política del operador), la configuración, un escenario BDD nuevo y la documentación, y añade la ADR-0028 **propuesta**. **No cambia ningún requisito, algoritmo, contrato MCP, esquema JSON ni código de error, ni el estado de ninguna fila de `plan_pruebas.csv` o `requisitos_trazabilidad.csv`.** No borra ningún archivo, no añade herramienta MCP ni campo de contrato. Sin entrada, sin pantalla y sin ejecución en vivo: las pruebas usan dobles y archivos temporales.
