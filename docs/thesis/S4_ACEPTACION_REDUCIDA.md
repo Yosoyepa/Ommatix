@@ -124,7 +124,7 @@ Mediana / p95 (máximo), en milisegundos. Las observaciones y acciones de una co
 | E2E-02 (editor: escritura y guardado) | sin cambio | El flujo del Bloc de notas sólo abre y cierra un menú: ni escribe ni guarda |
 | E2E-03 (explorador) | sin cambio | No ejecutado |
 | PERF-02 (percepción) | `EJECUTADO_SUPERVISADO_PARCIAL` | Latencia incremental medida en vivo, en release, con pesos y hardware fijados (n = 101 observaciones con inferencia en dos aplicaciones). Sin separar frío/caliente ni caché, sin refresco completo en caliente controlado, un solo DPI |
-| PERF-01, PERF-03, EV-01, EV-02 | sin cambio | No ejecutados. Las 20 corridas no son el protocolo de EV-02 |
+| PERF-01, PERF-03, EV-01, EV-02 | sin cambio | PERF-01 y PERF-03 se midieron fuera de este protocolo ([S0_RESULTADOS.md](S0_RESULTADOS.md) §11 y §12); EV-01 y EV-02 no ejecutados. Las 20 corridas no son el protocolo de EV-02 |
 | RF-18 | sin cambio (`PENDIENTE_IMPLEMENTACION_O_VALIDACION`) | Flujos reales verificables en 2 de las 3 aplicaciones, sin escritura. La Calculadora no se pudo puntuar (§4.2) |
 | RNF-03, RNF-05 | sin cambio | RNF-03 exige el protocolo definido (19 de 20 no lo es). RNF-05, incremental: p95 de 357 y 168 ms, por encima de 150 ms |
 

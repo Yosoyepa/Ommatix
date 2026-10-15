@@ -389,3 +389,85 @@ La primera corrida, con el código de `main` (commit `a5cd1f9`, 300 muestras por
 ### 11.4 Reproducir
 
 `cargo run --release -p ommatix-acceptance --example core_latency -- --out perf01.json` (unos dos minutos de un solo hilo; con `--samples N`, `--engine-samples N` y `--warmup N`). Se niega a correr sin optimizar. Las pruebas de la propia herramienta (`perf_01_*`) corren con `cargo test`. El informe nombra la compilación, el commit y si el árbol estaba limpio; `S4_REPRODUCIBILIDAD.md` §4 da el resto de comandos.
+
+## 12. PERF-03 / RNF-06: recursos y soak de 2 h (1.0.55)
+
+**Qué mide.** `tools/perf/soak.py` durante 120 minutos, **sin entrada de ningún tipo**: la herramienta sólo llama a `observe_screen` y `get_engine_metrics`, no toma ninguna observación mientras la aplicación de prueba no está en primer plano y no llama a `execute_action`. Se mide `ommatix serve --source dxgi` con la configuración del operador `ommatix.rnf05.directml.toml` (detector en float16 sobre DirectML, la de RNF-05, §10), que observa la aplicación de prueba propia (`tools/s4/testapp` con `--animate 100 --animate-labels 2`: dos etiquetas que cambian cada 100 ms, para que haya regiones que re-analizar). Una muestra cada 5 s. El ajuste de crecimiento deja fuera los primeros 10 minutos; las tablas de latencia los incluyen.
+
+**Sin umbral.** RNF-06 pide «sin crecimiento sostenido» y no fija cifra, y el responsable no fijó ninguna antes de medir. Esta sección da las pendientes y los máximos medidos. No declara que haya ni que no haya crecimiento sostenido: esa lectura es del responsable, con el umbral que fije. Un resultado negativo no se reemplaza por un umbral retrospectivo ([`09_EVALUACION_EXPERIMENTAL.md`](09_EVALUACION_EXPERIMENTAL.md) §9.7).
+
+**Condiciones [V].**
+
+| Condición | Valor |
+|---|---|
+| Commit medido | `fe35d80e292625666fb35c8f45c9acc3026a84b8` (`origin/main` entonces), árbol limpio. `main` avanzó después hasta `f749108`; no se volvió a medir |
+| `ommatix.exe` (SHA-256) | `809b4305ef71bb65feb8e20e537dba6662cd44eb486c4852c5052fa17b800801` (`--release --locked -p ommatix --features dxgi,directml,winrt-ocr,uia`) |
+| `ommatix-testapp.exe` (SHA-256) | `5050596d46bc300fdc9c31d6835af00d470dd5fb9ca12b464d1e66edec29a942` (`tools/s4/testapp`, `--release --locked`) |
+| Compilación | Incremental, sobre directorios `target` ya poblados por compilaciones anteriores |
+| Configuración del operador (SHA-256) | `94af2154c74ba93da7500c3c8273ea05654be2b0ee9293e42d560375fecd5298`. Manifiesto `models\manifest.rnf05.json`: `f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47`, el fijado. `tools/repro/environment.py` no halló ningún `mismatch` |
+| Entrada posible | Ninguna: `[engine] mode = "dry_run"`, `[safety] actuation_enabled = false` y `allowed_applications = []`. La comprobación de `soak.py` no halló ningún problema |
+| Equipo | AMD Ryzen 7 5700X (8 núcleos, 16 hilos), 31,9 GiB; AMD Radeon RX 6700 XT (driver 32.0.21045.5002); Windows 11 Pro, build 26300.9550 |
+| Plan de energía | «Alto rendimiento»; suspensión y apagado de pantalla en corriente alterna: nunca |
+| Escala | 100 % (`AppliedDPI` 96) |
+| Monitores | Dos conectados. Se captura la salida 0, la principal (1920×1080, origen 0,0); la otra (1920×1080, origen 1920,-137) no se captura |
+| Notificaciones | **No desactivadas.** La clave del interruptor no figura en el registro, así que vale el valor por defecto (activadas). No se cambió |
+| Protector de pantalla | Activo sin programa asignado (`SCRNSAVE.EXE` vacío): no arranca |
+| Carga de otras sesiones | No se muestreó durante la corrida. Al comenzar: CPU total del 42 %, sin `rustc` ni `cargo` en marcha, y 44 procesos `python.exe` de otros proyectos del mismo equipo. Al terminar: CPU total del 7 %, sin `rustc` ni `cargo`, y 44 procesos `python.exe` de otros proyectos todavía activos |
+| Ensayo previo | Un minuto con `--interval 2`: completado, 30 de 30 observaciones, sin pérdidas |
+| Inicio y fin (hora local) | 02:27:56 y 04:27:59 |
+| Terminación (`ended`) | `completed` |
+| Observaciones | 1440 ticks de 5 s; 1440 observados; 0 pérdidas de primer plano; 0 errores de observación; 0 latencias descartadas |
+| Acciones | Ninguna llegó al sistema: `delivered_actions` máximo 0; `rejected_actions` 0 |
+
+**Recursos [V].** Del proceso `ommatix.exe` (el motor), tras los primeros 10 minutos (n = 1320 muestras). La pendiente por hora es de mínimos cuadrados sobre esas muestras; las medianas son del primer y del último décimo:
+
+| Recurso | Mínimo | Máximo | Mediana, primer décimo | Mediana, último décimo | Pendiente por hora |
+|---|---|---|---|---|---|
+| Conjunto de trabajo (MiB) | 289,6 | 294,0 | 290,3 | 292,9 | +1,6 |
+| Bytes privados (MiB) | 1457,4 | 1461,9 | 1458,8 | 1460,9 | +1,6 |
+| Manejadores | 947 | 947 | 947 | 947 | 0 |
+| Memoria dedicada de GPU (MiB) | 1203,1 | 1203,1 | 1203,1 | 1203,1 | 0 |
+
+- El salto inicial ocurre entre el instante anterior a la primera observación (246 manejadores, 291,8 MiB privados, 2,4 MiB de GPU) y el quinto segundo (950 manejadores, 1452,5 MiB privados, 1203,1 MiB de GPU). Queda fuera del ajuste.
+- La memoria de GPU es la memoria dedicada que los contadores de rendimiento de Windows asignan a `ommatix.exe` (`GPU Process Memory`), no el total del adaptador. Estuvo disponible (`gpu_counter.available = true`).
+
+**Cola y acciones [V].** `pending_regions` fue 0 en las 1440 muestras. La cola del motor cuenta las componentes conexas de `pending_dirty` (`src/application/src/engine.rs`). Ese conjunto sólo recibe regiones cuando una observación **falla** (`record_failure`, `src/application/src/engine/observe.rs`) y se vacía en cada *commit* (`src/domain/src/snapshot.rs`). Con observaciones correctas la cola vale cero por construcción: esta corrida no ejercita un retraso de cambios pendientes, sólo confirma que ninguna observación falló. La época del snapshot fue 1 en todas las muestras y ninguna observación salió degradada.
+
+**Latencia por ventanas de 10 minutos [V].** Milisegundos, p50 / p95 / p99 / máximo. «Motor» es el total que el motor informa en `_meta`; «ida y vuelta» es lo que mide el cliente en `observe_screen`, e incluye el transporte MCP.
+
+| Ventana (min) | n | Motor: p50 / p95 / p99 / máx | Ida y vuelta: p50 / p95 / p99 / máx |
+|---|---|---|---|
+| 0–10 | 120 | 143,9 / 262,4 / 1146,7 / 6217,5 | 144,7 / 297,6 / 1147,5 / 6218,4 |
+| 10–20 | 120 | 142,5 / 151,3 / 156,8 / 169,9 | 143,2 / 152,0 / 157,4 / 170,6 |
+| 20–30 | 120 | 143,0 / 150,8 / 152,2 / 153,0 | 143,7 / 151,5 / 152,8 / 153,7 |
+| 30–40 | 120 | 142,9 / 150,0 / 155,2 / 160,7 | 143,6 / 150,7 / 156,0 / 161,3 |
+| 40–50 | 120 | 143,0 / 149,7 / 152,2 / 156,1 | 143,7 / 150,4 / 152,9 / 156,9 |
+| 50–60 | 120 | 142,0 / 149,1 / 152,5 / 153,4 | 142,7 / 149,7 / 153,2 / 154,1 |
+| 60–70 | 120 | 142,0 / 148,0 / 151,9 / 152,8 | 142,7 / 148,6 / 152,5 / 153,3 |
+| 70–80 | 120 | 142,2 / 148,5 / 154,7 / 159,9 | 142,8 / 149,2 / 155,4 / 160,6 |
+| 80–90 | 120 | 142,1 / 149,3 / 152,7 / 155,8 | 142,8 / 150,0 / 153,3 / 156,5 |
+| 90–100 | 120 | 143,2 / 155,9 / 213,1 / 214,0 | 143,9 / 156,9 / 213,9 / 215,2 |
+| 100–110 | 120 | 142,7 / 150,0 / 152,0 / 154,3 | 143,4 / 150,6 / 152,8 / 155,0 |
+| 110–120 | 120 | 141,8 / 150,7 / 153,6 / 156,5 | 142,5 / 151,4 / 154,3 / 157,2 |
+| **Global** | 1440 | 142,6 / 151,8 / 193,7 / 6217,5 | 143,3 / 152,5 / 195,5 / 6218,4 |
+| **A partir del minuto 10** | 1320 | 142,5 / 150,8 / 155,8 / 214,0 | 143,2 / 151,5 / 156,5 / 215,2 |
+
+- La primera llamada tardó 1050,5 ms de ida y vuelta y 103,2 ms de total del motor. El informe no desglosa la diferencia (unos 950 ms).
+- Los primeros 10 minutos tienen una cola: 11 observaciones con más de 200 ms de total del motor, de las que 9 pasan de 250 ms, todas entre los segundos 60 y 152. La mayor, de 6217,5 ms, es del segundo 145. Después del segundo 152 ninguna supera 250 ms. El informe no guarda desglose por etapas y no se muestreó la carga del equipo, así que **la causa no está determinada**.
+- Hay dos observaciones de unos 214 ms en la ventana de 90 a 100 minutos, sin causa identificada.
+
+**Lectura.**
+- La corrida terminó como `completed`: 120 minutos, 1440 de 1440 observaciones, sin pérdidas de primer plano ni errores. Cumple el protocolo de la sesión B ([`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md) §B) y no es una corrida truncada.
+- **Memoria.** Después de los primeros 10 minutos, los bytes privados del motor estuvieron entre 1457,4 y 1461,9 MiB, un intervalo de 4,5 MiB. La pendiente medida es de +1,6 MiB/h sobre 1 h 50 min de muestras, y el conjunto de trabajo tiene la misma pendiente. Los manejadores y la GPU no cambiaron. No hay umbral, así que esta sección no dice si la pendiente es «crecimiento sostenido».
+- **Cola.** Cero en todas las muestras, por la razón de arriba. RNF-06 pide una cola acotada: esta corrida la cumple sin observaciones fallidas, y no dice cómo se comporta la cola cuando una observación falla.
+- **Latencia.** A partir del minuto 10, el total del motor tiene p50 de 142,5 ms, p95 de 150,8 ms y p99 de 155,8 ms, y las medianas de las ventanas se mantienen entre 141,8 y 143,2 ms. Esta medición no es la de RNF-05 (§10) y no cambia el estado de RNF-05.
+- **Alcance.** La memoria es la del proceso `ommatix.exe`, no la de todo el sistema ni la de la aplicación de prueba.
+
+**Qué queda abierto.**
+1. **Umbral de RNF-06.** Lo fija el responsable antes de leer la pendiente con él. Sin umbral, RNF-06 no tiene veredicto y su estado no cambia (`PENDIENTE_IMPLEMENTACION_O_VALIDACION`).
+2. **Una sola corrida.** No hay variación entre corridas ni entre días; otra corrida la daría.
+3. **Cola con fallos.** Esta corrida no inyecta fallos de observación. Medir la cola cuando una observación falla necesita un escenario propio.
+4. **Causa de la cola de latencia** de los primeros 10 minutos y de las dos observaciones de 214 ms. Una corrida con las etapas de `_meta` y la carga del equipo muestreada durante la corrida la cerraría.
+5. **Condiciones que no coinciden con la sesión B:** dos monitores conectados (la sesión pide uno; sólo se captura el principal) y notificaciones activadas. Se dejaron como estaban; los números las incluyen.
+
+**Reproducir.** Desde la raíz del repositorio, con los dos ejecutables compilados (`S4_INSTALACION_Y_REVERSION.md` §3): `python tools/perf/soak.py --config %LOCALAPPDATA%\Ommatix\ommatix.rnf05.directml.toml --minutes 120 --out soak-120.json`. El informe bruto se guarda fuera del repositorio, con el commit y la máquina; no lleva datos de pantalla (ADR-0012). Las pruebas de la herramienta, sobre dobles: `python -m unittest discover -s tools/perf -p "test_*.py"`.
