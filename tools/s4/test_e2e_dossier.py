@@ -1656,6 +1656,14 @@ class FakeDecoyDesk(dossier.DossierProtocol):
     def wait_foreground(self, pid):
         return True, 0
 
+    def grant_editor_foreground(self, pid):
+        assert pid == self.editor_pid and pid in self.started
+        return True
+
+    def request_editor_foreground(self, hwnd):
+        assert hwnd == 77 and self.editor_pid in self.started
+        return True
+
     def app_window(self, pid):
         return 77
 
@@ -1681,6 +1689,102 @@ class FakeDecoyDesk(dossier.DossierProtocol):
 class DecoyRunTest(QuietTest):
     def desk(self, **kwargs):
         return FakeDecoyDesk(self.tmp, self.temp_root, **kwargs)
+
+    def test_startup_grants_only_the_started_editor_pid(self):
+        desk = self.desk()
+        desk.started.add(5151)
+        desk.editor_pid = 5151
+        with mock.patch.object(dossier.user32, "AllowSetForegroundWindow", create=True,
+                               return_value=1) as grant:
+            self.assertTrue(dossier.DossierProtocol.grant_editor_foreground(desk, 5151))
+            self.assertFalse(dossier.DossierProtocol.grant_editor_foreground(desk, 9999))
+            self.assertFalse(dossier.DossierProtocol.grant_editor_foreground(desk, -1))
+        grant.assert_called_once_with(5151)
+
+    def test_startup_foreground_request_uses_no_input_queue_attachment(self):
+        desk = self.desk()
+        desk.started.add(5151)
+        desk.editor_pid = 5151
+        with mock.patch.object(dossier.driver, "_pid", return_value=5151), \
+             mock.patch.object(dossier.driver, "_class", return_value="winit window"), \
+             mock.patch.object(dossier.user32, "SetForegroundWindow", return_value=1) as request, \
+             mock.patch.object(dossier.user32, "AttachThreadInput",
+                               side_effect=AssertionError("input queues must stay separate")):
+            self.assertTrue(dossier.DossierProtocol.request_editor_foreground(desk, 77))
+        request.assert_called_once_with(77)
+
+    def test_startup_never_requests_another_process_or_a_helper_window(self):
+        desk = self.desk()
+        desk.started.add(5151)
+        desk.editor_pid = 5151
+        with mock.patch.object(dossier.user32, "SetForegroundWindow") as request:
+            for owner, cls in ((9999, "winit window"), (5151, "Winit Thread Event Target")):
+                with mock.patch.object(dossier.driver, "_pid", return_value=owner), \
+                     mock.patch.object(dossier.driver, "_class", return_value=cls):
+                    self.assertFalse(dossier.DossierProtocol.request_editor_foreground(desk, 77))
+            desk.started.clear()
+            self.assertFalse(dossier.DossierProtocol.request_editor_foreground(desk, 77))
+        request.assert_not_called()
+
+    def test_startup_activation_never_uses_the_drivers_attachment_methods(self):
+        desk = self.desk()
+        with mock.patch.object(desk, "front_hwnd", side_effect=[12, 12, 77]), \
+             mock.patch.object(desk, "request_editor_foreground", return_value=True) as request, \
+             mock.patch.object(dossier.user32, "AttachThreadInput",
+                               side_effect=AssertionError("input queues must stay separate")):
+            self.assertEqual(desk.activate(77), "set_foreground")
+        request.assert_called_once_with(77)
+
+    def test_startup_requests_are_opt_in_for_the_decoy(self):
+        desk = self.desk()
+        desk.args.app = "editor"
+        desk.started.add(5151)
+        desk.editor_pid = 5151
+        with mock.patch.object(dossier.user32, "AllowSetForegroundWindow") as grant, \
+             mock.patch.object(dossier.user32, "SetForegroundWindow") as request:
+            self.assertFalse(dossier.DossierProtocol.grant_editor_foreground(desk, 5151))
+            self.assertFalse(dossier.DossierProtocol.request_editor_foreground(desk, 77))
+        grant.assert_not_called()
+        request.assert_not_called()
+
+    def test_startup_denied_rights_do_not_replace_the_real_focus_check(self):
+        desk = self.desk()
+        desk.focus = "outside"
+        with mock.patch.object(desk, "grant_editor_foreground", return_value=False), \
+             mock.patch.object(desk, "request_editor_foreground", return_value=True):
+            res = desk.run_once(1)
+        self.assertFalse(res["foreground_granted"])
+        self.assertTrue(res["startup_focus_requested"])
+        self.assertFalse(res["success"])
+        self.assertEqual(desk.actions, [], "API acceptance is not keyboard focus")
+
+    def test_startup_foreground_denial_keeps_the_operator_focus_fallback(self):
+        for arrives in (False, True):
+            with self.subTest(arrives=arrives):
+                desk = self.desk()
+                desk.args.operator_focus = True
+                with mock.patch.object(desk, "wait_foreground", return_value=(False, 1)), \
+                     mock.patch.object(desk, "wait_editor_focus", return_value=desk.focus_runtime()) as wait, \
+                     mock.patch.object(desk, "front", return_value={}), \
+                     mock.patch.object(desk, "is_front", return_value=arrives):
+                    res = desk.run_once(1)
+                self.assertGreaterEqual(wait.call_count, 1)
+                self.assertEqual(res["success"], arrives)
+                if not arrives:
+                    self.assertEqual(desk.actions, [])
+
+    def test_startup_os_denials_and_errors_are_best_effort(self):
+        desk = self.desk()
+        desk.started.add(5151)
+        desk.editor_pid = 5151
+        for result in (0, OSError("denied")):
+            kwargs = {"side_effect": result} if isinstance(result, OSError) else {"return_value": result}
+            with mock.patch.object(dossier.user32, "AllowSetForegroundWindow", **kwargs), \
+                 mock.patch.object(dossier.user32, "SetForegroundWindow", **kwargs), \
+                 mock.patch.object(dossier.driver, "_pid", return_value=5151), \
+                 mock.patch.object(dossier.driver, "_class", return_value="winit window"):
+                self.assertFalse(dossier.DossierProtocol.grant_editor_foreground(desk, 5151))
+                self.assertFalse(dossier.DossierProtocol.request_editor_foreground(desk, 77))
 
     def test_the_decoy_run_passes_when_no_key_is_sent_and_the_focus_is_on_the_target(self):
         desk = self.desk()
