@@ -68,7 +68,7 @@ SEC-04,Exfiltración,Sin screenshots ni secretos por defecto,NO_EJECUTADO,IMPLEM
 SEC-05,Precheck de acción,Foco/ventana/frescura y carreras,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
 SEC-06,Modelo/caché,"Hashes, licencia, corrupción y cache poisoning",NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S4
 E2E-01,Formulario local,Valores dummy y confirmación observable,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
-E2E-02,Editor,Escritura y guardado de archivo temporal,NO_EJECUTADO,PENDIENTE_PRODUCTO
+E2E-02,Editor,Escritura y guardado de archivo temporal,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
 E2E-03,Explorador,Navegar carpetas de prueba sin destrucción,NO_EJECUTADO,PENDIENTE_PRODUCTO
 S4R-02,Calculadora (protocolo reducido),"Calculadora de Windows: 7 + 8 = 15 y borrar, sólo clics; no es E2E-02",NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
 S4R-03,Bloc de notas (protocolo reducido),"Bloc de notas: abrir y cerrar «Editar», sólo clics; no es E2E-03",NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL

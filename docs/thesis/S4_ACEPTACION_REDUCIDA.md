@@ -1902,3 +1902,102 @@ Orden: verificación previa; construcción de motor y editor; comprobación de l
 ### Estado
 
 Hallazgos 7 y 8: abiertos, decisión del responsable; ninguno está confirmado por una corrida completa. Hallazgo 11: cerrado. Cuaderno: 494. Las matrices no cambian, y ninguna casilla de la Definition of Done cambia.
+
+## Décima ronda (serie): diez corridas puntuadas de E2E-02 sin falsos éxitos; E2E-03 no se ejecutó
+
+**Fecha:** 14 de octubre de 2026. Rama `docs/s4-tenth-round-series`, desde `main` en `3f5fa0f` (fusión de #28). **No cambia código.** Ejecuta la serie puntuada de E2E-02 (editor propio), que la continuación dejó pendiente tras el piloto que el responsable dio por superado. **E2E-03 no se ejecutó:** el responsable mantiene su parada hasta que se implemente la nueva regla de anclaje, y no se hizo ninguna invocación del Explorador, ni siquiera un sondeo. Cupo de 200 desde `--round-start 429`, `--operator-activation` apagado y el responsable sin usar el equipo. Regla de seguridad sin cambios: un clic anclado en un control incorrecto, un falso éxito del motor o una entrada fuera del flujo o de la ventana permitida detienen todo el trabajo en vivo. **Ninguna de esas condiciones se dio.**
+
+Resultado:
+
+- **E2E-02 (editor propio): diez de diez corridas puntuadas, cero falsos éxitos.** Corridas 2 a 11. Las veinte acciones entregadas fueron `effect_observed`, y las veinte comprobaciones del sistema pasaron (carpeta y título antes y después de «Guardar», y `nota.txt` con los bytes escritos). Hubo una negativa, `STALE_SNAPSHOT` en el primer `type` de la corrida 2, antes de entregar ninguna tecla; el reintento se entregó y se verificó. Con la regla del responsable (diez de diez y cero falsos éxitos), la matriz pasa E2E-02 a `EJECUTADO_SUPERVISADO_PARCIAL`, el mismo estado que S4R-02 y S4R-03.
+- **E2E-03 (Explorador): no ejecutado.** Ninguna invocación, ningún sondeo y ninguna ventana.
+- **Cuaderno:** 494 → 515, es decir, veintiuna solicitudes reales (86 de 200 de la ronda; 114 disponibles).
+
+### 1. Verificación previa a la entrada en vivo
+
+- Motor y editor **sin recompilar**. `main` pasó de `0cb126f` a `3f5fa0f` sólo con documentación (seis archivos, `git diff --stat`), así que los binarios de la continuación siguen siendo los de `main`. Comprobados antes de cada invocación:
+  - Motor, `target/release/ommatix.exe`: **`a137ccd15cd7b3974d394c5f2f097d0909eb8d02589431e005c857afbae7d548`**.
+  - Editor, `tools/s4/testeditor/target/release/ommatix-testeditor.exe`: **`f358b3a991754fc95eaabf3c5552318559643f915fbc2ceb9ee040e91f911d20`**.
+- Clientes sin cambio, comprobados antes de cada invocación: `tools/s4/e2e_driver.py` `143ea45464274936e5b5eca06ade8279117d3c33cbc0b13257b74753341aee3d`; `tools/s4/e2e_dossier.py` `85111edbe1b7acc113f71e88d48ba41d6c1fe485b5571f9b0c827d53d7f316df`.
+- Configuración sin cambio: `s4r10-live.toml` `0428daf861e1567e1be9eb8588887fd56f370beef863099904cd9bd3ce5ec1e2`. Artefactos fijados sin cambio: manifiesto `f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47`; ONNX Runtime `e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40`; DirectML `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`.
+- Comprobaciones de código, todas con código de salida 0: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia --all-targets -- -D warnings`; `cargo test --workspace` (447 pasadas, 0 fallidas, 1 ignorada); `python -m unittest discover -s tools/s4 -p "test_*.py"` (258 correctas); editor: `cargo clippy -- -D warnings` y `cargo test` (24 pasadas); desde `docs/thesis`: `referencia_ejecutable/run_tests.py` (48 de 48) y `validar_paquete.py` (449 comprobaciones, 0 fallidas). Los cuatro archivos de `referencia_ejecutable/resultados/` que cambiaron sólo en fecha, plataforma, duración o fin de línea se restauraron con `git restore`.
+- Comprobador de sólo lectura antes de cada invocación (fuera del repositorio, sin entrada) y compuerta entre invocaciones (`e2e10c_gate.py`, también fuera del repositorio). **Única excepción aceptada:** las dos ventanas `CabinetWClass` minimizadas y fuera de pantalla (−32000, −32000; 160 × 28) del proceso del shell (PID 36160), que ya estaban en la continuación (hallazgo 9). Un listado de sólo lectura, sin títulos, confirmó antes de la serie que siguen así y que la ventana oculta de base también.
+
+### 2. Invocaciones en vivo: diez, una por corrida
+
+Cada corrida tuvo su invocación: `e2e_dossier.py --app editor --mode run --runs 1 --first-run n --max-live M --round-start 429 --session-id s4d-e2e02-scored`, con `s4r10-live.toml`, rutas absolutas, el editor de la continuación (mismo SHA-256) en `--editor-exe` y el cuaderno en `--ledger`. Cada una fue precedida del comprobador y de la compuerta. `--max-live` recibió lo que quedaba del cupo de la serie (40): 40, 37, 35, 33, 31, 29, 27, 25, 23 y 21.
+
+**Por qué una invocación por corrida.** El cliente no detiene el protocolo ante un clic anclado en otro control ni ante un falso éxito: marca esa corrida como fallida y empieza la siguiente; sólo tres corridas fallidas seguidas crean `stop.flag`. Una invocación de diez corridas habría seguido enviando entradas tras un evento de seguridad, y una invocación en curso no puede detenerse sin matarla. Con una invocación por corrida, la compuerta aplica la regla del responsable antes de cada corrida (hallazgo 13 de la [revisión](../reviews/2026-10-14-s4-tenth-round.md)). Ninguna corrida falló, así que la compuerta nunca pausó la serie.
+
+### 3. Resultados
+
+#### 3.1 Corridas puntuadas (2 a 11)
+
+| Corrida | Éxito | Entregadas | `type` | Efecto observado | Rechazadas (`STALE_SNAPSHOT`) | Comprobaciones del sistema | Falsos éxitos | Anclaje incorrecto | `nota.txt` | Cuaderno | Activación |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2 | sí | 2 | 1 | 2 | 1 (1) | 2 de 2 | 0 | 0 | ok | 494 → 497 | `attach_show_top` |
+| 3 | sí | 2 | 1 | 2 | 0 | 2 de 2 | 0 | 0 | ok | 497 → 499 | `already_foreground` |
+| 4 | sí | 2 | 1 | 2 | 0 | 2 de 2 | 0 | 0 | ok | 499 → 501 | `already_foreground` |
+| 5 | sí | 2 | 1 | 2 | 0 | 2 de 2 | 0 | 0 | ok | 501 → 503 | sin petición |
+| 6 | sí | 2 | 1 | 2 | 0 | 2 de 2 | 0 | 0 | ok | 503 → 505 | `already_foreground` |
+| 7 | sí | 2 | 1 | 2 | 0 | 2 de 2 | 0 | 0 | ok | 505 → 507 | `already_foreground` |
+| 8 | sí | 2 | 1 | 2 | 0 | 2 de 2 | 0 | 0 | ok | 507 → 509 | `already_foreground` |
+| 9 | sí | 2 | 1 | 2 | 0 | 2 de 2 | 0 | 0 | ok | 509 → 511 | sin petición |
+| 10 | sí | 2 | 1 | 2 | 0 | 2 de 2 | 0 | 0 | ok | 511 → 513 | `already_foreground` |
+| 11 | sí | 2 | 1 | 2 | 0 | 2 de 2 | 0 | 0 | ok | 513 → 515 | `already_foreground` |
+
+#### 3.2 Totales y seguridad
+
+- **Corridas:** 10; exitosas según el cliente: 10.
+- **Acciones:** 21 solicitadas, 20 entregadas (10 `type` y 10 «Guardar»), 20 `effect_observed`, 0 `indeterminate`, 1 rechazada (`STALE_SNAPSHOT`, corrida 2, antes de cualquier entrada; `rtt` 7 ms), 1 reintento.
+- **Comprobaciones del sistema:** 20 de 20, dos por corrida.
+- **Falsos éxitos según el cliente:** 0. **Clics anclados en un control incorrecto:** 0. Identidad `ok` en todas las acciones: «Editor de texto» como `Edit` (`input`) y «Guardar» como `Button`, ambos con un único candidato. Descenso por isla XAML: no hizo falta.
+- **`POLICY_DENIED`:** 0. **Abortos:** 0. **Paradas del cliente:** 0. `stop.flag` nunca se creó.
+- **Entradas:** en cada corrida, la escritura de «prueba 123» en el campo del editor propio y un clic en «Guardar». Los registros no muestran ninguna acción sobre otra ventana.
+- **Capturas y texto de pantalla:** ninguno guardado. La limpieza de cada corrida borró un archivo y un directorio, y no dejó nada.
+
+#### 3.3 Latencias (`_meta`, acciones entregadas, una sesión de diez corridas)
+
+- Todas las entregadas (n = 20): `action_total` mediana 71,1 ms, p95 112,7 ms; `rtt` mediana 71,3 ms, p95 113,0 ms.
+- `type` (n = 10): `rtt` mediana 78,5 ms, p95 116,4 ms. «Guardar» (n = 10): `rtt` mediana 71,3 ms, p95 79,6 ms.
+- Con diez valores por tipo, el p95 es el máximo. Son acciones aisladas de una sesión: no son mediciones de RNF-05 (S0 §10).
+
+#### 3.4 Activación y escritorio
+
+- Activación: en la corrida 2 hizo falta una petición (`attach_show_top`); en las corridas 3, 4, 6, 7, 8, 10 y 11 el editor ya estaba en primer plano (`already_foreground`); en las corridas 5 y 9 no hizo falta ninguna petición. Sin diagnóstico de activación y sin espera del operador.
+- `user_idle_s_at_start` cuenta también la entrada de los propios clientes, así que no muestra si el responsable estaba en el equipo (como en la décima ronda).
+
+### 4. Escritorio final, `stop.flag`, `window.pin` y cuaderno
+
+- Tras la última invocación (comprobador de sólo lectura, sin entrada): ningún proceso de prueba (`ommatix.exe`, `calc.exe`, `CalculatorApp`, `ommatix-testeditor.exe`, `ommatix-testapp.exe`); carpeta temporal del cliente vacía; `window.pin` ausente; `stop.flag` ausente; cuaderno 515.
+- Bloc de notas del responsable: PID 23164 con sus dos ventanas minimizadas; PID 8960 sin ventana. Sin cambio.
+- Shell (`explorer.exe`, PID 36160): una ventana `CabinetWClass` oculta (la base) y las dos minimizadas fuera de pantalla del hallazgo 9. Sin cambio.
+
+### 5. Decisiones que tomé y el responsable no fijó
+
+1. **Diez invocaciones de una corrida** en lugar de una de diez, con los mismos argumentos salvo `--first-run` y `--max-live` (sección 2). El cupo de la serie (40) se repartió como se indica allí.
+2. **La compuerta** pausa la serie ante cualquier corrida fallida sin evento de seguridad, y detiene todo ante un evento de seguridad, un rechazo de política o un aborto. Aplica por sí misma la regla de tres corridas fallidas seguidas. No hizo falta ninguna de las dos.
+3. **Matriz:** E2E-02 pasa a `EJECUTADO_SUPERVISADO_PARCIAL` por la regla del responsable. Si el responsable prefiere otro estado, es un cambio de una línea en el PR.
+4. **Piloto:** el piloto de la continuación cuenta como superado por la decisión del responsable, y no se repitió. La serie son las corridas 2 a 11.
+5. **Configuración:** `s4r10-live.toml` permite también `calculatorapp.exe`, como en la décima ronda. El editor nunca recibió entrada en otra aplicación (ninguna comprobación halló la Calculadora en ejecución), pero una configuración sólo con el editor sería más estricta; el cliente no la exige.
+
+### 6. Matriz
+
+- `docs/thesis/matrices/plan_pruebas.csv`: E2E-02, `estado_aceptacion_producto` `PENDIENTE_PRODUCTO` → `EJECUTADO_SUPERVISADO_PARCIAL`. E2E-03, S4R-02 y S4R-03 sin cambio. Archivo UTF-8 con BOM y fin de línea LF, comprobado byte a byte.
+- Ninguna casilla de la Definition of Done cambia, y esta sección no cierra RF-18, RNF-03 ni RNF-05.
+
+### 7. Qué decide el responsable
+
+1. La matriz: aprobar el paso de E2E-02 a `EJECUTADO_SUPERVISADO_PARCIAL` en este PR.
+2. Si una serie puede ser una invocación de varias corridas: hace falta un cambio del cliente que detenga el protocolo ante un evento de seguridad (hallazgo 13), con una prueba que falle sin él, un hash nuevo y una ronda aparte. Mientras tanto, una invocación por corrida con compuerta.
+3. E2E-03: la nueva regla de anclaje (en curso) y después una ronda propia. El hallazgo 8 sigue abierto.
+4. Las dos ventanas minimizadas del shell (hallazgo 9): de quién son.
+5. El cupo: quedan 114 con `--round-start 429`, o una ronda nueva puede empezar en 515.
+
+### 8. Ejecución
+
+Orden: verificación previa (sección 1); diez invocaciones, cada una precedida del comprobador y de la compuerta (sección 2); comprobador final y resumen de los registros. Los registros y los JSONL están en la carpeta de ejecuciones, fuera del repositorio; contienen estados, códigos, contadores, tiempos, tipos de control, identificadores de automatización y las etiquetas fijas del protocolo, pero ninguna captura ni texto de pantalla.
+
+### Estado
+
+E2E-02: diez de diez corridas puntuadas, cero falsos éxitos; la matriz lo registra como `EJECUTADO_SUPERVISADO_PARCIAL`, sujeto a la aprobación del responsable en el PR. E2E-03: sin ejecutar, detenido. Hallazgo 7: cerrado por decisión del responsable (un rechazo previo a cualquier entrada no cuenta como piloto no superado). Hallazgos 8 y 9: abiertos. Hallazgo 13 (nuevo, cliente): abierto, decisión del responsable. Cuaderno: 515. Ninguna casilla de la Definition of Done cambia.

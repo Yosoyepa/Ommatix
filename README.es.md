@@ -173,6 +173,8 @@ Los bloqueos de la décima ronda se corrigieron después sin ejecución en vivo 
 
 La continuación de la décima ronda ([CHANGELOG 1.0.40](docs/thesis/CHANGELOG.md)) envió 4 solicitudes reales (cuaderno 490 → 494, cupo de 200). El piloto de E2E-02 no pasó: el primer `type` fue rechazado como obsoleto antes de entregar ninguna tecla; después se entregó y se verificó, pero el criterio del piloto no admite ningún rechazo de ese tipo, así que la serie no se ejecutó. La compuerta del sondeo de E2E-03 se cumplió. El primer clic del piloto se entregó y la comprobación de la carpeta pasó, pero la comprobación de anclaje posterior halló bajo el cursor un hijo de texto de la miga, no la miga, y la regla del responsable lo trata como un clic sobre un control incorrecto: ahí se detuvo todo el trabajo en vivo. No cambió ningún código; las decisiones son del responsable.
 
+La serie puntuada de E2E-02 ([CHANGELOG 1.0.41](docs/thesis/CHANGELOG.md)) ejecutó después diez corridas puntuadas en el editor de prueba. Las diez tuvieron éxito, con 20 de 20 comprobaciones del sistema pasadas y ningún falso éxito; el cambio de la matriz que registra E2E-02 como `EJECUTADO_SUPERVISADO_PARCIAL`, el estado de los flujos reducidos de la Calculadora y del Bloc de notas, está en el PR para la aprobación del responsable. Envió 21 solicitudes reales (cuaderno 494 → 515, cupo de 200). Cada corrida tuvo su invocación, así que la regla de seguridad del responsable pudo detener la serie entre corridas: el cliente, por sí mismo, no detiene una invocación de varias corridas ante un clic sobre un control incorrecto (hallazgo para el responsable). E2E-03 no se ejecutó.
+
 ## Hoja de ruta
 
 Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
