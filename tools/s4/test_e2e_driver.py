@@ -377,7 +377,9 @@ class FakeCalculator(driver.Protocol):
     """A Protocol on a fake Calculator: no server, no windows, no UI Automation, no input. It
     records the clicks the engine's gate would have delivered."""
 
-    def __init__(self, tmp, mode="other", std_count=1, pane_opens=True, max_live=4):
+    def __init__(self, tmp, mode="other", std_count=1, pane_opens=True, max_live=4,
+                 std_name="Estándar", std_aid="Standard", std_type="ListItem", uia_std=None,
+                 pane_delay=0):
         self.args = SimpleNamespace(app="calculator", max_live=max_live, settle=0.0,
                                     results=tmp / "results.jsonl", debug_grounding=False,
                                     restart="each", mode="run")
@@ -394,7 +396,12 @@ class FakeCalculator(driver.Protocol):
         self.placements = 0
         self.flow = driver.calculator_flow()
         self.mode = mode
-        self.std_count = std_count
+        self.std_count = std_count  # the engine's elements named like the item
+        self.uia_std = std_count if uia_std is None else uia_std  # the items UI Automation sees
+        self.std_name, self.std_aid, self.std_type = std_name, std_aid, std_type
+        self.pane_delay = pane_delay  # item reads that find nothing after the pane opened
+        self.pane_reads = 0
+        self.now = 0.0  # a virtual clock: pause() advances it, nothing really sleeps
         self.pane_opens = pane_opens
         self.pane_open = False
         self.clicks = []  # the labels clicked, in order
@@ -410,9 +417,26 @@ class FakeCalculator(driver.Protocol):
         nav = "Cerrar navegación" if self.pane_open else "Abrir navegación"
         found = [control(nav, "button", "nav", "42.1", "TogglePaneButton", "Button")]
         if self.pane_open:
-            found += [control("Estándar", "unknown", f"std{i}", f"42.7.{i}", "Std", "ListItem")
-                      for i in range(self.std_count)]
+            found += [control(self.std_name, "unknown", f"std{i}", f"42.7.{i}", self.std_aid,
+                              self.std_type) for i in range(self.std_count)]
         return found
+
+    def mono(self):
+        return self.now
+
+    def pause(self, seconds):
+        self.now += seconds
+
+    def standard_item_rows(self, hwnd):
+        """What the item read of the pane returns (UI Automation, read-only)."""
+        self.pane_reads += 1
+        if self.unreadable:
+            return None
+        if not self.pane_open or self.pane_reads <= self.pane_delay:
+            return []
+        return [{"runtime_id": f"42.7.{i}", "automation_id": self.std_aid,
+                 "control_type": self.std_type, "offscreen": False, "name": self.std_name}
+                for i in range(self.uia_std)]
 
     def observe(self):
         elements = [{"label": c["label"], "role": c["role"], "actionability": "confirmed",
@@ -429,6 +453,7 @@ class FakeCalculator(driver.Protocol):
         status = self.statuses.pop(0) if self.statuses else "effect_observed"
         if clicked["key"] == "nav" and self.pane_opens:
             self.pane_open = not self.pane_open
+            self.pane_reads = 0
         if clicked["key"].startswith("std"):
             self.mode, self.pane_open = "standard", False
         out = {"status": status, "input_delivered": status != "rejected", "verified": True,
@@ -647,7 +672,8 @@ class CalcStandardTest(QuietTest):
         desk, summary = self.run_step(std_count=2)
         self.assertEqual(desk.clicks, ["Abrir navegación"])
         self.assertFalse(summary["switched"])
-        self.assertIn("ambiguous", summary["failure"])
+        self.assertEqual(summary["standard_item"]["stopped_by"], "several_candidates")
+        self.assertIn("several_candidates", summary["failure"])
 
     def test_an_estandar_that_is_not_confirmed_stops_without_another_click(self):
         desk = FakeCalculator(self.tmp)
@@ -696,6 +722,275 @@ class CalcStandardTest(QuietTest):
         summary = desk.calc_standard()
         self.assertEqual(desk.clicks, ["Abrir navegación"])
         self.assertFalse(summary["switched"])
+
+
+class StandardItemPollTest(QuietTest):
+    """Seventh round, finding C1: after the navigation click the client found no element named
+    exactly «Estándar» about 1.5 s later and the record could not say why. The client now polls
+    UI Automation (read-only) for the pane's item by its AutomationId `Standard`, in a closed
+    list of list-item-like control types, for a bounded time, and accepts its name only from a
+    closed set. Zero, several, an unknown name or a timeout means no click."""
+
+    def run_step(self, **kwargs):
+        desk = FakeCalculator(self.tmp, **kwargs)
+        return desk, desk.calc_standard()
+
+    def test_a_pane_that_appears_late_within_the_window_is_found(self):
+        desk, summary = self.run_step(pane_delay=9)
+        item = summary["standard_item"]
+        self.assertEqual(desk.clicks, ["Abrir navegación", "Estándar"])
+        self.assertTrue(summary["switched"])
+        self.assertEqual(item["status"], "ok")
+        self.assertEqual(item["polls"], 10)
+        self.assertGreater(item["waited_ms"], 0)
+        self.assertLess(item["waited_ms"], driver.STANDARD_POLL_WINDOW_S * 1000)
+
+    def test_the_item_is_found_by_its_automation_id_with_a_name_the_old_step_did_not_know(self):
+        desk, summary = self.run_step(std_name="Calculadora estándar")
+        self.assertEqual(desk.clicks, ["Abrir navegación", "Calculadora estándar"])
+        self.assertEqual([c["grounded"] for c in summary["clicks"]], [True, True])
+        self.assertTrue(summary["switched"])
+        item = summary["standard_item"]
+        self.assertEqual((item["control_type"], item["automation_id"], item["name_accepted"]),
+                         ("ListItem", "Standard", True))
+        self.assertEqual([i["status"] for i in summary["identity"]], ["ok", "ok"])
+
+    def test_two_items_with_the_automation_id_mean_no_click(self):
+        desk, summary = self.run_step(uia_std=2)
+        self.assertEqual(desk.clicks, ["Abrir navegación"])
+        self.assertFalse(summary["switched"])
+        self.assertEqual(summary["standard_item"]["stopped_by"], "several_candidates")
+        self.assertEqual(summary["standard_item"]["candidates"], 2)
+        self.assertEqual(desk.closed, [4242])
+
+    def test_an_unknown_name_means_no_click_and_the_name_is_not_recorded(self):
+        secret = "Texto del propietario 4711"
+        desk, summary = self.run_step(std_name=secret)
+        self.assertEqual(desk.clicks, ["Abrir navegación"])
+        self.assertFalse(summary["switched"])
+        item = summary["standard_item"]
+        self.assertEqual((item["stopped_by"], item["name_accepted"]), ("unknown_name", False))
+        self.assertIsNone(item["name"])
+        written = (self.tmp / "results.jsonl").read_text(encoding="utf-8")
+        logged = json.dumps(driver.log.call_args_list, ensure_ascii=False, default=str)
+        for text in (json.dumps(summary, ensure_ascii=False), written, logged):
+            self.assertNotIn(secret, text)
+
+    def test_a_timeout_means_no_click_and_is_recorded(self):
+        desk, summary = self.run_step(pane_delay=10_000)
+        item = summary["standard_item"]
+        self.assertEqual(desk.clicks, ["Abrir navegación"])
+        self.assertFalse(summary["switched"])
+        self.assertEqual((item["status"], item["stopped_by"]), ("not_found", "timeout"))
+        self.assertGreaterEqual(item["waited_ms"], driver.STANDARD_POLL_WINDOW_S * 1000)
+        self.assertLess(item["waited_ms"], (driver.STANDARD_POLL_WINDOW_S + 1) * 1000)
+        self.assertEqual(driver.STANDARD_POLL_WINDOW_S, 3.0)
+        self.assertEqual(driver.STANDARD_POLL_STEP_S, 0.15)
+        self.assertEqual(desk.ledger_total(), 1, "only the navigation click was spent")
+        self.assertEqual(set(item["by_name"]), {"candidates", "offscreen", "control_types"})
+
+    def test_an_item_under_another_automation_id_times_out_and_the_record_says_so(self):
+        desk, summary = self.run_step(std_aid="Otro")
+        item = summary["standard_item"]
+        self.assertEqual(desk.clicks, ["Abrir navegación"], "never found by name alone")
+        self.assertEqual((item["status"], item["stopped_by"]), ("not_found", "timeout"))
+        self.assertEqual(item["by_name"],
+                         {"candidates": 1, "offscreen": 0, "control_types": ["ListItem"]})
+        self.assertNotIn("Estándar", json.dumps(item, ensure_ascii=False))
+
+    def test_a_failed_read_by_name_does_not_hide_the_stop(self):
+        desk = FakeCalculator(self.tmp, pane_delay=10_000)
+        original = desk.identify
+
+        def identify(hwnd, label, control_types):
+            if len(control_types) > 5:  # the read by name; the grounding lookups use role types
+                raise OSError("powershell is gone")
+            return original(hwnd, label, control_types)
+
+        desk.identify = identify
+        summary = desk.calc_standard()
+        self.assertEqual(summary["standard_item"]["stopped_by"], "timeout")
+        self.assertIsNone(summary["standard_item"]["by_name"])
+
+    def test_an_unreadable_pane_is_polled_until_the_timeout_and_never_clicked(self):
+        desk = FakeCalculator(self.tmp)
+        original = desk.standard_item_rows
+        desk.standard_item_rows = lambda hwnd: None if desk.pane_open else original(hwnd)
+        summary = desk.calc_standard()
+        self.assertEqual(desk.clicks, ["Abrir navegación"])
+        self.assertEqual(summary["standard_item"]["status"], "unreadable")
+        self.assertEqual(summary["standard_item"]["stopped_by"], "timeout")
+
+    def test_an_item_that_the_engine_does_not_see_stops_at_the_engine_side_record(self):
+        desk, summary = self.run_step(std_count=0, uia_std=1)
+        self.assertEqual(desk.clicks, ["Abrir navegación"])
+        self.assertEqual(summary["standard_item"]["status"], "ok")
+        self.assertEqual(summary["targets"][-1]["stopped_by"], "zero_candidates")
+
+    def test_the_click_must_reach_the_item_that_was_polled(self):
+        desk = FakeCalculator(self.tmp)
+        original = desk.identify
+
+        def identify(hwnd, label, control_types):
+            rows = original(hwnd, label, control_types)
+            return [dict(r, runtime_id="9.9") if r["automation_id"] == "Standard" else r
+                    for r in rows]
+
+        desk.identify = identify
+        summary = desk.calc_standard()
+        self.assertEqual(desk.clicks, ["Abrir navegación"], "another element has the same name")
+        self.assertFalse(summary["switched"])
+        self.assertEqual(summary["identity"][-1]["status"], "not_the_polled_item")
+
+    def test_the_polled_identity_does_not_leak_into_later_clicks(self):
+        desk, _ = self.run_step()
+        self.assertIsNone(desk.pinned_runtime_id)
+
+    def test_the_mode_after_is_recorded_when_the_step_stops(self):
+        for kwargs in ({"pane_delay": 10_000}, {"uia_std": 2}, {"std_name": "Otra cosa"},
+                       {"pane_opens": False}, {"std_count": 0, "uia_std": 1}):
+            _, summary = self.run_step(**kwargs)
+            self.assertEqual(summary["mode_after"], "other", kwargs)
+
+    def test_the_mode_after_is_read_even_when_the_mode_before_was_unreadable(self):
+        _, summary = self.run_step(mode="unknown")
+        self.assertEqual((summary["mode_before"], summary["mode_after"]), ("unknown", "unknown"))
+
+    def test_the_mode_is_read_before_the_calculator_is_closed(self):
+        desk = FakeCalculator(self.tmp, pane_delay=10_000)
+        order = []
+        read = desk.calc_mode
+        desk.calc_mode = lambda hwnd: (order.append("mode"), read(hwnd))[1]
+        close = desk.close
+        desk.close = lambda pid: (order.append("close"), close(pid))[1]
+        desk.calc_standard()
+        self.assertEqual(order[-2:], ["mode", "close"])
+
+    def test_the_foreground_wait_is_in_the_summary(self):
+        desk, summary = self.run_step()
+        self.assertIsInstance(summary["foreground_wait_s"], float)
+        self.assertEqual((summary["activation_requests"], summary["window_placements"]), (0, 0))
+        record = json.loads((self.tmp / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertIn("foreground_wait_s", record)
+
+    def test_the_foreground_wait_is_recorded_when_the_window_never_arrives(self):
+        desk = FakeCalculator(self.tmp)
+        desk.wait_foreground = lambda pid: (False, 3)
+        summary = desk.calc_standard()
+        self.assertEqual(summary["activation_requests"], 3)
+        self.assertIsInstance(summary["foreground_wait_s"], float)
+        self.assertEqual(summary["mode_after"], "unknown", "no window: nothing to read")
+        self.assertEqual(desk.clicks, [])
+
+
+class FlowIdTest(QuietTest):
+    """Owner decision 2026-10-14: the reduced flows are S4R-02 (Calculator) and S4R-03 (Notepad);
+    the dossier's E2E-02 and E2E-03 are other flows. The records keep `e2e` and add `flow_id`."""
+
+    def test_the_reduced_flows_have_their_own_identifiers(self):
+        self.assertEqual(driver.FLOW_ID, {"testapp": "E2E-01", "calculator": "S4R-02",
+                                          "notepad": "S4R-03"})
+        self.assertEqual(driver.E2E_ID["calculator"], "E2E-02", "recorded evidence refers to it")
+
+    def test_a_run_record_carries_both(self):
+        res = driver.new_result("E2E-03", 4, "S4R-03")
+        self.assertEqual((res["e2e"], res["flow_id"]), ("E2E-03", "S4R-03"))
+        self.assertIsNone(driver.new_result("MODE", 0)["flow_id"])
+
+    def test_the_standard_mode_step_belongs_to_s4r_02(self):
+        summary = FakeCalculator(self.tmp).calc_standard()
+        self.assertEqual(summary["flow_id"], "S4R-02")
+        record = json.loads((self.tmp / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(record["flow_id"], "S4R-02")
+
+
+class StandardItemRuleTest(unittest.TestCase):
+    """The pure rule: which UI Automation rows are the Standard item."""
+
+    @staticmethod
+    def row(**kw):
+        return {"runtime_id": "1.2", "automation_id": "Standard", "control_type": "ListItem",
+                "offscreen": False, "name": "Estándar", **kw}
+
+    def test_exactly_one_on_screen_item_with_an_accepted_name_is_ok(self):
+        for name in ("Estándar", "Calculadora estándar"):
+            status, found = driver.standard_item_decision([self.row(name=name)])
+            self.assertEqual((status, found["name"]), ("ok", name))
+
+    def test_names_are_compared_exactly_after_normalisation_only(self):
+        decomposed = "Estándar"
+        self.assertEqual(driver.standard_item_decision([self.row(name=decomposed)])[0], "ok")
+        for bad in ("estándar", "Estandar", "Estándar ", "Calculadora", ""):
+            self.assertEqual(driver.standard_item_decision([self.row(name=bad)])[0],
+                             "unknown_name", bad)
+
+    def test_only_the_closed_list_of_control_types_counts(self):
+        for ctype in ("ListItem", "TreeItem", "TabItem", "MenuItem", "RadioButton"):
+            self.assertEqual(driver.standard_item_decision([self.row(control_type=ctype)])[0], "ok")
+        for ctype in ("Button", "Text", "Pane", "Custom", "Edit"):
+            self.assertEqual(driver.standard_item_decision([self.row(control_type=ctype)])[0],
+                             "not_found", ctype)
+
+    def test_another_automation_id_is_not_the_item(self):
+        rows = [self.row(automation_id="Scientific"), self.row(automation_id="")]
+        self.assertEqual(driver.standard_item_decision(rows)[0], "not_found")
+
+    def test_off_screen_items_are_ignored(self):
+        status, found = driver.standard_item_decision([self.row(), self.row(offscreen=True)])
+        self.assertEqual((status, found["name"]), ("ok", "Estándar"))
+        self.assertEqual(driver.standard_item_decision([self.row(offscreen=True)])[0], "not_found")
+
+    def test_several_on_screen_items_and_unreadable_reads_decide_nothing(self):
+        self.assertEqual(driver.standard_item_decision([self.row(), self.row(runtime_id="1.3")])[0],
+                         "ambiguous")
+        self.assertEqual(driver.standard_item_decision(None)[0], "unreadable")
+        self.assertEqual(driver.standard_item_decision([])[0], "not_found")
+
+    def test_an_item_with_no_identifier_is_not_clickable(self):
+        status, _ = driver.standard_item_decision([self.row(runtime_id="")])
+        self.assertEqual(status, "unidentifiable")
+
+    def test_the_record_never_holds_a_name_outside_the_set(self):
+        record = driver.standard_item_record("unknown_name", [self.row(name="Privado")], 3, 0.45)
+        self.assertNotIn("Privado", json.dumps(record, ensure_ascii=False))
+        self.assertEqual((record["name"], record["name_accepted"]), (None, False))
+        record = driver.standard_item_record("ok", [self.row()], 1, 0.0)
+        self.assertEqual((record["name"], record["name_accepted"]), ("Estándar", True))
+
+    def test_the_rows_are_parsed_strictly(self):
+        import base64
+        name = base64.b64encode("Calculadora estándar".encode("utf-8")).decode("ascii")
+        rows = driver.parse_standard_item_rows(
+            f"42.7\tStandard\tListItem\t0\t{name}\nbad row\n42.8\tStandard\tListItem\t1\t!!!")
+        self.assertEqual(rows[0], {"runtime_id": "42.7", "automation_id": "Standard",
+                                   "control_type": "ListItem", "offscreen": False,
+                                   "name": "Calculadora estándar"})
+        self.assertEqual(len(rows), 2, "the unreadable name stays a row, with no name")
+        self.assertEqual(rows[1]["name"], "")
+        self.assertEqual(driver.parse_standard_item_rows(""), [])
+
+
+class Utf8LogTest(unittest.TestCase):
+    """Seventh round, finding C3: redirected to a file, stdout was written in the console code
+    page and the `calc_standard` line held a non-UTF-8 byte (0xF3 for `ó`)."""
+
+    def test_the_log_is_utf8_whatever_the_console_code_page_is(self):
+        import io
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="cp1252", write_through=True)
+        with mock.patch.object(driver.sys, "stdout", stream):
+            driver.use_utf8_stdout()
+            driver.log("calc_standard", failure="Estándar no encontrado")
+            stream.flush()
+        data = raw.getvalue()
+        self.assertIn("Estándar".encode("utf-8"), data)
+        self.assertNotIn("Estándar".encode("cp1252"), data)
+        self.assertEqual(json.loads(data.decode("utf-8"))["failure"], "Estándar no encontrado")
+
+    def test_a_stream_that_cannot_be_reconfigured_is_left_alone(self):
+        import io
+        with mock.patch.object(driver.sys, "stdout", io.StringIO()):
+            driver.use_utf8_stdout()  # a stream with no reconfigure(): nothing to do
 
 
 class CalcModeTest(unittest.TestCase):
@@ -792,8 +1087,9 @@ class TargetRecordTest(QuietTest):
         return desk, summary, summary["targets"][-1]
 
     def test_zero_candidates_and_two_candidates_produce_distinct_records(self):
-        _, _, zero = self.stopped(std_count=0)
-        _, _, two = self.stopped(std_count=2)
+        # UI Automation sees the item, the engine's observation holds none or two of them
+        _, _, zero = self.stopped(std_count=0, uia_std=1)
+        _, _, two = self.stopped(std_count=2, uia_std=1)
         self.assertEqual((zero["candidates"], zero["stopped_by"]), (0, "zero_candidates"))
         self.assertEqual((two["candidates"], two["stopped_by"]), (2, "several_candidates"))
         self.assertEqual(zero["roles"], {})
@@ -833,14 +1129,14 @@ class TargetRecordTest(QuietTest):
         self.assertEqual(len(desk.identify_calls), 2, "only the two grounding lookups")
 
     def test_the_records_hold_no_label_or_name(self):
-        for kwargs in ({"std_count": 0}, {"std_count": 2}, {}):
+        for kwargs in ({"std_count": 0, "uia_std": 1}, {"std_count": 2, "uia_std": 1}, {}):
             _, summary, _ = self.stopped(**kwargs)
             text = json.dumps(summary["targets"], ensure_ascii=False)
             for name in ("Estándar", "Abrir navegación", "Cerrar navegación"):
                 self.assertNotIn(name, text)
 
     def test_a_uia_read_that_fails_does_not_hide_the_stop(self):
-        desk = FakeCalculator(self.tmp, std_count=0)
+        desk = FakeCalculator(self.tmp, std_count=0, uia_std=1)
         original = desk.identify
 
         def identify(hwnd, label, control_types):

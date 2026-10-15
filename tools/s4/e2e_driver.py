@@ -11,14 +11,17 @@ run is:
     end state through an OS-side check that does not depend on the engine
 
 Applications and flows (docs/thesis/S4_ACEPTACION_REDUCIDA.md, section "Segunda ronda con
-accesibilidad (ADR-0017)"):
+accesibilidad (ADR-0017)"). The reduced flows have their own identifiers, S4R-02 and S4R-03: the
+dossier's E2E-02 (editor) and E2E-03 (file explorer) are other cases. The records of earlier
+rounds call them E2E-02 and E2E-03 (field ``e2e``, kept so that evidence stays readable); the
+records now also carry ``flow_id``:
 
 ``testapp``    E2E-01, the controlled test application ``tools/s4/testapp``: the first-round
                click flow (``Sumar`` x3, ``Reiniciar``, ``Activar`` x2, ``Siguiente``,
                ``Anterior``), then a typing step into its text field ``Campo de texto`` (the
                text ``prueba 123``). The OS-side check is the window title, which mirrors the
                state and the typed text (``GetWindowTextW``) after every step.
-``calculator`` E2E-02, the Windows 11 Calculator: ``Siete``, ``Más``, ``Ocho``, ``Es igual a``
+``calculator`` S4R-02, the Windows 11 Calculator: ``Siete``, ``Más``, ``Ocho``, ``Es igual a``
                (the display must read 15), then the clear control. The clear control is not a
                fixed name: the Calculator's real accessibility names are read from
                ``observe_screen`` before the flow and again before the last click, and the first
@@ -26,7 +29,7 @@ accesibilidad (ADR-0017)"):
                exists as a confirmed element is clicked. With none of them in the initial state
                the run fails before any input. The OS-side check is the UI Automation name of
                the display after every click, and it must return to 0 after the clear.
-``notepad``    E2E-03, Notepad: open the ``Editar`` menu and close it with a second click on
+``notepad``    S4R-03, Notepad: open the ``Editar`` menu and close it with a second click on
                ``Editar``. No menu item, tab or caption button is clicked and nothing is typed.
                The menu is "open" or "closed" by its UI Automation ExpandCollapseState, never by
                screen text. Every run starts by checking that the menu is Collapsed, and a run
@@ -47,10 +50,14 @@ under the point (ISLAND_HOST_CLASSES, ``descend``; sixth round, finding 1). An
 ``effect_observed`` whose OS-side or grounding check fails is counted as an engine false
 success; there must be none.
 
-``--calc-standard`` is a separate invocation, run once before the E2E-02 series: it switches
-the Calculator to Standard mode with two gated clicks (the navigation toggle, then
-``Estándar``), each with identity grounding, verifies the mode through UI Automation and
-closes the Calculator it started.
+``--calc-standard`` is a separate invocation, run once before the S4R-02 series: it switches
+the Calculator to Standard mode with two gated clicks, each with identity grounding: the
+navigation toggle, then the pane's Standard item. After the first click it polls UI Automation
+(read-only, 3 s in steps of 150 ms) for the one on-screen element with AutomationId ``Standard``
+of a list-item-like control type, accepts its name only from a closed set (``Estándar``,
+``Calculadora estándar``; any other name is never recorded), selects the engine's element by
+that exact name and requires the click to reach that very element. It verifies the mode through
+UI Automation, also when it stops, and closes the Calculator it started.
 
 Live input goes only through the engine's gate; this script never injects input itself.
 It types only into the test application's field. It starts the test application and the
@@ -438,6 +445,27 @@ if ($header) { [Console]::Out.Write("1`t" + $header.Current.Name + "`t" + $sci) 
 else { [Console]::Out.Write("0`t`t" + $sci) }
 """
 
+# The elements of a window with an exact AutomationId, as ``RuntimeId, AutomationId, ControlType,
+# IsOffscreen, Name`` rows with the name in base64 (a tab or a newline in a name must not break the
+# row). Read-only; the client records the name only when it is in CALC_STANDARD_NAMES.
+UIA_BY_AUTOMATION_ID_PS = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]__HWND__)
+$cond = New-Object System.Windows.Automation.PropertyCondition(
+  [System.Windows.Automation.AutomationElement]::AutomationIdProperty, '__AID__')
+$rows = @()
+foreach ($e in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)) {
+  $type = $e.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  $rid = ''
+  try { $rid = ($e.GetRuntimeId() -join '.') } catch {}
+  $name = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($e.Current.Name))
+  $rows += ($rid + "`t" + $e.Current.AutomationId + "`t" + $type + "`t" + [int]$e.Current.IsOffscreen +
+    "`t" + $name)
+}
+[Console]::Out.Write(($rows -join "`n"))
+"""
+
 MENU_STATE_PS = r"""
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
@@ -528,6 +556,20 @@ def uia_identify(hwnd, label: str, control_types: tuple[str, ...]) -> list[dict]
     except subprocess.TimeoutExpired:
         return None
     return parse_identity_rows(out)
+
+
+def uia_standard_items(hwnd) -> list[dict] | None:
+    """The elements of window `hwnd` whose AutomationId is CALC_STANDARD_AUTOMATION_ID (see
+    parse_standard_item_rows); None when the read failed. An OS-side read: no input."""
+    script = (UIA_BY_AUTOMATION_ID_PS.replace("__HWND__", str(int(hwnd)))
+              .replace("__AID__", CALC_STANDARD_AUTOMATION_ID))
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             check=False, creationflags=CREATE_NO_WINDOW, timeout=60).stdout
+    except subprocess.TimeoutExpired:
+        return None
+    return parse_standard_item_rows(out)
 
 
 def read_calc_mode(hwnd) -> str:
@@ -694,7 +736,15 @@ CLEAR_CONTROLS = ("Borrar", "Borrar todo", "Borrar entrada")
 # (Spanish Windows names). Scientific-only controls (present only in that mode) and the header
 # texts that stand for Standard mode.
 CALC_NAV_LABEL = "Abrir navegación"
-CALC_STANDARD_LABEL = "Estándar"
+# The pane's Standard item is found by its AutomationId in UI Automation (seventh round, finding
+# C1), never by its text alone: its Name is accepted only from a closed set, and only a control
+# type of a closed list of list-item-like controls counts. It is polled for a bounded time after
+# the navigation click, because the pane opens with an animation.
+CALC_STANDARD_AUTOMATION_ID = "Standard"
+CALC_STANDARD_NAMES = ("Estándar", "Calculadora estándar")
+STANDARD_ITEM_TYPES = ("ListItem", "TreeItem", "TabItem", "MenuItem", "RadioButton")
+STANDARD_POLL_WINDOW_S = 3.0
+STANDARD_POLL_STEP_S = 0.15
 SCIENTIFIC_ONLY = ("Alternar grados", "Notación científica")
 STANDARD_HEADERS = ("estándar", "calculadora estándar")
 CARDINALS = ("cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve")
@@ -763,6 +813,79 @@ def identity_decision(rows: list[dict] | None) -> tuple[str, dict | None]:
     if not found["runtime_id"] and not found["automation_id"]:
         return "unidentifiable", None
     return "ok", found
+
+
+def parse_standard_item_rows(output: str) -> list[dict]:
+    """Rows of ``RuntimeId<TAB>AutomationId<TAB>ControlType<TAB>IsOffscreen<TAB>Name(base64)`` as
+    printed by UIA_BY_AUTOMATION_ID_PS; a row of another shape is dropped, and a name that is
+    not valid base64 UTF-8 is kept as an empty name (which is in no set)."""
+    rows = []
+    for line in output.splitlines():
+        parts = line.rstrip("\r").split("\t")
+        if len(parts) != 5:
+            continue
+        try:
+            name = base64.b64decode(parts[4].strip(), validate=True).decode("utf-8")
+        except ValueError:  # binascii.Error and UnicodeDecodeError are ValueErrors
+            name = ""
+        rows.append({"runtime_id": parts[0].strip(), "automation_id": parts[1].strip(),
+                     "control_type": parts[2].strip().removeprefix("ControlType."),
+                     "offscreen": parts[3].strip() == "1", "name": name})
+    return rows
+
+
+def is_standard_item_row(row: dict) -> bool:
+    """A row with the Standard item's AutomationId and a control type of STANDARD_ITEM_TYPES."""
+    return (row["automation_id"] == CALC_STANDARD_AUTOMATION_ID
+            and row["control_type"] in STANDARD_ITEM_TYPES)
+
+
+def accepted_standard_name(name: str) -> str | None:
+    """The canonical (NFC) name when it is exactly one of CALC_STANDARD_NAMES, else None."""
+    name = unicodedata.normalize("NFC", name)
+    return name if name in CALC_STANDARD_NAMES else None
+
+
+def standard_item_decision(rows: list[dict] | None) -> tuple[str, dict | None]:
+    """Whether the pane's Standard item was found: ``ok`` only for exactly one on-screen item
+    with a RuntimeId and a Name in CALC_STANDARD_NAMES (compared after NFC, case and spaces
+    exactly); the item returned carries that canonical name. ``unreadable``, ``not_found``,
+    ``ambiguous``, ``unidentifiable`` and ``unknown_name`` all mean no click. An off-screen
+    element cannot receive the engine's click, so it is not a candidate."""
+    if rows is None:
+        return "unreadable", None
+    found = [r for r in rows if is_standard_item_row(r) and not r["offscreen"]]
+    if not found:
+        return "not_found", None
+    if len(found) > 1:
+        return "ambiguous", None
+    item = found[0]
+    if not item["runtime_id"]:
+        return "unidentifiable", None
+    name = accepted_standard_name(item["name"])
+    if name is None:
+        return "unknown_name", None
+    return "ok", {**item, "name": name}
+
+
+def standard_item_record(status: str, rows: list[dict] | None, polls: int, waited_s: float) -> dict:
+    """What the poll for the Standard item records: the decision, counts, the item's control
+    type and AutomationId when exactly one, and its name only when it is in CALC_STANDARD_NAMES
+    (a name outside the set is never recorded)."""
+    found = [r for r in rows or [] if is_standard_item_row(r) and not r["offscreen"]]
+    record = {"status": status, "polls": polls, "waited_ms": round(waited_s * 1000),
+              "window_s": STANDARD_POLL_WINDOW_S, "step_s": STANDARD_POLL_STEP_S,
+              "candidates": len(found),
+              "offscreen_ignored": sum(1 for r in rows or []
+                                       if is_standard_item_row(r) and r["offscreen"]),
+              "control_type": None, "automation_id": None, "name_accepted": False, "name": None,
+              "stopped_by": None}
+    if len(found) == 1:
+        name = accepted_standard_name(found[0]["name"])
+        record.update(control_type=found[0]["control_type"],
+                      automation_id=found[0]["automation_id"],
+                      name_accepted=name is not None, name=name)
+    return record
 
 
 def identity_hit(expected: dict, chain: list[dict]) -> bool:
@@ -991,7 +1114,7 @@ def pick_control(elements: list[dict], spec) -> str | None:
 
 
 def calculator_flow() -> dict:
-    """E2E-02, the Windows 11 Calculator: 7 + 8 = 15, then clear. The buttons are selected
+    """S4R-02, the Windows 11 Calculator: 7 + 8 = 15, then clear. The buttons are selected
     by their UI Automation names, which the engine reports as accessibility labels
     (ADR-0017). The clear control is whichever of CLEAR_CONTROLS exists when it is needed:
     the third S4 round showed that "Borrar" can be absent after "Es igual a" in Scientific
@@ -1057,8 +1180,20 @@ def needs_menu_restore(state: str | None) -> bool:
 
 FLOWS = {"testapp": testapp_flow, "calculator": calculator_flow, "notepad": notepad_flow}
 E2E_ID = {"testapp": "E2E-01", "calculator": "E2E-02", "notepad": "E2E-03"}
+# The reduced protocol's own flow identifiers (docs/thesis/S4_ACEPTACION_REDUCIDA.md): the dossier's
+# E2E-02 (editor) and E2E-03 (file explorer) are other flows. The records keep their `e2e` field
+# (recorded evidence refers to it) and carry `flow_id` going forward.
+FLOW_ID = {"testapp": "E2E-01", "calculator": "S4R-02", "notepad": "S4R-03"}
 
 # ---- the protocol ---------------------------------------------------------------------------
+
+
+def use_utf8_stdout() -> None:
+    """Writes the log as UTF-8 whatever the console code page is: redirected to a file, stdout
+    used the ANSI code page and a line held a non-UTF-8 byte (seventh round, finding C3)."""
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(encoding="utf-8")
 
 
 def log(event: str, **fields) -> None:
@@ -1081,9 +1216,9 @@ def stage_ms(meta: dict) -> dict:
     return stages
 
 
-def new_result(e2e: str, run: int) -> dict:
+def new_result(e2e: str, run: int, flow_id: str | None = None) -> dict:
     """A run's record, with every counter that `Protocol.steps` increments initialised."""
-    return {"e2e": e2e, "run": run, "success": False, "steps": 0,
+    return {"e2e": e2e, "flow_id": flow_id, "run": run, "success": False, "steps": 0,
             "actions_requested": 0, "delivered": 0, "typed_delivered": 0,
             "effect_observed": 0, "indeterminate": 0, "rejected": 0, "stale_retries": 0,
             "ocr_checks_failed": 0, "independent_checks": 0, "independent_failed": 0,
@@ -1326,7 +1461,7 @@ class Protocol:
 
     # -- one run
     def run_once(self, n: int) -> dict:
-        res = new_result(E2E_ID[self.args.app], n)
+        res = new_result(E2E_ID[self.args.app], n, FLOW_ID[self.args.app])
         start = time.perf_counter()
         res["user_idle_s_at_start"] = idle_seconds()
         reuse = self.args.restart == "never" and self.current is not None
@@ -1423,6 +1558,18 @@ class Protocol:
 
     # The descent record of the latest cursor_chain (or diag_at_element) read: None before any.
     last_descent: dict | None = None
+    # While set, a click is sent only if the identity lookup finds this very element (the
+    # Standard item that was polled); any other RuntimeId under the same name means no click.
+    pinned_runtime_id: str | None = None
+
+    def mono(self) -> float:
+        return time.monotonic()
+
+    def pause(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def standard_item_rows(self, hwnd) -> list[dict] | None:
+        return uia_standard_items(hwnd)
 
     def cursor_point(self) -> tuple[int, int]:
         return cursor()
@@ -1464,6 +1611,9 @@ class Protocol:
         control_types = ROLE_CONTROL_TYPES.get(target.get("role", ""))
         rows = self.identify(hwnd, label, control_types) if control_types else None
         status, found = identity_decision(rows)
+        if (found is not None and self.pinned_runtime_id
+                and found["runtime_id"] != self.pinned_runtime_id):
+            status, found = "not_the_polled_item", None
         if not control_types:
             status = "no_control_type"  # a role with no UI Automation control is never clicked
         record = {"status": status,
@@ -1560,23 +1710,85 @@ class Protocol:
         fg = foreground()
         return fg["exe"] == self.flow["exe"] and fg["maximized_primary"]
 
+    def await_standard_item(self, hwnd, summary: dict) -> dict | None:
+        """Polls UI Automation (read-only) for the pane's Standard item after the navigation
+        click: the one on-screen element with AutomationId CALC_STANDARD_AUTOMATION_ID of a
+        control type in STANDARD_ITEM_TYPES, for at most STANDARD_POLL_WINDOW_S in steps of
+        STANDARD_POLL_STEP_S (each read costs a PowerShell start, so a step is a lower bound).
+        Returns the item when its name is one of CALC_STANDARD_NAMES; otherwise None, with the
+        reason in ``summary["standard_item"]["stopped_by"]``: ``timeout`` (nothing, or nothing
+        readable, in the window), ``several_candidates``, ``unknown_name`` or ``unidentifiable``.
+        The three last stop at once: waiting does not make them better. A stop also records
+        ``by_name``: how many elements UI Automation sees under the accepted names, of any
+        control type and AutomationId (counts and types, never names), which tells an
+        AutomationId that is not ``Standard`` from a pane that never showed the item."""
+        started = self.mono()
+        polls = 0
+        while True:
+            rows = self.standard_item_rows(hwnd)
+            polls += 1
+            status, item = standard_item_decision(rows)
+            waited = self.mono() - started
+            if status in ("ok", "ambiguous", "unknown_name", "unidentifiable"):
+                break
+            if waited >= STANDARD_POLL_WINDOW_S:
+                break
+            self.pause(STANDARD_POLL_STEP_S)
+        record = standard_item_record(status, rows, polls, waited)
+        record["stopped_by"] = (None if item is not None else
+                                "several_candidates" if status == "ambiguous" else
+                                status if status in ("unknown_name", "unidentifiable") else
+                                "timeout")
+        if item is None:  # what UI Automation sees under the accepted names, by any AutomationId
+            record["by_name"] = self.uia_candidates(hwnd, CALC_STANDARD_NAMES)
+        summary["standard_item"] = record
+        return item
+
+    def calc_click(self, res: dict, summary: dict, kind: str, label: str, hwnd, pid) -> None:
+        """One grounded click of --calc-standard on `label` (a new observation first), recorded
+        under `kind`. A failed or ungrounded click ends the step."""
+        snap, elements, obs = self.observe()
+        res["observations"].append(obs)
+        self.flow = single_click_flow(label)
+        before = res["actions_requested"]
+        self.steps(res, snap, elements, hwnd, pid)
+        summary["clicks"].append({
+            "label_is": kind,
+            "requested": res["actions_requested"] - before,
+            "status": (res["actions"] or [{}])[-1].get("status"),
+            "input_delivered": (res["actions"] or [{}])[-1].get("input_delivered"),
+            "grounded": (res.get("grounding") or [None])[-1]})
+        if res["failure"] is not None or res["grounding_wrong"]:
+            raise Abort(f"calc-standard stops, no further click: {res['failure']}")
+
     def calc_standard(self) -> dict:
-        """Switches the Calculator to Standard mode (--calc-standard), once, before the E2E-02
+        """Switches the Calculator to Standard mode (--calc-standard), once, before the S4R-02
         series. Two clicks through the engine's gate, each with identity grounding: the
-        navigation toggle, selected by its exact label, and then ``Estándar``, selected after
-        a new observation. The mode is read through UI Automation before (no click when it
-        is Standard already, or cannot be read) and after. Nothing else is clicked: a pane
-        that does not open, an ``Estándar`` that is not unique and confirmed, an identity
-        that is not exactly one or a click that is not grounded ends the step. Only the
-        Calculator this step started is closed."""
-        res = new_result("MODE", 0)
-        summary = {"step": "calc_standard", "round_start": self.round_start,
-                   "ledger_start": self.ledger_total(), "mode_before": None, "nav_label": None,
-                   "clicks": [], "mode_after": None, "switched": False, "failure": None}
+        navigation toggle, selected by its exact label, and then the pane's Standard item. The
+        item is first polled in UI Automation by its AutomationId (await_standard_item), its
+        name is read from a closed set (``Estándar``, ``Calculadora estándar``), the engine's
+        element is selected by that exact name after a new observation (unique and confirmed)
+        and the click must reach that very element (``pinned_runtime_id``). The mode is read
+        through UI Automation before (no click when it is Standard already, or cannot be read)
+        and after, also when the step stops. Nothing else is clicked: a pane that does not
+        show the item, an item that is not unique, a name outside the set, an engine element
+        that is not unique and confirmed, an identity that is not exactly one or a click that is
+        not grounded ends the step. Only the Calculator this step started is closed."""
+        res = new_result("MODE", 0, FLOW_ID["calculator"])
+        summary = {"step": "calc_standard", "flow_id": FLOW_ID["calculator"],
+                   "round_start": self.round_start, "ledger_start": self.ledger_total(),
+                   "mode_before": None, "nav_label": None, "standard_item": None,
+                   "foreground_wait_s": None, "activation_requests": None,
+                   "window_placements": None, "clicks": [], "mode_after": None,
+                   "switched": False, "failure": None}
         pid = None
+        hwnd = None
         try:
+            waiting = time.perf_counter()
             pid = self.launch()
-            ok, _ = self.wait_foreground(pid)
+            ok, requests = self.wait_foreground(pid)
+            summary.update(foreground_wait_s=round(time.perf_counter() - waiting, 2),
+                           activation_requests=requests, window_placements=self.placements)
             if not ok:
                 raise Abort("the Calculator did not reach the foreground maximized")
             hwnd = self.current_hwnd()
@@ -1588,25 +1800,17 @@ class Protocol:
                 return summary
             if summary["mode_before"] != "other":
                 raise Abort("the Calculator's mode cannot be read through UI Automation: no click")
-            snap, elements, obs = self.observe()
-            res["observations"].append(obs)
-            for label in (CALC_NAV_LABEL, CALC_STANDARD_LABEL):
-                if label == CALC_STANDARD_LABEL:  # the pane is open now: look again, then click
-                    snap, elements, obs = self.observe()
-                    res["observations"].append(obs)
-                else:
-                    summary["nav_label"] = label
-                self.flow = single_click_flow(label)
-                before = res["actions_requested"]
-                self.steps(res, snap, elements, hwnd, pid)
-                summary["clicks"].append({
-                    "label_is": "navigation" if label == CALC_NAV_LABEL else "standard",
-                    "requested": res["actions_requested"] - before,
-                    "status": (res["actions"] or [{}])[-1].get("status"),
-                    "input_delivered": (res["actions"] or [{}])[-1].get("input_delivered"),
-                    "grounded": (res.get("grounding") or [None])[-1]})
-                if res["failure"] is not None or res["grounding_wrong"]:
-                    raise Abort(f"calc-standard stops, no further click: {res['failure']}")
+            summary["nav_label"] = CALC_NAV_LABEL
+            self.calc_click(res, summary, "navigation", CALC_NAV_LABEL, hwnd, pid)
+            item = self.await_standard_item(hwnd, summary)
+            if item is None:
+                raise Abort("calc-standard stops, no click on the Standard item: "
+                            f"{summary['standard_item']['stopped_by']}")
+            self.pinned_runtime_id = item["runtime_id"]
+            try:
+                self.calc_click(res, summary, "standard", item["name"], hwnd, pid)
+            finally:
+                self.pinned_runtime_id = None
             for _ in range(8):
                 summary["mode_after"] = self.calc_mode(hwnd)
                 if summary["mode_after"] == "standard":
@@ -1618,6 +1822,8 @@ class Protocol:
         except Abort as error:
             summary["failure"] = str(error)
         finally:
+            if summary["mode_after"] is None:  # a stop records the mode too (read-only)
+                summary["mode_after"] = self.mode_now(hwnd)
             if summary["clicks"]:
                 time.sleep(self.args.settle)  # let the Calculator save its mode before it closes
             self.close(pid)  # only a process this step started
@@ -1629,6 +1835,16 @@ class Protocol:
             with open(self.args.results, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(summary, ensure_ascii=False) + "\n")
         return summary
+
+    def mode_now(self, hwnd) -> str:
+        """The Calculator's mode when the step ends, or ``unknown`` when there is no window to
+        read or the read fails. A read-only query: it never stops the step's own record."""
+        if hwnd is None:
+            return "unknown"
+        try:
+            return self.calc_mode(hwnd)
+        except (OSError, subprocess.SubprocessError):
+            return "unknown"
 
     def restore_click(self, res: dict, target: dict, snap: dict) -> dict:
         """One live click through the engine's gate and nothing else (no retry)."""
@@ -1933,7 +2149,7 @@ def main() -> int:
     p.add_argument("--calc-standard", action="store_true",
                    help="switch the Calculator to Standard mode (two gated clicks with identity "
                         "grounding, verified through UI Automation) and exit; run once before "
-                        "the E2E-02 series (--app calculator, run mode)")
+                        "the S4R-02 series (--app calculator, run mode)")
     p.add_argument("--results", type=Path, required=True, help="JSONL file to append runs to")
     p.add_argument("--testapp-exe", default=str(HERE / "testapp" / "target" / "release" / "ommatix-testapp.exe"))
     p.add_argument("--session-id", default="s4r2")
@@ -1952,6 +2168,7 @@ def main() -> int:
                    help="each: start and close the application around every run; never: one "
                         "start per invocation, every run checks the initial state first")
     args = p.parse_args()
+    use_utf8_stdout()
 
     raw = args.config.read_bytes()
     config = tomllib.loads(raw.decode("utf-8"))
