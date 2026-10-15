@@ -531,7 +531,8 @@ fn plan_record(
         work: kind,
         full_refresh_reason: reason,
         region_count: regions.len(),
-        region_area_px: regions.iter().map(BBox::area).sum(),
+        // Not `.sum()`: the sum of no areas is `-0.0`, which the record would write out.
+        region_area_px: regions.iter().fold(0.0, |total, r| total + r.area()),
         inference_count: inference_shapes.as_ref().map(Vec::len),
         input_shapes: inference_shapes,
         accessibility_truncated: truncated,

@@ -1987,6 +1987,22 @@ fn the_plan_says_what_each_observation_processed() {
 }
 
 #[test]
+fn an_idle_observation_records_its_region_area_as_a_positive_zero() {
+    // The sum of no areas is `-0.0` in Rust, which `0.0 == -0.0` hides and the research
+    // record wrote out as `-0.0`.
+    let mut r = rig(form());
+    r.observe();
+    r.observe();
+    let plan = r.engine.last_plan().unwrap();
+    assert_eq!(plan.work, WorkKind::Idle);
+    assert_eq!(plan.region_area_px, 0.0);
+    assert!(
+        plan.region_area_px.is_sign_positive(),
+        "an idle observation has an area of +0.0, not -0.0"
+    );
+}
+
+#[test]
 fn the_experimental_baseline_processes_the_whole_frame_on_every_observation() {
     // B0 (ADR-0024): the same planner forced to the whole frame. Without the switch, the same
     // screens plan one region, or nothing (the test above).
