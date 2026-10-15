@@ -59,6 +59,15 @@ EXIT_OK, EXIT_ENDED_EARLY, EXIT_REFUSED = 0, 1, 2
 
 # ---- analysis (pure) ----------------------------------------------------------------------
 
+
+def _error_code(page) -> str | None:
+    """The code of a tool error: the contract puts it under `error` (chapter 07 §7.7,
+    `tool_error.output.schema.json`); None when the reply has none."""
+    if not isinstance(page, dict):
+        return None
+    error = page.get("error")
+    return error.get("code") if isinstance(error, dict) else None
+
 def slope_per_hour(points: list[tuple[float, float]]) -> float | None:
     """Least-squares slope of (seconds, value) points, per hour; None without a trend to fit."""
     if len(points) < 2:
@@ -282,7 +291,7 @@ class Soak:
             if is_error:
                 counts["observe_errors"] += 1
                 consecutive_errors += 1
-                sample.update(observed=False, error_code=page.get("code"))
+                sample.update(observed=False, error_code=_error_code(page))
                 samples.append(sample)
                 if consecutive_errors >= a.max_observe_errors:
                     return "observe_errors"

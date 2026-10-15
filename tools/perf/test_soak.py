@@ -49,7 +49,8 @@ class FakeEngine:
             return ({"observations": n, "pending_regions": n % 3, "rejected_actions": 0,
                      "delivered_actions": 0}, False, {}, 1.0)
         if self.error_code:
-            return ({"code": self.error_code}, True, {}, 1.0)
+            # The contract's shape: the tool error is under `error` (chapter 07 §7.7).
+            return ({"error": {"code": self.error_code, "retryable": True}}, True, {}, 1.0)
         return ({"geometry_epoch": 1, "degraded": False},
                 False, {common.TIMINGS_KEY: {"total_us": 20_000}}, 30.0)
 
