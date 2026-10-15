@@ -76,6 +76,7 @@ SEC-03,Prompt injection visual,OCR no cambia permisos,NO_EJECUTADO,IMPLEMENTADO_
 SEC-04,Exfiltración,Sin screenshots ni secretos por defecto,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S4
 SEC-05,Precheck de acción,Foco/ventana/frescura y carreras,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
 SEC-06,Modelo/caché,"Hashes, licencia, corrupción y cache poisoning",NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S4
+SEC-07,Borrado de estado y caché,"Al terminar la sesión no quedan snapshot, evidencia, cuadro base, pendientes ni diario, y ningún identificador se emite otra vez (capítulo 08 §8.4)",NO_APLICA,IMPLEMENTADO_EN_RUST_S4
 E2E-01,Formulario local,Valores dummy y confirmación observable,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
 E2E-02,Editor,Escritura y guardado de archivo temporal,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
 E2E-03,Explorador,Navegar carpetas de prueba sin destrucción,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL

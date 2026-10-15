@@ -68,7 +68,7 @@ Perfil moderno y compatibilidad legacy sólo si se prueba explícitamente. Traza
 
 ### RF-16. Parada y privacidad
 
-Actuación deshabilitada al inicio; parada local y telemetría redactada. Trazabilidad: SEC-01..SEC-06. Hito: S3.
+Actuación deshabilitada al inicio; parada local y telemetría redactada; estado y caché borrados al terminar la sesión. Trazabilidad: SEC-01..SEC-07. Hito: S3.
 
 ### RF-17. Observabilidad
 

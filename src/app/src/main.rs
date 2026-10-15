@@ -65,9 +65,10 @@ fn serve(args: &RunArgs) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .context("cannot start the I/O runtime")?;
-    runtime
-        .block_on(server.serve_stdio())
-        .context("the stdio transport failed")
+    let outcome = runtime.block_on(server.serve_stdio());
+    // The session is over, however it ended: the engine has deleted its state and cache.
+    eprintln!("ommatix: session ended; the engine's state and cache were deleted");
+    outcome.context("the stdio transport failed")
 }
 
 fn run_demo(args: &DemoArgs) -> Result<()> {

@@ -206,6 +206,14 @@ fn it_06_and_sec_04_a_session_writes_replies_to_stdout_diagnostics_to_stderr_and
     for secret in SCREEN_TEXT.iter().chain(&[TYPED, "another text"]) {
         assert!(!stderr.contains(secret), "{secret:?} in stderr:\n{stderr}");
     }
+    // SEC-07: the session ends after its state was deleted, and says so.
+    assert!(
+        stderr
+            .lines()
+            .last()
+            .is_some_and(|l| l.contains("session ended") && l.contains("were deleted")),
+        "{stderr}"
+    );
 
     assert!(
         entries(&sandbox.cwd()).is_empty(),

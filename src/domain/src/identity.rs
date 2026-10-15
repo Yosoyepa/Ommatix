@@ -149,6 +149,25 @@ impl Registry {
         self.retired.contains(&id)
     }
 
+    /// The registry a purge leaves behind (chapter 08 §8.4): no track, hence no label, box or
+    /// revision, but the same session, epoch and counters. The live IDs join the retired set,
+    /// so the next observation issues new ones and an action naming an old one is refused.
+    pub fn purged(&self) -> Self {
+        Self {
+            session_id: self.session_id.clone(),
+            geometry_epoch: self.geometry_epoch,
+            snapshot_id: self.snapshot_id,
+            next_id: self.next_id,
+            tracks: BTreeMap::new(),
+            retired: self
+                .retired
+                .iter()
+                .chain(self.tracks.keys())
+                .copied()
+                .collect(),
+        }
+    }
+
     /// The registry after `observations`, taken at `geometry_epoch`.
     ///
     /// A track keeps its ID only when exactly one observation is compatible with it and it
@@ -572,6 +591,26 @@ mod tests {
         let (r, changes) = observe(&r, &[a]);
         assert_eq!(changes.created, vec![id(2)]);
         assert!(r.get(id(1)).is_none());
+    }
+
+    /// SEC-07 (chapter 08 §8.4): a purge deletes every track and keeps the counters, so the
+    /// next observation issues new IDs and the purged ones stay retired.
+    #[test]
+    fn sec_07_purge_drops_the_tracks_and_never_reissues_their_ids() {
+        let save = button(bx(0.0, 0.0, 40.0, 20.0), "Save");
+        let open = button(bx(0.0, 30.0, 40.0, 50.0), "Open");
+        let before = observe(&Registry::new("s", 1), &[save.clone(), open]).0;
+        let purged = before.purged();
+        assert_eq!(purged.tracks().count(), 0);
+        assert_eq!(purged.session_id(), "s");
+        assert_eq!(purged.geometry_epoch(), 1);
+        assert_eq!(purged.snapshot_id(), before.snapshot_id());
+        assert!(purged.is_retired(id(1)) && purged.is_retired(id(2)));
+
+        let (after, changes) = observe(&purged, &[save]);
+        assert_eq!(changes.created, vec![id(3)]);
+        assert_eq!(after.get(id(3)).map(|t| t.revision), Some(1));
+        assert_eq!(after.snapshot_id(), before.snapshot_id() + 1);
     }
 
     /// UT-36: one observation never feeds two tracks; indistinguishable cases abstain.

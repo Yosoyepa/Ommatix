@@ -1887,6 +1887,97 @@ fn identical_runs_produce_identical_pages() {
     assert_eq!(run(), run());
 }
 
+// ---- deletion of the engine's state (SEC-07, chapter 08 §8.4) ----
+
+/// The number of a snapshot identifier `s<n>`.
+fn snapshot_number(page: &ObservePage) -> u64 {
+    page.snapshot_id
+        .strip_prefix('s')
+        .and_then(|n| n.parse().ok())
+        .expect("a snapshot identifier of this engine")
+}
+
+#[test]
+fn sec_07_purge_deletes_the_snapshot_and_refuses_actions_and_cursors() {
+    let mut r = rig(form());
+    let page = r
+        .observe_with(&ObserveRequest {
+            limit: 1,
+            ..ObserveRequest::default()
+        })
+        .unwrap();
+    let cursor = page.next_cursor.clone().expect("truncated");
+    let label = page.elements[0].label.clone();
+    assert!(r.engine.last_timings().is_some());
+
+    r.engine.purge();
+
+    let refused = r
+        .engine
+        .execute_action(&Rig::action(&page, &label, "r1", ActionKind::Click));
+    assert_eq!(error_code(&refused), Some(ErrorCode::StaleSnapshot));
+    assert!(!refused.input_delivered());
+    let next = ObserveRequest {
+        limit: 1,
+        cursor: Some(cursor),
+        ..ObserveRequest::default()
+    };
+    assert_eq!(
+        r.observe_with(&next).unwrap_err().code,
+        ErrorCode::StaleSnapshot
+    );
+    assert!(r.engine.last_timings().is_none());
+    assert!(r.engine.accessibility_complete().is_none());
+    assert_eq!(r.engine.engine_metrics().pending_regions, 0);
+}
+
+#[test]
+fn sec_07_purge_never_issues_a_target_or_snapshot_identifier_twice() {
+    let mut r = rig(form());
+    let before = r.observe();
+    let old_ids: Vec<String> = before
+        .elements
+        .iter()
+        .map(|e| e.target_id.to_string())
+        .collect();
+
+    r.engine.purge();
+    let after = r.observe();
+
+    assert_eq!(after.elements.len(), before.elements.len());
+    for element in &after.elements {
+        let id = element.target_id.to_string();
+        assert!(!old_ids.contains(&id), "{id} was issued before the purge");
+    }
+    assert!(snapshot_number(&after) > snapshot_number(&before));
+    assert_eq!(r.engine.engine_metrics().observations, 2);
+}
+
+#[test]
+fn sec_07_a_request_from_before_a_purge_delivers_nothing_again() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    let mut click = Rig::action(&page, "Save", "r1", ActionKind::Click);
+    click.dry_run = false;
+    assert!(r.engine.execute_action(&click).input_delivered());
+
+    r.engine.purge();
+    // The journal is gone, so the replay meets the gate: nothing is published, so nothing is
+    // sent.
+    let replay = r.engine.execute_action(&click);
+    assert_eq!(error_code(&replay), Some(ErrorCode::StaleSnapshot));
+    assert!(!replay.input_delivered());
+
+    // After a new observation the old snapshot identifier is still refused.
+    r.observe();
+    let stale = r.engine.execute_action(&click);
+    assert_eq!(error_code(&stale), Some(ErrorCode::StaleSnapshot));
+    assert_eq!(r.world().delivered.len(), 1);
+    assert_eq!(r.engine.engine_metrics().delivered_actions, 1);
+}
+
 // ---- Algorithm 3A in the observation ----
 
 mod icons {

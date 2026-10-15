@@ -37,3 +37,4 @@ BDD-35,RF-13,SEC-05,features/06_accion_segura.feature,Foco no confirmado,EJECUTA
 BDD-36,RF-11,UT-45,features/06_accion_segura.feature,Ventana fuera del alcance,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-37,RF-11,UT-45,features/06_accion_segura.feature,Ventana no registrada,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-38,RF-11,UT-46,features/06_accion_segura.feature,Observación caducada,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-39,RF-16,SEC-07,features/07_retencion.feature,Fin de sesión sin estado conservado,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE

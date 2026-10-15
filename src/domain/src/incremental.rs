@@ -111,6 +111,17 @@ impl BgraFrame {
         &self.pixels
     }
 
+    /// Overwrites the pixels with zeros when this frame holds the only copy of its buffer, and
+    /// returns whether it did. A buffer still shared with another holder is left alone, so the
+    /// caller must not count on it being overwritten (chapter 08 §8.4).
+    pub fn overwrite(&mut self) -> bool {
+        let Some(pixels) = Arc::get_mut(&mut self.pixels) else {
+            return false;
+        };
+        pixels.fill(0);
+        true
+    }
+
     /// The whole frame as a box.
     pub fn bounds(&self) -> BBox {
         frame_box(self.width, self.height)
@@ -897,5 +908,242 @@ mod tests {
         assert_eq!(regions.len(), 1);
         assert_eq!(regions, vec![bx(32.0, 224.0, 288.0, 480.0)]);
         assert!(regions[0].contains(&support));
+    }
+
+    /// SEC-07 (chapter 08 §8.4): an unshared frame buffer is overwritten; one still held by
+    /// another frame is left alone.
+    #[test]
+    fn sec_07_frame_buffer_is_overwritten_only_when_nothing_else_holds_it() {
+        let len = 4 * 9 * 7;
+        let mut alone = BgraFrame::new(9, 7, 36, 1, vec![0xAB; len]).unwrap();
+        assert!(alone.overwrite());
+        assert!(alone.pixels().iter().all(|&b| b == 0));
+
+        let mut first = BgraFrame::new(9, 7, 36, 1, vec![0xAB; len]).unwrap();
+        let second = first.clone();
+        assert!(!first.overwrite());
+        assert_eq!(second.pixels(), &vec![0xAB; len][..]);
+    }
+
+    /// Fixed-seed generator (splitmix64): the same frames on every run, with no random crate
+    /// in the domain (chapter 05 §5.5).
+    struct Rng(u64);
+
+    impl Rng {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        /// A number in `0..n`, for `n > 0`.
+        fn below(&mut self, n: u64) -> u64 {
+            self.next_u64() % n
+        }
+    }
+
+    /// A base buffer and the byte edits that turn it into the current frame. Offsets are
+    /// distinct and every new value differs from the base byte, so each edit is a real change.
+    #[derive(Debug, Clone)]
+    struct Case {
+        width: u32,
+        height: u32,
+        pad: usize,
+        tile: u32,
+        base: Vec<u8>,
+        edits: Vec<(usize, u8)>,
+    }
+
+    impl Case {
+        fn stride(&self) -> usize {
+            4 * self.width as usize + self.pad
+        }
+
+        fn frames(&self) -> (BgraFrame, BgraFrame) {
+            let mut current = self.base.clone();
+            for &(offset, value) in &self.edits {
+                current[offset] = value;
+            }
+            let frame = |pixels: Vec<u8>| {
+                BgraFrame::new(self.width, self.height, self.stride(), 1, pixels).unwrap()
+            };
+            (frame(self.base.clone()), frame(current))
+        }
+
+        /// The dirty set from the byte positions alone, without any tile loop: a changed B,
+        /// G or R byte marks its tile; a changed alpha or padding byte marks nothing (OR-08..
+        /// OR-10, and OR-48 for every pixel of a small frame).
+        fn expected(&self) -> BTreeSet<TileCoord> {
+            let stride = self.stride();
+            self.edits
+                .iter()
+                .filter_map(|&(offset, _)| {
+                    let (row, col) = (offset / stride, offset % stride);
+                    let (x, channel) = (col / 4, col % 4);
+                    (col < 4 * self.width as usize && channel < 3)
+                        .then(|| TileCoord::new(x as u32 / self.tile, row as u32 / self.tile))
+                })
+                .collect()
+        }
+    }
+
+    /// The straightforward reference of chapter 05 §5.5: every pixel of every tile, by explicit
+    /// coordinates, comparing its B, G and R bytes. Alpha and padding are never read.
+    fn scalar_dirty_tiles(base: &BgraFrame, current: &BgraFrame, tile: u32) -> BTreeSet<TileCoord> {
+        let at = |f: &BgraFrame, x: u32, y: u32, c: usize| {
+            f.pixels()[y as usize * f.row_stride() + 4 * x as usize + c]
+        };
+        let mut dirty = BTreeSet::new();
+        for row in 0..current.height().div_ceil(tile) {
+            for col in 0..current.width().div_ceil(tile) {
+                let mut changed = false;
+                for y in row * tile..((row + 1) * tile).min(current.height()) {
+                    for x in col * tile..((col + 1) * tile).min(current.width()) {
+                        for c in 0..3 {
+                            changed |= at(base, x, y, c) != at(current, x, y, c);
+                        }
+                    }
+                }
+                if changed {
+                    dirty.insert(TileCoord::new(col, row));
+                }
+            }
+        }
+        dirty
+    }
+
+    /// `Err` with the three answers when the optimised diff, the scalar reference and the
+    /// expected set do not agree.
+    fn check(case: &Case) -> Result<(), String> {
+        let (base, current) = case.frames();
+        let expected = case.expected();
+        let optimised = dirty_tiles(Some(&base), &current, case.tile).unwrap();
+        let scalar = scalar_dirty_tiles(&base, &current, case.tile);
+        if optimised.full_refresh.is_some() || optimised.tiles != expected || scalar != expected {
+            return Err(format!(
+                "optimised {:?} (full refresh {:?}), scalar {scalar:?}, expected {expected:?}",
+                optimised.tiles, optimised.full_refresh
+            ));
+        }
+        Ok(())
+    }
+
+    /// Greedy reduction of a failing case: drops each edit the failure does not need.
+    fn reduce(mut case: Case) -> Case {
+        let mut i = 0;
+        while i < case.edits.len() {
+            let mut smaller = case.clone();
+            smaller.edits.remove(i);
+            if check(&smaller).is_err() {
+                case = smaller;
+            } else {
+                i += 1;
+            }
+        }
+        case
+    }
+
+    fn assert_matches_reference(case: Case) {
+        if check(&case).is_err() {
+            let minimal = reduce(case);
+            panic!(
+                "differential mismatch, reduced to {minimal:?}: {}",
+                check(&minimal).unwrap_err()
+            );
+        }
+    }
+
+    /// `base` with the bytes at `offsets` changed to other values (`rng` picks them).
+    fn edited(base: &Case, mut offsets: Vec<usize>, rng: &mut Rng) -> Case {
+        offsets.sort_unstable();
+        offsets.dedup();
+        let mut case = base.clone();
+        case.edits = offsets
+            .into_iter()
+            .map(|o| (o, base.base[o] ^ (1 + rng.below(255) as u8)))
+            .collect();
+        case
+    }
+
+    /// The bytes that edge cases are about: the first and last pixel of the first and last
+    /// row, each channel (alpha included), and the first and last padding byte of those rows.
+    fn edge_offsets(width: u32, height: u32, pad: usize, stride: usize) -> Vec<usize> {
+        let (w, h) = (width as usize, height as usize);
+        let mut out = Vec::new();
+        for y in [0, h - 1] {
+            for x in [0, w - 1] {
+                out.extend((0..4).map(|c| y * stride + 4 * x + c));
+            }
+            if pad > 0 {
+                out.extend([y * stride + 4 * w, y * stride + 4 * w + pad - 1]);
+            }
+        }
+        out
+    }
+
+    /// UT-08 (OR-48, OR-08..OR-10): the optimised tile comparison of `dirty_tiles` agrees with
+    /// a scalar reference on generated frames of odd sizes and strides. Every byte of a small
+    /// frame is changed on its own (every channel, alpha, padding, last row and column); big
+    /// frames get their edge bytes and sampled bytes; then random multi-byte edits.
+    #[test]
+    fn ut_08_differential_tile_diff_matches_scalar_reference_on_generated_frames() {
+        // (width, height, row padding, tile size)
+        const SHAPES: [(u32, u32, usize, u32); 16] = [
+            (1, 1, 0, 1),
+            (1, 1, 0, 64),
+            (1, 9, 0, 4),
+            (9, 1, 3, 4),
+            (3, 3, 0, 3),
+            (5, 4, 0, 2),
+            (7, 5, 1, 2),
+            (9, 7, 8, 4),
+            (17, 3, 2, 16),
+            (33, 31, 7, 8),
+            (63, 129, 5, 64),
+            (64, 64, 0, 64),
+            (65, 65, 0, 64),
+            (65, 65, 12, 64),
+            (130, 3, 2, 64),
+            (100, 1, 0, 7),
+        ];
+        const SEED: u64 = 0x5EED_0008;
+        let mut rng = Rng(SEED);
+        let mut checked = 0;
+        for (width, height, pad, tile) in SHAPES {
+            let stride = 4 * width as usize + pad;
+            let len = stride * height as usize;
+            let base: Vec<u8> = (0..len).map(|_| rng.next_u64() as u8).collect();
+            let template = Case {
+                width,
+                height,
+                pad,
+                tile,
+                base,
+                edits: Vec::new(),
+            };
+            let mut cases = vec![template.clone()];
+            if len <= 1_200 {
+                cases.extend((0..len).map(|o| edited(&template, vec![o], &mut rng)));
+            } else {
+                let edges = edge_offsets(width, height, pad, stride);
+                cases.extend(edges.iter().map(|&o| edited(&template, vec![o], &mut rng)));
+                for _ in 0..150 {
+                    let o = rng.below(len as u64) as usize;
+                    cases.push(edited(&template, vec![o], &mut rng));
+                }
+            }
+            for _ in 0..100 {
+                let n = 2 + rng.below(6) as usize;
+                let offsets = (0..n).map(|_| rng.below(len as u64) as usize).collect();
+                cases.push(edited(&template, offsets, &mut rng));
+            }
+            checked += cases.len();
+            for case in cases {
+                assert_matches_reference(case);
+            }
+        }
+        assert!(checked > 3_000, "only {checked} generated cases");
     }
 }
