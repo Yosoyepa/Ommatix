@@ -11,7 +11,7 @@ figure below comes from them.
 
 | # | Severity | Finding | Resolution | Test that covers the behaviour |
 |---|---|---|---|---|
-| 1 | Observation (fail-closed behaviour; not a safety failure) | After `s3-it03-open-1` was delivered (`effect_observed`), `s3-it03-close-1` and `s3-it03-close-2` were each refused with `STALE_SNAPSHOT` ("the screen changed since the observation; nothing was delivered; observe again"), after a fresh observation each time (`frame_seq` 7 and 9), 5.3 and 5.6 ms round trip, `input_delivered: false`. The close was delivered in the same round in Run 1 (after the `sec02r` step) and in Run 2b, and in S3 §8.2. | **None needed in the engine:** the refusal is the specified behaviour (SDD §2.6 and §2.9: a frame captured right before delivery must still be the committed base, otherwise nothing is delivered and a new observation is asked for). **Follow-up, not done here:** a settle observation in `tools/s3/mcp_driver.py` before the close; a measurement of idle observation pairs; an engine diagnostic that counts differing tiles on a freshness refusal; and, if the cause is confirmed as a harmless blink, a design decision on validating freshness by unchanged region (SDD §2.6 already allows it "after proving its correctness"). All in S3 §9.6. | `a_change_before_delivery_is_not_an_observed_effect` (`src/application/src/engine/tests.rs`: the screen changes after the observation, the live click is refused with `STALE_SNAPSHOT`, nothing is delivered, `delivered_actions` stays 0); `a_live_action_after_a_scaling_change_is_stale_and_sends_nothing` (same `fresh_frame` branch through a geometry change); `ut_38_action_on_previous_snapshot_is_stale_after_a_new_observation`; `an_action_before_any_observation_is_stale`; BDD-38 for the age bound (`stale_snapshot_asks_for_a_new_observation`, `src/acceptance/tests/thesis.rs`) |
+| 1 | Observation (fail-closed behaviour; not a safety failure) | After `s3-it03-open-1` was delivered (`effect_observed`), `s3-it03-close-1` and `s3-it03-close-2` were each refused with `STALE_SNAPSHOT` ("the screen changed since the observation; nothing was delivered; observe again"), after a fresh observation each time (`frame_seq` 7 and 9), 5.3 and 5.6 ms round trip, `input_delivered: false`. The close was delivered in the same round in Run 1 (after the `sec02r` step) and in Run 2b, and in S3 §8.2. | **None needed in the engine:** the refusal is the specified behaviour (SDD §2.6 and §2.9: a frame captured right before delivery must still be the committed base, otherwise nothing is delivered and a new observation is asked for). **Follow-up, not done here:** a settle observation in `tools/s3/mcp_driver.py` before the close; a measurement of idle observation pairs; an engine diagnostic that counts differing tiles on a freshness refusal; and, if the cause is confirmed as a harmless blink, a design decision on validating freshness by unchanged region (SDD §2.6 already allows it "after proving its correctness"). All in S3 §9.6. | `a_single_pixel_change_before_delivery_is_stale_and_sends_nothing` and `a_single_pixel_change_under_the_target_is_stale_and_sends_nothing` (`src/application/src/engine/tests/freshness.rs`: one pixel changed after the observation, far from or under the target; the live click is refused with `STALE_SNAPSHOT`, nothing is sent, and the refused click is not retried on the spent snapshot); `a_change_before_delivery_is_not_an_observed_effect` (`src/application/src/engine/tests.rs`: the screen changes after the observation, the live click is refused with `STALE_SNAPSHOT`, nothing is delivered, `delivered_actions` stays 0); `a_live_action_after_a_scaling_change_is_stale_and_sends_nothing` (same `fresh_frame` branch through a geometry change); `ut_38_action_on_previous_snapshot_is_stale_after_a_new_observation`; `an_action_before_any_observation_is_stale`; BDD-38 for the age bound (`stale_snapshot_asks_for_a_new_observation`, `src/acceptance/tests/thesis.rs`) |
 
 ## Analysis
 
@@ -20,7 +20,7 @@ figure below comes from them.
   committed base (`src/domain/src/incremental.rs`). One differing tile, or a full refresh, is
   `STALE_SNAPSHOT`, and the snapshot is spent. The comparison covers the whole frame (1920x1080 on
   output 0), is exact per pixel on the three colour channels of each 64x64 tile
-  (`tile_changed`; only alpha and row padding are ignored) and has no tolerance.
+  (`tile_changed`; only alpha and row padding are ignored) and has no tolerance. Confirmed from the code on 2026-10-15: `fresh_frame` (`act.rs:396-418`) compares against the committed base, `SnapshotStore::base()` (`snapshot.rs:90-92`), which `SnapshotStore::commit` sets to the observation's own frame (`snapshot.rs:128-135`; `observe.rs:578`, `observe.rs:661`); no caret mask, threshold or tolerance exists on that path, and a dry run returns before it (`act.rs:329-331`).
 - **What the base is.** The frame captured when the observation started (`captured_at` is that
   instant). The distance to the freshness capture is therefore about the observation's own
   duration, reported as `age_ms`.
@@ -51,10 +51,11 @@ figure below comes from them.
 
 ## Notes
 
-- **Not changed here.** No code, configuration or test. The follow-ups need their own PRs, each with
+- **No engine change.** The engine, its configuration and the dossier are unchanged; the tests that close the gap are named in the table. The follow-ups need their own PRs, each with
   a test that fails without it (AGENTS.md rule 10) where it changes behaviour.
-- **Coverage gap noticed.** No unit test changes a single pixel of an otherwise stable frame between
-  the observation and the live action; the cases above change the screen through a scripted redraw
-  (`reactions`) or a geometry change. The engine's tile comparison itself has the differential test
-  `ut_08_differential_tile_diff_matches_scalar_reference_on_generated_frames` (`src/domain/src/incremental.rs`),
-  so the gap is at the engine boundary, not in the diff.
+- **Coverage gap, closed.** Until the freshness tests were added, no unit test changed a single pixel of an
+  otherwise stable frame between the observation and the live action; the earlier cases changed the screen
+  through a scripted redraw (`reactions`) or a geometry change. The tests named in the table now do, and a
+  one-tile tolerance in `fresh_frame` makes both fail. The engine's tile comparison itself has the differential
+  test `ut_08_differential_tile_diff_matches_scalar_reference_on_generated_frames` and
+  `ut_03_single_pixel_on_odd_row_is_detected` (both in `src/domain/src/incremental.rs`), so the diff was never the gap.

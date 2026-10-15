@@ -73,6 +73,8 @@ struct World {
     events: Vec<&'static str>,
     /// 9x8 greyscale grids painted over a box at 2x2 pixels per cell (icons).
     textures: Vec<(BBox, Vec<u8>)>,
+    /// Single pixels painted over the scene, as a blinking caret would be: `(x, y, colour)`.
+    pixels: Vec<(u32, u32, [u8; 3])>,
     /// The accessibility tree of the foreground window (ADR-0017).
     accessible: Vec<AccessibleElement>,
     access_calls: Vec<Vec<BBox>>,
@@ -138,6 +140,7 @@ impl Default for World {
             foreground_script: VecDeque::new(),
             events: Vec::new(),
             textures: Vec::new(),
+            pixels: Vec::new(),
             accessible: Vec::new(),
             access_calls: Vec::new(),
             fail_access: false,
@@ -229,6 +232,11 @@ fn render(world: &World) -> BgraFrame {
                 px[i..i + 4].copy_from_slice(&[v, v, v, 255]);
             }
         }
+    }
+    for &(x, y, colour) in &world.pixels {
+        let i = y as usize * stride + 4 * x as usize;
+        px[i..i + 3].copy_from_slice(&colour);
+        px[i + 3] = 255;
     }
     BgraFrame::new(W, H, stride, world.epoch, px).unwrap()
 }
@@ -2664,6 +2672,7 @@ mod icons {
 mod accessibility;
 mod candidates;
 mod concurrency;
+mod freshness;
 mod identity;
 mod purge;
 mod security;
