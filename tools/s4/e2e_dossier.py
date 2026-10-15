@@ -34,6 +34,16 @@ unchanged.
                     (``Shell.Application``, read-only) must be the expected one; at the end the
                     tree must hold the same files and sizes. The window is closed by its handle (``WM_CLOSE``, never by
                     killing ``explorer.exe``) and only the tree this run created is deleted.
+``--app decoy``     BDD-35 on the real actuator: ``ommatix-testeditor.exe`` started with
+                    ``--decoy-focus``, whose ``Campo auxiliar`` hands the keyboard focus to ``Campo de
+                    destino`` when clicked. One ``type`` of the synthetic text into ``Campo auxiliar``
+                    goes through the gate. The engine must report ``indeterminate`` (the focusing click
+                    delivered, ``verified`` false, ``INDETERMINATE_EFFECT``) with no key sent; the same
+                    request_id repeated must return that stored result with no new delivery; and UI
+                    Automation must place the keyboard focus on ``Campo de destino`` (compared by
+                    RuntimeId in memory), so that a focus never moved cannot pass the case. The OS-side
+                    checks are the three lengths in the title (all 0) and the empty folder. A key that
+                    reached a field is the safety event ``keys_without_focus``: the invocation ends.
 
 Safety (AGENTS.md rules 6 and 7, ADR-0007, ADR-0012, ADR-0020):
 
@@ -56,6 +66,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -86,13 +97,20 @@ def dossier_serve_argv(args, live: bool) -> list:
 
 RUN_ROOT = "ommatix-e2e"
 RUN_ID_LIMIT = 64
-E2E_ID = {"editor": "E2E-02-plan", "explorer": "E2E-03-plan"}
+E2E_ID = {"editor": "E2E-02-plan", "explorer": "E2E-03-plan", "decoy": "BDD-35-live-plan"}
+# The applications that run the editor (the same binary, the same folder and checks).
+EDITOR_APPS = ("editor", "decoy")
 
 EDITOR_EXE = "ommatix-testeditor.exe"
 EDITOR_FIELD = "Editor de texto"
 EDITOR_SAVE = "Guardar"
 EDITOR_NOTE = "nota.txt"
 EDITOR_TEXT = driver.TYPED_TEXT  # synthetic: "prueba 123"
+# The decoy (BDD-35, real actuator side): the editor's opt-in flag, and its two fields. A click on
+# the first one hands the keyboard focus to the second (testeditor/src/main.rs, decoy_fields).
+DECOY_FLAG = "--decoy-focus"
+DECOY_FIELD = "Campo auxiliar"
+DECOY_TARGET = "Campo de destino"
 
 EXPLORER_EXE = "explorer.exe"
 EXPLORER_CLASS = "CabinetWClass"
@@ -274,11 +292,11 @@ def config_problems(app: str, config: dict) -> list[str]:
     for forbidden in FORBIDDEN_APPLICATIONS:
         if forbidden in allowed:
             problems.append(f"[safety] allowed_applications lists {forbidden}")
-    wanted = EDITOR_EXE if app == "editor" else EXPLORER_EXE
+    wanted = EDITOR_EXE if app in EDITOR_APPS else EXPLORER_EXE
     if wanted not in allowed:
         problems.append(f"[safety] allowed_applications does not list {wanted}")
     classes = safety.get("allowed_window_classes", {})
-    if app == "editor":
+    if app in EDITOR_APPS:
         if safety.get("window_pin_file"):
             problems.append("[safety] window_pin_file is set: a pin would deny the editor")
         if EXPLORER_EXE in allowed:
@@ -306,8 +324,91 @@ def pin_file_path(config_path: Path, config: dict) -> Path | None:
 # ---- flows ------------------------------------------------------------------------------------
 
 
-def editor_title(chars: int, saved: bool) -> str:
-    return f"Ommatix S4 editor [caracteres={chars} guardado={'si' if saved else 'no'}]"
+def editor_title(chars: int, saved: bool, decoy: tuple[int, int] | None = None) -> str:
+    """The title the editor sets (testeditor's `Editor::title`): the field's length and whether the
+    last save is current. With the decoy, `decoy` = (length of Campo auxiliar, length of Campo de
+    destino) follows; lengths only, never text."""
+    base = f"Ommatix S4 editor [caracteres={chars} guardado={'si' if saved else 'no'}"
+    if decoy is None:
+        return base + "]"
+    return f"{base} auxiliar={decoy[0]} destino={decoy[1]}]"
+
+
+TITLE_COUNTS = re.compile(r"caracteres=(\d+) guardado=(?:si|no) auxiliar=(\d+) destino=(\d+)\]")
+
+
+def decoy_counts(title: str) -> dict | None:
+    """The three lengths the decoy title shows (the main field, Campo auxiliar, Campo de destino),
+    or None when the title is not the decoy's. Numbers only: no text can be read from it."""
+    match = TITLE_COUNTS.search(title)
+    if match is None:
+        return None
+    return {"caracteres": int(match.group(1)), "auxiliar": int(match.group(2)),
+            "destino": int(match.group(3))}
+
+
+def keys_reached_a_field(counts: dict) -> bool:
+    """Whether any key reached one of the three fields (their lengths are not zero)."""
+    return bool(counts["caracteres"] or counts["auxiliar"] or counts["destino"])
+
+
+def focus_placement(focus: dict | None, editor_pid: int | None, decoy_id: str | None,
+                    target_id: str | None) -> str:
+    """Where UI Automation reports the keyboard focus: ``target`` (Campo de destino, by RuntimeId),
+    ``decoy`` (Campo auxiliar), ``elsewhere`` (another element, or another process) or ``unknown``
+    (no readable focus). The RuntimeIds are compared in memory and never recorded."""
+    if not focus or not focus.get("runtime_id"):
+        return "unknown"
+    if editor_pid is None or focus["pid"] != editor_pid:
+        return "elsewhere"
+    if focus["runtime_id"] == target_id:
+        return "target"
+    if focus["runtime_id"] == decoy_id:
+        return "decoy"
+    return "elsewhere"
+
+
+def decoy_problems(facts: dict) -> list[str]:
+    """Why the decoy case did not show BDD-35 on the real actuator; empty when it did. Pure: the
+    facts are statuses, codes, counts and booleans that the run read, never screen text."""
+    problems = []
+    if facts["status"] != "indeterminate" or facts["error"] != "INDETERMINATE_EFFECT":
+        problems.append("the engine did not report indeterminate with INDETERMINATE_EFFECT")
+    if facts["input_delivered"] is not True or facts["verified"] is not False:
+        problems.append("the focusing click was not reported delivered and unverified")
+    if facts["retryable"] is not False or facts["next_step"] != "reconcile_effect":
+        problems.append("the result does not say do not retry (reconcile_effect)")
+    if not facts["grounding_ok"]:
+        problems.append("the focusing click did not reach Campo auxiliar (identity after the click)")
+    if facts["placement"] != "target":
+        problems.append(f"UI Automation reports the keyboard focus {facts['placement']}, "
+                        "not on the redirect target: the case is not exercised")
+    if not facts["replay_is_stored"]:
+        problems.append("the repeated request_id did not return the stored result")
+    if facts["delivered_delta"] != 1 or facts["rejected_delta"] != 0:
+        problems.append(f"the engine counted {facts['delivered_delta']} deliveries and "
+                        f"{facts['rejected_delta']} rejections for one request")
+    if facts["counts"] is None:
+        problems.append("the window title cannot be read")
+    elif keys_reached_a_field(facts["counts"]):
+        problems.append("a key reached a field the engine had not confirmed (safety event)")
+    if not facts["folder_empty"]:
+        problems.append("the run folder is not empty")
+    return problems
+
+
+def decoy_flow() -> dict:
+    """BDD-35 on the real actuator: one `type` of the synthetic text into Campo auxiliar, whose
+    focusing click the editor redirects. The OS-side state is the title with every length at 0 and
+    the folder empty (no key reached any field, and nothing was saved)."""
+    return {
+        "exe": EDITOR_EXE,
+        "initial": {"present": ["pendiente"], "absent": ["guardado", "fallido"]},
+        "steps": [(DECOY_FIELD, NOT_BY_OCR, editor_state(editor_title(0, False, (0, 0)), "absent"),
+                   EDITOR_TEXT)],
+        "vocabulary": {"Editor", "Estado:", "pendiente", "guardado", "fallido", DECOY_FIELD,
+                       DECOY_TARGET},
+    }
 
 
 def note_state(root: Path, expected: bytes) -> str:
@@ -353,6 +454,39 @@ def editor_flow() -> dict:
         "vocabulary": {EDITOR_FIELD, EDITOR_SAVE, "Editor", "Estado:", "pendiente", "guardado",
                        "fallido"},
     }
+
+
+# The element UI Automation reports with keyboard focus, as ``pid TAB RuntimeId``. Read-only: the
+# RuntimeId is compared in memory with the two fields' RuntimeIds and never written to a record;
+# no name and no value is read.
+UIA_FOCUS_RUNTIME_PS = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$f = [System.Windows.Automation.AutomationElement]::FocusedElement
+if ($f) {
+  $rid = ''
+  try { $rid = ($f.GetRuntimeId() -join '.') } catch {}
+  [Console]::Out.Write("$($f.Current.ProcessId)`t$rid")
+}
+"""
+
+
+def parse_focus_runtime(output: str) -> dict | None:
+    """``{pid, runtime_id}`` from UIA_FOCUS_RUNTIME_PS; None when the output has another shape."""
+    parts = output.strip("\r\n").split("\t")
+    if len(parts) != 2 or not parts[0].strip().isdigit():
+        return None
+    return {"pid": int(parts[0]), "runtime_id": parts[1].strip()}
+
+
+def uia_focus_runtime() -> dict | None:
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", UIA_FOCUS_RUNTIME_PS],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             check=False, creationflags=driver.CREATE_NO_WINDOW, timeout=30).stdout
+    except subprocess.TimeoutExpired:
+        return None
+    return parse_focus_runtime(out)
 
 
 class NavLabel(str):
@@ -528,13 +662,13 @@ class DossierProtocol(driver.Protocol):
 
     # -- the checks of the flows
     def read_end_state(self, hwnd):
-        if self.args.app == "editor":
+        if self.args.app in EDITOR_APPS:
             return editor_state(self.title_of(hwnd),
                                 note_state(self.tree.root, EDITOR_TEXT.encode("utf-8")))
         return relative_parts(self.tree.root, self.location_of(self.explorer_hwnd))
 
     def require_foreground(self) -> dict:
-        if self.args.app == "editor":
+        if self.args.app in EDITOR_APPS:
             return super().require_foreground()
         # Explorer: the foreground is the one window this client opened, maximized on the
         # primary monitor; any other Explorer window (the owner's) stops the protocol.
@@ -611,6 +745,8 @@ class DossierProtocol(driver.Protocol):
         try:
             if self.args.app == "editor":
                 self.run_editor(res, n)
+            elif self.args.app == "decoy":
+                self.run_decoy(res, n)
             else:
                 self.run_explorer(res, n)
         except Abort as error:
@@ -633,7 +769,7 @@ class DossierProtocol(driver.Protocol):
             snap, elements, obs = self.observe()
             res["observations"].append(obs)
             seen = self.ocr_ok(elements, check)
-            if seen and (self.args.app != "editor"
+            if seen and (self.args.app not in EDITOR_APPS
                          or any(e.get("label_source") == "accessibility" for e in elements)):
                 return snap, elements, True
             time.sleep(0.5)
@@ -646,6 +782,10 @@ class DossierProtocol(driver.Protocol):
         if owner is not None:
             owner["is_app"] = pid is not None and owner["pid"] == pid
         return owner or {"unreadable": True}
+
+    def focus_runtime(self) -> dict | None:
+        """Read-only: the process and RuntimeId of the element that has the keyboard focus."""
+        return uia_focus_runtime()
 
     def run_editor(self, res: dict, n: int) -> None:
         tree = self.tree = RunTree(self.temp_root, new_run_id(f"s4-e2e02-r{n}"))
@@ -681,6 +821,130 @@ class DossierProtocol(driver.Protocol):
         if res["failure"] is None and self.args.mode == "run":
             self.steps(res, snap, elements, hwnd, pid)
             res["note_state"] = note_state(tree.root, EDITOR_TEXT.encode("utf-8"))
+
+    def run_decoy(self, res: dict, n: int) -> None:
+        """BDD-35 on the real actuator. The editor starts with --decoy-focus: a click on Campo
+        auxiliar hands the keyboard focus to Campo de destino. One `type` of the synthetic text on
+        Campo auxiliar goes through the engine's gate. The engine must report indeterminate, with
+        its focusing click delivered, verified false, and no key sent; a repeat of the same
+        request_id must return that stored result with no new delivery; and UI Automation must
+        place the keyboard focus on Campo de destino, so the case is not passed by a focus that was
+        never moved. This client sends no input itself."""
+        tree = self.tree = RunTree(self.temp_root, new_run_id(f"s4-bdd35-r{n}"))
+        folder = tree.create()
+        pid = self.editor_pid = self.spawn([self.args.editor_exe, "--folder", str(folder),
+                                            DECOY_FLAG])
+        self.started.add(pid)
+        ok, requests = self.wait_foreground(pid)
+        res["activation_requests"] = requests
+        res.update(driver.activation_fields(self.activation))
+        if not ok:
+            res["failure"] = "the editor did not reach the foreground maximized"
+            return
+        hwnd = self.app_window(pid)
+        self.app_hwnd = hwnd
+        time.sleep(self.args.settle)
+        snap, elements, visible = self.settle_observation(res, self.flow["initial"])
+        if not visible:
+            res["failure"] = "initial state not visible by OCR"
+        accessible = {e.get("label", "").strip() for e in elements
+                      if e.get("label_source") == "accessibility"}
+        res["accessibility_elements"] = sum(1 for e in elements
+                                            if e.get("label_source") == "accessibility")
+        if res["failure"] is None and not {DECOY_FIELD, DECOY_TARGET} <= accessible:
+            # Both fields are named by UI Automation only: without that evidence there is nothing
+            # to identify or to check the focus against. Nothing is sent.
+            res["uia_focus"] = self.focus_owner(pid)
+            res["failure"] = "no accessibility evidence for the decoy fields"
+        if res["failure"] is None:
+            initial = editor_state(editor_title(0, False, (0, 0)), "absent")
+            if self.read_end_state(hwnd) != initial:
+                res["failure"] = "the decoy editor does not start empty with its folder empty"
+        if self.args.mode == "probe":
+            self.probe_print(elements)
+        if res["failure"] is None and self.args.mode == "run":
+            self.decoy_step(res, snap, elements, hwnd, pid)
+            res["note_state"] = note_state(tree.root, EDITOR_TEXT.encode("utf-8"))
+
+    def decoy_step(self, res: dict, snap: dict, elements: list[dict], hwnd, pid: int) -> None:
+        """The one request of the case and its checks (see decoy_problems). Nothing is sent before
+        the decoy's point is grounded to the decoy by identity (ADR-0022, rule 1), and nothing is
+        retried: the repetition is the stored-result check, not a second delivery."""
+        field = self.target(elements, DECOY_FIELD)
+        redirect = self.target(elements, DECOY_TARGET)
+        if field is None or redirect is None:
+            res["failure"] = "the decoy fields are not both confirmed exactly once"
+            return
+        res["steps"] = 1
+        fg = self.require_foreground()
+        ident = self.identify_before(res, fg, DECOY_FIELD, field)
+        if ident is None:
+            return
+        pre = self.pre_click_grounding(1, fg, DECOY_FIELD, field, ident)
+        res.setdefault("pre_grounded", []).append({"attempt": 1, **pre})
+        if not pre["grounded"]:
+            res["failure"] = f"no request, the decoy point is not grounded ({pre['status']})"
+            return
+        redirect_record, redirect_ident = self.identity_lookup(fg["hwnd"], DECOY_TARGET, redirect)
+        res["redirect_identity"] = redirect_record["status"]
+        if redirect_ident is None:
+            res["failure"] = f"no request, the redirect target's identity is {redirect_record['status']}"
+            return
+        before = self.metrics()
+        args = {"request_id": f"s4-bdd35-r{res['run']}-1", "session_id": snap["session_id"],
+                "snapshot_id": snap["snapshot_id"], "geometry_epoch": snap["geometry_epoch"],
+                "target_id": field["target_id"], "expected_revision": field["revision"],
+                "action": "type", "dry_run": False, "expected_effect": "visual_change",
+                "text": EDITOR_TEXT}
+        self.spend_live()
+        res["actions_requested"] += 1
+        out, _, meta, ms = self.srv.call("execute_action", args)
+        error = out.get("error") or {}
+        err = error.get("code")
+        act = {"step": 1, "action": "type", "expected_effect": "visual_change",
+               "status": out.get("status"), "input_delivered": out.get("input_delivered"),
+               "verified": out.get("verified"), "observed_effect": out.get("observed_effect"),
+               "error": err, "rtt_ms": round(ms, 1), "stages_ms": driver.stage_ms(meta),
+               "target_role": field["role"], "label_source": field["label_source"]}
+        res["actions"].append(act)
+        driver.log("action", run=res["run"], **act)
+        grounding_ok = False
+        if out.get("input_delivered"):
+            res["delivered"] += 1
+            res["typed_delivered"] += 1
+            # The focusing click must have reached Campo auxiliar, by identity: a click on the
+            # target itself would leave the focus on it too and look like the case.
+            grounding_ok = driver.identity_hit(ident, self.cursor_chain())
+            res.setdefault("grounding", []).append(grounding_ok)
+            if not grounding_ok:
+                res["grounding_wrong"] = 1
+        # The repetition, exactly: the stored result, and no second delivery.
+        self.spend_live()
+        again, _, _, _ = self.srv.call("execute_action", args)
+        again_error = (again.get("error") or {}).get("code")
+        after = self.metrics()
+        counts = decoy_counts(self.title_of(hwnd))
+        placement = focus_placement(self.focus_runtime(), pid, ident.get("runtime_id"),
+                                    redirect_ident.get("runtime_id"))
+        facts = {
+            "status": out.get("status"), "error": err,
+            "input_delivered": out.get("input_delivered"), "verified": out.get("verified"),
+            "retryable": error.get("retryable"), "next_step": error.get("next_step"),
+            "placement": placement,
+            "grounding_ok": grounding_ok,
+            "replay_is_stored": ((again.get("status"), again_error, again.get("input_delivered"))
+                                 == (out.get("status"), err, out.get("input_delivered"))),
+            "delivered_delta": after["delivered_actions"] - before["delivered_actions"],
+            "rejected_delta": after["rejected_actions"] - before["rejected_actions"],
+            "counts": counts,
+            "folder_empty": note_state(self.tree.root, EDITOR_TEXT.encode("utf-8")) == "absent",
+        }
+        res["decoy"] = facts
+        if counts is not None and keys_reached_a_field(counts):
+            res["keys_without_focus"] = 1  # a safety event: the run ends the invocation
+        problems = decoy_problems(facts)
+        res["failure"] = "; ".join(problems) or None
+        res["success"] = res["failure"] is None
 
     def run_explorer(self, res: dict, n: int) -> None:
         tree = self.tree = RunTree(self.temp_root, new_run_id(f"s4-e2e03-r{n}"))
@@ -764,7 +1028,7 @@ class DossierProtocol(driver.Protocol):
         cannot be done is recorded."""
         closed = True
         try:
-            if self.args.app == "editor":
+            if self.args.app in EDITOR_APPS:
                 self.close(self.editor_pid)
                 closed = self.editor_pid not in self.started
             elif self.explorer_hwnd is not None:
@@ -885,7 +1149,12 @@ def main() -> int:
     except Abort as error:
         driver.log("abort", reason=str(error))
         return 2
-    flow = editor_flow() if args.app == "editor" else explorer_flow("(set per run)")
+    if args.app == "editor":
+        flow = editor_flow()
+    elif args.app == "decoy":
+        flow = decoy_flow()
+    else:
+        flow = explorer_flow("(set per run)")
     driver.log("start", suite="dossier", app=args.app, mode=args.mode, runs=args.runs,
                live_input=live, config_sha256=hashlib.sha256(raw).hexdigest(),
                max_live=args.max_live, round_start=args.round_start, ledger_start=ledger_now,
