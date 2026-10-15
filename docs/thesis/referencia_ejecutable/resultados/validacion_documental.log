@@ -103,6 +103,7 @@ PASS referencias:0023-licence-and-reduced-mvp-scope.md []
 PASS referencias:0024-observation-spans-and-a-switched-full-frame-baseline.md []
 PASS referencias:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
 PASS referencias:0026-native-identity-discriminant.md []
+PASS referencias:0027-candidate-enumeration-with-an-rstar-index.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 
@@ -190,6 +191,31 @@ PASS gherkin_estructura:BDD-38
 PASS gherkin_cabecera:07_retencion.feature 
 PASS gherkin_id_unico:BDD-39 
 PASS gherkin_estructura:BDD-39 
+PASS gherkin_cabecera:08_indice_candidatos.feature 
+PASS gherkin_id_unico:BDD-41 
+PASS gherkin_estructura:BDD-41 
+PASS gherkin_id_unico:BDD-42 
+PASS gherkin_estructura:BDD-42 
+PASS gherkin_id_unico:BDD-43 
+PASS gherkin_estructura:BDD-43 
+PASS gherkin_id_unico:BDD-44 
+PASS gherkin_estructura:BDD-44 
+PASS gherkin_id_unico:BDD-45 
+PASS gherkin_estructura:BDD-45 
+PASS gherkin_id_unico:BDD-46 
+PASS gherkin_estructura:BDD-46 
+PASS gherkin_id_unico:BDD-47 
+PASS gherkin_estructura:BDD-47 
+PASS gherkin_id_unico:BDD-48 
+PASS gherkin_estructura:BDD-48 
+PASS gherkin_id_unico:BDD-49 
+PASS gherkin_estructura:BDD-49 
+PASS gherkin_id_unico:BDD-50 
+PASS gherkin_estructura:BDD-50 
+PASS gherkin_id_unico:BDD-51 
+PASS gherkin_estructura:BDD-51 
+PASS gherkin_id_unico:BDD-52 
+PASS gherkin_estructura:BDD-52 
 PASS escenarios_matriz_completos 
 PASS trazabilidad:BDD-01 
 PASS trazabilidad:BDD-02 
@@ -231,6 +257,18 @@ PASS trazabilidad:BDD-37
 PASS trazabilidad:BDD-38 
 PASS trazabilidad:BDD-39 
 PASS trazabilidad:BDD-40 
+PASS trazabilidad:BDD-41 
+PASS trazabilidad:BDD-42 
+PASS trazabilidad:BDD-43 
+PASS trazabilidad:BDD-44 
+PASS trazabilidad:BDD-45 
+PASS trazabilidad:BDD-46 
+PASS trazabilidad:BDD-47 
+PASS trazabilidad:BDD-48 
+PASS trazabilidad:BDD-49 
+PASS trazabilidad:BDD-50 
+PASS trazabilidad:BDD-51 
+PASS trazabilidad:BDD-52 
 PASS doc01_pruebas_existen:RF-01 []
 PASS doc01_adr_existen:RF-01 ADR-0008; ADR-0016
 PASS doc01_propietario:RF-01 
@@ -383,6 +421,7 @@ PASS doc01_adr_pruebas:0023-licence-and-reduced-mvp-scope.md []
 PASS doc01_adr_pruebas:0024-observation-spans-and-a-switched-full-frame-baseline.md []
 PASS doc01_adr_pruebas:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
 PASS doc01_adr_pruebas:0026-native-identity-discriminant.md []
+PASS doc01_adr_pruebas:0027-candidate-enumeration-with-an-rstar-index.md []
 PASS doc01_prueba_enlazada:UT-01 
 PASS doc01_prueba_enlazada:UT-02 
 PASS doc01_prueba_enlazada:UT-03 
@@ -473,6 +512,20 @@ PASS doc01_prueba_enlazada:EV-01
 PASS doc01_prueba_enlazada:EV-02 
 PASS doc01_prueba_enlazada:REL-01 
 PASS doc01_prueba_enlazada:DOC-01 
+PASS doc01_prueba_enlazada:IDX-01 
+PASS doc01_prueba_enlazada:IDX-02 
+PASS doc01_prueba_enlazada:IDX-03 
+PASS doc01_prueba_enlazada:IDX-04 
+PASS doc01_prueba_enlazada:IDX-05 
+PASS doc01_prueba_enlazada:IDX-06 
+PASS doc01_prueba_enlazada:IDX-07 
+PASS doc01_prueba_enlazada:IDX-08 
+PASS doc01_prueba_enlazada:IDX-09 
+PASS doc01_prueba_enlazada:IDX-10 
+PASS doc01_prueba_enlazada:IDX-11 
+PASS doc01_prueba_enlazada:IDX-12 
+PASS doc01_prueba_enlazada:IDX-13 
+PASS doc01_prueba_enlazada:IDX-14 
 PASS doc01_estados_de_pruebas []
 PASS doc01_estados_de_escenarios []
 PASS doc01_estado_de_requisitos 
