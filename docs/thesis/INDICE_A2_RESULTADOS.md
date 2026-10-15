@@ -79,7 +79,7 @@ Los umbrales son los de `04_Protocolo_y_Gates.md`, aprobados por el responsable 
 ## 2. Medio de la medición
 
 - **Corrida definitiva:** 15 de octubre de 2026, de 04:12 a 04:38 (hora local). Un solo proceso, `candidate_index.exe` compilado en `--release`, un hilo de medición, sin pantalla ni entrada de teclado o ratón.
-- **Commit medido:** `5c28ec4`. El protocolo quedó en `4289ed8`. Después sólo cambió el código del arnés, en `28cc215` (tope de tiempo por celda, descrito en §3.1), y los commits posteriores son documentación. El código Rust del medido es el de `28cc215`.
+- **Commit medido:** `5c28ec4` (el mismo árbol aparece como `3f5e499` tras reajustar la rama sobre `origin/main`; el código Rust y los manifiestos son idénticos, sin líneas distintas). El protocolo quedó en `4289ed8`. Después sólo cambió el código del arnés, en `28cc215` (tope de tiempo por celda, descrito en §3.1), y los commits posteriores son documentación. El código Rust del medido es el de `28cc215`.
 - **Compilador:** rustc 1.99.0 (b940084d7, 2026-09-28), perfil `release` del espacio de trabajo (`lto = "thin"`, `codegen-units = 1`).
 - **Máquina:** AMD Ryzen 7 5700X (8 núcleos, 16 hilos), Windows 11 Pro 10.0.26300. Es la misma máquina de `S0_RESULTADOS.md` §11.
 - **Carga antes de empezar:** CPU total entre 7 y 18 %, sin procesos `cargo` ni `rustc`. Durante la corrida no se muestreó la carga. La corrida anterior (§3.8) sí se hizo con otras sesiones compilando.
