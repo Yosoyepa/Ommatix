@@ -1793,3 +1793,112 @@ Hashes (SHA-256) de lo que cambia, compilado en el árbol de trabajo de esta ram
 ### Estado
 
 Hallazgo 1 de la décima ronda: causa verificada en el toolkit y corregida en el editor, con pruebas; **no confirmada en vivo**. Hallazgo 2: causa verificada por reproducción y corregida en el adaptador, con pruebas y mediciones; **no confirmada en vivo**. Nuevo para el responsable: la tolerancia a cursores parpadeantes en aplicaciones reales (arriba, §1). Cuaderno: 490, sin cambio. Las matrices no cambian.
+
+## Décima ronda (continuación): el piloto de E2E-02 no pasa y E2E-03 se detiene en su primer clic por la regla de anclaje
+
+**Fecha:** 14 de octubre de 2026. Rama `docs/s4-tenth-round-continuation`, desde `main` en `0cb126f` (fusión de #27). **No cambia código.** Ejecuta lo que la décima ronda dejó abierto: E2E-02 (editor propio) y E2E-03 (Explorador, ADR-0020), con la autorización del responsable para la continuación, el cupo de 200 desde `--round-start 429`, `--operator-activation` apagado y el responsable sin usar el equipo. Regla de seguridad: un clic anclado en un control incorrecto, un falso éxito del motor o una entrada fuera del flujo o de la ventana permitida detienen todo el trabajo en vivo. **Esa parada se activó** en el primer clic del piloto de E2E-03 (§3.3).
+
+Resultado:
+
+- **E2E-02 (editor propio):** el sondeo pasó; el piloto **no pasó** su criterio, porque hubo un `STALE_SNAPSHOT` en el primer `type`, antes de cualquier entrada. La serie queda bloqueada: 0 corridas puntuadas.
+- **E2E-03 (Explorador):** la señal ACTIVE CONTROL pasó y el sondeo cumplió la compuerta; el primer clic del piloto activó la parada de seguridad. No hubo piloto válido ni serie.
+- **Cuaderno:** 490 → 494, es decir, 4 solicitudes reales (65 de 200 de la ronda; 135 disponibles).
+
+### 1. Verificación previa a la entrada en vivo
+
+- Motor y editor recompilados desde `main`. SHA-256:
+  - Motor, `target/release/ommatix.exe` (`cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia`): **`a137ccd15cd7b3974d394c5f2f097d0909eb8d02589431e005c857afbae7d548`** (antes `38080631…e5d3`, de `193e7ce`).
+  - Editor, `ommatix-testeditor.exe` (`cargo build --release` en `tools/s4/testeditor`): **`f358b3a991754fc95eaabf3c5552318559643f915fbc2ceb9ee040e91f911d20`** (antes `32b8fadd…8f8`).
+  - Las compilaciones de la undécima ronda (`6e8f6fdd…`, `868cadb7…`) se hicieron en otro directorio y no son comparables con éstas.
+- Clientes sin cambio: `tools/s4/e2e_driver.py` `143ea45464274936e5b5eca06ade8279117d3c33cbc0b13257b74753341aee3d`; `tools/s4/e2e_dossier.py` `85111edbe1b7acc113f71e88d48ba41d6c1fe485b5571f9b0c827d53d7f316df`.
+- Configuraciones sin cambio: `s4r10-live.toml` `0428daf861e1567e1be9eb8588887fd56f370beef863099904cd9bd3ce5ec1e2`; `s4r10-explorer.toml` `ab6c33b5144e6785e4be60aac71a6d54b93c29e8f383932ed60324dbaaa233d7`.
+- Artefactos fijados (sin cambio): manifiesto `f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47`; ONNX Runtime `e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40`; DirectML `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1`.
+- Comprobaciones, todas con código de salida 0: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia --all-targets -- -D warnings`; `cargo test --workspace` (447 pasadas, 0 fallidas, 1 ignorada); `python -m unittest discover -s tools/s4 -p "test_*.py"` (258 correctas); editor: `cargo clippy -- -D warnings` y `cargo test` (24 pasadas); desde `docs/thesis`: `referencia_ejecutable/run_tests.py` (48 de 48) y `validar_paquete.py` (449 comprobaciones, 0 fallidas). Los cuatro archivos de `referencia_ejecutable/resultados/` que cambiaron sólo en fecha, plataforma y duración se restauraron con `git restore`.
+- Comprobador de sólo lectura, fuera del repositorio, antes de cada invocación: hashes, ausencia de `stop.flag` y de `window.pin`, cuaderno, procesos de prueba, ventanas del Bloc de notas del responsable y carpeta temporal del cliente. **Excepción registrada:** dos ventanas `CabinetWClass` minimizadas y fuera de pantalla (−32000, −32000) del proceso del shell (PID 36160), que no estaban al cierre de la décima ronda. El comprobador las marca como bloqueantes. Se aceptaron para E2E-02 y E2E-03 porque el cliente sólo toma como suya la ventana nueva cuya carpeta es la raíz de la corrida, el motor sólo entrega a la ventana registrada, y ninguna de las dos está en pantalla (hallazgo 9).
+
+### 2. Invocaciones en vivo
+
+| Paso | Invocación (resumen) | Solicitudes | Resultado |
+|---|---|---|---|
+| E2E-02, sondeo (sin entrada) | `e2e_dossier.py --app editor --mode probe --runs 1` con `s4r10-live.toml` | 0 | 6 elementos de accesibilidad; «Editor de texto» `input` confirmado; «Guardar» `button` confirmado; ventana cerrada; árbol borrado. |
+| E2E-02, piloto | `--mode run --runs 1 --max-live 8 --round-start 429` | 3 | **No pasa** el criterio: `STALE_SNAPSHOT` en el primer `type`; reintento entregado y verificado; «Guardar» entregado con `effect_observed`; comprobaciones del sistema 2 de 2. Serie bloqueada; no se repitió. |
+| Señal ACTIVE CONTROL (Explorador) | `ommatix.exe serve --source dxgi --output 0 --config s4r10-explorer.toml --input sendinput`, con la entrada en `/dev/null` | 0 | Línea con el alcance por ventana y el archivo de la ventana; sin avisos; salida 0; ningún byte en la salida estándar. |
+| E2E-03, sondeo (sin entrada) | `--app explorer --mode probe --runs 1` con `s4r10-explorer.toml` | 0 | Compuerta cumplida: «carpeta-a» y la raíz, `button` confirmados y únicos; «Atrás», `unknown` (esperable). |
+| E2E-03, piloto | `--mode run --runs 1 --max-live 8 --round-start 429` | 1 | **Parada de seguridad** en el primer clic: entregado, pero el control bajo el cursor no era el identificado (`grounding_wrong` 1; `engine_false_success` 1). Sin más solicitudes. |
+
+Todas las invocaciones usaron rutas absolutas. No se usó `--calc-standard`, ni `--operator-activation`, ni ninguna entrada fuera de los dos flujos.
+
+### 3. Resultados
+
+#### 3.1 E2E-02, editor propio
+
+- **Sondeo.** 59 elementos del motor, 6 de ellos con origen de accesibilidad. «Editor de texto» es un `input` confirmado por accesibilidad, y «Guardar» un `button` confirmado por accesibilidad. El cliente no registra `uia_focus` cuando hay evidencia de accesibilidad.
+- **Piloto.**
+  - `type` (paso 1), primer intento: `rejected` con `STALE_SNAPSHOT`, sin entrega; la comprobación de frescura tardó 9 ms.
+  - `type`, reintento: `effect_observed`, entregado y verificado; `rtt` 52,0 ms.
+  - Clic en «Guardar» (paso 2): `effect_observed`, entregado y verificado; anclaje por identidad a un `Button` confirmado; `rtt` 72,0 ms.
+  - Comprobaciones del sistema, 2 de 2: tras escribir, la carpeta estaba vacía y el título decía `caracteres=10 guardado=no`; tras guardar, la carpeta tenía exactamente `nota.txt`, con los bytes del texto escrito, y el título decía `guardado=si`.
+  - Del cliente: `success` verdadero, `engine_false_success` 0, `grounding_wrong` 0. Activación: `attach_show_top`, gestión de la ventana sin entrada.
+- **Criterio del piloto.** La orden exige: `type` entregado y verificado; «Guardar» entregado con `effect_observed`; `nota.txt` con los bytes escritos; y **ningún `STALE_SNAPSHOT`**. Los tres primeros se cumplen y el cuarto no: el primer `type` fue rechazado. Se aplicó el criterio literal, así que **el piloto no pasa**. Lectura alternativa, que decide el responsable: el rechazo fue anterior a cualquier entrada y el reintento se entregó. El piloto no se repitió: el bloqueo de la serie es la regla del responsable, y repetirlo sería decisión suya.
+- **Causa.** No verificada. El rechazo ocurrió antes de que el campo tuviera el foco de teclado, así que el parpadeo del cursor (hallazgo 1 de la décima ronda, ya corregido en el editor) no lo explica. Candidatos sin comprobar: un cambio de pantalla al activar la ventana o en su primera pintura.
+
+#### 3.2 Señal ACTIVE CONTROL del Explorador
+
+Antes de cualquier solicitud, `serve` con la configuración del Explorador imprimió: «ACTIVE CONTROL: live input is enabled for explorer.exe (only windows of class CabinetWClass of explorer.exe) (only the window whose handle … holds); the agent acts only with dry_run: false; to stop, create … or press Ctrl+C». No hubo avisos sobre `explorer.exe` sin ventana registrada. Con esto se cierra el punto 7 de la [revisión de la décima ronda](../reviews/2026-10-14-s4-tenth-round.md). Las otras notas de arranque (`max_snapshot_age_ms` todavía sin aplicar y ausencia de prototipos de icono) son las de cualquier arranque de esta compilación.
+
+#### 3.3 E2E-03, Explorador
+
+- **Ventana.** El cliente abrió una ventana sobre la carpeta de la corrida, la reconoció como la única ventana nueva cuya carpeta es la raíz (la ventana empieza en «carpeta-b»), escribió `window.pin`, la llevó al frente y la maximizó. La cerró el cliente al terminar, y `window.pin` no existe.
+- **Sondeo** (sin entrada). 210 elementos del motor; la zona de las migas es `unknown`, que el cliente no exige. «carpeta-a»: `button` confirmado y único (UIA: `SplitButton`). La raíz: `button` confirmado y único (UIA: `SplitButton`). «Atrás»: `button` con `unknown` (UIA: `Button`, `AutomationId` `backButton`), esperable en una ventana sin historial. **Compuerta cumplida.**
+- **Piloto, paso 1** (clic en la miga «carpeta-a»). Antes del clic, el anclaje fue el `SplitButton` confirmado con su `RuntimeId`. El motor entregó el clic y respondió `effect_observed` (`rtt` 72,3 ms); la comprobación del sistema (carpeta actual de la ventana) pasó. Después de la entrega, el cliente leyó el control bajo el cursor, tras descender por la isla XAML (profundidad 4, 64 elementos visitados, sin truncar ni ambigüedad): era un `Text`, hijo de la miga, con un `RuntimeId` distinto. Resultado: `grounding_wrong` 1; `engine_false_success` 1 según la definición del cliente; fallo «step 1: the control under the cursor is not the element found before the click».
+- **Parada.** Según la regla del responsable, el trabajo en vivo se detuvo. No se enviaron el paso 2 (la raíz), el paso 3 («Atrás»), un piloto repetido ni las corridas puntuadas.
+- **Lo que muestra el sistema.** El árbol quedó igual (`tree_unchanged`); el cliente cerró la ventana que abrió; se borraron 2 archivos y 3 carpetas de la corrida; no quedó ningún `window.pin`.
+- **Lectura.** La entrega fue en el centro de la miga y la carpeta cambió a «carpeta-a», lo que sugiere que el clic hizo lo previsto. La regla de identidad, sin embargo, compara el `RuntimeId` del control bajo el cursor con el identificado antes y no admite un descendiente. Si el clic fue correcto, es decisión del responsable (hallazgo 8). El cliente no se cambió: está fijado para la ronda.
+
+#### 3.4 Latencias
+
+Acciones entregadas, de `_meta`: piloto de E2E-02, `type` con `rtt` 52,0 ms (`action_total` 51,7 ms) y clic de «Guardar» con `rtt` 72,0 ms (`action_total` 71,6 ms); piloto de E2E-03, clic de la miga con `rtt` 72,3 ms (`action_total` 72,1 ms). Son tres acciones en una sesión: no son mediciones de RNF-05 (S0 §10).
+
+#### 3.5 Totales y seguridad
+
+- **Solicitudes reales:** 4 (cuaderno 490 → 494). **Entregadas:** 3 (2 en E2E-02, 1 en E2E-03). **Rechazadas:** 1 (`STALE_SNAPSHOT`, en E2E-02). **`indeterminate`:** 0. **`POLICY_DENIED`:** 0.
+- **Verificación por el estado del sistema:** 3 de 3 entregas pasaron.
+- **Falsos éxitos según el cliente:** 1 (E2E-03, paso 1). **Clics anclados en un control incorrecto según el cliente:** 1 (el mismo).
+- **Entradas:** en E2E-02, la escritura de «prueba 123» y un clic en «Guardar» en el editor propio; en E2E-03, un clic en la miga «carpeta-a» de la ventana que abrió el cliente. Según los registros del cliente, ninguna otra ventana recibió entrada.
+- **Capturas y texto de pantalla:** ninguno guardado.
+
+#### 3.6 Hallazgos
+
+| # | Severidad | Hallazgo | Estado y siguiente paso |
+|---|---|---|---|
+| 7 | Mayor (E2E-02) | El piloto no cumple «sin `STALE_SNAPSHOT`»: el primer `type` fue rechazado antes de entregar; el reintento y el resto se entregaron y se verificaron. | Abierto. Decide el responsable (§5). Causa no verificada. |
+| 8 | Seguridad (E2E-03) | El primer clic se entregó y el cliente lo cuenta como control incorrecto (hijo de texto del `SplitButton` identificado) y como falso éxito del motor: parada de seguridad. | Abierto. Decide el responsable (§5). Sin cambio de código. |
+| 9 | Observación (escritorio del shell) | Dos ventanas `CabinetWClass` minimizadas, fuera de pantalla, del proceso del shell (PID 36160), que no estaban al cierre de la décima ronda. No son del cliente y no se tocaron. | Abierto: confirmar de quién son. |
+| 10 | Observación (Bloc de notas del responsable) | Sin cambio: 23164 con dos ventanas minimizadas; 8960 sin ventana. | Sin cambio. |
+| 11 | Cerrado: ACTIVE CONTROL de la configuración del Explorador | Comprobado sin entrada al arrancar el motor: nombra el alcance y no avisa. Cierra el punto 7 de la décima ronda. | Cerrado. |
+| 12 | Documentación | Esta sección de la preparación del dossier (§3, «El flujo») describe tres clics: «carpeta-a» y «carpeta-b» en el panel de navegación, y la raíz en la ruta. El cliente fijado hace clic en las migas «carpeta-a» y raíz, y después en «Atrás», partiendo de «carpeta-b». | Abierto. El cliente es el contrato ejecutado; el texto se corrige en un cambio de documentación aprobado. |
+
+### 4. Estado del escritorio, del cuaderno y de `stop.flag`
+
+- **Procesos de prueba:** ninguno al terminar. El cliente cerró el editor y su ventana del Explorador; la comprobación de la señal terminó con salida 0 al cerrar su entrada.
+- **Carpeta temporal del cliente (`%TEMP%\ommatix-e2e`):** vacía.
+- **`window.pin`:** no existe. **`stop.flag`:** ausente; ninguna invocación lo creó (el cliente lo crea sólo tras tres fallos seguidos, y hubo uno).
+- **Bloc de notas del responsable:** 23164 con sus dos ventanas minimizadas; 8960 sin ventana. Sin cambio.
+- **Shell (`explorer.exe`, PID 36160):** una ventana `CabinetWClass` oculta (la base de la décima ronda) y las dos minimizadas del hallazgo 9.
+- **Cuaderno:** 494 (65 de 200 solicitudes de la ronda; 135 disponibles).
+
+### 5. Qué decide el responsable
+
+1. **E2E-02:** si el `STALE_SNAPSHOT` previo a cualquier entrada cuenta como piloto no superado (aquí se aplicó el criterio literal) y si el piloto se repite en otra ronda.
+2. **E2E-03:** si el anclaje acepta como el mismo control un descendiente del identificado (cambio del cliente con una prueba que falle sin él, un hash nuevo y una ronda aparte); si el flujo cambia de objetivos; o si el clic del primer paso se considera correcto y sólo se cambia la regla para este flujo.
+3. **Ventanas del shell:** confirmar de quién son las dos ventanas minimizadas (hallazgo 9).
+4. **Cupo:** quedan 135 con `--round-start 429`, o una ronda nueva puede empezar en 494.
+5. **Matriz:** esta continuación no cambia `matrices/plan_pruebas.csv`; S4R-02 queda como está en `main`, según la décima ronda.
+
+### 6. Ejecución
+
+Orden: verificación previa; construcción de motor y editor; comprobación de la señal ACTIVE CONTROL (sin solicitudes); sondeo de E2E-02; piloto de E2E-02 (no pasó: serie bloqueada); sondeo de E2E-03 (compuerta cumplida); piloto de E2E-03 (parada de seguridad). Cada invocación precedida del comprobador. Los registros y los JSONL están en la carpeta de ejecuciones, fuera del repositorio; contienen estados, códigos, contadores, tiempos, tipos de control, identificadores de automatización y las etiquetas fijas del protocolo, pero ninguna captura ni texto de pantalla.
+
+### Estado
+
+Hallazgos 7 y 8: abiertos, decisión del responsable; ninguno está confirmado por una corrida completa. Hallazgo 11: cerrado. Cuaderno: 494. Las matrices no cambian, y ninguna casilla de la Definition of Done cambia.
