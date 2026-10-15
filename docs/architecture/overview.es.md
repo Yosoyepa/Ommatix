@@ -338,3 +338,17 @@ operador por ventanas ([ADR-0020](../adr/0020-operator-scope-on-windows.md), apr
 de ventana y una ventana registrada, para poder permitir `explorer.exe` sin el escritorio ni la
 barra de tareas) son BDD-36 y BDD-37, sobre el mismo doble del actuador; su parte de Windows sólo
 está compilada y analizada, no ejecutada en vivo.
+
+Las pruebas que no necesitan entrada real ni pantalla también son pruebas de Rust (CHANGELOG
+1.0.35): IT-06 (`_meta` lleva los tiempos por etapa como números enteros y nada de la pantalla;
+`ommatix serve` escribe las respuestas en stdout, sus líneas `ommatix:` en stderr y nada en
+disco), SEC-03 (el texto de OCR y de accesibilidad nunca cambia la política, la lista de
+aplicaciones, la puerta ni la accionabilidad), SEC-04 (ningún resultado lleva píxeles, un archivo
+ni una clave que los esquemas no tengan; ningún código de producción abre un socket ni escribe un
+archivo), SEC-06 (el manifiesto, la biblioteca del runtime, los pesos y el archivo de íconos
+curados se comprueban cada uno contra un SHA-256 fijado antes de cargar nada; cada artefacto de
+los manifiestos distribuidos registra origen, digest y licencia), PERF-01 (`core_latency`,
+compilación `release`: el núcleo con 300 controles y 600 fragmentos de texto), REL-01 y DOC-01
+(`src/acceptance/tests/repository.rs` y `docs/thesis/validar_paquete.py`). Corren sobre dobles, el
+escritorio simulado y archivos temporales; los mismos casos con el OCR real, el árbol de UI
+Automation y el operador siguen necesitando corridas supervisadas.

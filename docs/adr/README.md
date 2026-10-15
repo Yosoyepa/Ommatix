@@ -10,7 +10,9 @@ need, ADR-0017 adds UI Automation evidence fused with the visual path, and ADR-0
 runs the perception stages of one observation concurrently; the owner accepted all five on
 2026-10-14. ADR-0020, accepted the same day, narrows the application allowlist to
 windows (window classes and a pinned window) so that `explorer.exe` can be allowed without
-the desktop and the taskbar.
+the desktop and the taskbar. ADR-0021 (proposed, awaiting the owner) pins every artefact the
+engine loads, the curated-icon file included, before loading anything, and keeps screen and
+agent text out of protocol errors.
 
 | # | Title | Status |
 |---|---|---|
@@ -34,6 +36,7 @@ the desktop and the taskbar.
 | [0018](0018-two-phase-type-with-element-level-focus-confirmation.md) | Two-phase type with element-level focus confirmation | Accepted (2026-10-14) |
 | [0019](0019-concurrent-observation-stages.md) | Run the perception stages of one observation concurrently | Accepted (2026-10-14) |
 | [0020](0020-operator-scope-on-windows.md) | The operator's scope on windows: window classes and a pinned window | Accepted (2026-10-14) |
+| [0021](0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md) | Pin every artefact the engine loads before loading anything, and keep screen and agent text out of errors | Proposed |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They

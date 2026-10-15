@@ -20,13 +20,13 @@ Cada afirmación de las tablas la comprueba una prueba de Rust (`src/acceptance/
 
 ## 2. Artefactos fijados, comprobados en la máquina de referencia
 
-Con `python tools/repro/environment.py` (sólo lectura, sin red), el 14 de octubre de 2026, sobre `%LOCALAPPDATA%\Ommatix`, **los 11 archivos que fijan las tres configuraciones de `tools/s0/` tienen el digest fijado**: los tres manifiestos, los dos pesos (`icon_detect_v3.onnx`, `icon_detect_v3_fp16.onnx`; cada manifiesto declara los suyos y coinciden), ONNX Runtime 1.28.0 (CPU), ONNX Runtime 1.24.4 con DirectML y `DirectML.dll` 1.15.4. Ningún mensaje de error ni el informe imprimen contenido de un archivo.
+Con `python tools/repro/environment.py` (sólo lectura, sin red), el 14 de octubre de 2026, sobre `%LOCALAPPDATA%\Ommatix`, **los 11 archivos que fijan las tres configuraciones de `tools/s0/` tienen el digest fijado**: los tres manifiestos, los dos pesos (`icon_detect_v3.onnx`, `icon_detect_v3_fp16.onnx`; cada manifiesto declara los suyos y coinciden), ONNX Runtime 1.28.0 (CPU), ONNX Runtime 1.24.4 con DirectML y `DirectML.dll` 1.15.4. Ningún mensaje de error ni el informe imprimen contenido de un archivo. El registro de esa comprobación, con el commit, el toolchain, los digests de los tres `Cargo.lock` y la máquina, es `plantillas/environment.rel01.json`.
 
 Las pruebas `sec_06_*` hacen lo contrario con archivos temporales falsos, nunca con los pesos reales: un bit cambiado, un archivo truncado, ampliado, vacío o sustituido por otro, un manifiesto editado después de fijarlo, un runtime parcheado y un archivo de prototipos de íconos con una línea añadida se rechazan antes de cargar nada.
 
 ## 3. Licencias del grafo de dependencias
 
-`cargo metadata --locked` lista 243 paquetes (los del espacio de trabajo y sus dependencias, para todas las plataformas). Todos declaran licencia; ninguno es copyleft fuerte. Las expresiones distintas y cuántos paquetes tiene cada una:
+`cargo metadata --locked` lista 243 paquetes para todas las plataformas: los 10 del espacio de trabajo (`UNLICENSED`, más abajo) y **233 de terceros**. Todos los de terceros declaran licencia; ninguno es copyleft fuerte. Las expresiones distintas y cuántos paquetes tiene cada una:
 
 | Expresión | Paquetes |
 |---|---|
@@ -78,7 +78,7 @@ Medición de PERF-01 (compilación `release`; no abre la pantalla ni envía entr
 cargo run --release -p ommatix-acceptance --example core_latency -- --out perf01.json
 ```
 
-El informe `perf01.json` nombra la compilación, la máquina, el commit y los argumentos. Sus cifras, tal como se midieron, están en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §11. En una máquina distinta las cifras cambian; la prueba que fija las reglas del método es `perf_01_*` en `src/acceptance/examples/core_latency.rs`, que corre con `cargo test`.
+El informe `perf01.json` nombra la compilación, la máquina, el commit y los argumentos. Sus cifras, tal como se midieron, están en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §11 y el informe de esa corrida es `plantillas/perf01_core_latency.s0.json`. En una máquina distinta las cifras cambian; la prueba que fija las reglas del método es `perf_01_*` en `src/acceptance/examples/core_latency.rs`, que corre con `cargo test`.
 
 ## 5. Corpus
 

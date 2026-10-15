@@ -316,3 +316,15 @@ the accessibility provider. The operator's scope on windows ([ADR-0020](../adr/0
 accepted: window classes and a pinned window, so that `explorer.exe` can be allowed without the
 desktop and the taskbar) is BDD-36 and BDD-37, over the same actuator double; its Win32 half is
 only compiled and linted, not run live.
+
+The tests that need no live input and no screen are Rust tests too (CHANGELOG 1.0.35): IT-06
+(`_meta` carries per-stage times as whole numbers and nothing from the screen; `ommatix serve`
+writes replies to stdout, its own `ommatix:` lines to stderr and nothing to disk), SEC-03 (OCR and
+accessibility text never changes the policy, the allowlist, the gate or actionability), SEC-04
+(no result carries pixels, a file or a key the schemas lack; no production code opens a socket
+or writes a file), SEC-06 (manifest, runtime library, weights and the curated-icon file are each
+checked against a pinned SHA-256 before anything is loaded; every artefact in the shipped
+manifests records origin, digest and licence), PERF-01 (`core_latency`, release build: the core on
+300 controls and 600 text spans), REL-01 and DOC-01 (`src/acceptance/tests/repository.rs` and
+`docs/thesis/validar_paquete.py`). They run over doubles, the simulated desktop and temporary
+files; the same cases with the real OCR, UI Automation tree and operator still need supervised runs.

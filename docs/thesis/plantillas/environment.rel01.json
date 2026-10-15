@@ -1,0 +1,121 @@
+{
+  "commit": "75b339da0efd3ba39c55f0616806c4d0e942abd4",
+  "tree_clean": true,
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+  "toolchain_file": "[toolchain]\nchannel = \"1.99.0\"\ncomponents = [\"rustfmt\", \"clippy\"]\n",
+  "lockfiles_sha256": {
+    "Cargo.lock": "fb0f8937d0c1bbfb79dd30836ce99facc05ce90abde09849ede5c63488739d96",
+    "tools/s4/testapp/Cargo.lock": "842ff56b5021b1be7b55e1c2f095218ee0c13ce47a2a2789b45d4b2fece14633",
+    "tools/s4/testeditor/Cargo.lock": "9c8837e419991113fd22c50e89fa165c394f8d23a0c1c68545d44d1f1e61efe1"
+  },
+  "python": "3.12.2",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "machine": {
+    "cpu": "AMD Ryzen 7 5700X 8-Core Processor",
+    "cores": 8,
+    "threads": 16,
+    "ram_gib": 31.9,
+    "os": "Microsoft Windows 11 Pro build 26300.9550",
+    "gpus": [
+      "AMD Radeon RX 6700 XT (driver 32.0.21045.5002)"
+    ],
+    "power_plan": "Alto rendimiento"
+  },
+  "operator_directory": {
+    "present": true,
+    "pins": [
+      {
+        "config": "ommatix.rnf05.directml.toml",
+        "key": "detector_manifest_sha256",
+        "path": "models/manifest.rnf05.json",
+        "sha256": "f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47",
+        "actual": "f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47",
+        "status": "ok"
+      },
+      {
+        "config": "ommatix.rnf05.directml.toml",
+        "key": "weights of models/manifest.rnf05.json",
+        "path": "omniparser-icon-detect-v3/icon_detect_v3_fp16.onnx",
+        "sha256": "d7a8901db0ae650616ee43f53e6ee8f57a829de54ab8daae431be77556cc0805",
+        "actual": "d7a8901db0ae650616ee43f53e6ee8f57a829de54ab8daae431be77556cc0805",
+        "status": "ok",
+        "license": "MIT: icon_detect_v3/LICENSE (sha256 646f8936b8ddcd14e13e578f"
+      },
+      {
+        "config": "ommatix.rnf05.directml.toml",
+        "key": "onnxruntime_sha256",
+        "path": "runtime/onnxruntime-directml-1.24.4/onnxruntime.dll",
+        "sha256": "e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40",
+        "actual": "e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40",
+        "status": "ok"
+      },
+      {
+        "config": "ommatix.rnf05.directml.toml",
+        "key": "directml_sha256",
+        "path": "runtime/onnxruntime-directml-1.24.4/DirectML.dll",
+        "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1",
+        "actual": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1",
+        "status": "ok"
+      },
+      {
+        "config": "ommatix.s0.directml.toml",
+        "key": "detector_manifest_sha256",
+        "path": "models/manifest.json",
+        "sha256": "63d9df24109308d1e2b354648139fee0c1d4e2563f8cb2a83497d4e26b7d728e",
+        "actual": "63d9df24109308d1e2b354648139fee0c1d4e2563f8cb2a83497d4e26b7d728e",
+        "status": "ok"
+      },
+      {
+        "config": "ommatix.s0.directml.toml",
+        "key": "weights of models/manifest.json",
+        "path": "omniparser-icon-detect-v3/icon_detect_v3.onnx",
+        "sha256": "bcbec780f2b3e5fcbc13c26a73a73541c84ea3482a7696540eb258a076c9d968",
+        "actual": "bcbec780f2b3e5fcbc13c26a73a73541c84ea3482a7696540eb258a076c9d968",
+        "status": "ok",
+        "license": "MIT: icon_detect_v3/LICENSE (sha256 646f8936b8ddcd14e13e578f"
+      },
+      {
+        "config": "ommatix.s0.directml.toml",
+        "key": "onnxruntime_sha256",
+        "path": "runtime/onnxruntime-directml-1.24.4/onnxruntime.dll",
+        "sha256": "e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40",
+        "actual": "e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40",
+        "status": "ok"
+      },
+      {
+        "config": "ommatix.s0.directml.toml",
+        "key": "directml_sha256",
+        "path": "runtime/onnxruntime-directml-1.24.4/DirectML.dll",
+        "sha256": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1",
+        "actual": "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1",
+        "status": "ok"
+      },
+      {
+        "config": "ommatix.s0.toml",
+        "key": "detector_manifest_sha256",
+        "path": "models/manifest.json",
+        "sha256": "63d9df24109308d1e2b354648139fee0c1d4e2563f8cb2a83497d4e26b7d728e",
+        "actual": "63d9df24109308d1e2b354648139fee0c1d4e2563f8cb2a83497d4e26b7d728e",
+        "status": "ok"
+      },
+      {
+        "config": "ommatix.s0.toml",
+        "key": "weights of models/manifest.json",
+        "path": "omniparser-icon-detect-v3/icon_detect_v3.onnx",
+        "sha256": "bcbec780f2b3e5fcbc13c26a73a73541c84ea3482a7696540eb258a076c9d968",
+        "actual": "bcbec780f2b3e5fcbc13c26a73a73541c84ea3482a7696540eb258a076c9d968",
+        "status": "ok",
+        "license": "MIT: icon_detect_v3/LICENSE (sha256 646f8936b8ddcd14e13e578f"
+      },
+      {
+        "config": "ommatix.s0.toml",
+        "key": "onnxruntime_sha256",
+        "path": "runtime/onnxruntime-1.28.0/lib/onnxruntime.dll",
+        "sha256": "18370c375f07357fa5874344a9d9ac17e6b6fe1eb18b1dd209d79483b4470257",
+        "actual": "18370c375f07357fa5874344a9d9ac17e6b6fe1eb18b1dd209d79483b4470257",
+        "status": "ok"
+      }
+    ]
+  }
+}

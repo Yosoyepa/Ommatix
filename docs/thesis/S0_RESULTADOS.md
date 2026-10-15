@@ -335,3 +335,57 @@ Metas iniciales de RNF-05: incremental p95 ≤ 150 ms y refresco completo en cal
 - Dos regiones por debajo de 150 ms (p95) necesitan quitar entre 3 y 5 ms más: bajar la inferencia por región sin cambiar el contexto (§10.2) o evitar la enumeración de ventanas.
 - Las detecciones de float16 se validaron contra float32 sobre frames sintéticos, no contra un corpus etiquetado (§7).
 - Las corridas de S4 de este repositorio usaban el manifiesto de §9 (float32). **Decisión del responsable (14 de octubre de 2026):** desde la sexta ronda usan el manifiesto float16 de este apartado (`plantillas/model_manifest.rnf05.json`); las rondas anteriores no se repiten. Decidió también no cambiar la enumeración de ventanas de ADR-0017 para llegar a los 150 ms con dos regiones: RNF-05 sigue sin cumplirse por unos 3 ms ([CHANGELOG 1.0.23](CHANGELOG.md)).
+
+## 11. PERF-01 y RNF-04: latencia del núcleo (1.0.35)
+
+**Qué mide.** El núcleo sin detector, sin OCR, sin transporte y sin sistema operativo (capítulo 03 §3.4: «Core: algoritmos sin detector/OCR/transporte/SO»), sobre una escena sintética de **300 controles y 600 fragmentos de texto** en 1920×1080, compilado en `--release`, con `cargo run --release -p ommatix-acceptance --example core_latency` (`src/acceptance/examples/core_latency.rs`). No lee la pantalla ni envía entrada. Dos capas:
+
+- **Núcleo del dominio, etapa por etapa:** Algoritmo 1 (diferencia de tiles y plan de regiones contra la base confirmada y la evidencia anterior), fusión (`fuse`), identidad (`Registry::observe`) y puesta en escena y *commit* del snapshot (`SnapshotStore`). El total es un solo bloque cronometrado, no la suma de los percentiles de las etapas (capítulo 09 §9.6).
+- **Núcleo de la aplicación:** `Engine::observe_screen` entero (con la primera página de 200 elementos) sobre dobles instantáneos de los puertos, con reloj monotónico y las etapas en serie (un hilo por etapa sólo mediría el coste de crearlo). Aquí `plan`, `fusión` y `seguimiento` son los tiempos que el propio motor informa en `_meta`.
+
+Tres situaciones: **primera observación** (sin base: refresco completo), **en caliente sin cambios** (la misma pantalla de nuevo: nada que re-analizar, pero todo se vuelve a fusionar y a asociar) y **en caliente con una región** (cambia una celda cada vez). Los percentiles son de rango más cercano sobre las muestras tras 200 de calentamiento: 10 000 muestras por situación en la capa del dominio y 2 000 en la del motor (capítulo 09 §9.6 pide al menos 10 000 para las colas; la capa del motor no las alcanza).
+
+**Máquina y compilación [V].** La de §1 (AMD Ryzen 7 5700X, 8 núcleos y 16 hilos, 31,9 GiB, AMD Radeon RX 6700 XT sin uso, Windows 11 Pro 26H2 build 26300.9550, plan «Alto rendimiento»), comprobada de nuevo con `tools/repro/environment.py`. `rustc 1.99.0 (b940084d7 2026-09-28)`, perfil `release` del espacio de trabajo (`lto = "thin"`, `codegen-units = 1`). Commit `75b339da0efd3ba39c55f0616806c4d0e942abd4`, árbol limpio (al reajustar la rama sobre `main`, que entretanto sólo cambió documentación, ese commit pasó a ser `161d079`: el código medido es el mismo). Un solo hilo de medición; sin `ommatix.exe` en ejecución ni ninguna ronda en vivo durante la corrida (103 s). Registro completo: `plantillas/perf01_core_latency.s0.json`; entorno: `plantillas/environment.rel01.json`.
+
+### 11.1 Resultados [V]
+
+Núcleo del dominio, milisegundos, **p50 / p95 / p99** (10 000 muestras por situación):
+
+| Situación | Plan (Alg. 1) | Fusión | Identidad | Commit | **Total del núcleo** | Máximo |
+|---|---|---|---|---|---|---|
+| Primera observación (refresco completo) | 0,005 / 0,011 / 0,060 | 1,219 / 1,492 / 2,059 | 0,253 / 0,323 / 0,450 | 0,000 / 0,000 / 0,000 | **1,477 / 1,809 / 2,503** | 5,418 |
+| En caliente, sin cambios | 1,172 / 1,651 / 1,967 | 1,206 / 1,492 / 2,075 | 0,512 / 0,643 / 0,932 | 0,016 / 0,025 / 0,036 | **2,926 / 3,666 / 4,851** | 11,493 |
+| En caliente, una región | 1,561 / 1,923 / 2,370 | 1,226 / 1,507 / 2,107 | 0,525 / 0,654 / 0,949 | 0,018 / 0,028 / 0,037 | **3,349 / 3,965 / 5,325** | 9,305 |
+
+`Engine::observe_screen` sobre dobles instantáneos, milisegundos, **p50 / p95 / p99** (2 000 muestras por situación; 604 elementos publicados en las tres):
+
+| Situación | `observe_screen` (reloj de pared) | Plan | Fusión | Seguimiento | Plan + fusión + seguimiento |
+|---|---|---|---|---|---|
+| Primera observación (refresco completo) | 1,721 / 1,963 / 2,235 | 0,005 / 0,007 / 0,010 | 1,269 / 1,403 / 1,630 | 0,409 / 0,484 / 0,581 | 1,686 / 1,882 / 2,190 |
+| En caliente, sin cambios | 3,103 / 3,677 / 4,991 | 1,127 / 1,525 / 1,856 | 1,270 / 1,468 / 2,153 | 0,647 / 0,762 / 1,151 | 3,063 / 3,642 / 4,885 |
+| En caliente, una región | 3,636 / 4,605 / 6,037 | 1,609 / 2,042 / 2,642 | 1,285 / 1,642 / 2,313 | 0,666 / 0,900 / 1,242 | 3,586 / 4,525 / 5,960 |
+
+La captura del doble tarda menos de un microsegundo (el fotograma se comparte por referencia): la «espera de captura» del capítulo 03 §3.4 no está en estas cifras, como tampoco el detector, el OCR ni la accesibilidad.
+
+### 11.2 Lectura
+
+- **RNF-04 se cumple en el núcleo, en esta máquina y con esta escena sintética:** el p95 peor de las tres situaciones es **3,97 ms** (en caliente con una región; la meta es ≤ 10 ms) y el de `observe_screen` entero, 4,61 ms. El p99 peor es 5,3 ms.
+- **Hay colas:** un máximo de 11,5 ms en 10 000 muestras (en caliente, sin cambios) y de 9,3 ms en la situación con una región. La meta es de p95 y el p99 queda en la mitad; el máximo es una muestra aislada, que se conserva (capítulo 09 §9.7: no se publican sólo los éxitos).
+- **Dónde se va el tiempo en caliente:** la diferencia de tiles contra la base cuesta 1,2 a 1,6 ms (comparar 8 MB), la fusión 1,2 ms, la asociación de identidad 0,5 ms y el *commit* menos de 0,02 ms. La fusión es cuadrática en controles y palabras (300 × 600) y es la etapa que más crecería con una pantalla más densa.
+- **Lo que no mide:** ni el detector, ni el OCR, ni la lectura de accesibilidad, ni la captura (en vivo, §10.4: unos 58 ms de accesibilidad y 70 a 120 de detección por región), ni el transporte MCP ni la serialización. Las observaciones de una situación no son independientes (misma escena); la escena es sintética y regular, no una captura; hay una máquina y un plan de energía. No sustituye a PERF-02 ni a RNF-05, que **siguen sin cumplirse** (§10.6), ni a la casilla de rendimiento de la Definition of Done, que pide también los pesos.
+
+### 11.3 Defecto que PERF-01 encontró y que se corrigió
+
+La primera corrida, con el código de `main` (commit `a5cd1f9`, 300 muestras por situación y 100 en la capa del motor, misma máquina y compilación), **no cumplía RNF-04**: en caliente, el total del núcleo era de 60 / 75 / 87 ms (p50 / p95 / p99), y 57 / 71 / 82 ms de ellos eran la asociación de identidad (`Registry::observe`). La causa: la asociación comparaba cada pista con cada observación (604 × 604 pares) y, **para cada par, normalizaba a Unicode (NFC) y en minúsculas la etiqueta y el discriminante de las dos**, con cuatro asignaciones de cadena por par. La primera observación no lo sufría (0,075 ms) porque no había pistas.
+
+| Situación | Total del núcleo antes (n = 300) | Total del núcleo después (n = 10 000) | Identidad antes → después (p50) |
+|---|---|---|---|
+| Primera observación | 1,369 / 1,502 / 2,302 | 1,477 / 1,809 / 2,503 | 0,075 → 0,253 |
+| En caliente, sin cambios | 60,130 / 75,165 / 86,612 | 2,926 / 3,666 / 4,851 | 56,882 → 0,512 |
+| En caliente, una región | 61,383 / 78,657 / 87,656 | 3,349 / 3,965 / 5,325 | 58,021 → 0,525 |
+
+(`observe_screen` en caliente, antes: 61,1 / 72,4 / 77,7 ms y 60,1 / 74,9 / 87,3 ms; ahora 3,1 / 3,7 / 5,0 y 3,6 / 4,6 / 6,0.) La corrección calcula cada clave una vez por elemento y agrupa las observaciones por (rol, etiqueta, discriminante), de modo que una pista sólo se compara con las observaciones de su grupo. **La asociación es la misma**: `perf_01_the_association_is_the_pairwise_definition` la compara con la definición por pares (código independiente) en 400 escenas generadas, con etiquetas repetidas, escritas de distinta forma Unicode y desplazadas, y `perf_01_every_element_is_normalised_once_not_once_per_pair` falla si una etiqueta se normaliza más de una vez por elemento. La primera observación pasa de 0,075 a 0,253 ms de identidad porque ahora agrupa antes de comparar: unos 0,18 ms que se pagan una vez por observación y que en caliente se recuperan de sobra.
+
+### 11.4 Reproducir
+
+`cargo run --release -p ommatix-acceptance --example core_latency -- --out perf01.json` (unos dos minutos de un solo hilo; con `--samples N`, `--engine-samples N` y `--warmup N`). Se niega a correr sin optimizar. Las pruebas de la propia herramienta (`perf_01_*`) corren con `cargo test`. El informe nombra la compilación, el commit y si el árbol estaba limpio; `S4_REPRODUCIBILIDAD.md` §4 da el resto de comandos.

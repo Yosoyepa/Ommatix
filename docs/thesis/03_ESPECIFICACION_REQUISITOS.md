@@ -98,6 +98,8 @@ Precisión aceptada >=98% y cobertura >=85% en corpus de aceptación. Evidencia 
 
 p95 <=10 ms para 300 controles y 600 spans; sólo core, hardware fijado S0. Evidencia requerida: PERF-01.
 
+**Evidencia a 14 de octubre de 2026 (PERF-01, 1.0.35).** Medido en `--release` en la máquina de S0 sobre una escena sintética de 300 controles y 600 fragmentos de texto, con 10 000 muestras por situación: el p95 del núcleo (diferencia de tiles, fusión, identidad y *commit*) es de **1,81 ms** en la primera observación, **3,67 ms** en caliente sin cambios y **3,97 ms** en caliente con una región, y el de `Engine::observe_screen` entero, de 4,61 ms como máximo; el criterio (≤ 10 ms) se cumple en esa medición. Antes de corregir la asociación de identidad (que normalizaba cada etiqueta una vez por par de pista y observación) el p95 en caliente era de 75 a 79 ms. La medición no incluye detector, OCR, accesibilidad, captura ni transporte, la escena es sintética y el estado del requisito sigue pendiente hasta el informe de aceptación (capítulo 06 §6.6). Detalle, defecto y método en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §11.
+
 ### RNF-05. Latencia percepción
 
 Metas iniciales: incremental p95 <=150 ms; full warm p95 <=700 ms. Evidencia requerida: PERF-02.

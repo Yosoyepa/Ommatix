@@ -28,7 +28,7 @@ the interim adapters use. Some bootstrap pieces remain as interim adapters until
 them (the flat-region detector, `xcap` capture, `enigo` input): do not extend them, and never
 put coordinates on the wire. The prototype's decisions are archived in `docs/adr/bootstrap/`.
 The icon cache (Algorithm 3A) runs in the observation only with the operator's curated
-prototypes and thresholds; never give those thresholds defaults (the thesis calibrates them)
+prototypes (a file pinned by SHA-256 in `[cache] prototypes_sha256`) and thresholds; never give those thresholds defaults (the thesis calibrates them)
 and never let an icon label change actionability. Accessibility evidence (ADR-0017, UI
 Automation, `[models] accessibility`) is fused with the visual path and never replaces it: it
 confirms an element only when it is enabled, on screen and has an action pattern, it never
@@ -105,7 +105,8 @@ compiler-enforced boundary.
 | A code review | `docs/reviews/YYYY-MM-DD-topic.md`: finding → resolution → regression test |
 | Executable acceptance scenarios | Thesis scenarios stay in `docs/thesis/features/` (the validator traces them there); their steps go in `src/acceptance/tests/thesis.rs`, and the PR that adds them adds the scenario to its `IMPLEMENTED` list. There is no other feature directory |
 | Unit tests | next to the code (`#[cfg(test)] mod tests`); a test that implements a planned test carries its ID (`ut_13_failed_commit_keeps_pending_dirty`) |
-| Cross-crate / end-to-end tests | `src/<crate>/tests/` (the MCP contract tests CT-xx live in `src/adapters/mcp/tests/`) |
+| Cross-crate / end-to-end tests | `src/<crate>/tests/` (the MCP contract tests CT-xx live in `src/adapters/mcp/tests/`, with the telemetry, injection and exfiltration tests IT-06, SEC-03 and SEC-04; the process-level ones in `src/app/tests/`; invariants of the repository itself, REL-01 and DOC-01, in `src/acceptance/tests/repository.rs`) |
+| A measurement of the core (PERF-01) | `src/acceptance/examples/core_latency.rs`; its numbers go to `docs/thesis/S0_RESULTADOS.md` with the machine and the commit |
 
 Nothing MVP-related goes in the repository root except workspace configuration.
 
@@ -189,6 +190,9 @@ cargo clippy --workspace --all-targets -- -D warnings  # lint (CI-blocking)
 cargo test --workspace                                 # unit + integration + Gherkin (CI-blocking)
 cargo run -- demo                                      # smoke test: the engine on the simulated desktop
 python tools/perf/measure_latency.py --variant NAME=EXE,CONFIG ... --out perf.json  # RNF-05 latency, Windows, no input (S0_RESULTADOS.md §10)
+cargo run --release -p ommatix-acceptance --example core_latency -- --out perf01.json  # PERF-01: the core on 300 controls and 600 spans, no screen (S0_RESULTADOS.md §11)
+python tools/repro/environment.py --out environment.json  # REL-01: commit, toolchain, lockfiles, machine and pinned artefacts (S4_REPRODUCIBILIDAD.md)
+python -m unittest discover -s tools/repro -p "test_*.py"  # REL-01 helper tests
 cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings  # when touching capture/input
 cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia --all-targets -- -D warnings  # on Windows (CI job `windows`)
 cargo test -p ommatix-adapter-capture --features dxgi -- --ignored                   # manual: one DXGI frame, never saved
@@ -219,8 +223,8 @@ done is in thesis chapter 06 §6.7; its boxes stay unchecked until the evidence 
 
 ### Toolchain
 
-Rust stable (see `rust-toolchain.toml`, MSRV in `Cargo.toml`) and Python 3.11 or later for
-the thesis checks. The first target platform is Windows 11 x64 (ADR-0008). The interim
+Rust at the exact release pinned in `rust-toolchain.toml` (REL-01; the CI installs the same
+one; MSRV in `Cargo.toml`) and Python 3.11 or later for the thesis checks. The first target platform is Windows 11 x64 (ADR-0008). The interim
 `screen` and `native-input` features (`xcap`, `enigo`) on Linux need: `libwayland-dev libpipewire-0.3-dev
 libgbm-dev libegl1-mesa-dev libxcb1-dev libxrandr-dev libdbus-1-dev clang`.
 
