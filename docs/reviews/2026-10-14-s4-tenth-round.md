@@ -70,3 +70,25 @@ The continuation (branch `docs/s4-tenth-round-continuation`, CHANGELOG 1.0.40) r
 
 - The owner's decisions on findings 7, 8 and 9, and whether the cap continues at 135 with `--round-start 429` or a new round starts at 494.
 - For any live run: rebuild and hash the engine and the editor, verify the pinned clients and configurations again, and rerun the read-only preflight. The ACTIVE CONTROL line for the Explorer configuration is already checked.
+
+## Scored series (2026-10-14)
+
+The scored series of E2E-02 (branch `docs/s4-tenth-round-series`, CHANGELOG 1.0.41) ran runs 2 to 11 in the test editor. The engine and the editor were the continuation's builds (SHA-256 `a137ccd1…d548` and `f358b3a9…1d20`; `main` changed only documentation since `0cb126f`). Each run had its own invocation, preceded by the read-only preflight and by a gate that stops on a safety event and pauses on a failed run. Result: 10 of 10 runs succeeded, 20 of 20 OS-side checks passed, 0 engine false successes, 0 wrong-control groundings, and one `STALE_SNAPSHOT` before any input (run 2). 21 live requests (ledger 494 → 515; `--round-start 429`, 114 left). E2E-03 was not run: no Explorer invocation and no probe.
+
+| # | Severity | Finding | Resolution | Regression test |
+|---|---|---|---|---|
+| 13 | Safety, client protocol (open; owner decision) | The pinned client does not stop a protocol on a safety event inside an invocation. A `grounding_wrong` or an `engine_false_success` marks that run failed; `run()` then starts the next run, and only three consecutive failed runs make the client create `stop.flag`. A single invocation of ten runs would have kept sending input after such an event, and an invocation in progress cannot be stopped without killing it. | Not changed: the client is pinned for the round. The series ran as ten single-run invocations, each preceded by the read-only preflight and by a gate (outside the repository) that stops on a safety event, a policy refusal or an abort, and pauses on any failed run. No such event occurred. Proposed: the protocol ends after any safety event. That is a client change, with its own test, a new hash and a new round | None yet: a test that a `grounding_wrong` run ends the protocol needs the change |
+| 14 | Observation, E2E-02 (closed by the owner's decision) | The first `type` of an invocation was refused with `STALE_SNAPSHOT` before any key was sent, in two of the eleven invocations (the continuation's pilot and run 2 of the series). The retry was delivered and verified both times, and the refusal did not recur in runs 3 to 11. The owner decided that a refusal before input is allowed and is not a failed pilot, which closes finding 7 for E2E-02. The cause is not verified; the caret blink of finding 1 does not explain it, because the refusal came before the field had focus | None: the refusal is the engine's correct behaviour | None |
+
+## Not in this round
+
+- E2E-03: not run. Finding 8 stays open and the owner's stop holds until the new grounding rule is implemented.
+- Finding 9 (the two minimized `CabinetWClass` windows of the shell, PID 36160) and finding 12 (the documented Explorer flow): open, unchanged.
+- No client, engine, editor or Rust change.
+
+## What the next round needs
+
+- The owner's approval of `E2E-02` at `EJECUTADO_SUPERVISADO_PARCIAL` in the matrix (this PR), or another status.
+- Finding 13: whether the client changes so that a protocol ends after any safety event (a client change, its test, a new hash and a new round), or every series keeps one invocation per run with the gate.
+- E2E-03: the new grounding rule, then a round of its own.
+- The cap: 114 requests remain under `--round-start 429`, or a new round can start at 515.

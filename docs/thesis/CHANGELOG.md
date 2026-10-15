@@ -1,5 +1,14 @@
 # Historial documental
 
+## 1.0.41 — 2026-10-14: S4, serie de E2E-02 de la décima ronda: diez corridas puntuadas de diez, sin falsos éxitos; E2E-03 no se ejecutó (rama `docs/s4-tenth-round-series`, con veintiuna solicitudes reales)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código. Motor y editor no se recompilan: sus SHA-256 (`a137ccd1…d548` y `f358b3a9…1d20`) coinciden con los de la continuación, y `main` sólo cambió documentación desde `0cb126f`. Los clientes (`tools/s4/e2e_driver.py` `143ea454…aee3d`; `tools/s4/e2e_dossier.py` `85111edb…316df`) y `s4r10-live.toml` no cambian y se comprueban antes de cada invocación. **Cuaderno 494 → 515**, de 200 de la ronda con `--round-start 429` (86 usadas, 114 disponibles). Registro en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), «Décima ronda (serie)», y en la [revisión](../reviews/2026-10-14-s4-tenth-round.md), hallazgos 13 y 14.
+
+- **E2E-02 (editor propio): diez de diez corridas puntuadas, cero falsos éxitos.** Corridas 2 a 11; veinte de veinte comprobaciones del sistema. Hubo una negativa `STALE_SNAPSHOT` antes de entregar ninguna tecla, reintentada y entregada. La matriz pasa E2E-02 a `EJECUTADO_SUPERVISADO_PARCIAL`, por la regla del responsable.
+- **Diez invocaciones de una corrida, con una compuerta entre ellas** que aplica la regla de seguridad del responsable: el cliente no detiene una invocación de varias corridas ante un clic anclado en otro control (hallazgo 13).
+- **E2E-03 (Explorador): no ejecutado.** Sigue detenido; ninguna invocación ni sondeo.
+- Latencias (`_meta`, veinte acciones entregadas; no son mediciones de RNF-05): `rtt` mediana 71,3 ms, p95 113,0 ms.
+
 ## 1.0.40 — 2026-10-14: S4, continuación de la décima ronda: el piloto de E2E-02 no pasa y E2E-03 se detiene en su primer clic por la regla de anclaje (rama `docs/s4-tenth-round-continuation`, con cuatro solicitudes reales)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni código. Motor y editor se recompilan desde `main` (`0cb126f`). Los clientes (`tools/s4/e2e_driver.py` `143ea454…aee3d`; `tools/s4/e2e_dossier.py` `85111edb…316df`) no cambian y se comprueban antes de cada invocación. **Cuaderno 490 → 494**, de 200 de la ronda con `--round-start 429` (65 usadas, 135 disponibles). Registro en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), «Décima ronda (continuación)», y en la [revisión](../reviews/2026-10-14-s4-tenth-round.md), hallazgos 7 a 12.
