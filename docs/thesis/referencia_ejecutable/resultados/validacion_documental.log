@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 20
+PASS adrs_encontradas 21
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -97,6 +97,7 @@ PASS referencias:0017-ui-automation-evidence-fused-with-vision.md []
 PASS referencias:0018-two-phase-type-with-element-level-focus-confirmation.md []
 PASS referencias:0019-concurrent-observation-stages.md []
 PASS referencias:0020-operator-scope-on-windows.md []
+PASS referencias:0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 
@@ -215,4 +216,234 @@ PASS trazabilidad:BDD-34
 PASS trazabilidad:BDD-35 
 PASS trazabilidad:BDD-36 
 PASS trazabilidad:BDD-37 
+PASS doc01_pruebas_existen:RF-01 []
+PASS doc01_adr_existen:RF-01 ADR-0008; ADR-0016
+PASS doc01_propietario:RF-01 
+PASS doc01_evidencia_existe:RF-01 []
+PASS doc01_pruebas_existen:RF-02 []
+PASS doc01_adr_existen:RF-02 ADR-0001; ADR-0011
+PASS doc01_propietario:RF-02 
+PASS doc01_evidencia_existe:RF-02 []
+PASS doc01_pruebas_existen:RF-03 []
+PASS doc01_adr_existen:RF-03 ADR-0011
+PASS doc01_propietario:RF-03 
+PASS doc01_evidencia_existe:RF-03 []
+PASS doc01_pruebas_existen:RF-04 []
+PASS doc01_adr_existen:RF-04 ADR-0006
+PASS doc01_propietario:RF-04 
+PASS doc01_evidencia_existe:RF-04 []
+PASS doc01_pruebas_existen:RF-05 []
+PASS doc01_adr_existen:RF-05 ADR-0009; ADR-0019
+PASS doc01_propietario:RF-05 
+PASS doc01_evidencia_existe:RF-05 []
+PASS doc01_pruebas_existen:RF-06 []
+PASS doc01_adr_existen:RF-06 ADR-0003; ADR-0017
+PASS doc01_propietario:RF-06 
+PASS doc01_evidencia_existe:RF-06 []
+PASS doc01_pruebas_existen:RF-07 []
+PASS doc01_adr_existen:RF-07 ADR-0003; ADR-0017
+PASS doc01_propietario:RF-07 
+PASS doc01_evidencia_existe:RF-07 []
+PASS doc01_pruebas_existen:RF-08 []
+PASS doc01_adr_existen:RF-08 ADR-0004
+PASS doc01_propietario:RF-08 
+PASS doc01_evidencia_existe:RF-08 []
+PASS doc01_pruebas_existen:RF-09 []
+PASS doc01_adr_existen:RF-09 ADR-0005
+PASS doc01_propietario:RF-09 
+PASS doc01_evidencia_existe:RF-09 []
+PASS doc01_pruebas_existen:RF-10 []
+PASS doc01_adr_existen:RF-10 ADR-0002; ADR-0006
+PASS doc01_propietario:RF-10 
+PASS doc01_evidencia_existe:RF-10 []
+PASS doc01_pruebas_existen:RF-11 []
+PASS doc01_adr_existen:RF-11 ADR-0006; ADR-0007; ADR-0020
+PASS doc01_propietario:RF-11 
+PASS doc01_evidencia_existe:RF-11 []
+PASS doc01_pruebas_existen:RF-12 []
+PASS doc01_adr_existen:RF-12 ADR-0007; ADR-0016; ADR-0018
+PASS doc01_propietario:RF-12 
+PASS doc01_evidencia_existe:RF-12 []
+PASS doc01_pruebas_existen:RF-13 []
+PASS doc01_adr_existen:RF-13 ADR-0007; ADR-0018
+PASS doc01_propietario:RF-13 
+PASS doc01_evidencia_existe:RF-13 []
+PASS doc01_pruebas_existen:RF-14 []
+PASS doc01_adr_existen:RF-14 ADR-0007
+PASS doc01_propietario:RF-14 
+PASS doc01_evidencia_existe:RF-14 []
+PASS doc01_pruebas_existen:RF-15 []
+PASS doc01_adr_existen:RF-15 ADR-0002; ADR-0015
+PASS doc01_propietario:RF-15 
+PASS doc01_evidencia_existe:RF-15 []
+PASS doc01_pruebas_existen:RF-16 []
+PASS doc01_adr_existen:RF-16 ADR-0007; ADR-0012; ADR-0020
+PASS doc01_propietario:RF-16 
+PASS doc01_evidencia_existe:RF-16 []
+PASS doc01_pruebas_existen:RF-17 []
+PASS doc01_adr_existen:RF-17 ADR-0010; ADR-0012
+PASS doc01_propietario:RF-17 
+PASS doc01_evidencia_existe:RF-17 []
+PASS doc01_pruebas_existen:RF-18 []
+PASS doc01_adr_existen:RF-18 ADR-0008; ADR-0020
+PASS doc01_propietario:RF-18 
+PASS doc01_evidencia_existe:RF-18 []
+PASS doc01_pruebas_existen:RNF-01 []
+PASS doc01_adr_existen:RNF-01 ADR-0001
+PASS doc01_propietario:RNF-01 
+PASS doc01_evidencia_existe:RNF-01 []
+PASS doc01_pruebas_existen:RNF-02 []
+PASS doc01_adr_existen:RNF-02 ADR-0003; ADR-0009
+PASS doc01_propietario:RNF-02 
+PASS doc01_evidencia_existe:RNF-02 []
+PASS doc01_pruebas_existen:RNF-03 []
+PASS doc01_adr_existen:RNF-03 ADR-0007; ADR-0008
+PASS doc01_propietario:RNF-03 
+PASS doc01_evidencia_existe:RNF-03 []
+PASS doc01_pruebas_existen:RNF-04 []
+PASS doc01_adr_existen:RNF-04 ADR-0010; ADR-0011
+PASS doc01_propietario:RNF-04 
+PASS doc01_evidencia_existe:RNF-04 []
+PASS doc01_pruebas_existen:RNF-05 []
+PASS doc01_adr_existen:RNF-05 ADR-0010; ADR-0019
+PASS doc01_propietario:RNF-05 
+PASS doc01_evidencia_existe:RNF-05 []
+PASS doc01_pruebas_existen:RNF-06 []
+PASS doc01_adr_existen:RNF-06 ADR-0010
+PASS doc01_propietario:RNF-06 
+PASS doc01_evidencia_existe:RNF-06 []
+PASS doc01_pruebas_existen:RNF-07 []
+PASS doc01_adr_existen:RNF-07 ADR-0008
+PASS doc01_propietario:RNF-07 
+PASS doc01_evidencia_existe:RNF-07 []
+PASS doc01_pruebas_existen:RNF-08 []
+PASS doc01_adr_existen:RNF-08 ADR-0001; ADR-0009; ADR-0012
+PASS doc01_propietario:RNF-08 
+PASS doc01_evidencia_existe:RNF-08 []
+PASS doc01_pruebas_existen:RNF-09 []
+PASS doc01_adr_existen:RNF-09 ADR-0002; ADR-0015
+PASS doc01_propietario:RNF-09 
+PASS doc01_evidencia_existe:RNF-09 []
+PASS doc01_pruebas_existen:RNF-10 []
+PASS doc01_adr_existen:RNF-10 ADR-0012; ADR-0013; ADR-0014
+PASS doc01_propietario:RNF-10 
+PASS doc01_evidencia_existe:RNF-10 []
+PASS doc01_riesgo_pruebas:R01 []
+PASS doc01_riesgo_pruebas:R02 []
+PASS doc01_riesgo_pruebas:R03 []
+PASS doc01_riesgo_pruebas:R04 []
+PASS doc01_riesgo_pruebas:R05 []
+PASS doc01_riesgo_pruebas:R06 []
+PASS doc01_riesgo_pruebas:R07 []
+PASS doc01_riesgo_pruebas:R08 []
+PASS doc01_riesgo_pruebas:R09 []
+PASS doc01_riesgo_pruebas:R10 []
+PASS doc01_riesgo_pruebas:R11 []
+PASS doc01_riesgo_pruebas:R12 []
+PASS doc01_riesgo_pruebas:R13 []
+PASS doc01_riesgo_pruebas:R14 []
+PASS doc01_adr_pruebas:0001-rust-runtime-and-independent-oracles.md []
+PASS doc01_adr_pruebas:0002-mcp-stdio-with-explicit-profiles.md []
+PASS doc01_adr_pruebas:0003-conservative-spatial-fusion-with-ioc.md []
+PASS doc01_adr_pruebas:0004-masked-open-set-appearance-cache.md []
+PASS doc01_adr_pruebas:0005-persistent-tracking-instead-of-cell-hash.md []
+PASS doc01_adr_pruebas:0006-transactional-snapshots-and-commits.md []
+PASS doc01_adr_pruebas:0007-fail-closed-actuation-and-honest-simulation.md []
+PASS doc01_adr_pruebas:0008-one-real-platform-first.md []
+PASS doc01_adr_pruebas:0009-models-and-licences-decided-in-the-spike.md []
+PASS doc01_adr_pruebas:0010-performance-budgets-subject-to-measurement.md []
+PASS doc01_adr_pruebas:0011-modular-monolith-and-adaptive-incrementality.md []
+PASS doc01_adr_pruebas:0012-data-minimisation-and-evidence-traceability.md []
+PASS doc01_adr_pruebas:0013-bilingual-documentation.md []
+PASS doc01_adr_pruebas:0014-hexagonal-crate-layout.md []
+PASS doc01_adr_pruebas:0015-mcp-transport-on-rmcp-wire-types.md []
+PASS doc01_adr_pruebas:0016-bounded-unsafe-for-windows-capture-and-input.md []
+PASS doc01_adr_pruebas:0017-ui-automation-evidence-fused-with-vision.md []
+PASS doc01_adr_pruebas:0018-two-phase-type-with-element-level-focus-confirmation.md []
+PASS doc01_adr_pruebas:0019-concurrent-observation-stages.md []
+PASS doc01_adr_pruebas:0020-operator-scope-on-windows.md []
+PASS doc01_adr_pruebas:0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md []
+PASS doc01_prueba_enlazada:UT-01 
+PASS doc01_prueba_enlazada:UT-02 
+PASS doc01_prueba_enlazada:UT-03 
+PASS doc01_prueba_enlazada:UT-04 
+PASS doc01_prueba_enlazada:UT-05 
+PASS doc01_prueba_enlazada:UT-06 
+PASS doc01_prueba_enlazada:UT-07 
+PASS doc01_prueba_enlazada:UT-08 
+PASS doc01_prueba_enlazada:UT-09 
+PASS doc01_prueba_enlazada:UT-10 
+PASS doc01_prueba_enlazada:UT-11 
+PASS doc01_prueba_enlazada:UT-12 
+PASS doc01_prueba_enlazada:UT-13 
+PASS doc01_prueba_enlazada:UT-14 
+PASS doc01_prueba_enlazada:UT-15 
+PASS doc01_prueba_enlazada:UT-16 
+PASS doc01_prueba_enlazada:UT-17 
+PASS doc01_prueba_enlazada:UT-18 
+PASS doc01_prueba_enlazada:UT-19 
+PASS doc01_prueba_enlazada:UT-20 
+PASS doc01_prueba_enlazada:UT-21 
+PASS doc01_prueba_enlazada:UT-22 
+PASS doc01_prueba_enlazada:UT-23 
+PASS doc01_prueba_enlazada:UT-24 
+PASS doc01_prueba_enlazada:UT-25 
+PASS doc01_prueba_enlazada:UT-26 
+PASS doc01_prueba_enlazada:UT-27 
+PASS doc01_prueba_enlazada:UT-28 
+PASS doc01_prueba_enlazada:UT-29 
+PASS doc01_prueba_enlazada:UT-30 
+PASS doc01_prueba_enlazada:UT-31 
+PASS doc01_prueba_enlazada:UT-32 
+PASS doc01_prueba_enlazada:UT-33 
+PASS doc01_prueba_enlazada:UT-34 
+PASS doc01_prueba_enlazada:UT-35 
+PASS doc01_prueba_enlazada:UT-36 
+PASS doc01_prueba_enlazada:UT-37 
+PASS doc01_prueba_enlazada:UT-38 
+PASS doc01_prueba_enlazada:UT-39 
+PASS doc01_prueba_enlazada:UT-40 
+PASS doc01_prueba_enlazada:UT-41 
+PASS doc01_prueba_enlazada:UT-42 
+PASS doc01_prueba_enlazada:UT-43 
+PASS doc01_prueba_enlazada:UT-44 
+PASS doc01_prueba_enlazada:UT-45 
+PASS doc01_prueba_enlazada:IT-01 
+PASS doc01_prueba_enlazada:IT-02 
+PASS doc01_prueba_enlazada:IT-03 
+PASS doc01_prueba_enlazada:IT-04 
+PASS doc01_prueba_enlazada:IT-05 
+PASS doc01_prueba_enlazada:IT-06 
+PASS doc01_prueba_enlazada:IT-07 
+PASS doc01_prueba_enlazada:CT-01 
+PASS doc01_prueba_enlazada:CT-02 
+PASS doc01_prueba_enlazada:CT-03 
+PASS doc01_prueba_enlazada:CT-04 
+PASS doc01_prueba_enlazada:CT-05 
+PASS doc01_prueba_enlazada:CT-06 
+PASS doc01_prueba_enlazada:CT-07 
+PASS doc01_prueba_enlazada:CT-08 
+PASS doc01_prueba_enlazada:CT-09 
+PASS doc01_prueba_enlazada:CT-10 
+PASS doc01_prueba_enlazada:SEC-01 
+PASS doc01_prueba_enlazada:SEC-02 
+PASS doc01_prueba_enlazada:SEC-03 
+PASS doc01_prueba_enlazada:SEC-04 
+PASS doc01_prueba_enlazada:SEC-05 
+PASS doc01_prueba_enlazada:SEC-06 
+PASS doc01_prueba_enlazada:E2E-01 
+PASS doc01_prueba_enlazada:E2E-02 
+PASS doc01_prueba_enlazada:E2E-03 
+PASS doc01_prueba_enlazada:S4R-02 
+PASS doc01_prueba_enlazada:S4R-03 
+PASS doc01_prueba_enlazada:PERF-01 
+PASS doc01_prueba_enlazada:PERF-02 
+PASS doc01_prueba_enlazada:PERF-03 
+PASS doc01_prueba_enlazada:EV-01 
+PASS doc01_prueba_enlazada:EV-02 
+PASS doc01_prueba_enlazada:REL-01 
+PASS doc01_prueba_enlazada:DOC-01 
+PASS doc01_estados_de_pruebas []
+PASS doc01_estados_de_escenarios []
+PASS doc01_estado_de_requisitos 
 PASS reporte_oraculo_aprobado Se lee el informe previo; para volver a ejecutar use referencia_ejecutable/run_tests.py
