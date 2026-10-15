@@ -177,6 +177,8 @@ La serie puntuada de E2E-02 ([CHANGELOG 1.0.41](docs/thesis/CHANGELOG.md)) ejecu
 
 El responsable decidió después la regla para los clics que reconstruyen su propio control ([CHANGELOG 1.0.42](docs/thesis/CHANGELOG.md), [ADR-0022](docs/adr/0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md), sin ejecución en vivo ni entrada). Antes de cada solicitud, el cliente supervisado lee ahora el elemento bajo el punto objetivo, que debe ser el identificado (o su padre) en la ventana esperada, o no envía nada. Para una lista cerrada de clics de navegación (las dos migas de pan y «Atrás» de E2E-03) la identidad posterior se registra pero no se exige: decide la comprobación del sistema, la carpeta que muestra la ventana, y un fallo lo detiene todo. Los demás pasos conservan la comprobación de identidad. No está verificado por qué el control bajo el cursor era otro (los registros no guardaban sus ancestros; ahora sí). Nada de esto está confirmado en una ejecución en vivo.
 
+La undécima ronda ([CHANGELOG 1.0.43](docs/thesis/CHANGELOG.md)) no envió ninguna solicitud real. Su preflight de sólo lectura halló que las dos ventanas minimizadas y fuera de pantalla del Explorador del shell (PID 36160), que el responsable confirmó como suyas, ya no existen, y que el equipo recibió una entrada de teclado o ratón entre dos comprobaciones. La sonda, el piloto y la serie de E2E-03 no se ejecutaron: una sonda abre y maximiza una ventana del Explorador, y no debe correr con alguien usando el equipo. La causa no está verificada; el responsable debe confirmar el estado del equipo y de la línea base antes de cualquier entrada.
+
 ## Hoja de ruta
 
 Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):

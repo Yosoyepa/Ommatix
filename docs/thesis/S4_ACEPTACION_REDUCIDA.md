@@ -2049,3 +2049,44 @@ Antes de la corrección fallan o dan error **41** pruebas (33 de la regla de anc
 ### Estado
 
 Hallazgo 8: la regla que el responsable decidió está implementada y probada con un escritorio simulado; **no confirmada en vivo**, y la causa sigue sin verificar (§1). Cuaderno: 494, sin cambio. Las matrices no cambian.
+
+## Undécima ronda: E2E-03 no llegó a la sonda; las ventanas del propietario ya no están y el equipo recibió entrada
+
+**Fecha:** 14 y 15 de octubre de 2026. **Estado:** detenida antes de cualquier entrada. Rama `docs/s4-eleventh-round` desde `main` en `32e1644` (fusión de #30). CHANGELOG 1.0.43. Revisión: [`reviews/2026-10-14-s4-eleventh-round.md`](../reviews/2026-10-14-s4-eleventh-round.md). **No se envió ninguna solicitud real** (cuaderno 515, sin cambio): ninguna sonda, ningún piloto y ninguna corrida puntuada.
+
+### 1. Verificación previa a la entrada en vivo
+
+- **Motor y editor sin recompilar.** `git diff --stat 0cb126f..HEAD -- src` no muestra cambios. `target/release/ommatix.exe` tiene el SHA-256 `a137ccd1…d548` y `ommatix-testeditor.exe` `f358b3a9…1d20`, los de la décima ronda.
+- **Clientes fijados**, comprobados con su SHA-256 antes de cada invocación: `tools/s4/e2e_driver.py` `768e77e3…7202d` y `tools/s4/e2e_dossier.py` `359f6f28…0afc2`, los de la ADR-0022. Configuración `s4r10-explorer.toml` `ab6c33b5…33d7`, sin cambio.
+- **Comprobaciones de la rama** (fuera del repositorio), todas con código de salida 0: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; la misma con las características de Windows; `cargo test --workspace` (447 pasadas, 1 ignorada); `tools/s4` (297 pruebas correctas); el editor (clippy y 24 pruebas); `referencia_ejecutable/run_tests.py` (48 de 48); `validar_paquete.py` (451 comprobaciones, 0 fallidas); `cargo test -p ommatix-acceptance` (37 de 37 escenarios; 15 y 6 pruebas).
+- **Preflight de sólo lectura** antes de la sonda: el cuaderno marca 515; `stop.flag` y `window.pin` no existen; no hay procesos de prueba; la carpeta temporal del cliente está vacía; Notepad (PID 23164) conserva sus dos ventanas. **La línea base de las ventanas del propietario no se cumple** (§2).
+
+### 2. Por qué se detuvo: las ventanas del propietario ya no están, y el equipo recibió entrada
+
+La línea base aceptada en la décima ronda son dos ventanas `CabinetWClass` minimizadas, fuera de pantalla, del proceso del shell (PID 36160), que el responsable confirmó como suyas. Dos comprobaciones de sólo lectura (clase, PID, proceso, estado, tamaño y posición; sin títulos), separadas por unos minutos, dan:
+
+| Ventana | Primera comprobación (cuaderno 515) | Segunda comprobación |
+|---|---|---|
+| `CabinetWClass` minimizada, 160 × 28 en (−32000, −32000) | visible | **no existe** |
+| segunda `CabinetWClass` minimizada, fuera de pantalla | no existe | no existe |
+| `CabinetWClass` oculta, 1920 × 1032 en (0, 0) (línea base) | presente | presente |
+
+Entre las dos comprobaciones, el tiempo desde la última entrada de teclado o ratón pasó de 239,8 s a 116,5 s: el equipo recibió entrada. Ningún comando de esta ronda envía entrada (las pruebas usan dobles y los clientes no llaman a `SendInput`), así que la produjo alguien más; no se ha verificado quién. El resto no cambió: `explorer.exe` del shell (PID 36160), Notepad (PID 23164 con dos ventanas; PID 8960 sin ventana) y `ApplicationFrameHost.exe` (PID 10076). La causa de la desaparición no está verificada. La última comprobación que contó dos ventanas fue la posterior a la serie de E2E-02 (cuaderno 515), y desde entonces no se ha ejecutado ningún cliente. El cliente sólo cierra la ventana que abrió, por su identificador, y sólo elige ventanas que no existían antes de su propio lanzamiento.
+
+La segunda comprobación ya no tiene ventanas visibles que contar, así que la compuerta la aceptaría. No se ejecutó la sonda por dos razones. La línea base que el responsable confirmó ya no existe. Y el equipo parece en uso: una sonda abre y maximiza una ventana del Explorador y cambia el primer plano, así que no debe correr con alguien trabajando en el equipo. La compuerta no se amplió para aceptar la situación nueva.
+
+### 3. Lo que decide el responsable
+
+1. **¿Está el equipo libre?** Y **¿cerró usted las dos ventanas minimizadas?** Si el equipo está libre y acepta el estado actual (ninguna ventana `CabinetWClass` visible y la oculta del shell) como línea base, la ronda sigue en su orden: sonda sin entrada; piloto con `--max-live 8`; y, sólo si el piloto pasa, diez corridas puntuadas en diez invocaciones de una corrida, con compuerta entre ellas y `--max-live` igual al presupuesto que quede de 60.
+2. Si el equipo no está libre, o el cambio no se explica, hay que investigar antes de cualquier entrada.
+
+### 4. Estado de E2E-03 y del cupo
+
+- **E2E-03: `PENDIENTE_PRODUCTO`**, sin cambio en la matriz. No hubo sonda, piloto ni serie.
+- **Cupo:** cuaderno 515 con `--round-start 429`: 86 solicitudes usadas de 200 y 114 disponibles. Si se reanuda, el plan usa 8 en el piloto y 60 en la serie (68 en total).
+- **Escritorio:** sin procesos de prueba, carpeta temporal vacía, `stop.flag` y `window.pin` ausentes, Notepad sin cambios y la ventana oculta de línea base sin tocar.
+
+### 5. Otros cambios de documentación
+
+- `docs/handoff.md`: se elimina una copia obsoleta de la fila y del párrafo de la ADR-0022. La copia obsoleta citaba un hash de `e2e_driver.py` anterior (`a758d172…`) y las cifras de un estado intermedio (286 pruebas, 33 fallidas sin el cambio). La copia vigente (`768e77e3…`, 297 pruebas, 41 fallidas sin el cambio) se conserva.
+- `README.md` y `README.es.md`: un párrafo de la undécima ronda en cada uno, después del de la regla de anclaje.
