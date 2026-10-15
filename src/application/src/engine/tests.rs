@@ -102,6 +102,12 @@ struct World {
     access_delay: Duration,
     /// How long one capture takes on the clock, after the frame is stamped.
     advance_on_capture: Duration,
+    /// The operator's stop, which the policy double reads (SEC-02). It is engaged by the
+    /// operator, never by the engine.
+    operator_stop: Arc<AtomicBool>,
+    /// Engages the operator's stop when this event happens for the `n`th time in the sequence,
+    /// counted from the last clear of `events`; one-shot.
+    stop_at: Option<(&'static str, usize)>,
 }
 
 impl Default for World {
@@ -146,6 +152,8 @@ impl Default for World {
             foreground_window_script: VecDeque::new(),
             access_delay: Duration::ZERO,
             advance_on_capture: Duration::ZERO,
+            operator_stop: Arc::new(AtomicBool::new(false)),
+            stop_at: None,
         }
     }
 }
@@ -159,6 +167,19 @@ impl World {
             } else {
                 self.pending_redraw = Some(self.redraw_after_captures);
             }
+        }
+    }
+
+    /// Records an event of the sequence. When the operator waits for it, the operator engages
+    /// the stop right here: the sequence goes on, and the engine reads the stop at its next check.
+    fn note(&mut self, event: &'static str) {
+        self.events.push(event);
+        let Some((waited, nth)) = self.stop_at else {
+            return;
+        };
+        if waited == event && self.events.iter().filter(|e| **e == event).count() == nth {
+            self.stop_at = None;
+            self.operator_stop.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -221,7 +242,7 @@ impl FrameCapturer for Capturer {
             return Err(PortError::new("test-capturer", "gone"));
         }
         w.seq += 1;
-        w.events.push("capture");
+        w.note("capture");
         match w.pending_redraw {
             Some(0) => {
                 w.reactions = w.reactions.wrapping_add(1);
@@ -325,7 +346,7 @@ impl AccessibilityProvider for Access {
 
     fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError> {
         let mut w = lock(&self.0);
-        w.events.push("focus");
+        w.note("focus");
         if w.fail_focus {
             return Err(PortError::new("test-accessibility", "focus unavailable"));
         }
@@ -349,7 +370,7 @@ impl OsActuator for Actuator {
 
     fn foreground_application(&self) -> Option<String> {
         let mut w = lock(&self.0);
-        w.events.push("foreground");
+        w.note("foreground");
         match w.foreground_script.pop_front() {
             Some(answer) => answer,
             None => w.foreground.clone(),
@@ -358,7 +379,7 @@ impl OsActuator for Actuator {
 
     fn foreground_window(&self) -> Option<TopLevelWindow> {
         let mut w = lock(&self.0);
-        w.events.push("foreground_window");
+        w.note("foreground_window");
         match w.foreground_window_script.pop_front() {
             Some(answer) => answer,
             None => w.foreground_window.clone(),
@@ -367,13 +388,13 @@ impl OsActuator for Actuator {
 
     fn window_at(&self, _point: (f64, f64)) -> Option<TopLevelWindow> {
         let mut w = lock(&self.0);
-        w.events.push("window_at");
+        w.note("window_at");
         w.window_at_point.clone()
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
         let mut w = lock(&self.0);
-        w.events.push("deliver");
+        w.note("deliver");
         w.delivered.push(action.clone());
         w.repaint_after_input();
         w.receipt
@@ -389,7 +410,7 @@ impl OsActuator for Actuator {
         action: &ValidatedAction,
     ) -> Result<DeliveryReceipt, PortError> {
         let mut w = lock(&self.0);
-        w.events.push("click");
+        w.note("click");
         w.clicks.push(action.clone());
         if w.react_to_click {
             w.reactions = w.reactions.wrapping_add(1);
@@ -400,7 +421,7 @@ impl OsActuator for Actuator {
 
     fn deliver_keys(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
         let mut w = lock(&self.0);
-        w.events.push("keys");
+        w.note("keys");
         if w.fail_keys {
             return Err(PortError::new("test-actuator", "injection failed"));
         }
@@ -413,9 +434,15 @@ impl OsActuator for Actuator {
 
 /// The operator's policy; the queue answers the next reads before the base policy takes
 /// over (an operator acting while the engine works). The third field is the operator's
-/// purge file (`[safety] purge_file`).
+/// purge file (`[safety] purge_file`); the fourth is the operator's stop, which reads as
+/// engaged whatever the other answers say (SEC-02).
 #[derive(Debug, Default)]
-struct Policy(Mutex<LocalPolicy>, Mutex<VecDeque<LocalPolicy>>, PurgeFile);
+struct Policy(
+    Mutex<LocalPolicy>,
+    Mutex<VecDeque<LocalPolicy>>,
+    PurgeFile,
+    Arc<AtomicBool>,
+);
 
 /// The operator's purge file, as the tests make it. Each creation is a new instance of the
 /// file, and the engine honours each instance once: `ConfigPolicy` keys the file on its
@@ -453,12 +480,14 @@ impl PolicyStore for Policy {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .pop_front();
-        next.unwrap_or_else(|| {
+        let mut policy = next.unwrap_or_else(|| {
             self.0
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone()
-        })
+        });
+        policy.stopped |= self.3.load(Ordering::SeqCst);
+        policy
     }
 
     fn purge_requested(&self) -> bool {
@@ -495,6 +524,21 @@ impl Rig {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .extend(reads);
+    }
+
+    /// The operator engages the stop now (SEC-02): the next policy read reports it.
+    fn engage_operator_stop(&self) {
+        self.policy.3.store(true, Ordering::SeqCst);
+    }
+
+    /// The operator clears the stop.
+    fn clear_operator_stop(&self) {
+        self.policy.3.store(false, Ordering::SeqCst);
+    }
+
+    /// The operator engages the stop when `event` happens for the `nth` time in the sequence.
+    fn stop_at(&self, event: &'static str, nth: usize) {
+        self.world().stop_at = Some((event, nth));
     }
 
     fn observe(&mut self) -> ObservePage {
@@ -579,7 +623,13 @@ fn rig(world: World) -> Rig {
 fn rig_with(world: World, config: EngineConfig) -> Rig {
     let world = Arc::new(Mutex::new(world));
     let clock = Arc::new(ManualClock::new());
-    let policy = Arc::new(Policy::default());
+    let operator_stop = lock(&world).operator_stop.clone();
+    let policy = Arc::new(Policy(
+        Mutex::default(),
+        Mutex::default(),
+        PurgeFile::default(),
+        operator_stop,
+    ));
     let engine = Engine::new(
         config,
         Ports {
@@ -2455,5 +2505,6 @@ mod identity;
 mod purge;
 mod security;
 mod snapshot_age;
+mod stop;
 mod typing;
 mod window_scope;

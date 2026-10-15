@@ -62,7 +62,7 @@ fn phases(r: &Rig, names: &[&str]) -> Vec<&'static str> {
         .collect()
 }
 
-fn assert_clicked_but_not_typed(r: &Rig, result: &ActionResult) {
+pub(super) fn assert_clicked_but_not_typed(r: &Rig, result: &ActionResult) {
     assert_eq!(result.status, ActionStatus::Indeterminate, "{result:?}");
     let error = result.error.as_ref().expect("an error");
     assert_eq!(
