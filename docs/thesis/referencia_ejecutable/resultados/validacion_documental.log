@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 25
+PASS adrs_encontradas 26
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -100,6 +100,7 @@ PASS referencias:0020-operator-scope-on-windows.md []
 PASS referencias:0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md []
 PASS referencias:0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md []
 PASS referencias:0023-licence-and-reduced-mvp-scope.md []
+PASS referencias:0024-observation-spans-and-a-switched-full-frame-baseline.md []
 PASS referencias:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
 PASS referencias:0026-native-identity-discriminant.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
@@ -379,6 +380,7 @@ PASS doc01_adr_pruebas:0020-operator-scope-on-windows.md []
 PASS doc01_adr_pruebas:0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md []
 PASS doc01_adr_pruebas:0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md []
 PASS doc01_adr_pruebas:0023-licence-and-reduced-mvp-scope.md []
+PASS doc01_adr_pruebas:0024-observation-spans-and-a-switched-full-frame-baseline.md []
 PASS doc01_adr_pruebas:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
 PASS doc01_adr_pruebas:0026-native-identity-discriminant.md []
 PASS doc01_prueba_enlazada:UT-01 

@@ -43,8 +43,8 @@ use super::accessibility::accessible_control;
 use super::icons::{self, IconLabel, Scope};
 use super::{Engine, Ports, aged_out};
 use crate::PortError;
-use crate::contract::{ErrorCode, LabelSource, StageTimings, ToolError};
-use crate::ports::{AccessibilityProvider, Clock, TextRecognizer, VisionDetector};
+use crate::contract::{ErrorCode, LabelSource, ObservationPlan, StageTimings, ToolError, WorkKind};
+use crate::ports::{AccessibilityProvider, Clock, InputShape, TextRecognizer, VisionDetector};
 
 /// Raw evidence of the last committed observation, clipped to its frame and sorted.
 #[derive(Debug, Clone, Default)]
@@ -226,7 +226,6 @@ pub(super) struct Published {
     pub captured_at: Duration,
     /// Sorted by target ID.
     pub elements: Vec<StoredElement>,
-    pub timings: StageTimings,
     /// Regions whose accessibility read was cut short by its budget and not completed
     /// since: the next observation reads them again, pixels changed or not. Empty when
     /// the evidence is complete.
@@ -241,6 +240,14 @@ impl Published {
     pub fn snapshot_id(&self) -> String {
         format!("s{}", self.registry.snapshot_id())
     }
+}
+
+/// What the observation that published the snapshot measured and planned. Kept beside the
+/// snapshot, not inside it: its commit can only be timed after the snapshot is committed.
+#[derive(Debug, Clone)]
+pub(super) struct Measured {
+    pub timings: StageTimings,
+    pub plan: ObservationPlan,
 }
 
 /// An observation before identity: what the registry sees, plus the view's extras.
@@ -467,6 +474,8 @@ struct Inferred {
     accessibility: Duration,
     /// The accessibility read ended on its budget.
     truncated: bool,
+    /// The detector's inferences, `None` when it does not count them.
+    inference_shapes: Option<Vec<InputShape>>,
 }
 
 /// What a perception stage returned, when it started and how long it ran on the injected
@@ -498,10 +507,39 @@ fn idle<T: Default>() -> Timed<T> {
 
 /// Waits for a stage thread. A panic of the stage goes on unwinding in the caller, exactly
 /// as it would have when the stages ran one after the other.
-fn joined<T>(handle: std::thread::ScopedJoinHandle<'_, Timed<T>>) -> Timed<T> {
+fn joined<T>(handle: std::thread::ScopedJoinHandle<'_, T>) -> T {
     handle
         .join()
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+/// The planner's decision in the vocabulary of the research record and `_meta`.
+fn plan_record(
+    work: &Work,
+    regions: &[BBox],
+    inference_shapes: Option<Vec<InputShape>>,
+    truncated: bool,
+    evidence: &EvidenceSet,
+    relations_n: usize,
+) -> ObservationPlan {
+    let (kind, reason) = match work {
+        Work::Nothing => (WorkKind::Idle, None),
+        Work::Regions(_) => (WorkKind::Regions, None),
+        Work::FullRefresh(reason) => (WorkKind::Full, Some(*reason)),
+    };
+    ObservationPlan {
+        work: kind,
+        full_refresh_reason: reason,
+        region_count: regions.len(),
+        region_area_px: regions.iter().map(BBox::area).sum(),
+        inference_count: inference_shapes.as_ref().map(Vec::len),
+        input_shapes: inference_shapes,
+        accessibility_truncated: truncated,
+        controls_n: evidence.controls.len(),
+        words_n: evidence.words.len(),
+        supports_n: evidence.controls.len() + evidence.words.len() + evidence.accessible.len(),
+        relations_n,
+    }
 }
 
 /// `regions` and `extra` as one sorted list without duplicates.
@@ -521,6 +559,9 @@ fn inference_failed() -> ToolError {
 
 impl Engine {
     /// Runs one observation and commits it, or reports why nothing was published.
+    // One observation is one transaction (SDD §2.7): its stages read in order, and splitting
+    // them would only move the clock readings that define each span away from their stage.
+    #[allow(clippy::too_many_lines)]
     pub(super) fn observe(&mut self) -> Result<(), ToolError> {
         let clock = self.ports.clock.clone();
         let t0 = clock.now();
@@ -566,6 +607,7 @@ impl Engine {
             recognize,
             accessibility,
             truncated,
+            inference_shapes,
         }) = self.infer(&frame, &regions, &read_regions)
         else {
             self.store.record_failure(&plan.dirty);
@@ -596,16 +638,15 @@ impl Engine {
         };
 
         let span = |a: Duration, b: Duration| b.saturating_sub(a);
-        let timings = StageTimings {
-            capture: span(t0, t_capture),
-            plan: span(t_capture, t_plan),
-            detect,
-            recognize,
-            accessibility,
-            fuse: span(t_access, tracked.fused_at),
-            track: span(tracked.fused_at, t_track),
-            total: span(t0, t_track),
-        };
+        // Counted while the evidence is still here: it moves into the candidate snapshot.
+        let observed_plan = plan_record(
+            &plan.work,
+            &regions,
+            inference_shapes,
+            truncated,
+            &evidence,
+            tracked.relations.len(),
+        );
         let staged = self.store.stage(
             frame,
             Published {
@@ -616,7 +657,6 @@ impl Engine {
                 frame_seq: captured.frame_seq,
                 captured_at: captured.captured_at,
                 elements: tracked.elements,
-                timings,
                 accessibility_gaps,
                 changes: tracked.changes,
             },
@@ -626,7 +666,24 @@ impl Engine {
             self.store.record_failure(&plan.dirty);
             return Err(inference_failed());
         }
+        // The publication is the last stage: `total` ends here (ADR-0024).
+        let t_commit = clock.now();
         self.snapshot_spent = false;
+        self.measured = Some(Measured {
+            timings: StageTimings {
+                capture: span(t0, t_capture),
+                plan: span(t_capture, t_plan),
+                detect,
+                recognize,
+                accessibility,
+                fuse: span(t_access, tracked.fused_at),
+                track: span(tracked.fused_at, t_track),
+                commit: span(t_track, t_commit),
+                total: span(t0, t_commit),
+                response_build: None,
+            },
+            plan: observed_plan,
+        });
         Ok(())
     }
 
@@ -716,11 +773,14 @@ impl Engine {
             ..
         } = &mut self.ports;
         let clock: &dyn Clock = clock.as_ref();
+        // The shapes are read on the thread that made the call, right after it: they are the
+        // inferences of that call. With nothing to detect no call is made, so no inference ran.
         let detect = |detector: &mut Box<dyn VisionDetector>| {
             if regions.is_empty() {
-                idle()
+                (idle(), Some(Vec::new()))
             } else {
-                timed(clock, || detector.detect(frame, regions))
+                let stage = timed(clock, || detector.detect(frame, regions));
+                (stage, detector.inference_shapes())
             }
         };
         let recognize = |recognizer: &mut Box<dyn TextRecognizer>| {
@@ -739,7 +799,7 @@ impl Engine {
         };
 
         // With no region to analyse only the accessibility read has work: nothing to overlap.
-        let (controls, words, tree) = if concurrent && !regions.is_empty() {
+        let (detected, words, tree) = if concurrent && !regions.is_empty() {
             std::thread::scope(|scope| {
                 let controls = scope.spawn(|| detect(detector));
                 let words = scope.spawn(|| recognize(recognizer));
@@ -748,20 +808,21 @@ impl Engine {
             })
         } else {
             // One after the other, and a failure ends the observation at once.
-            let controls = detect(detector);
-            let words = if controls.result.is_ok() {
+            let detected = detect(detector);
+            let words = if detected.0.result.is_ok() {
                 recognize(recognizer)
             } else {
                 idle()
             };
-            let tree = if controls.result.is_ok() && words.result.is_ok() {
+            let tree = if detected.0.result.is_ok() && words.result.is_ok() {
                 read(accessibility)
             } else {
                 idle()
             };
-            (controls, words, tree)
+            (detected, words, tree)
         };
 
+        let (controls, inference_shapes) = detected;
         let (detect_took, recognize_took, access_took) = (controls.took, words.took, tree.took);
         // Evidence is dated by when its read started: the state it reports is no older
         // than that, so the age it is judged by is never understated (ADR-0025).
@@ -786,6 +847,7 @@ impl Engine {
             recognize: recognize_took,
             accessibility: access_took,
             truncated: read.truncated,
+            inference_shapes,
         })
     }
 }

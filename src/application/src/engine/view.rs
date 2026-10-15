@@ -12,7 +12,7 @@ use ommatix_domain::fusion::normalized;
 
 use super::Engine;
 use super::journal::fnv1a64;
-use super::observe::{Published, StoredElement};
+use super::observe::{Measured, Published, StoredElement};
 use crate::contract::{
     ElementView, ErrorCode, ObservePage, ObserveRequest, ToolError, Zone, limits, truncate_chars,
 };
@@ -167,7 +167,8 @@ impl Engine {
     /// The first page of the snapshot just committed.
     pub(super) fn first_page(&self, request: &ObserveRequest) -> Result<ObservePage, ToolError> {
         let published = self.store.published().ok_or_else(stale_cursor)?;
-        Ok(self.page(published, request, 0, false))
+        let measured = self.measured.as_ref().ok_or_else(stale_cursor)?;
+        Ok(self.page(published, measured, request, 0, false))
     }
 
     /// The page a cursor names, without capturing anything.
@@ -178,6 +179,7 @@ impl Engine {
     ) -> Result<ObservePage, ToolError> {
         let cursor = Cursor::decode(cursor).ok_or_else(stale_cursor)?;
         let published = self.store.published().ok_or_else(stale_cursor)?;
+        let measured = self.measured.as_ref().ok_or_else(stale_cursor)?;
         let key = query_key(request);
         if cursor.snapshot != published.registry.snapshot_id()
             || cursor.include_values != self.show_values(request)
@@ -187,7 +189,7 @@ impl Engine {
             return Err(stale_cursor());
         }
         let degraded = !self.store.actions_allowed();
-        let page = self.page(published, request, cursor.offset, degraded);
+        let page = self.page(published, measured, request, cursor.offset, degraded);
         // A cursor past the end was not issued by this engine.
         if cursor.offset >= page.total_elements {
             return Err(stale_cursor());
@@ -204,6 +206,7 @@ impl Engine {
     fn page(
         &self,
         published: &Published,
+        measured: &Measured,
         request: &ObserveRequest,
         offset: usize,
         degraded: bool,
@@ -243,7 +246,8 @@ impl Engine {
             elements,
             total_elements: filtered.len(),
             next_cursor,
-            timings: published.timings,
+            timings: measured.timings,
+            plan: measured.plan.clone(),
         }
     }
 }

@@ -227,20 +227,23 @@ fn it_06_and_sec_04_a_session_writes_replies_to_stdout_diagnostics_to_stderr_and
     );
 }
 
-/// IT-06: `demo --timings` puts its per-stage times on stderr as numbers and nothing from
-/// the screen; the labels it prints are the demo's own report, on stdout.
+/// IT-06: `demo --timings` puts one record per observation on stderr: whole microseconds,
+/// the plan, and a signature per element, never a label or any other text of the screen;
+/// the labels it prints are the demo's own report, on stdout.
 #[test]
 fn it_06_demo_timings_on_stderr_are_numbers_only() {
     let sandbox = Sandbox::new("demo");
     let output = sandbox.run(&["demo", "--session-id", "demo", "--timings"], "");
     assert!(output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    let timing_lines: Vec<&str> = stderr
+    let records: Vec<&str> = stderr
         .lines()
-        .filter(|l| l.starts_with("timings "))
+        .filter_map(|l| l.strip_prefix("ommatix-observation "))
         .collect();
-    assert!(timing_lines.len() >= 2, "{stderr}");
-    for line in timing_lines {
+    assert!(records.len() >= 2, "{stderr}");
+    for line in records {
+        let record: serde_json::Value = serde_json::from_str(line).expect("a JSON record");
+        assert_eq!(record["schema"], "ommatix.observation/1", "{line}");
         for stage in [
             "capture",
             "plan",
@@ -249,12 +252,24 @@ fn it_06_demo_timings_on_stderr_are_numbers_only() {
             "accessibility",
             "fuse",
             "track",
+            "commit",
+            "response_build",
             "total",
         ] {
-            assert!(line.contains(stage), "{stage} missing in {line:?}");
+            assert!(
+                record["timings_us"][stage].is_u64(),
+                "{stage} missing or not whole microseconds in {line:?}"
+            );
         }
-        let words: Vec<&str> = line.split_whitespace().collect();
-        assert_eq!(words[0], "timings");
+        assert!(
+            ["full", "regions", "idle"].contains(&record["plan"]["work"].as_str().unwrap_or("")),
+            "{line:?}"
+        );
+        for signature in record["signatures"].as_array().expect("signatures") {
+            let text = signature.as_str().expect("a signature");
+            assert_eq!(text.len(), 16, "{line:?}");
+            assert!(text.bytes().all(|b| b.is_ascii_hexdigit()), "{line:?}");
+        }
         for secret in SCREEN_TEXT {
             assert!(!line.contains(secret), "{line:?}");
         }

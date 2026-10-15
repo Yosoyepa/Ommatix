@@ -300,6 +300,7 @@ fn startup_notes(
 ) -> Vec<String> {
     let access = config.models.accessibility;
     let mut notes = vec![icon_note(icons)];
+    notes.extend(config.notes());
     if source != SourceKind::Sim && config.models.has_detector() {
         let m = &config.models;
         notes.push(format!(

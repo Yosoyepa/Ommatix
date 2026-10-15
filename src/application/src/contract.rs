@@ -8,6 +8,9 @@ use std::time::Duration;
 
 use ommatix_domain::fusion::{Actionability, Role, TextKind};
 use ommatix_domain::identity::{ActionStatus, TargetId};
+use ommatix_domain::incremental::FullRefreshReason;
+
+use crate::ports::InputShape;
 
 /// Contract version, independent of the MCP protocol version.
 pub const SCHEMA_VERSION: &str = "1.0";
@@ -232,6 +235,12 @@ pub struct ElementView {
 /// read run concurrently (SDD §2.7, ADR-0019), so those three overlap and do not add up to
 /// `total`, which is the wall-clock time of the whole observation measured directly
 /// (chapter 09 §9.6: overlapping stages are never summed).
+///
+/// The boundaries are fixed (ADR-0024). `total` runs from the start of the capture to the end
+/// of the commit, that is, to the published snapshot: the perception latency of chapter 03
+/// §3.4. `commit` is the publication alone. `response_build` starts after the publication and
+/// is the engine's preparation of the first page; its own `_meta` cannot include the JSON
+/// serialisation or the transport that follow it, so those are measured by the client.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StageTimings {
     pub capture: Duration,
@@ -242,7 +251,63 @@ pub struct StageTimings {
     pub accessibility: Duration,
     pub fuse: Duration,
     pub track: Duration,
+    /// Staging and publishing the candidate snapshot (the end of tracking to the commit).
+    pub commit: Duration,
+    /// From the start of the capture to the end of the commit: the published snapshot.
     pub total: Duration,
+    /// Building the first page of the response, after the publication. `None` until the
+    /// page is built: a value is never invented for it.
+    pub response_build: Option<Duration>,
+}
+
+/// What the planner decided for one observation (Algorithm 1), for the research record and
+/// MCP `_meta` (`io.ommatix/plan`). Counts are of the evidence the snapshot published.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ObservationPlan {
+    pub work: WorkKind,
+    /// Why the whole frame was processed; `None` unless `work` is [`WorkKind::Full`].
+    pub full_refresh_reason: Option<FullRefreshReason>,
+    /// Regions the detector and the recogniser were asked about: one (the frame) for a full
+    /// refresh, none when idle.
+    pub region_count: usize,
+    /// Sum of the areas of those regions, in physical pixels.
+    pub region_area_px: f64,
+    /// Model inferences the detector ran, `None` when the detector does not count them (not
+    /// measured). An idle observation runs none: `Some(0)`.
+    pub inference_count: Option<usize>,
+    /// Input shape of each inference (`[batch, channels, height, width]`), same length as
+    /// `inference_count`.
+    pub input_shapes: Option<Vec<InputShape>>,
+    /// The accessibility read was cut short by its budget.
+    pub accessibility_truncated: bool,
+    pub controls_n: usize,
+    pub words_n: usize,
+    /// Boxes a region must not cut in half: controls, words and accessibility elements.
+    pub supports_n: usize,
+    pub relations_n: usize,
+}
+
+/// The work an observation did, as the planner classified it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WorkKind {
+    /// The whole frame was processed.
+    Full,
+    /// Only the planned regions were processed.
+    Regions,
+    /// Nothing changed and nothing was pending: no detector, recogniser or read ran.
+    #[default]
+    Idle,
+}
+
+impl WorkKind {
+    /// The name on the research record and in `_meta`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Regions => "regions",
+            Self::Idle => "idle",
+        }
+    }
 }
 
 /// Per-stage durations of one `execute_action`. Run-dependent: MCP `_meta` only.
@@ -265,7 +330,7 @@ pub struct ActionTimings {
 }
 
 /// One page of a full snapshot (`mode: "full"`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ObservePage {
     pub session_id: String,
     /// `s<n>`.
@@ -280,7 +345,10 @@ pub struct ObservePage {
     pub total_elements: usize,
     /// Present exactly when the page is truncated; bound to this snapshot.
     pub next_cursor: Option<String>,
+    /// The observation that published this snapshot (every page of it names the same one).
     pub timings: StageTimings,
+    /// What that observation planned.
+    pub plan: ObservationPlan,
 }
 
 impl ObservePage {

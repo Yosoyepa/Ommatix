@@ -225,6 +225,8 @@ Metas iniciales de RNF-05: refresco completo en caliente p95 ≤ 700 ms e increm
 
 ## 10. RNF-05: etapas concurrentes, red en float16 y entradas más pequeñas (1.0.22)
 
+> **Nota (1.0.54, ADR-0024).** El `total` de estas medidas termina al acabar el *tracking*, antes del *commit*. Desde 1.0.54 `total` termina en la publicación del snapshot, como define el capítulo 03 §3.4; los valores de aquí no son comparables con los nuevos y conservan su commit de origen (§11.5).
+
 **Fecha:** 14 de octubre de 2026, misma máquina (§1), rama `perf/rnf05-latency` sobre `adfb1ea`. Dentro del spike y de la aprobación del responsable del proyecto del 14 de octubre de 2026 («rendimiento de RNF-05 primero»). No se envió ninguna tecla ni ningún clic, y no se guardó ningún frame: de las corridas con DXGI sólo se conservaron los tiempos de stderr y el número de elementos de cada observación.
 
 Punto de partida: una observación incremental con DirectML costaba la suma de sus etapas (§9.4 y `S4_ACEPTACION_REDUCIDA.md`): detección unos 115 ms por región (una inferencia de 1280×1280), lectura de accesibilidad unos 60 ms y OCR de 3 a 8 ms. Con una región, 184 ms; con dos, 298 ms.
@@ -389,6 +391,34 @@ La primera corrida, con el código de `main` (commit `a5cd1f9`, 300 muestras por
 ### 11.4 Reproducir
 
 `cargo run --release -p ommatix-acceptance --example core_latency -- --out perf01.json` (unos dos minutos de un solo hilo; con `--samples N`, `--engine-samples N` y `--warmup N`). Se niega a correr sin optimizar. Las pruebas de la propia herramienta (`perf_01_*`) corren con `cargo test`. El informe nombra la compilación, el commit y si el árbol estaba limpio; `S4_REPRODUCIBILIDAD.md` §4 da el resto de comandos.
+
+### 11.5 Medición de 1.0.54: antes y después de los tramos nuevos (ADR-0024)
+
+**Qué se midió.** El mismo ejemplo `core_latency` en `--release`, con los valores por defecto (10 000 muestras por situación en el núcleo, 2 000 en `observe_screen` entero, calentamiento de 200), en **diez pares intercalados**: cinco con la base primero y cinco con la rama primero, para separar el efecto del orden. **Antes**: `origin/main` en `114a020`, que ya incluye INC-03 (vigencia) y la purga de sesión, compilado en su propio directorio de compilación. **Después**: la rama `feat/inc01-measurement` con esta PR. La escena es sintética: no se lee la pantalla ni se envía entrada. La máquina es la de §1, con sesiones abiertas y sin compilaciones en marcha durante la ronda final.
+
+Una ronda anterior, contra `ecd8986` (antes de INC-03 y de la purga) y con otras compilaciones en marcha, mostró en la situación con una región diferencias de +0,6 a +1,2 ms de p50. No se reprodujeron al repetir la medida y no miden el código que se integra, así que no son evidencia de esta PR.
+
+| Capa | Situación | p50 antes | p50 después | p95 antes | p95 después |
+|---|---|---|---|---|---|
+| núcleo (`core_total`) | primera observación | 1,54 (1,50–1,62) | 1,55 (1,50–1,59) | 2,70 (2,67–2,79) | 2,72 (2,68–2,77) |
+| núcleo (`core_total`) | en caliente, sin cambios | 3,12 (2,88–3,40) | 3,10 (2,87–3,48) | 5,49 (5,32–5,65) | 5,56 (5,30–5,65) |
+| núcleo (`core_total`) | en caliente, una región | 3,41 (3,14–3,65) | 3,49 (3,15–4,09) | 5,78 (5,58–5,99) | 5,89 (5,60–6,01) |
+| `observe_screen` entero | primera observación | 1,86 (1,74–3,04) | 1,83 (1,75–1,93) | 3,17 (3,02–3,31) | 3,15 (3,03–3,24) |
+| `observe_screen` entero | en caliente, sin cambios | 3,36 (3,11–5,56) | 3,36 (3,11–3,88) | 5,81 (5,67–6,09) | 5,86 (5,66–6,04) |
+| `observe_screen` entero | en caliente, una región | 3,75 (3,42–3,86) | 3,70 (3,33–3,92) | 6,24 (5,85–6,39) | 6,18 (5,92–6,39) |
+
+Cada celda es la mediana de diez corridas, con el mínimo y el máximo entre paréntesis. Milisegundos. Los mínimos y máximos incluyen alguna corrida aislada más lenta (por ejemplo, 3,04 ms en la primera observación de `observe_screen`, en una corrida base); la mediana no las sigue.
+
+**Diferencias apareadas** (después menos antes, mediana de los diez pares, en ms): núcleo, primera observación +0,010 en p50 y +0,013 en p95; núcleo, en caliente sin cambios −0,003 y −0,021; núcleo, una región +0,020 y −0,012; `observe_screen`, primera observación −0,022 y −0,012; `observe_screen`, en caliente sin cambios −0,040 y −0,007; `observe_screen`, una región −0,017 y +0,040.
+
+**Lectura.**
+
+1. **No hay efecto separable del ruido.** Las medianas de las diferencias quedan entre −0,04 y +0,02 ms en p50 y entre −0,02 y +0,04 ms en p95. En la fila del núcleo con una región el signo es positivo en 8 de 10 pares, pero la mediana es de 0,02 ms: es del tamaño del ruido de la propia medida.
+2. **Un cambio de la primera ronda no se mantuvo.** Con los seis primeros pares, el núcleo con una región parecía 0,17 ms más lento en p50; la diferencia la explicaban dos pares (+0,37 y +0,51 ms) y los cuatro pares siguientes dieron una mediana de −0,02 ms. La rama sólo añade una comprobación de un indicador que vale `false` en la ruta por defecto, así que no se atribuye el cambio a esta PR.
+3. **RNF-04 (p95 del núcleo ≤ 10 ms).** En las veinte corridas, el peor p95 del núcleo fue de 5,58 a 6,01 ms, antes y después, por debajo del objetivo.
+4. **Coste por observación.** No medido de forma aislada: la rama añade cuatro lecturas del reloj (fin de la publicación y de la página), una copia del registro del plan y unas sumas. Es una estimación del camino de código, de cientos de nanosegundos, y no se presenta como medida.
+
+**Límites.** Diez pares no resuelven diferencias de décimas de milisegundo, y la carga del equipo varía entre corridas. Estas cifras no sustituyen la medición del RNF-04 sobre el equipo de referencia en condiciones controladas, que sigue pendiente (capítulo 06 §6.6), ni la medición de los tramos nuevos en vivo.
 
 ## 12. PERF-03 / RNF-06: recursos y soak de 2 h (1.0.55)
 

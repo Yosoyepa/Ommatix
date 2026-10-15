@@ -31,8 +31,8 @@ use ommatix_domain::incremental::{PlanParams, connected_components};
 use ommatix_domain::snapshot::SnapshotStore;
 
 use crate::contract::{
-    ActionRequest, ActionResult, ActionTimings, EngineMetrics, EngineMode, ObservePage,
-    ObserveRequest, StageTimings, TimingsSource, ToolError,
+    ActionRequest, ActionResult, ActionTimings, EngineMetrics, EngineMode, ObservationPlan,
+    ObservePage, ObserveRequest, StageTimings, TimingsSource, ToolError,
 };
 use crate::ports::{
     AccessibilityProvider, Clock, FrameCapturer, OsActuator, PolicyStore, TextRecognizer,
@@ -43,7 +43,7 @@ pub use icons::IconResolverConfig;
 pub use journal::JOURNAL_CAPACITY;
 
 use journal::Journal;
-use observe::Published;
+use observe::{Measured, Published};
 
 /// How long the engine looks for an action's visual effect after delivering it (SDD §2.9,
 /// chapter 07 §7.4: the deadline of BDD-29). After delivery it captures, compares with
@@ -163,6 +163,9 @@ pub struct Engine {
     /// The identity counters of the snapshot the last purge deleted, without its tracks: the
     /// next observation builds on them, so no snapshot or target ID is issued twice.
     purged_identity: Option<Registry>,
+    /// What the last committed observation measured and planned. It belongs to the published
+    /// snapshot: `None` exactly when nothing has been published.
+    measured: Option<Measured>,
 }
 
 impl Engine {
@@ -176,6 +179,7 @@ impl Engine {
             snapshot_spent: false,
             action_timings: None,
             purged_identity: None,
+            measured: None,
         }
     }
 
@@ -194,6 +198,7 @@ impl Engine {
         }
         self.journal = Journal::new(JOURNAL_CAPACITY);
         self.action_timings = None;
+        self.measured = None;
     }
 
     pub fn session_id(&self) -> &str {
@@ -209,7 +214,17 @@ impl Engine {
             return self.next_page(request, cursor);
         }
         self.observe()?;
-        self.first_page(request)
+        // The response is built after the publication: its time is the observation's
+        // `response_build` (ADR-0024), reported by this page and by every later page of it.
+        let clock = self.ports.clock.clone();
+        let started = clock.now();
+        let mut page = self.first_page(request)?;
+        let response_build = clock.now().saturating_sub(started);
+        if let Some(measured) = self.measured.as_mut() {
+            measured.timings.response_build = Some(response_build);
+        }
+        page.timings.response_build = Some(response_build);
+        Ok(page)
     }
 
     /// Validates and (dry-run by default) performs one action on a target by ID.
@@ -240,7 +255,12 @@ impl Engine {
 
     /// Timings of the last committed observation, for MCP `_meta`.
     pub fn last_timings(&self) -> Option<StageTimings> {
-        self.store.published().map(|p| p.timings)
+        self.measured.as_ref().map(|m| m.timings)
+    }
+
+    /// What the last committed observation planned, for MCP `_meta` and the research record.
+    pub fn last_plan(&self) -> Option<ObservationPlan> {
+        self.measured.as_ref().map(|m| m.plan.clone())
     }
 
     /// Whether the accessibility evidence of the published snapshot is complete: `false`

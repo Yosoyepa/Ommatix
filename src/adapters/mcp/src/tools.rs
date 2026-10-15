@@ -22,6 +22,10 @@ pub const GET_ENGINE_METRICS: &str = "get_engine_metrics";
 /// `_meta` key of the per-stage timings of the observation behind a result.
 pub const TIMINGS_META_KEY: &str = "io.ommatix/timings";
 
+/// `_meta` key of what the planner decided for the observation behind a result: the work
+/// kind, the regions, the inferences and the evidence counts (ADR-0024).
+pub const PLAN_META_KEY: &str = "io.ommatix/plan";
+
 /// `_meta` key of the per-stage timings of an `execute_action` result: gate, freshness
 /// capture, delivery, focus confirmation and verification.
 pub const ACTION_TIMINGS_META_KEY: &str = "io.ommatix/action_timings";
@@ -119,12 +123,14 @@ pub(crate) fn call(
                 Err(error) => ToolOutput::tool_error(OBSERVE_SCREEN, &error),
             };
             let timings = engine.last_timings();
+            let plan = engine.last_plan();
             let complete = engine.accessibility_complete();
             drop(engine);
-            Ok(match (timings, complete) {
-                (Some(t), Some(complete)) if !output.is_error => ToolOutput {
+            Ok(match (timings, plan, complete) {
+                (Some(t), Some(plan), Some(complete)) if !output.is_error => ToolOutput {
                     meta: vec![
                         (TIMINGS_META_KEY, dto::timings_meta(&t)),
+                        (PLAN_META_KEY, dto::plan_meta(&plan)),
                         (ACCESSIBILITY_META_KEY, dto::accessibility_meta(complete)),
                     ],
                     ..output

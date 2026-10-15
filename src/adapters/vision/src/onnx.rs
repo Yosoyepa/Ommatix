@@ -44,6 +44,7 @@
 
 use std::path::Path;
 
+use ommatix_application::ports::InputShape;
 use ommatix_application::{PortError, VisionDetector};
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::Control;
@@ -71,6 +72,9 @@ pub struct OnnxVisionDetector {
     sessions: Vec<Session>,
     input_name: String,
     provider: ExecutionProvider,
+    /// The input shape of each inference the last `detect` call ran, for the research record
+    /// (ADR-0024). Cleared at the start of every `detect`.
+    inferences: Vec<InputShape>,
 }
 
 impl std::fmt::Debug for OnnxVisionDetector {
@@ -154,6 +158,7 @@ impl OnnxVisionDetector {
             sessions,
             input_name,
             provider,
+            inferences: Vec::new(),
         };
         if provider == ExecutionProvider::DirectMl {
             detector.warm_up()?;
@@ -299,6 +304,7 @@ impl OnnxVisionDetector {
     /// before NMS.
     fn infer(&mut self, size: usize, input: Vec<f32>) -> Result<Vec<Candidate>, PortError> {
         let (width, height) = self.spec.input_sizes[size];
+        self.inferences.push([1, 3, height, width]);
         let shape = [1, 3, height as usize, width as usize];
         let tensor = Tensor::from_array((shape, input))
             .map_err(|e| port(format!("cannot build the input tensor: {e}")))?;
@@ -416,8 +422,13 @@ impl VisionDetector for OnnxVisionDetector {
         true
     }
 
+    fn inference_shapes(&self) -> Option<Vec<InputShape>> {
+        Some(self.inferences.clone())
+    }
+
     /// Detections in each region, sorted by box then role, without exact duplicates.
     fn detect(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Vec<Control>, PortError> {
+        self.inferences.clear();
         let mut controls = Vec::new();
         for region in regions {
             controls.extend(self.detect_region(frame, region)?);
