@@ -57,6 +57,7 @@ fn accessible_save() -> World {
                 invoke: true,
                 ..AccessiblePatterns::default()
             },
+            native: None,
         }],
         ..World::default()
     }

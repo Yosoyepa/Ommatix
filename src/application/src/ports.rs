@@ -87,6 +87,39 @@ impl AccessiblePatterns {
     }
 }
 
+/// The native identity of an accessibility element: the runtime ID its platform gives it,
+/// and the scope in which that ID means something (ADR-0026). A runtime ID is unique only
+/// within the provider that issued it, in its process and window, and only while the
+/// element lives. The engine compares it within that scope and nowhere else, and never
+/// shows it to the agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeIdentity {
+    /// The provider that issued the ID (`uia` for UI Automation).
+    pub provider: &'static str,
+    /// The process that hosts the provider.
+    pub process_id: u32,
+    /// The window the provider belongs to, by its handle.
+    pub window: u64,
+    /// The ID's components as the platform reports them. Opaque to the engine.
+    pub runtime_id: Vec<i32>,
+}
+
+impl NativeIdentity {
+    /// The discriminant that tracking compares: the provider, the process and the window
+    /// (the scope), and the ID. Two elements share it only when the same provider, in the
+    /// same process and window, issued the same ID. It holds no name and no value.
+    pub fn discriminant(&self) -> String {
+        let id: Vec<String> = self.runtime_id.iter().map(i32::to_string).collect();
+        format!(
+            "{}:{}:{}:{}",
+            self.provider,
+            self.process_id,
+            self.window,
+            id.join(".")
+        )
+    }
+}
+
 /// One element of the attested foreground window's accessibility tree, as an
 /// [`AccessibilityProvider`] reports it.
 #[derive(Debug, Clone, PartialEq)]
@@ -105,6 +138,10 @@ pub struct AccessibleElement {
     /// A password field.
     pub password: bool,
     pub patterns: AccessiblePatterns,
+    /// The element's native identity, when the platform gives one that can be scoped
+    /// (ADR-0026). `None` otherwise: the element then has no continuity evidence beyond its
+    /// role, label and box.
+    pub native: Option<NativeIdentity>,
 }
 
 /// What one accessibility read found, and whether it covered what it was asked about.

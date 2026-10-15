@@ -451,6 +451,10 @@ pub struct AccessibleControl {
     pub label: String,
     /// A password field: no OCR text inside it is ever published, as label or value.
     pub sensitive: bool,
+    /// The element's native identity, already scoped by the application (ADR-0026): the
+    /// tracking compares it, and it never reaches the agent. `None` when the platform gives
+    /// none.
+    pub discriminant: Option<String>,
 }
 
 /// Visual detections reconciled with accessibility elements.
@@ -810,6 +814,7 @@ mod tests {
             control: control(bbox, role, Actionability::Confirmed),
             label: label.to_owned(),
             sensitive: false,
+            discriminant: None,
         }
     }
 

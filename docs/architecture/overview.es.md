@@ -103,7 +103,10 @@ DirectML como opción; los modelos se eligen en el spike S0
 6. **Seguir la identidad (algoritmo 3B).** Un matching uno a uno conserva el ID de sesión de
    cada elemento, que es monotónico y nunca se reutiliza; la revisión aumenta cuando cambia
    algo de lo que depende una acción; los IDs retirados dejan tombstones. Ante ambigüedad se
-   crea un track nuevo en lugar de adivinar.
+   crea un track nuevo en lugar de adivinar. El `RuntimeId` de UI Automation de un elemento de
+   accesibilidad, acotado por su proceso y su ventana, forma parte de su identidad; si la
+   continuidad no está probada, el elemento recibe un ID nuevo, y el motivo de cada retirada
+   se registra como código (ADR-0026).
 7. **Confirmar (commit).** Registro, índice y base se publican juntos como un snapshot
    inmutable. Si algún paso falla no se publica nada, las regiones sucias pendientes se
    conservan y el motor queda degradado, lo que bloquea las acciones

@@ -24,6 +24,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use ommatix_application::NativeIdentity;
 use ommatix_domain::fusion::Role;
 
 #[cfg(all(windows, feature = "uia"))]
@@ -121,6 +122,26 @@ pub const FRAME_HOST_CLASS: &str = "ApplicationFrameWindow";
 
 /// The class of the hosted application's window inside that frame.
 pub const HOSTED_WINDOW_CLASS: &str = "Windows.UI.Core.CoreWindow";
+
+/// The native identity of an element (ADR-0026): its UI Automation runtime ID, scoped by the
+/// process and the window that hosts its provider. `None` when the element has no runtime
+/// ID, or when its process or window is unknown (zero or negative): a runtime ID is never
+/// compared without the scope that gives it meaning. Pure: no platform call.
+pub fn native_identity(
+    pid: i32,
+    hwnd: isize,
+    runtime_id: Option<Vec<i32>>,
+) -> Option<NativeIdentity> {
+    let process_id = u32::try_from(pid).ok().filter(|&p| p != 0)?;
+    let window = u64::try_from(hwnd).ok().filter(|&w| w != 0)?;
+    let runtime_id = runtime_id.filter(|id| !id.is_empty())?;
+    Some(NativeIdentity {
+        provider: ADAPTER,
+        process_id,
+        window,
+        runtime_id,
+    })
+}
 
 /// Whether a top-level window is an `ApplicationFrameHost` frame, whose application is
 /// the process of its hosted `CoreWindow` child, never the frame's own (the `SendInput`
@@ -229,6 +250,25 @@ pub fn walk<N>(
 mod tests {
     use super::control_type as ct;
     use super::*;
+
+    /// ADR-0026: a runtime ID is compared only within its process and window; without one
+    /// of them, or without an ID, the element has no native identity at all.
+    #[test]
+    fn a_runtime_id_is_scoped_by_its_process_and_window() {
+        let id = Some(vec![42, 7, 3]);
+        let scoped = native_identity(4321, 68_140, id.clone()).expect("scoped");
+        assert_eq!(scoped.provider, ADAPTER);
+        assert_eq!(scoped.process_id, 4321);
+        assert_eq!(scoped.window, 68_140);
+        assert_eq!(scoped.runtime_id, vec![42, 7, 3]);
+        assert_eq!(scoped.discriminant(), "uia:4321:68140:42.7.3");
+        assert_eq!(native_identity(0, 1, id.clone()), None, "no process");
+        assert_eq!(native_identity(-1, 1, id.clone()), None, "no process");
+        assert_eq!(native_identity(4321, 0, id.clone()), None, "no window");
+        assert_eq!(native_identity(4321, -5, id), None, "no window");
+        assert_eq!(native_identity(4321, 1, None), None, "no runtime id");
+        assert_eq!(native_identity(4321, 1, Some(Vec::new())), None, "empty id");
+    }
 
     #[test]
     fn buttons_checkboxes_and_combo_boxes_keep_their_contract_roles() {

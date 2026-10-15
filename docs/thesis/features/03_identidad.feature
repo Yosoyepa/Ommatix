@@ -32,3 +32,9 @@ Característica: Identidad persistente y referencias vigentes
     Dado un ID retirado durante la sesión
     Cuando aparece otro control en el mismo lugar
     Entonces no se reutiliza el ID retirado
+
+  @BDD-40 @RF-09 @UT-37
+  Escenario: BDD-40 Identidad nativa sustituida con el mismo texto y la misma caja
+    Dado un botón de accesibilidad «Guardar» con identidad nativa A en una caja
+    Cuando otro objeto con identidad nativa B, el mismo texto y la misma caja ocupa ese sitio
+    Entonces el elemento recibe un ID nuevo y el anterior se retira sin reanclaje

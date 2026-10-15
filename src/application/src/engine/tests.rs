@@ -2238,6 +2238,7 @@ mod icons {
 
 mod accessibility;
 mod concurrency;
+mod identity;
 mod security;
 mod snapshot_age;
 mod typing;

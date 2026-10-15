@@ -27,7 +27,7 @@ pub use engine::{Engine, EngineConfig, IconResolverConfig, JOURNAL_CAPACITY, Por
 pub use error::{PortError, error_chain};
 pub use ports::{
     AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame,
-    Clock, DeliveryReceipt, FrameCapturer, LocalPolicy, NoAccessibility, OsActuator, PolicyStore,
-    TextRecognizer, TopLevelWindow, VisionDetector, WindowPin,
+    Clock, DeliveryReceipt, FrameCapturer, LocalPolicy, NativeIdentity, NoAccessibility,
+    OsActuator, PolicyStore, TextRecognizer, TopLevelWindow, VisionDetector, WindowPin,
 };
 pub use window_scope::{window_scope_applies, window_scope_problem};

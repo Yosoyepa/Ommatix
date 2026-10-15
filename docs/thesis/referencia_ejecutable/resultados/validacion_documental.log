@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 24
+PASS adrs_encontradas 25
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -101,6 +101,7 @@ PASS referencias:0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md [
 PASS referencias:0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md []
 PASS referencias:0023-licence-and-reduced-mvp-scope.md []
 PASS referencias:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
+PASS referencias:0026-native-identity-discriminant.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 
@@ -140,6 +141,8 @@ PASS gherkin_id_unico:BDD-16
 PASS gherkin_estructura:BDD-16 
 PASS gherkin_id_unico:BDD-17 
 PASS gherkin_estructura:BDD-17 
+PASS gherkin_id_unico:BDD-40 
+PASS gherkin_estructura:BDD-40 
 PASS gherkin_cabecera:04_iconos.feature 
 PASS gherkin_id_unico:BDD-18 
 PASS gherkin_estructura:BDD-18 
@@ -226,6 +229,7 @@ PASS trazabilidad:BDD-36
 PASS trazabilidad:BDD-37 
 PASS trazabilidad:BDD-38 
 PASS trazabilidad:BDD-39 
+PASS trazabilidad:BDD-40 
 PASS doc01_pruebas_existen:RF-01 []
 PASS doc01_adr_existen:RF-01 ADR-0008; ADR-0016
 PASS doc01_propietario:RF-01 
@@ -376,6 +380,7 @@ PASS doc01_adr_pruebas:0021-pin-every-loaded-artefact-and-keep-text-out-of-error
 PASS doc01_adr_pruebas:0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md []
 PASS doc01_adr_pruebas:0023-licence-and-reduced-mvp-scope.md []
 PASS doc01_adr_pruebas:0025-bound-authorisations-by-snapshot-and-evidence-age.md []
+PASS doc01_adr_pruebas:0026-native-identity-discriminant.md []
 PASS doc01_prueba_enlazada:UT-01 
 PASS doc01_prueba_enlazada:UT-02 
 PASS doc01_prueba_enlazada:UT-03 

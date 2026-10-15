@@ -139,7 +139,25 @@ El caché exacto tiene límite LRU/TTL y key con contexto, versión del descript
 
 Un track pasa por `new → active → ambiguous/occluded → retired`. Un ID se asigna una sola vez dentro de la sesión, se guarda como cadena opaca y no se recicla. La etiqueta puede cambiar sin renumerar todo el snapshot; una modificación significativa incrementa revisión.
 
-Los candidatos se asocian sólo dentro del mismo contexto permitido. Se combinan rol, grupo, texto discriminante, apariencia, continuidad geométrica y, si está disponible en fases posteriores, identidad de accesibilidad. Para virtualización, cambio de fila o sustitución semántica hay que retirar/renovar el track aunque no cambie la caja.
+Los candidatos se asocian sólo dentro del mismo contexto permitido. Se combinan rol, grupo, texto discriminante, apariencia, continuidad geométrica e identidad nativa de accesibilidad, descrita a continuación. Para virtualización, cambio de fila o sustitución semántica hay que retirar/renovar el track aunque no cambie la caja.
+
+### Identidad nativa de accesibilidad
+
+Un elemento que aporta la accesibilidad de la plataforma (UI Automation, ADR-0017) lleva como discriminante su `RuntimeId`, acotado por el proveedor (`uia`), el proceso que lo aloja y la ventana del proveedor. Ese alcance es la única comparación válida: el mismo `RuntimeId` en otro proceso, en otra ventana o en otra sesión no designa el mismo objeto. El identificador sólo vale mientras el elemento exista, y sólo se conserva entre observaciones consecutivas: una observación que no lo vuelva a ver retira el track. El `RuntimeId` no sale del motor; el agente sigue recibiendo sólo IDs de sesión (ADR-0026).
+
+Un elemento visual, detectado por contornos u OCR, no tiene discriminante. Su continuidad se decide sólo por rol, texto, apariencia y caja, como antes.
+
+Si la continuidad no está probada, el objeto recibe un ID nuevo, nunca el ID de su vecino más parecido. Esto cubre:
+
+- una sustitución con el mismo texto y la misma caja, que es otro objeto con otro `RuntimeId`: ID nuevo, y el anterior se retira;
+- dos gemelos que intercambian su sitio: ninguno conserva su ID y ninguno toma el del otro;
+- dos gemelos apilados en la misma caja: cada uno conserva el suyo, porque su identidad los distingue donde la caja no puede;
+- un contenedor reciclado para otro contenido (mismo `RuntimeId`, distinto nombre): ID nuevo;
+- un elemento que sale de la ventana y vuelve, aunque conserve su `RuntimeId`: ID nuevo.
+
+Cada retirada registra su motivo como código, sin etiquetas, discriminantes, cajas ni identificadores de usuario: `vanished` (ningún elemento lo continúa), `moved` (su identidad aparece fuera del IoU mínimo), `substituted` (otro objeto con el mismo rol, texto y caja ocupa su sitio), `ambiguous` (varios candidatos compiten por la asociación) o `geometry_changed` (cambio de época geométrica). El motivo no sale por el contrato; queda en el registro de la última observación publicada.
+
+Límite: el algoritmo 1 relee la accesibilidad sólo en las regiones que cambian. Una sustitución que no altera ningún píxel de su región no se ve hasta que la región cambia. La revalidación de la identidad justo antes de la entrega corresponde al incremento de vigencia (INC-03).
 
 ### Seguridad de ejecución
 
@@ -149,7 +167,7 @@ No se intenta resolver una referencia desconocida buscando un label parecido a 1
 
 ### Propiedades
 
-IDs únicos por sesión; ausencia de reutilización; independencia de la posición exacta; matching uno-a-uno; revisión monotónica; snapshots inmutables; rechazo de sesión/epoch incorrectos; baja de elementos desaparecidos; abstención ante asociación indistinguible. Los contadores persistentes no demuestran identidad por sí solos: esas propiedades también dependen de la calidad del matcher.
+IDs únicos por sesión; ausencia de reutilización; independencia de la posición exacta; matching uno-a-uno; revisión monotónica; snapshots inmutables; rechazo de sesión/epoch incorrectos; baja de elementos desaparecidos; abstención ante asociación indistinguible; identidad nativa acotada por proveedor, proceso y ventana; motivo de cada retirada registrado sin valores. Los contadores persistentes no demuestran identidad por sí solos: esas propiedades también dependen de la calidad del matcher.
 
 ## 4.6 Optimización posterior a corrección
 

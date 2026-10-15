@@ -16,6 +16,7 @@ pub(super) fn name_field() -> AccessibleElement {
             editable_value: true,
             ..AccessiblePatterns::default()
         },
+        native: None,
     }
 }
 
