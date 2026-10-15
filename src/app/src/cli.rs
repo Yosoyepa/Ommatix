@@ -87,7 +87,9 @@ pub struct RunArgs {
     #[arg(long, value_enum, default_value_t = ThemeKind::Light)]
     pub theme: ThemeKind,
     /// Session identifier (1-64 visible ASCII characters). Defaults to one derived from
-    /// the start time, unique per process; set it for reproducible output.
+    /// the start time, unique per process; set it for reproducible output. A fixed
+    /// identifier is not unique across runs: a restarted run accepts an earlier request
+    /// (chapter 08 §8.4).
     #[arg(long, value_name = "ID")]
     pub session_id: Option<String>,
     /// Also serve the legacy MCP 2025-11-25 profile (same as `[mcp] legacy_enabled =

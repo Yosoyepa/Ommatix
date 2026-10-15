@@ -429,6 +429,34 @@ mod tests {
         assert!(store.current().stopped);
     }
 
+    /// SEC-02 and process termination: the stop file is the operator's stop that outlives the
+    /// process (a restarted process reads it again), whereas the in-process switch dies with
+    /// the process that holds it. Ctrl+C ends the process and runs no code of the engine.
+    #[test]
+    fn sec_02_the_stop_file_outlives_a_restart_and_the_in_process_switch_does_not() {
+        let dir = temp_dir("restart");
+        let file = dir.join("STOP");
+        let engaged = ConfigPolicy::new(live()).with_stop_file(&file);
+        engaged.stop_switch().engage();
+        std::fs::write(&file, b"").unwrap();
+        assert!(engaged.current().stopped);
+
+        drop(engaged);
+        let restarted = ConfigPolicy::new(live()).with_stop_file(&file);
+        assert!(
+            restarted.current().stopped,
+            "the file still stops the new process"
+        );
+        assert!(
+            !restarted.stop_switch().is_engaged(),
+            "the switch of the old process is gone"
+        );
+
+        std::fs::remove_file(&file).unwrap();
+        assert!(!restarted.current().stopped, "removing the file clears it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Writes the purge file and sets its modification time: one instance of the file, which
     /// a test can replace by another with the same size and a later time.
     fn purge_instance(path: &Path, contents: &[u8], modified_secs: u64) {
