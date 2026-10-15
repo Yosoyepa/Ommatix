@@ -828,4 +828,71 @@ La suma de ningún área es `-0.0` en Rust (`Iterator::sum` de `f64` arranca en 
 
 **Plan de energía, en lectura [V].** A las 07:47 (hora local), el plan activo («Alto rendimiento») tenía el apagado de pantalla en corriente alterna en 0x00000384 s (900 s, 15 minutos) y en corriente continua en 0x00000258 s (600 s); el suspendido en corriente alterna era 0 (nunca). El cambio a «nunca» que el responsable comunicó a las 07:40 **no aparece** en esa lectura. Esta sección no cambia ningún ajuste.
 
-**Qué queda.** La repetición con `uia` sobre `main` (decisión 6 de 06 §6.7) sigue sin cifras. Para repetirla hacen falta la pantalla encendida durante toda la sesión, comprobada antes, un ensayo de un minuto que capture y después la corrida de 120 minutos sin umbral. PERF-03 mantiene el estado de 1.0.55 (`EJECUTADO_SUPERVISADO_PARCIAL`), y RNF-06 sigue sin veredicto.
+**Qué queda.** La repetición con `uia` sobre `main` (decisión 6 de 06 §6.7) sigue sin cifras. Para repetirla hacen falta la pantalla encendida durante toda la sesión, comprobada antes, un ensayo de un minuto que capture y después la corrida de 120 minutos sin umbral. PERF-03 mantiene el estado de 1.0.55 (`EJECUTADO_SUPERVISADO_PARCIAL`), y RNF-06 sigue sin veredicto. Se repitió sobre `745caff` en la §15 (1.0.66).
+
+## 15. PERF-03 / RNF-06 con `uia` sobre `745caff`: corrida completa de 120 minutos (1.0.66)
+
+**Qué mide.** La repetición de §12 que pidió el responsable, con `[models] accessibility = "uia"` sobre el código de `main` en `745caff`: `tools/perf/soak.py --minutes 120`, sin entrada de ningún tipo (sólo `observe_screen` y `get_engine_metrics`), con la aplicación de prueba propia (`tools/s4/testapp`, `--animate 100 --animate-labels 2`) y una muestra cada 5 s. Antes, un ensayo de un minuto con el mismo montaje: `completed`, 30 de 30 observaciones. Los criterios son los del responsable ([capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md)): conjunto de trabajo de no más de 10 MiB/h, y manejadores sin pendiente positiva, medidos después de los primeros 10 minutos.
+
+**Condiciones [V].**
+
+| Condición | Valor |
+|---|---|
+| Commit medido | `745caff478cb5710f0c10d222a85632162079b55` (`origin/main` entonces), árbol limpio al empezar (`tree_clean`: sí). `main` avanzó después; esta sección no cambia código |
+| `ommatix.exe` (SHA-256) | `a66f6557022e00945985dfc039b8c791cc2cfc8240f81effc662a0bdadc43eb9` (`--release --locked -p ommatix --features dxgi,directml,winrt-ocr,uia`; `rustc 1.99.0`; sin avisos) |
+| `ommatix-testapp.exe` (SHA-256) | `901a3595d05b0549b42b41fb23a1a10db5253692d4443133274496845e36bcd2` (`tools/s4/testapp`, `--release --locked`). Su código no ha cambiado desde `fe35d80`, pero el hash no es el de §12 (`5050596d…`); probablemente por la ruta de compilación, sin verificar |
+| Configuración con `uia` (SHA-256) | `bfde539ffd8a28aa3185b4e3cd6eb58a18e676ac49116ccd027b449813ce7e7c`, fuera del repositorio (la misma que en §14). Sólo difiere de la del operador (`94af2154…`, sin cambios) en `accessibility = "uia"` bajo `[models]` y en rutas absolutas. `config_problem` = None; `dry_run`, actuación desactivada, `allowed_applications = []` |
+| Manifiesto `models\manifest.rnf05.json` (SHA-256) | `f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47`, el fijado |
+| Herramienta `tools/perf/soak.py` (SHA-256) | `20dc342d4cf66ad51961bd066bd81d62be0925d367b1a455bee9f08361a7d23b` en `745caff`, anterior a `650ce27`, que añade los criterios por defecto. Los criterios de esta sección se aplicaron al JSON con la misma definición |
+| Auxiliar de primer plano | `soakuia_activate.py` (`5102de55…`) y `tools/s4/e2e_driver.py` (`768e77e3…`), sin cambios. Método en ambas ejecuciones: `already_foreground`; la ventana apareció a los 0,86 s (corrida) y a los 9,7 s (ensayo) |
+| Plan de energía | «Alto rendimiento». Apagado de pantalla en corriente alterna: `0x00000000` (nunca) antes de empezar y después de la corrida (`powercfg /query`); en corriente continua, 600 s. Este trabajo no cambió ningún ajuste |
+| Sistema | Windows 11 Pro, `Windows-11-10.0.26300-SP0`; Python 3.12.2. Monitores y escala no releídos en esta sesión |
+| Ensayo previo | Un minuto con `--interval 2`: `completed`, 30 de 30 observaciones, GPU disponible, sin errores |
+| Inicio y fin (hora local) | Inicio 08:57:43; último muestreo a los 7195 s (10:57:38) |
+| Carga de otras sesiones | No se muestreó durante la corrida. Instantánea al terminar: 44 procesos `python.exe` de otros proyectos, ningún `cargo` ni `rustc` en marcha |
+| Terminación (`ended`) | `completed` |
+
+**Observaciones y acciones [V].** 1440 ticks de 5 s; 1440 observados; 0 pérdidas de primer plano; 0 errores de observación; 0 latencias descartadas. `delivered_actions` y `rejected_actions`, máximo 0. Época del snapshot 1 en todas las muestras; ninguna observación salió degradada. `pending_regions` fue 0 en las 1440 muestras: como en §12, ninguna observación falló, así que la cola no se pone a prueba.
+
+**Recursos [V].** Del proceso `ommatix.exe`, tras los primeros 10 minutos (n = 1320). La pendiente es de mínimos cuadrados sobre esas muestras; las medianas son del primer y del último décimo.
+
+| Recurso | Mínimo | Máximo | Mediana, primer décimo | Mediana, último décimo | Pendiente por hora | Criterio del responsable |
+|---|---|---|---|---|---|---|
+| Conjunto de trabajo (MiB) | 305,0 | 310,7 | 306,8 | 309,0 | +1,25 | no más de 10 MiB/h: **cumple** |
+| Manejadores | 1008 | 1009 | 1008 | 1009 | +0,81 | pendiente no positiva: **no cumple** |
+| Bytes privados (MiB) | 1463,1 | 1468,1 | 1464,7 | 1467,2 | +1,10 | sin criterio (referencia) |
+| Memoria dedicada de GPU (MiB) | 1203,1 | 1203,1 | 1203,1 | 1203,1 | 0 | sin criterio |
+
+**Manejadores, serie completa [V].** En el primer minuto el recuento sube de 285 a entre 1006 y 1017, y hasta el segundo 470 oscila entre 1008 y 1012. Desde el segundo 470 hasta el 4165 (minuto 69) vale 1008. En el segundo 4165 pasa a 1009 y se queda ahí hasta el final: 607 de las 1320 muestras posteriores al calentamiento valen 1009, y 713 valen 1008. No hay tendencia, sólo un paso de +1. La herramienta no atribuye manejadores, así que no se sabe qué lo creó. En §12, sin `uia` y en otro commit, el recuento fue 947 durante toda la corrida.
+
+**Criterios del responsable [V].** Conjunto de trabajo: pendiente de +1,25 MiB/h frente a un máximo de 10 MiB/h: **cumple**. Manejadores: la pendiente, +0,81 por hora, es positiva. El capítulo 09 §9.7 dice que ese criterio es estricto a propósito («cualquier pendiente positiva lo incumple»), así que **no cumple**. La regla se aplica sin cambios; si el responsable quiere tolerancia, la fija antes de la siguiente corrida, no después.
+
+**Latencia, tras el minuto 10 [V].** Milisegundos, sobre las 1320 observaciones posteriores al calentamiento. Ida y vuelta: p50 141,4, p95 164,9, p99 180,8, máximo 3424,1. Total del motor: p50 141,1, p95 164,6, p99 180,4, máximo 3423,8. Una sola observación superó 1 s, en los minutos 10 a 20. Por ventanas de 10 minutos (ida y vuelta: p50 / p95 / p99 / máximo; motor: p99 / máximo):
+
+| Ventana (min) | n | Ida y vuelta: p50 / p95 / p99 / máx | Motor: p99 / máx |
+|---|---|---|---|
+| 0–10 | 120 | 143,4 / 174,6 / 190,1 / 745,1 | 180,7 / 189,7 |
+| 10–20 | 120 | 142,1 / 182,7 / 576,5 / 3424,1 | 576,1 / 3423,8 |
+| 20–30 | 120 | 142,5 / 164,4 / 172,4 / 172,7 | 172,0 / 172,3 |
+| 30–40 | 120 | 142,4 / 174,2 / 182,4 / 182,7 | 182,0 / 182,3 |
+| 40–50 | 120 | 143,2 / 168,3 / 428,0 / 618,2 | 427,7 / 617,7 |
+| 50–60 | 120 | 141,3 / 165,4 / 170,1 / 173,7 | 169,8 / 173,4 |
+| 60–70 | 120 | 141,2 / 165,8 / 168,0 / 168,0 | 167,7 / 167,7 |
+| 70–80 | 120 | 141,0 / 163,3 / 166,8 / 168,4 | 166,5 / 168,2 |
+| 80–90 | 120 | 140,1 / 162,1 / 165,2 / 169,0 | 165,0 / 168,8 |
+| 90–100 | 120 | 140,6 / 160,2 / 166,7 / 169,5 | 166,5 / 169,3 |
+| 100–110 | 120 | 141,2 / 164,3 / 165,5 / 167,0 | 165,2 / 166,8 |
+| 110–120 | 120 | 140,3 / 154,7 / 169,9 / 172,2 | 169,6 / 172,0 |
+
+Hay dos colas de latencia (minutos 10 a 20 y 40 a 50) sin causa identificada: el informe no desglosa etapas ni carga. Frente a §12, la latencia tras el minuto 10 (motor, p95 164,6 ms, frente a 150,8 ms) es algo mayor, pero no es comparable directamente: cambian el commit, el código y el binario. Esta medición no cambia el estado de RNF-05 (§10).
+
+**Lectura.** La corrida terminó como `completed`: 120 minutos, 1440 de 1440 observaciones, sin pérdidas de primer plano ni errores, así que no es una corrida truncada. Con los criterios del responsable, el **conjunto de trabajo cumple** (+1,25 MiB/h frente a 10). **Los manejadores no cumplen**: la pendiente es de +0,81 por hora, positiva, por un único manejador que se añadió en el minuto 69 y se mantuvo hasta el final. Por tanto RNF-06 no se cumple en esta corrida: la casilla 7 de §6.7 sigue sin marcar, y PERF-03 mantiene `EJECUTADO_SUPERVISADO_PARCIAL`. Es una sola corrida; no hay variación entre corridas.
+
+**Qué queda abierto.**
+1. **Decisión del responsable.** Si el paso de un manejador cuenta como crecimiento (la regla dice que sí), o si fija una tolerancia antes de la siguiente corrida. No se fija después de ver este resultado.
+2. **Origen del manejador.** La herramienta no atribuye manejadores; identificarlo requiere una corrida instrumentada, que no se ha hecho.
+3. **Cola.** Sin cota (decisión 9) y sin prueba con observaciones fallidas.
+4. **Carga.** No se muestreó la carga de otras sesiones durante la corrida.
+5. **Latencia.** Dos colas (minutos 10 a 20 y 40 a 50) sin causa identificada.
+
+**Reproducir.** Desde la raíz del repositorio en `745caff` o posterior, con los dos ejecutables compilados (`S4_INSTALACION_Y_REVERSION.md` §3), una copia de `%LOCALAPPDATA%\Ommatix\ommatix.rnf05.directml.toml` con `accessibility = "uia"` bajo `[models]`, y la aplicación de prueba al frente de la pantalla (la herramienta no la trae al frente): `python tools/perf/soak.py --config <copia> --minutes 120 --out soak-120.json`. Desde `650ce27` la herramienta juzga los dos criterios por defecto (`criteria`). El informe bruto se guarda fuera del repositorio (ADR-0012).
