@@ -1,5 +1,16 @@
 # Historial documental
 
+## 1.0.28 — 2026-10-14: S4, el cliente busca «Estándar» por `AutomationId` y los flujos reducidos pasan a S4R-02 y S4R-03 (rama `fix/s4-calc-standard-and-ids`)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust. Cambian el cliente de S4 (`tools/s4/e2e_driver.py`, SHA-256 `a16c53afca63e21f629140ab33951f481b75dfd113866720ab947aa8272ae22d`, antes `60486d87…c214a`) y sus pruebas, dos matrices y la documentación; no hubo ejecución en vivo.
+
+- **Cliente, hallazgo C1 (modo Estándar de la Calculadora):** tras el clic de navegación, `--calc-standard` sondea UI Automation (sólo lectura, 3 s en pasos de 150 ms) por el elemento en pantalla con `AutomationId` `Standard` y un tipo de control de una lista cerrada; acepta su nombre sólo si es `Estándar` o `Calculadora estándar` y no registra ningún otro; selecciona el elemento del motor por ese nombre exacto (único y confirmado) y exige que el clic llegue al mismo RuntimeId. Cero, varios, nombre desconocido, sin identificador o tiempo agotado: sin clic, con `stopped_by`. Que el `AutomationId` sea `Standard` es una hipótesis aún no verificada en vivo.
+- **Cliente, `mode_after`, C2 y C3:** el modo se registra en todo desenlace (antes quedaba nulo al detenerse); el resumen registra la espera de primer plano; el registro de salida se escribe en UTF-8.
+- **Pruebas:** 143 en `tools/s4` (113 anteriores y 30 nuevas); con el cliente de la séptima ronda las 30 nuevas fallan.
+- **Identificadores (decisión del responsable):** el flujo de la Calculadora es **S4R-02** y el del Bloc de notas **S4R-03**. `matrices/plan_pruebas.csv` añade S4R-02 (`PENDIENTE_PRODUCTO`, no ejecutada) y S4R-03 (`EJECUTADO_SUPERVISADO_PARCIAL`, diez de diez corridas puntuadas, 0 falsos éxitos); E2E-02 y E2E-03 no cambian. `requisitos_trazabilidad.csv` liga RF-18 también a ellos. `validar_paquete.py` no cambia: no valida patrones de identificador. Los registros conservan `e2e` y añaden `flow_id`.
+- **RF-18 y §6.7:** se dice qué aplicaciones tienen evidencia puntuada (la aplicación de prueba, E2E-01 parcial, y el Bloc de notas, S4R-03) y qué falta (Calculadora, editor, explorador, DPI, temas, 450 corridas). Ninguna casilla de la Definition of Done cambia.
+- **Revisión:** [`2026-10-14-s4-seventh-round.md`](../reviews/2026-10-14-s4-seventh-round.md), sección de la octava ronda (C1 a C3 resueltos con su prueba; el hallazgo 5 resuelto por la decisión del responsable).
+
 ## 1.0.27 — 2026-10-14: S4, séptima ronda (continuación; rama `docs/s4-seventh-round-continuation`): corrida 10 de E2E-03 aprobada y serie completa de diez; `--calc-standard` no alcanzó el modo Estándar y E2E-02 no se ejecutó
 
 No cambia ningún requisito, algoritmo, contrato, escenario, código de Rust ni del cliente (`tools/s4/e2e_driver.py`, SHA-256 `60486d87…c214a`, comprobado antes de cada invocación en vivo). Se ejecutaron en vivo la corrida 10 de E2E-03 sobre el Bloc de notas del responsable (2 solicitudes reales, aprobada) y `--calc-standard` sobre la Calculadora (1 solicitud, sin modo Estándar). El cuaderno pasó de 423 a 426; la ronda lleva 25 de 150 solicitudes. El detalle está en la sección «Séptima ronda (continuación)» de [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), y los hallazgos, en la [revisión de la séptima ronda](../reviews/2026-10-14-s4-seventh-round.md).

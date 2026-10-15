@@ -76,3 +76,24 @@ Before the live part, on `docs/s4-seventh-round-continuation` at `885cda7`, with
 
 - E2E-02 (pilot and series): not run, because Standard mode was not reached.
 - No client change, no matrix change and no regression test. The three new findings are recorded with their decisions; none has a fix in this round.
+
+
+## Eighth round preparation: C1 to C3 and the S4R identifiers (branch `fix/s4-calc-standard-and-ids`)
+
+Client change only, no live input. `tools/s4/e2e_driver.py` is now SHA-256 `a16c53afca63e21f629140ab33951f481b75dfd113866720ab947aa8272ae22d` (it was `60486d87…c214a`). The unit tests use a fake Calculator; the only read made on the real desktop was a read-only check that the new UI Automation script runs and returns an element by AutomationId in an open window (not the Calculator). That the Calculator's Standard item has AutomationId `Standard` is a hypothesis, not yet confirmed live.
+
+### Findings and resolution (eighth round)
+
+| # | Finding | Resolution | Regression test |
+|---|---|---|---|
+| C1 | `--calc-standard` found no element named exactly «Estándar» about 1.5 s after the navigation click; the record could not tell a pane that never opened from an item with another name or a pane that opened late, and `mode_after` was null | After the (grounded) navigation click the client polls UI Automation, read-only, for 3 s in steps of 150 ms, for the one on-screen element with AutomationId `Standard` and a control type in `ListItem`, `TreeItem`, `TabItem`, `MenuItem`, `RadioButton`. Its name is accepted only if it is `Estándar` or `Calculadora estándar` (NFC, exact) and is never recorded otherwise. The engine's element is then selected by that exact name (unique and confirmed) and the identity lookup must return the polled RuntimeId. Zero, several, an unknown name, no identifier or a timeout: no click, `standard_item.stopped_by`; a timeout also records `by_name` (counts and types under the accepted names, no names) | `StandardItemPollTest` (late pane found; `Calculadora estándar` selected and grounded; two candidates; unknown name not recorded anywhere; timeout; unreadable pane; other AutomationId with the same name; item the engine does not see; another RuntimeId under the same name; failed read by name), `StandardItemRuleTest` (closed lists, exact names, off-screen, parsing) |
+| C1 (`mode_after`) | `mode_after` was null when the step stopped | The mode is read (read-only) in every outcome, before the Calculator the step started is closed; `unknown` when there is no window | `test_the_mode_after_is_recorded_when_the_step_stops` (five causes), `test_the_mode_after_is_read_even_when_the_mode_before_was_unreadable`, `test_the_mode_is_read_before_the_calculator_is_closed` |
+| C2 | The `calc_standard` summary did not record the foreground wait (about 165 s in the continuation) | The summary records `foreground_wait_s`, `activation_requests` and `window_placements`, also when the window never arrives. Cause of the wait: still unverified | `test_the_foreground_wait_is_in_the_summary`, `test_the_foreground_wait_is_recorded_when_the_window_never_arrives` |
+| C3 | The driver's log held a non-UTF-8 byte when redirected to a file | `main()` reconfigures standard output to UTF-8 (`use_utf8_stdout`) | `Utf8LogTest` |
+| 5 | `plan_pruebas.csv` named E2E-02 «Editor» and E2E-03 «Explorador» while the S4 protocol ran the Calculator and Notepad flows under those identifiers (owner decision 2026-10-14) | The reduced flows are **S4R-02** (Calculator) and **S4R-03** (Notepad). The matrix gains both rows (S4R-02 `PENDIENTE_PRODUCTO`; S4R-03 `EJECUTADO_SUPERVISADO_PARCIAL`, ten of ten scored runs, 0 false successes); E2E-02 and E2E-03 are unchanged. Run records keep `e2e` and add `flow_id`. `validar_paquete.py` is unchanged: it checks uniqueness and traceability, not identifier patterns | `FlowIdTest`; `validar_paquete.py` (`pruebas_planificadas_unicas`) |
+
+C4 (an observation) and findings 1 to 4 need no client change. The retry-aware budget of the Calculator series (finding 1) stays an owner decision.
+
+### Tests
+
+`python -m unittest discover -s tools/s4 -p "test_*.py"`: 143 passed. Run against the previous client, the 30 new tests fail (6 failures, 24 errors); the rest pass.

@@ -76,7 +76,9 @@ Métricas por etapa y motivos de rechazo; ninguna captura/texto crudo por defect
 
 ### RF-18. Demo funcional
 
-Ejecutar flujos reales verificables en 3 aplicaciones permitidas. Trazabilidad: E2E-01..E2E-03. Hito: S4.
+Ejecutar flujos reales verificables en 3 aplicaciones permitidas. Trazabilidad: E2E-01..E2E-03 y, para el protocolo reducido de S4, S4R-02 y S4R-03 (no sustituyen a E2E-02 ni a E2E-03: el editor con escritura y guardado y el explorador de archivos siguen pendientes). Hito: S4.
+
+**Evidencia puntuada a 14 de octubre de 2026 (RF-18 sigue sin cumplirse).** Hay corridas puntuadas, con verificador independiente del motor y sin falsos éxitos, en dos aplicaciones: la aplicación de prueba propia (E2E-01, parcial: una tarea, un DPI y un tema) y el Bloc de notas (S4R-03: abrir y cerrar «Editar», diez de diez corridas, sólo clics). Falta la Calculadora (S4R-02: no se ha ejecutado, porque el cambio al modo Estándar no se había logrado), falta el editor con escritura y guardado de un archivo temporal (E2E-02) y el explorador de archivos (E2E-03), y faltan los DPI, los temas y las 450 corridas del diseño.
 
 ## 3.3 Requisitos no funcionales
 

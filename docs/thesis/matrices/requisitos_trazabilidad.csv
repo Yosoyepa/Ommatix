@@ -16,7 +16,7 @@ RF-14,Deduplicación,request_id repetido no duplica input; conflicto y caída ex
 RF-15,MCP,Perfil moderno y compatibilidad legacy sólo si se prueba explícitamente.,CT-05..CT-09,S2,PENDIENTE_IMPLEMENTACION_O_VALIDACION
 RF-16,Parada y privacidad,Actuación deshabilitada al inicio; parada local y telemetría redactada.,SEC-01..SEC-06,S3,PENDIENTE_IMPLEMENTACION_O_VALIDACION
 RF-17,Observabilidad,Métricas por etapa y motivos de rechazo; ninguna captura/texto crudo por defecto.,IT-06,S3,PENDIENTE_IMPLEMENTACION_O_VALIDACION
-RF-18,Demo funcional,Ejecutar flujos reales verificables en 3 aplicaciones permitidas.,E2E-01..E2E-03,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
+RF-18,Demo funcional,Ejecutar flujos reales verificables en 3 aplicaciones permitidas.,E2E-01..E2E-03; S4R-02; S4R-03,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
 RNF-01,Corrección del core,100% de regresiones críticas aprobadas; cero referencia obsoleta ejecutada en suite.,UT/SEC,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
 RNF-02,Grounding útil,Precisión aceptada >=98% y cobertura >=85% en corpus de aceptación.,EV-01,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION
 RNF-03,Éxito de tareas,Éxito global de al menos 90% y por aplicación de al menos 85% en el protocolo definido.,EV-02,S4,PENDIENTE_IMPLEMENTACION_O_VALIDACION

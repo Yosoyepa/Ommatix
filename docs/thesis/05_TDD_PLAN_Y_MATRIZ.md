@@ -2,7 +2,7 @@
 
 ## 5.1 Qué está ejecutado y qué es una especificación
 
-La matriz `matrices/plan_pruebas.csv` identifica UT, integración, contratos, seguridad, E2E, rendimiento y evaluación. Las pruebas **UT** son compromisos de la implementación productiva; **OR** identifica comprobaciones de la referencia Python. Aprobar una OR no equivale a aprobar el UT completo en Rust. El informe local registra 48 tests OR, sin detector, OCR, MCP ni Windows.
+La matriz `matrices/plan_pruebas.csv` identifica UT, integración, contratos, seguridad, E2E, rendimiento y evaluación. Las pruebas **UT** son compromisos de la implementación productiva; **OR** identifica comprobaciones de la referencia Python. Aprobar una OR no equivale a aprobar el UT completo en Rust. El informe local registra 48 tests OR, sin detector, OCR, MCP ni Windows. Los identificadores **S4R-xx** son los flujos del protocolo reducido de S4 (S4R-02, Calculadora; S4R-03, Bloc de notas) y no sustituyen a E2E-02 ni a E2E-03 de la matriz.
 
 Las características `features/*.feature` están redactadas en español y contienen comportamientos de aceptación. Se entregan como especificaciones BDD, no como pruebas Cucumber ejecutadas: aún deben enlazarse a step definitions del runtime. Se mantiene el formato de Gherkin documentado por Cucumber [S24], con una línea por paso y etiquetas de trazabilidad.
 

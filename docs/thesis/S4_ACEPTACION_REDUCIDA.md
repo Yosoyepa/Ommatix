@@ -1,5 +1,7 @@
 # S4: protocolo de aceptación reducido (corridas E2E supervisadas)
 
+> **Nota de identificadores (14 de octubre de 2026).** Donde este informe y sus rondas dicen «E2E-02 del protocolo reducido» (la Calculadora) y «E2E-03 del protocolo reducido» (el Bloc de notas), el responsable decidió que esos flujos tengan identificadores propios: **S4R-02** (Calculadora: 7 + 8 = 15 y borrar) y **S4R-03** (Bloc de notas: abrir y cerrar «Editar»). **E2E-01** sigue siendo la aplicación de prueba. E2E-02 («Editor: escritura y guardado de archivo temporal») y E2E-03 («Explorador: navegar carpetas de prueba sin destrucción») de `matrices/plan_pruebas.csv` son otros casos y siguen `PENDIENTE_PRODUCTO`. El historial no se reescribe: las secciones de las rondas anteriores conservan las etiquetas con las que se escribieron, y sus registros guardan `e2e` con `E2E-02` y `E2E-03`; desde la octava ronda los registros añaden `flow_id` (`S4R-02`, `S4R-03`). Estado de la matriz: S4R-03 `EJECUTADO_SUPERVISADO_PARCIAL` (diez de diez corridas puntuadas, 0 falsos éxitos, séptima ronda) y S4R-02 `PENDIENTE_PRODUCTO` (no ejecutada).
+
 **Fecha:** 14 de octubre de 2026. **Autorización:** el responsable del proyecto autorizó el 14 de octubre de 2026 un protocolo S4 **reducido** en la máquina de referencia: corridas E2E automatizadas (unas decenas, no las 450 del diseño) dentro de tres aplicaciones autorizadas, que son una aplicación de prueba propia con datos desechables, `notepad.exe` y la Calculadora de Windows. La parada es local, por `stop_file`, y no se guarda ninguna captura. **Alcance:** una máquina, un monitor capturado (salida 0), DPI 100 %, sólo clics. Este informe registra lo que se ejecutó, con qué resultado y qué queda pendiente para el protocolo completo. No cierra RF-18, RNF-03 ni RNF-05, ni ninguna casilla DoD (capítulo 06 §6.7).
 
 Todas las cifras son **mediciones [V]** con el `n` indicado. No se guardó ningún frame ni ninguna etiqueta de pantalla. El OCR (es-ES) se procesó en memoria (ADR-0012). El cliente sólo registra estados, códigos, recuentos, tiempos y booleanos. La única excepción es el texto propio de la aplicación de prueba y de la Calculadora, que se mostró en la consola durante el piloto para diseñar los flujos. Del Bloc de notas nunca se mostró ni registró texto: sus pestañas restauradas pueden tener texto del responsable.
@@ -1052,3 +1054,50 @@ Sin cambio. `docs/thesis/matrices/plan_pruebas.csv` no se modifica. E2E-03 tiene
 ### 8. Ejecución
 
 Dos invocaciones en vivo (la corrida 10 y `--calc-standard`), con 3 solicitudes reales en total. Las únicas entradas fueron dos clics sobre «Editar» en el Bloc de notas (`MenuItem`, `AutomationId` `Edit`) y un clic sobre «Abrir navegación» en la Calculadora (`Button`, `AutomationId` `TogglePaneButton`). No se escribió nada, no se pulsó ninguna pestaña ni botón de ventana, y no se tocó ningún otro elemento. Mover y restaurar la ventana del propietario es gestión de ventanas, sin entradas, y las lecturas de UI Automation son de sólo lectura.
+
+
+## Preparación de la octava ronda: el cliente busca el elemento «Estándar» por `AutomationId`, registra el modo al detenerse, y los flujos reducidos pasan a S4R-02 y S4R-03
+
+**Fecha:** 14 de octubre de 2026. Rama `fix/s4-calc-standard-and-ids`, sobre `main` en `eef459e`. Cambian el cliente (`tools/s4/e2e_driver.py`, SHA-256 **`a16c53afca63e21f629140ab33951f481b75dfd113866720ab947aa8272ae22d`**, antes `60486d87…c214a`), sus pruebas, las matrices y la documentación. No cambia ninguna crate de Rust ni se ejecutó entrada en vivo: las pruebas usan una Calculadora falsa. Sólo se comprobó, de sólo lectura, que el nuevo script de UI Automation se ejecuta y devuelve el elemento con un `AutomationId` dado en una ventana abierta del escritorio (no la Calculadora). Que el elemento «Estándar» del panel tenga `AutomationId` `Standard` es una hipótesis, **no verificada en vivo**: viene de las convenciones de WinUI, no de una lectura del panel.
+
+### Decisiones del responsable (14 de octubre de 2026)
+
+1. Los flujos reducidos tienen identificadores propios: **S4R-02** (Calculadora) y **S4R-03** (Bloc de notas). E2E-02 y E2E-03 del dossier no cambian.
+2. Hallazgos C1, C2 y C3 de la [revisión](../reviews/2026-10-14-s4-seventh-round.md): se corrigen en el cliente con pruebas que fallan sin el cambio.
+
+### La regla de `--calc-standard` (hallazgo C1)
+
+1. **Primer clic, como antes.** «Abrir navegación», seleccionado por su etiqueta exacta, con identidad y anclaje. Después el cliente **no** busca «Estándar» en la observación del motor de inmediato.
+2. **Sondeo de sólo lectura.** Durante `STANDARD_POLL_WINDOW_S` = 3 s, en pasos de `STANDARD_POLL_STEP_S` = 0,15 s, lee por UI Automation los elementos de la ventana con `AutomationId` `Standard`. Cada lectura cuesta un arranque de PowerShell, así que el paso real es mayor que 150 ms: lo que se acota es la ventana, y `polls` y `waited_ms` dicen cuántas lecturas hubo y cuánto se esperó.
+3. **Candidato.** Un elemento en pantalla con ese `AutomationId` y un tipo de control de la lista cerrada `ListItem`, `TreeItem`, `TabItem`, `MenuItem`, `RadioButton`. Se necesita exactamente uno y con RuntimeId.
+4. **Nombre.** Se acepta sólo si, tras NFC, es exactamente `Estándar` o `Calculadora estándar` (lista cerrada `CALC_STANDARD_NAMES`). Cualquier otro nombre (otra capitalización, con espacios, otro texto) es `unknown_name`, y **no se registra**: `name` es nulo y `name_accepted` falso.
+5. **Sin clic** (y `standard_item.stopped_by`): `timeout` (nada, o nada legible, en la ventana), `several_candidates`, `unknown_name` o `unidentifiable` (sin RuntimeId). Los tres últimos paran de inmediato; esperar no los mejora. Un `timeout` registra además `by_name`: cuántos elementos ve UI Automation con los dos nombres aceptados, de cualquier tipo y `AutomationId`, con recuentos y tipos y sin nombres. Así se distingue un `AutomationId` distinto de `Standard` de un panel que no mostró el elemento. Nunca se hace clic por el nombre solo.
+6. **Elemento del motor.** Con el elemento sondeado hallado, el cliente observa de nuevo, selecciona el elemento del motor por ese nombre exacto (único y confirmado, como en cualquier paso: `targets` y `stopped_by` como hasta ahora) y busca su identidad por UI Automation con el tipo de control de su rol. Esa identidad debe ser **el mismo RuntimeId** que el elemento sondeado (`pinned_runtime_id`); otro RuntimeId bajo el mismo nombre es `not_the_polled_item` y no se envía el clic. El anclaje tras el clic (RuntimeId, y el descenso por la isla si el punto cae en un anfitrión) no cambia.
+7. **Modo.** Se lee antes (sin clic si ya es Estándar o no se puede leer) y después. `mode_after` se registra **en todo desenlace**, también cuando el paso se detiene (antes quedaba nulo): se lee, de sólo lectura, antes de cerrar la Calculadora que el paso lanzó; sin ventana que leer es `unknown`.
+
+### Hallazgos C2 y C3
+
+- **C2.** El resumen de `calc_standard` registra `foreground_wait_s`, `activation_requests` y `window_placements`, como las corridas.
+- **C3.** `main()` configura la salida estándar en UTF-8 (`use_utf8_stdout`) cualquiera que sea la página de códigos de la consola; el registro redirigido a un archivo ya no mezcla bytes de la página de códigos.
+
+### Registro (sin nombres)
+
+El resumen añade `flow_id` (`S4R-02`), `standard_item` (`status`, `polls`, `waited_ms`, `window_s`, `step_s`, `candidates`, `offscreen_ignored`, `control_type`, `automation_id`, `name_accepted`, `name` sólo si está en la lista cerrada, `stopped_by` y, al detenerse, `by_name`), `foreground_wait_s`, `activation_requests` y `window_placements`; `mode_after` ya no es nulo. Las corridas de todos los flujos añaden `flow_id` (`E2E-01`, `S4R-02`, `S4R-03`) y conservan `e2e` (`E2E-01`, `E2E-02`, `E2E-03`), porque la evidencia registrada se refiere a él.
+
+### Pruebas
+
+`python -m unittest discover -s tools/s4 -p "test_*.py"`: **143 pruebas correctas** (113 anteriores, con las que cambian por el nuevo flujo ajustadas, y 30 nuevas). Con el cliente de la séptima ronda las 30 nuevas fallan (6 fallos y 24 errores). Cubren: el panel que aparece tarde dentro de la ventana → hallado; `AutomationId` `Standard` con el nombre «Calculadora estándar» → seleccionado y anclado; dos candidatos → sin clic; nombre desconocido → sin clic y el nombre no aparece en el resumen, en el archivo de resultados ni en el registro; tiempo agotado → sin clic; lectura ilegible → sondeo hasta el tiempo y sin clic; otro `AutomationId` con el mismo nombre → `timeout` con `by_name` y sin clic; elemento que el motor no ve → se detiene en el registro del lado del motor; otro RuntimeId bajo el mismo nombre → sin clic; `mode_after` registrado al detenerse (cinco causas) y antes de cerrar la Calculadora; espera de primer plano en el resumen; registro en UTF-8; `flow_id`.
+
+### Identificadores y matrices
+
+`matrices/plan_pruebas.csv` añade **S4R-02** (`PENDIENTE_PRODUCTO`: no ejecutada) y **S4R-03** (`EJECUTADO_SUPERVISADO_PARCIAL`: diez de diez corridas puntuadas, 0 falsos éxitos, séptima ronda y su continuación; parcial por una tarea, sólo clics, un DPI y un tema). E2E-02 y E2E-03 siguen `PENDIENTE_PRODUCTO`. `requisitos_trazabilidad.csv` liga RF-18 también a S4R-02 y S4R-03. `validar_paquete.py` no valida patrones de identificador (sólo unicidad y trazabilidad de los escenarios), así que no cambia.
+
+**RF-18 y §6.7, sin casillas marcadas.** Hay evidencia puntuada en dos aplicaciones: la aplicación de prueba (E2E-01, parcial) y el Bloc de notas (S4R-03). Falta la Calculadora (S4R-02), el editor con escritura y guardado (E2E-02), el explorador (E2E-03), los DPI de 125 y 150 %, otro tema y las 450 corridas. RF-18 y la Definition of Done siguen abiertos.
+
+### Qué debe mostrar la próxima ronda en vivo
+
+`--calc-standard` con su cupo de 4 y `--round-start 426`, y el hash de arriba comprobado antes de cada invocación. Una ejecución que alcance Estándar muestra `standard_item.status` `ok`, el `control_type` y `name_accepted` verdadero, dos clics anclados y `mode_after` `standard`. Si no lo alcanza, el registro dirá por qué (`timeout` con `by_name`, `several_candidates`, `unknown_name`, un objetivo del motor ausente o ambiguo), y eso es un hallazgo, no un fallo del cliente. Seguirá abierto el cupo de S4R-02, que debe contar los reintentos (decisión del responsable).
+
+### Estado
+
+Hallazgos C1, C2 y C3: corregidos en el cliente y probados con dobles, **sin confirmar en vivo**. S4R-02 no se ejecutó. Cuaderno: 426, sin cambio.
