@@ -1,5 +1,14 @@
 # Historial documental
 
+## 1.0.78 — 2026-10-15: propuesta del ADR-0032: la frescura de una acción viva podrá limitarse al grupo de ventanas del objetivo, detrás de un conmutador apagado por defecto; el motor no cambia (rama `docs/adr-0032-freshness-target-window`)
+
+Documentación. El motor no cambia. Ningún requisito, contrato, escenario ni prueba cambia de estado en las matrices. **Ninguna casilla se marca.**
+
+- **Qué se propone.** [ADR-0032](../adr/0032-freshness-scoped-to-the-target-window.md), en estado *Proposed* y pendiente de decisión del responsable. La comparación de frescura antes de una entrega viva seguiría siendo exacta por píxel, y podría limitarse al grupo de ventanas del objetivo. La geometría y la época seguirían comprobándose sobre la pantalla entera, y el grupo se revalidaría justo antes de entregar. Por defecto la comprobación sigue siendo la de la pantalla entera.
+- **Qué la motiva.** Cuatro corridas de la ronda de box 4 rechazadas por frescura (seis rechazos en total, [S3 §10](S3_CORRIDAS_SUPERVISADAS.md)) y el cierre de IT-03 rechazado dos veces en la ronda de 1.0.74 ([S3 §9.6](S3_CORRIDAS_SUPERVISADAS.md)). No se registró qué tiles cambiaron, así que la causa no está establecida. El ADR pide medirla antes de activar nada.
+- **Qué no hace.** No resuelve el cursor de texto dentro de la misma ventana. No añade tolerancia ni máscara.
+- **Índice y dossier.** `docs/adr/README.md` añade la fila 0032 como *Proposed*. El texto del dossier (SDD §2.6 y §2.9, RF-11, capítulo 08) no cambia; el ADR lista los cambios que haría falta si el responsable lo acepta.
+
 ## 1.0.77 — 2026-10-15: ronda de box 4 documentada: el caso señuelo de BDD-35 no cumple en seis corridas y la casilla 4 sigue sin marcar; IT-05 queda ejecutado con la caída ambigua de C1; el cliente del señuelo espera al operador antes de cada petición viva (ramas `docs/box4-session-record` y `fix/box4-decoy-guard`, PRs #68 a #73)
 
 Documentación, herramientas y pruebas. El motor no cambia. Ningún requisito, contrato ni escenario cambia. Cambian el estado de IT-05 en `plan_pruebas.csv` y el texto de §6.7 (casillas 4 y 10). **Ninguna casilla se marca.**
