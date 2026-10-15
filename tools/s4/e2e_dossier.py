@@ -44,6 +44,10 @@ unchanged.
                     RuntimeId in memory), so that a focus never moved cannot pass the case. The OS-side
                     checks are the three lengths in the title (all 0) and the empty folder. A key that
                     reached a field is the safety event ``keys_without_focus``: the invocation ends.
+                    The precondition is read before anything else: UI Automation must report the
+                    keyboard focus inside the editor's process (``--focus-wait`` seconds, read-only).
+                    Without it nothing is sent, because no element of the window can hold the focus
+                    then; ``--operator-focus`` lets the operator give the window the focus by hand.
 
 Safety (AGENTS.md rules 6 and 7, ADR-0007, ADR-0012, ADR-0020):
 
@@ -355,17 +359,44 @@ def keys_reached_a_field(counts: dict) -> bool:
 def focus_placement(focus: dict | None, editor_pid: int | None, decoy_id: str | None,
                     target_id: str | None) -> str:
     """Where UI Automation reports the keyboard focus: ``target`` (Campo de destino, by RuntimeId),
-    ``decoy`` (Campo auxiliar), ``elsewhere`` (another element, or another process) or ``unknown``
-    (no readable focus). The RuntimeIds are compared in memory and never recorded."""
+    ``decoy`` (Campo auxiliar), ``editor`` (another element of the editor's process: its window
+    itself when no widget holds the focus), ``outside`` (another process: the desktop, when the
+    window has no operating system focus) or ``unknown`` (no readable focus). The RuntimeIds are
+    compared in memory and never recorded."""
     if not focus or not focus.get("runtime_id"):
         return "unknown"
     if editor_pid is None or focus["pid"] != editor_pid:
-        return "elsewhere"
+        return "outside"
     if focus["runtime_id"] == target_id:
         return "target"
     if focus["runtime_id"] == decoy_id:
         return "decoy"
-    return "elsewhere"
+    return "editor"
+
+
+def editor_holds_focus(focus: dict | None, editor_pid: int | None) -> bool:
+    """Whether UI Automation reports the keyboard focus inside the editor's process: the
+    precondition of the case. Without the operating system's focus in the window, no element of it
+    can hold the focus, so a result would say nothing about the redirect."""
+    return bool(focus) and editor_pid is not None and focus["pid"] == editor_pid
+
+
+def focus_summary(focus: dict | None, editor_pid: int | None) -> dict:
+    """What a record keeps of a focus read: whether it is inside the editor, and the control type.
+    Never a RuntimeId, a name or a value."""
+    return {"in_editor": editor_holds_focus(focus, editor_pid),
+            "control_type": focus.get("control_type") if focus else None}
+
+
+PLACEMENT_PROBLEM = {
+    "outside": "UI Automation reports the keyboard focus outside the editor (the desktop or another "
+               "application): the window has no operating system focus; the case is not exercised",
+    "editor": "UI Automation reports the keyboard focus inside the editor but not on Campo de "
+              "destino: the case is not exercised",
+    "decoy": "UI Automation reports the keyboard focus on Campo auxiliar: the redirect did not run; "
+             "the case is not exercised",
+    "unknown": "UI Automation gave no readable keyboard focus: the case is not exercised",
+}
 
 
 def decoy_problems(facts: dict) -> list[str]:
@@ -381,8 +412,7 @@ def decoy_problems(facts: dict) -> list[str]:
     if not facts["grounding_ok"]:
         problems.append("the focusing click did not reach Campo auxiliar (identity after the click)")
     if facts["placement"] != "target":
-        problems.append(f"UI Automation reports the keyboard focus {facts['placement']}, "
-                        "not on the redirect target: the case is not exercised")
+        problems.append(PLACEMENT_PROBLEM.get(facts["placement"], PLACEMENT_PROBLEM["unknown"]))
     if not facts["replay_is_stored"]:
         problems.append("the repeated request_id did not return the stored result")
     if facts["delivered_delta"] != 1 or facts["rejected_delta"] != 0:
@@ -456,9 +486,9 @@ def editor_flow() -> dict:
     }
 
 
-# The element UI Automation reports with keyboard focus, as ``pid TAB RuntimeId``. Read-only: the
-# RuntimeId is compared in memory with the two fields' RuntimeIds and never written to a record;
-# no name and no value is read.
+# The element UI Automation reports with keyboard focus, as ``pid TAB RuntimeId TAB control type``.
+# Read-only: the RuntimeId is compared in memory with the two fields' RuntimeIds and never written to
+# a record; no name and no value is read, and the control type is a kind of element, not content.
 UIA_FOCUS_RUNTIME_PS = r"""
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
@@ -466,17 +496,19 @@ $f = [System.Windows.Automation.AutomationElement]::FocusedElement
 if ($f) {
   $rid = ''
   try { $rid = ($f.GetRuntimeId() -join '.') } catch {}
-  [Console]::Out.Write("$($f.Current.ProcessId)`t$rid")
+  $type = $f.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  [Console]::Out.Write("$($f.Current.ProcessId)`t$rid`t$type")
 }
 """
 
 
 def parse_focus_runtime(output: str) -> dict | None:
-    """``{pid, runtime_id}`` from UIA_FOCUS_RUNTIME_PS; None when the output has another shape."""
+    """``{pid, runtime_id, control_type}`` from UIA_FOCUS_RUNTIME_PS; None when the output has
+    another shape (nothing had the focus, or the read failed)."""
     parts = output.strip("\r\n").split("\t")
-    if len(parts) != 2 or not parts[0].strip().isdigit():
+    if len(parts) != 3 or not parts[0].strip().isdigit():
         return None
-    return {"pid": int(parts[0]), "runtime_id": parts[1].strip()}
+    return {"pid": int(parts[0]), "runtime_id": parts[1].strip(), "control_type": parts[2].strip()}
 
 
 def uia_focus_runtime() -> dict | None:
@@ -862,9 +894,30 @@ class DossierProtocol(driver.Protocol):
                 res["failure"] = "the decoy editor does not start empty with its folder empty"
         if self.args.mode == "probe":
             self.probe_print(elements)
+            # Read-only: whether the window holds the keyboard focus now (the case's precondition).
+            res["focus_probe"] = focus_summary(self.focus_runtime(), pid)
         if res["failure"] is None and self.args.mode == "run":
             self.decoy_step(res, snap, elements, hwnd, pid)
             res["note_state"] = note_state(tree.root, EDITOR_TEXT.encode("utf-8"))
+
+    def wait_editor_focus(self, pid: int, res: dict) -> dict | None:
+        """Read-only: waits until UI Automation reports the keyboard focus inside the editor's
+        process. The bound is --focus-wait seconds, or --operator-focus-wait after an instruction to
+        the operator (--operator-focus: the operator gives the window the focus by hand, with its
+        taskbar button, and never types). Nothing is sent meanwhile. Returns the last read; the
+        caller decides what it means."""
+        bound = self.args.operator_focus_wait if self.args.operator_focus else self.args.focus_wait
+        if self.args.operator_focus:
+            self.announce(f"OPERATOR: give the editor's window the keyboard focus by hand (click its "
+                          f"taskbar button once; do not type). Waiting up to {bound:.0f} s; nothing "
+                          "is sent meanwhile.")
+        started = time.monotonic()
+        focus = self.focus_runtime()
+        while not editor_holds_focus(focus, pid) and time.monotonic() - started < bound:
+            time.sleep(0.5)
+            focus = self.focus_runtime()
+        res["focus_wait_s"] = round(time.monotonic() - started, 1)
+        return focus
 
     def decoy_step(self, res: dict, snap: dict, elements: list[dict], hwnd, pid: int) -> None:
         """The one request of the case and its checks (see decoy_problems). Nothing is sent before
@@ -876,6 +929,24 @@ class DossierProtocol(driver.Protocol):
             res["failure"] = "the decoy fields are not both confirmed exactly once"
             return
         res["steps"] = 1
+        # The precondition of the case, read before anything else: the editor's window must hold the
+        # operating system's keyboard focus. Without it no element of the editor can hold the focus,
+        # and a result would not say anything about the redirect (the S4 decoy round). Read-only.
+        focus = self.wait_editor_focus(pid, res)
+        res["focus_before"] = focus_summary(focus, pid)
+        if not editor_holds_focus(focus, pid):
+            res["failure"] = ("no request: UI Automation reports the keyboard focus outside the editor "
+                              "(the window has no operating system focus); nothing was sent")
+            return
+        # A long wait (the operator's) ages the observation past [engine] max_snapshot_age_ms: observe
+        # again, so that the request names a fresh snapshot and its targets are the current ones.
+        snap, elements, obs = self.observe()
+        res["observations"].append(obs)
+        field = self.target(elements, DECOY_FIELD)
+        redirect = self.target(elements, DECOY_TARGET)
+        if field is None or redirect is None:
+            res["failure"] = "after the focus wait the decoy fields are not both confirmed exactly once"
+            return
         fg = self.require_foreground()
         ident = self.identify_before(res, fg, DECOY_FIELD, field)
         if ident is None:
@@ -924,13 +995,16 @@ class DossierProtocol(driver.Protocol):
         again_error = (again.get("error") or {}).get("code")
         after = self.metrics()
         counts = decoy_counts(self.title_of(hwnd))
-        placement = focus_placement(self.focus_runtime(), pid, ident.get("runtime_id"),
+        focus_after = self.focus_runtime()
+        placement = focus_placement(focus_after, pid, ident.get("runtime_id"),
                                     redirect_ident.get("runtime_id"))
         facts = {
             "status": out.get("status"), "error": err,
             "input_delivered": out.get("input_delivered"), "verified": out.get("verified"),
             "retryable": error.get("retryable"), "next_step": error.get("next_step"),
             "placement": placement,
+            "focus_before": res["focus_before"],
+            "focus_after": focus_summary(focus_after, pid),
             "grounding_ok": grounding_ok,
             "replay_is_stored": ((again.get("status"), again_error, again.get("input_delivered"))
                                  == (out.get("status"), err, out.get("input_delivered"))),
@@ -1112,6 +1186,13 @@ def main() -> int:
                    help="seconds to wait for the new Explorer window to appear")
     p.add_argument("--pause", type=float, default=1.0)
     p.add_argument("--settle", type=float, default=1.5)
+    p.add_argument("--focus-wait", type=float, default=5.0,
+                   help="--app decoy: seconds to wait, read-only, for UI Automation to report the "
+                        "keyboard focus inside the editor before any request; then no request")
+    p.add_argument("--operator-focus", action="store_true",
+                   help="--app decoy: when the editor lacks the keyboard focus, the operator gives it "
+                        "by hand (its taskbar button, no typing), waiting --operator-focus-wait")
+    p.add_argument("--operator-focus-wait", type=float, default=120.0)
     p.add_argument("--debug-grounding", action="store_true")
     args = p.parse_args()
     args.restart = "each"

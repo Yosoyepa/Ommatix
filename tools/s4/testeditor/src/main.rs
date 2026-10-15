@@ -397,8 +397,10 @@ fn decoy_fields(ui: &mut egui::Ui, decoy: &mut Decoy) {
     ui.ctx()
         .accesskit_node_builder(field.id, |node| node.set_label(DECOY_LABEL));
     // Every frame in which the decoy holds the focus, the focus goes on to the target: the decoy
-    // never keeps it, whichever frame the click gave it in.
-    if field.has_focus() {
+    // never keeps it, whichever frame the click gave it in, and whether or not the window has the
+    // operating system's focus. `Response::has_focus` also requires that focus, so in a window
+    // without it the decoy kept the focus (the S4 decoy round read the focus `elsewhere`).
+    if ui.ctx().memory(|memory| memory.has_focus(field.id)) {
         ui.ctx()
             .memory_mut(|memory| memory.request_focus(egui::Id::new(TARGET_FIELD_ID)));
     }
@@ -976,9 +978,17 @@ mod tests {
 
     /// One frame of the editor at `time` seconds, the window in front and focused; returns what
     /// it painted.
-    fn paint_frame(ctx: &egui::Context, app: &mut EditorApp, time: f64) -> String {
+    fn paint_frame(
+        ctx: &egui::Context,
+        app: &mut EditorApp,
+        time: f64,
+        window_focused: bool,
+    ) -> String {
+        // As the integration does: the window's focus reaches the input state (`RawInput::focused`,
+        // the flag `Response::has_focus` reads) and the viewport info.
         let mut raw = egui::RawInput {
             time: Some(time),
+            focused: window_focused,
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(1920.0, 1080.0),
@@ -988,7 +998,7 @@ mod tests {
         raw.viewports.insert(
             egui::ViewportId::ROOT,
             egui::ViewportInfo {
-                focused: Some(true),
+                focused: Some(window_focused),
                 ..Default::default()
             },
         );
@@ -996,6 +1006,37 @@ mod tests {
         // The textures are not uploaded anywhere: the toolkit insists they are handled.
         output.textures_delta.clear();
         format!("{:?}", output.shapes)
+    }
+
+    /// The decoy never keeps the keyboard focus, whether or not the window has the operating
+    /// system's focus. The redirect used to read the window's focus through `Response::has_focus`,
+    /// so in a window without it the decoy kept the focus, and the case could not tell an
+    /// unfocused window from a focus that never moved (the S4 decoy round read `elsewhere`).
+    #[test]
+    fn the_decoy_hands_the_focus_on_even_when_the_window_has_no_os_focus() {
+        let root = temp_root();
+        let dir = run_dir(&root, "decoy-unfocused");
+        let mut editor = Editor::new(SaveFolder::new(&dir, &root).unwrap());
+        editor.decoy = Some(Decoy::default());
+        let mut app = EditorApp {
+            editor,
+            started: Instant::now(),
+            maximized: true,
+            seeker: FocusSeeker::default(),
+        };
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        for step in 0..3 {
+            let _ = paint_frame(&ctx, &mut app, f64::from(step) * 0.01, false);
+        }
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new(DECOY_FIELD_ID)));
+        let _ = paint_frame(&ctx, &mut app, 0.04, false);
+        assert_eq!(
+            ctx.memory(egui::Memory::focused),
+            Some(egui::Id::new(TARGET_FIELD_ID)),
+            "the decoy kept the focus while the window had no operating system focus"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// What the editor paints, frame by frame, with the field holding the keyboard focus and
@@ -1016,13 +1057,13 @@ mod tests {
         look(&ctx);
         // Fonts and layout settle in the first frames; the field then takes the focus.
         for step in 0..3 {
-            let _ = paint_frame(&ctx, &mut app, f64::from(step) * 0.01);
+            let _ = paint_frame(&ctx, &mut app, f64::from(step) * 0.01, true);
         }
         ctx.memory_mut(|m| m.request_focus(egui::Id::new(FIELD_ID)));
-        let _ = paint_frame(&ctx, &mut app, 0.04);
+        let _ = paint_frame(&ctx, &mut app, 0.04, true);
         let painted = times
             .iter()
-            .map(|t| paint_frame(&ctx, &mut app, *t))
+            .map(|t| paint_frame(&ctx, &mut app, *t, true))
             .collect();
         let _ = std::fs::remove_dir_all(&root);
         painted
@@ -1046,18 +1087,18 @@ mod tests {
         let ctx = egui::Context::default();
         configure(&ctx);
         for step in 0..3 {
-            let _ = paint_frame(&ctx, &mut app, f64::from(step) * 0.01);
+            let _ = paint_frame(&ctx, &mut app, f64::from(step) * 0.01, true);
         }
         // The same state a click leaves: the decoy holds the focus in a frame.
         ctx.memory_mut(|m| m.request_focus(egui::Id::new(DECOY_FIELD_ID)));
-        let _ = paint_frame(&ctx, &mut app, 0.04);
+        let _ = paint_frame(&ctx, &mut app, 0.04, true);
         assert_eq!(
             ctx.memory(egui::Memory::focused),
             Some(egui::Id::new(TARGET_FIELD_ID)),
             "the focus left the decoy"
         );
         for step in 0..6 {
-            let _ = paint_frame(&ctx, &mut app, 0.05 + f64::from(step) * 0.05);
+            let _ = paint_frame(&ctx, &mut app, 0.05 + f64::from(step) * 0.05, true);
             assert_eq!(
                 ctx.memory(egui::Memory::focused),
                 Some(egui::Id::new(TARGET_FIELD_ID)),
