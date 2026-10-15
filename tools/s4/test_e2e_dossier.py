@@ -1508,10 +1508,13 @@ class FakeDecoyDesk(dossier.DossierProtocol):
         self.spawned = []
         self.closed = []
         self.actions = []
-        self.first = None
+        self.stored = {}  # request_id -> the answer the engine stored for it
         self.delivered = 0
         self.rejected = 0
         self.answer = "indeterminate"  # "effect_observed" scripts a false success
+        self.stale_answers = 0  # the first requests refused as STALE_SNAPSHOT, before any delivery
+        self.refusal = None  # a code every new request is refused with, before any delivery
+        self.request_ids = []  # every request the engine receives, in order
         self.replay_delivers = False  # the repetition delivers again
         self.leak = None  # "decoy" or "target": a key reaches that field on the first request
         self.leaked = None  # the field the keys reached, once the first request is handled
@@ -1551,10 +1554,22 @@ class FakeDecoyDesk(dossier.DossierProtocol):
     def call(self, tool, args):
         assert tool == "execute_action" and args["dry_run"] is False
         self.snapshots_used.append(args["snapshot_id"])
+        self.request_ids.append(args["request_id"])
         self.actions.append({"target": args["target_id"], "action": args["action"],
                              "text": args.get("text")})
-        if self.first is None:
-            self.leaked = self.leak
+        if args["request_id"] in self.stored:  # the repetition: the stored result, no new delivery
+            if self.replay_delivers:
+                self.delivered += 1
+            return dict(self.stored[args["request_id"]]), False, {}, 0.2
+        if self.stale_answers:  # the screen moved since the observation: refused before any delivery
+            self.stale_answers -= 1
+            out = self.refused("STALE_SNAPSHOT", "the screen changed since the observation; nothing "
+                               "was delivered; observe again")
+        elif self.refusal is not None:
+            out = self.refused(self.refusal, "the element is not actionable; nothing was delivered")
+        else:
+            if self.delivered == 0:
+                self.leaked = self.leak  # the keys reach a field only with the first delivery
             if self.answer == "indeterminate":
                 out = {"status": "indeterminate", "input_delivered": True, "verified": False,
                        "observed_effect": "unknown",
@@ -1563,12 +1578,15 @@ class FakeDecoyDesk(dossier.DossierProtocol):
             else:
                 out = {"status": "effect_observed", "input_delivered": True, "verified": True,
                        "observed_effect": "visual_change"}
-            self.first = out
             self.delivered += 1
-            return dict(out), False, {}, 5.0
-        if self.replay_delivers:
-            self.delivered += 1
-        return dict(self.first), False, {}, 0.2  # the stored result
+        self.stored[args["request_id"]] = out
+        return dict(out), False, {}, 5.0
+
+    def refused(self, code: str, message: str) -> dict:
+        self.rejected += 1
+        return {"status": "rejected", "input_delivered": False, "verified": False,
+                "error": {"code": code, "message": message, "retryable": False,
+                          "next_step": "observe_again"}}
 
     def metrics(self):
         return {"delivered_actions": self.delivered, "rejected_actions": self.rejected}
@@ -1754,6 +1772,53 @@ class DecoyRunTest(QuietTest):
         self.assertEqual(res["decoy"]["delivered_delta"], 2)
         self.assertIn("counted 2 deliveries", res["failure"])
 
+    def test_a_stale_snapshot_is_retried_with_a_new_observation_and_request_id(self):
+        desk = self.desk(max_live=4)
+        desk.stale_answers = 1  # refused before any delivery: the screen moved since the observation
+        res = desk.run_once(1)
+        self.assertTrue(res["success"], res["failure"])
+        self.assertEqual(desk.request_ids, ["s4-bdd35-r1-1", "s4-bdd35-r1-2", "s4-bdd35-r1-2"],
+                         "a new request_id per attempt; the repetition names the final one")
+        self.assertEqual(desk.snapshots_used, ["s2", "s3", "s3"], "a new observation per attempt")
+        self.assertEqual([p["attempt"] for p in res["pre_grounded"]], [1, 2], "grounded again")
+        self.assertEqual([a["attempt"] for a in res["actions"]], [1, 2])
+        self.assertEqual(res["actions"][0]["error"], "STALE_SNAPSHOT")
+        self.assertIsInstance(res["actions"][0]["observe_to_action_ms"], float)
+        self.assertEqual((res["stale_retries"], res["decoy"]["attempts"]), (1, 2))
+        self.assertEqual((res["actions_requested"], desk.ledger_total()), (3, 3),
+                         "both attempts and the repetition are live requests in the ledger")
+        self.assertEqual((res["rejected"], res["indeterminate"]), (1, 1))
+        self.assertEqual((res["decoy"]["delivered_delta"], res["decoy"]["rejected_delta"]), (1, 0),
+                         "the refused attempt is not counted against the final request")
+        self.assertEqual(res["decoy"]["placement"], "target")
+        self.assertTrue(res["decoy"]["replay_is_stored"])
+        self.assertEqual(desk.delivered, 1)
+
+    def test_three_stale_snapshots_fail_the_case_with_no_repetition_and_no_fourth_request(self):
+        desk = self.desk(max_live=4)
+        desk.stale_answers = 3
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertIn("STALE_SNAPSHOT", res["failure"])
+        self.assertIn("nothing was delivered", res["failure"])
+        self.assertEqual(desk.request_ids, ["s4-bdd35-r1-1", "s4-bdd35-r1-2", "s4-bdd35-r1-3"])
+        self.assertEqual(desk.snapshots_used, ["s2", "s3", "s4"])
+        self.assertEqual(len(res["pre_grounded"]), 3)
+        self.assertEqual((res["stale_retries"], res["actions_requested"]), (2, 3))
+        self.assertEqual((desk.ledger_total(), desk.delivered, res["delivered"]), (3, 0, 0))
+        self.assertEqual(res["decoy"], {"attempts": 3, "status": "rejected",
+                                        "error": "STALE_SNAPSHOT", "input_delivered": False})
+
+    def test_a_refusal_other_than_stale_snapshot_is_not_retried(self):
+        desk = self.desk(max_live=4)
+        desk.refusal = "NOT_ACTIONABLE"
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(desk.request_ids, ["s4-bdd35-r1-1", "s4-bdd35-r1-1"],
+                         "the request and its repetition only")
+        self.assertEqual((res["stale_retries"], res["decoy"]["attempts"]), (0, 1))
+        self.assertIn("did not report indeterminate", res["failure"])
+
     def test_no_accessibility_evidence_sends_nothing(self):
         desk = self.desk()
         desk.accessible = False
@@ -1865,6 +1930,13 @@ class DecoyPureTest(unittest.TestCase):
         self.assertEqual(text, dossier.EDITOR_TEXT)
         self.assertNotIn("navigating", flow)
         self.assertEqual(dossier.E2E_ID["decoy"], "BDD-35-live-plan")
+
+    def test_a_live_decoy_run_needs_room_for_its_attempts_and_the_repetition(self):
+        self.assertIsNone(dossier.decoy_budget_problem("decoy", True, dossier.DECOY_LIVE_REQUESTS))
+        self.assertIn("at least 4", dossier.decoy_budget_problem("decoy", True, 3))
+        self.assertIsNone(dossier.decoy_budget_problem("decoy", False, 1), "a probe sends nothing")
+        self.assertIsNone(dossier.decoy_budget_problem("editor", True, 1))
+        self.assertEqual(dossier.DECOY_LIVE_REQUESTS, dossier.DECOY_ATTEMPTS + 1)
 
     def test_the_editor_and_the_decoy_share_one_configuration_rule(self):
         config = {"safety": {"actuation_enabled": True, "stop_file": "stop.flag",
