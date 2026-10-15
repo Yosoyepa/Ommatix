@@ -19,7 +19,7 @@
 //! `-32603` internal error. Expected domain errors are tool results with `isError: true`.
 //! Notifications are never answered.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ommatix_application::Engine;
 use rmcp::model::{
@@ -114,6 +114,12 @@ impl Connection {
         if message.iter().all(u8::is_ascii_whitespace) {
             return None;
         }
+        // The request boundary (SEC-07): the operator's purge is honoured here, before the
+        // message is handled, and never while a message is being handled.
+        self.engine
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .honour_purge_request();
         let Ok(value) = serde_json::from_slice::<Value>(message) else {
             return Some(self.encode_error(
                 &Value::Null,
