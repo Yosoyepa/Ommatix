@@ -10,7 +10,7 @@ Documentación, herramientas y pruebas. El motor no cambia. Ningún requisito, c
 - **Causa del foco en la ventana (análisis, sin corrida viva).** En egui 0.36.2 el redirect del señuelo se hacía al pulsar, y al soltar, un clic fuera, el campo de destino perdía el foco; el árbol publicaba entonces ningún campo enfocado. Corregido en `testeditor` con pruebas headless (PR #73); esa corrección no se ha ejercido en vivo.
 - **Primer plano y guarda.** La tercera corrida se rechazó con `POLICY_DENIED` en el motor, sin entrega; la quinta se paró antes de su primera petición, sin evidencia de accesibilidad. El cliente comprueba, sólo en lectura, antes de cada petición viva del señuelo, que la ventana del editor está en primer plano, tiene el foco UIA y no está minimizada; si no, no envía, avisa en stderr y espera al operador, como máximo tres veces por caso (PR #73).
 - **Hallazgo de diseño (propuesta, sin decidir).** La frescura compara la pantalla completa con exactitud: cualquier cambio visible rechaza la acción, también los que no tocan el objetivo. Queda propuesto un ADR de frescura por región (§10.7 de S3); no se decide aquí.
-- **Estado sin cambio.** BDD-28 y BDD-35 en el lado del actuador real, y SEC-05, siguen en parte. El recuento de casillas sigue en 5 de 10.
+- **Estado sin cambio.** BDD-28 y BDD-35 en el lado del actuador real, y SEC-05, siguen en parte; la casilla 10 los lista dentro de SEC-05, por decisión del arquitecto. El recuento de casillas sigue en 5 de 10.
 
 ## 1.0.76 — 2026-10-15: el caso señuelo de BDD-35 no se ejecuta sin foco de teclado en la ventana del editor: precondición de solo lectura, señuelo que siempre cede el foco y categorías de foco precisas (rama `fix/box4-decoy-focus`)
 

@@ -394,7 +394,7 @@ La comprobación actual protege contra actuar sobre una pantalla que ya no es la
 | BDD-28 (actuador real) | en parte | Visto de forma no planificada en la tercera corrida (`POLICY_DENIED` sin entrega); no es el caso planificado |
 | SEC-05 | `EJECUTADO_SUPERVISADO_PARCIAL`, sin cambio | El cambio de primer plano apareció dos veces sin plan (tercera y quinta corridas); el caso con foco de `type` no se ha ejercido |
 
-En [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md): la **casilla 4 queda sin marcar** (decisión del responsable: el criterio pre-registrado de BDD-35 no se cumplió). La **casilla 10** deja de listar IT-05 y sigue con IT-01 a IT-04. Si el caso señuelo debe figurar en su lista de incumplimientos, es una decisión pendiente, que esta sección no toma.
+En [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md): la **casilla 4 queda sin marcar** (decisión del responsable: el criterio pre-registrado de BDD-35 no se cumplió). La **casilla 10** deja de listar IT-05 y sigue con IT-01 a IT-04. Por decisión del arquitecto, BDD-35 y el lado real de BDD-28 figuran en esa lista, dentro de SEC-05.
 
 ### 10.9 Qué no cubre esta ronda
 
