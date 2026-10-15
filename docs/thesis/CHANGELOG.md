@@ -1,5 +1,14 @@
 # Historial documental
 
+## 1.0.44 — 2026-10-15: S4, undécima ronda, continuación: la línea base nueva cumple la comprobación previa, pero el equipo recibió entrada y la ronda se detuvo antes de la sonda (rama `docs/s4-eleventh-round-run`, sin entrada ni solicitud real)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni matriz. No cambia ninguna crate de Rust, el motor, el editor ni los clientes. **No se envió entrada ni ninguna solicitud real** (cuaderno 515, de 200 desde `--round-start 429`, sin cambio). Clientes sin cambio: `tools/s4/e2e_driver.py` `768e77e3…7202d` y `tools/s4/e2e_dossier.py` `359f6f28…0afc2`; motor `a137ccd1…d548`; editor `f358b3a9…1d20`.
+
+- **Línea base nueva del responsable:** ninguna ventana `CabinetWClass` visible, con la oculta del shell (PID 36160) intacta y sin tocar. La comprobación previa y la compuerta de las invocaciones se actualizaron a ese estado, sin excepciones.
+- **Parada antes de la sonda:** a las 00:24 (hora local del equipo) la comprobación previa cumplía todas sus condiciones, pero el contador de inactividad marcaba una entrada de teclado o ratón hacia las 00:23, después de la respuesta del responsable y sin comandos de esta ronda que envíen entrada. Por la regla del responsable se detuvo todo el trabajo en vivo: no hubo sonda, piloto ni serie. Una segunda lectura a las 00:25 no mostró entrada posterior.
+- **Matriz:** E2E-03 sigue `PENDIENTE_PRODUCTO`.
+- **Documentación:** sección «Undécima ronda (continuación)» de `docs/thesis/S4_ACEPTACION_REDUCIDA.md`; revisión `docs/reviews/2026-10-14-s4-eleventh-round.md`, hallazgos 3 y 4; `docs/handoff.md`; `README.md` y `README.es.md`.
+
 ## 1.0.43 — 2026-10-14: S4, undécima ronda: E2E-03 no llegó a la sonda; la comprobación previa halló que las ventanas minimizadas del propietario ya no están y que el equipo recibió entrada (rama `docs/s4-eleventh-round`, sin entrada ni solicitud real)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni matriz. No cambia ninguna crate de Rust, el motor, el editor ni los clientes. **No se envió entrada ni ninguna solicitud real** (cuaderno 515, de 200 desde `--round-start 429`, sin cambio). Clientes sin cambio: `tools/s4/e2e_driver.py` `768e77e3…7202d` y `tools/s4/e2e_dossier.py` `359f6f28…0afc2`; motor `a137ccd1…d548`; editor `f358b3a9…1d20`.

@@ -179,6 +179,8 @@ El responsable decidió después la regla para los clics que reconstruyen su pro
 
 La undécima ronda ([CHANGELOG 1.0.43](docs/thesis/CHANGELOG.md)) no envió ninguna solicitud real. Su preflight de sólo lectura halló que las dos ventanas minimizadas y fuera de pantalla del Explorador del shell (PID 36160), que el responsable confirmó como suyas, ya no existen, y que el equipo recibió una entrada de teclado o ratón entre dos comprobaciones. La sonda, el piloto y la serie de E2E-03 no se ejecutaron: una sonda abre y maximiza una ventana del Explorador, y no debe correr con alguien usando el equipo. La causa no está verificada; el responsable debe confirmar el estado del equipo y de la línea base antes de cualquier entrada.
 
+La continuación de la undécima ronda ([CHANGELOG 1.0.44](docs/thesis/CHANGELOG.md)) tampoco envió ninguna solicitud real. Con la línea base nueva que indicó el responsable (ninguna ventana del Explorador visible en el shell, y la oculta intacta), la comprobación previa cumplió todas sus condiciones, pero el contador de inactividad marcó una entrada de teclado o ratón hacia las 00:23 (hora local), después de su respuesta y sin comandos que la provocaran. Por la regla de la ronda no se ejecutó nada de E2E-03; el responsable debe confirmar si el equipo estaba en uso antes de cualquier entrada.
+
 ## Hoja de ruta
 
 Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
