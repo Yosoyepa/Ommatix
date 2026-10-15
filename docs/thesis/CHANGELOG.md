@@ -1,5 +1,17 @@
 # Historial documental
 
+## 1.0.72 — 2026-10-15: REL-01, la guía de instalación se corrige en tres puntos que impedían seguirla en una máquina limpia de CPU (rama `docs/rel01-sandbox-session`)
+
+Sólo documentación: `S4_INSTALACION_Y_REVERSION.md`. **No cambia ningún requisito, algoritmo, contrato, escenario, código ni la configuración, y no cambia el estado de ninguna fila de `plan_pruebas.csv`, `requisitos_trazabilidad.csv` o `gherkin_trazabilidad.csv`.** REL-01 y RNF-08 siguen como están: la ejecución en una máquina limpia es de la sesión A.
+
+Al preparar la sesión A (un kit para Windows Sandbox, fuera del repositorio) se leyó la guía entera contra el repositorio. Tres puntos no permitían seguirla tal cual en una máquina sin GPU DirectX:
+
+- **§6 sólo nombraba la configuración de DirectML.** La compilación de CPU (§3, `dxgi,onnx,winrt-ocr`) necesita `tools\s0\ommatix.s0.toml`; se añade la orden de CPU, y el paso 4 de §8.2 usa esa configuración.
+- **§6 escribía `environment.json` en la raíz del repositorio** y §8.4 espera un árbol limpio: con ese archivo sin rastrear, §8.4 falla y `git worktree remove` se niega. Ahora se escribe fuera del repositorio (`..\environment.json`).
+- **§4 no decía de dónde ni dónde poner `icon_detect_v3\model.pt`** antes de exportar. Se añaden la URL del commit fijado, su tamaño y la ruta que usa la orden de exportación. Además, §4 indica qué archivos hacen falta con la compilación de CPU.
+
+Pruebas: `tools/repro/test_install_guide.py` (comprueba que cada ruta, opción, rasgo y digest que nombra la guía existe) y `rel_01_the_install_guide_points_at_files_that_exist` (`src/acceptance/tests/repository.rs`) siguen en verde con la guía corregida. El kit de la sesión A no se ha ejecutado todavía.
+
 ## 1.0.71 — 2026-10-15: el cliente de S3 gana los pasos de la ronda de regresión en vivo (`sec02r`, `purge`, `ttl`, `sec05m`)
 
 Sin cambio del motor ni de ningún requisito, contrato o escenario. `tools/s3/mcp_driver.py` añade cuatro pasos a `--scenario live`, todos con la regla del responsable de la ronda (en el Bloc de notas sólo clics sobre «Editar»; el cliente se niega si `--menu-labels` admite otra etiqueta): `sec02r` (SEC-02: la parada creada por el propio cliente a mitad de secuencia, la repetición de un `request_id` ya entregado devuelve el resultado guardado y una petición nueva es `POLICY_DENIED`, sin entrega; sólo retira el archivo de parada que creó y lo dice en stderr), `purge` (ADR-0028: tras crear el archivo de purga, una acción sobre el snapshot anterior es `STALE_SNAPSHOT` sin entrega y una observación nueva no reutiliza ningún identificador; se compara en memoria), `ttl` (ADR-0025: lee `max_snapshot_age_ms` de la configuración, control simulado dentro de la ventana, y pasada la ventana más un margen la simulación y la petición real son `STALE_SNAPSHOT`) y `sec05m` (SEC-05: el cambio de primer plano lo hace el responsable a mano; el cliente no activa ninguna aplicación ni lanza ningún proceso, avisa por stderr, sondea el primer plano sólo para leer y pide un clic cuando es una aplicación esperada que no está en la lista permitida; si el responsable no cambia a tiempo, no envía nada). Una expectativa incumplida es un hallazgo (`check` con `ok: false`, salida distinta de cero); una entrega inesperada activa la parada del operador. Pruebas nuevas en `tools/s3/test_mcp_driver.py` con un motor simulado que sigue el orden de la compuerta (fallaban sin el cambio). Nada se ejecutó en vivo.

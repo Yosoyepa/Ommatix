@@ -95,9 +95,11 @@ Qué colocar y con qué digest (los mismos de [`S0_RESULTADOS.md`](S0_RESULTADOS
 | `onnxruntime.dll` 1.24.4 (DirectML) | paquete NuGet `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4, `runtimes/win-x64/native/` | `e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40` |
 | `DirectML.dll` 1.15.4 | paquete NuGet `Microsoft.AI.DirectML` 1.15.4, `bin/x64-win/` | `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1` |
 
-Los pesos de partida (`icon_detect_v3/model.pt`, MIT) se descargan de `microsoft/OmniParser-v2.0`, revisión `f55d0750e5b94db2125ef0b45b0fa4a85ddc59b4`, y su digest (`11c6cbb77f22569fab22d86c76407a83ec81ab89dbfe28279854822d6e3fb00c`) lo comprueba el script de exportación antes de exportar; **no se usan los pesos `icon_detect` AGPL-3.0.** El entorno de exportación (torch, onnx, onnxruntime) es un `venv` temporal fuera del repositorio; el encabezado del script da las versiones y las órdenes exactas.
+Los pesos de partida (`icon_detect_v3/model.pt`, MIT) se descargan de `microsoft/OmniParser-v2.0`, revisión `f55d0750e5b94db2125ef0b45b0fa4a85ddc59b4`, en `https://huggingface.co/microsoft/OmniParser-v2.0/resolve/f55d0750e5b94db2125ef0b45b0fa4a85ddc59b4/icon_detect_v3/model.pt` (281 182 680 bytes), y su digest (`11c6cbb77f22569fab22d86c76407a83ec81ab89dbfe28279854822d6e3fb00c`) lo comprueba el script de exportación antes de exportar; **no se usan los pesos `icon_detect` AGPL-3.0.** Cópielos a `%LOCALAPPDATA%\Ommatix\models\omniparser-icon-detect-v3\model.pt`, la ruta que usa la orden de exportación del encabezado del script. El entorno de exportación (torch, onnx, onnxruntime) es un `venv` temporal fuera del repositorio; el encabezado del script da las versiones y las órdenes exactas.
 
 `DirectML.dll` se distribuye con los términos de Microsoft para DirectML (no MIT) y el repositorio no la incluye; usarla es una decisión de licencia del responsable ([`S4_REPRODUCIBILIDAD.md`](S4_REPRODUCIBILIDAD.md) §3).
+
+Con la compilación de CPU (`--features dxgi,onnx,winrt-ocr`, §3) basta con `models\manifest.json`, `icon_detect_v3.onnx` y `onnxruntime.dll` 1.28.0 de la tabla, y con la configuración `tools\s0\ommatix.s0.toml`. Los demás archivos de la tabla no hacen falta: `environment.py` los da por `absent`, que no es un fallo (§6).
 
 Para copiar la configuración y comprobar un archivo a mano:
 
@@ -144,10 +146,10 @@ El detalle de cada clave y sus rangos está en `README.md` (sección «Quick sta
 Desde la raíz del repositorio, sólo lectura y sin red:
 
 ```powershell
-python tools/repro/environment.py --operator-dir "$env:LOCALAPPDATA\Ommatix" --out environment.json
+python tools/repro/environment.py --operator-dir "$env:LOCALAPPDATA\Ommatix" --out ..\environment.json
 ```
 
-Termina con código 1 si algún archivo existe con un digest distinto del fijado (`status: mismatch`); un archivo de otra variante que no se instaló aparece como `absent`, que no es un fallo. Escribe el commit, si el árbol estaba limpio, `rustc`, los digests de los tres `Cargo.lock`, la máquina y el estado de cada archivo fijado. No imprime el contenido de ningún archivo. Guarde `environment.json` junto a la entrega: es el registro de lo que se instaló.
+Termina con código 1 si algún archivo existe con un digest distinto del fijado (`status: mismatch`); un archivo de otra variante que no se instaló aparece como `absent`, que no es un fallo. Escribe el commit, si el árbol estaba limpio, `rustc`, los digests de los tres `Cargo.lock`, la máquina y el estado de cada archivo fijado. No imprime el contenido de ningún archivo. Guárdelo junto a la entrega: es el registro de lo que se instaló. Se escribe fuera del repositorio (`..\environment.json`) para que el árbol quede limpio en §8.4.
 
 Después, el motor de punta a punta sobre el escritorio simulado y sobre la pantalla real (esto último captura fotogramas en memoria, nunca se guardan, y no envía entrada):
 
@@ -157,6 +159,12 @@ target\release\ommatix.exe demo --source dxgi --config "$env:LOCALAPPDATA\Ommati
 ```
 
 La segunda debe imprimir tres observaciones con elementos y, en `stderr`, sus tiempos por etapa. Si falla antes de capturar, el mensaje nombra el artefacto o la clave, nunca su contenido.
+
+Con la compilación de CPU (§3) la configuración es `ommatix.s0.toml`. La orden anterior con `ommatix.s0.directml.toml` necesita los archivos de DirectML de §4 y, sin ellos, se rechaza; la de CPU es:
+
+```powershell
+target\release\ommatix.exe demo --source dxgi --config "$env:LOCALAPPDATA\Ommatix\ommatix.s0.toml" --session-id verificacion --observations 3 --timings
+```
 
 ## 7. Conectar un cliente MCP
 
@@ -207,10 +215,12 @@ cd ..\Ommatix-anterior
 cargo build --release --locked -p ommatix --features dxgi,directml,winrt-ocr,uia
 ```
 
+Con la compilación de CPU, use `--features dxgi,onnx,winrt-ocr` en la orden anterior y `ommatix.s0.toml` en el paso 4.
+
 1. Use el `environment.json` de esa entrega para comprobar que el toolchain (`rustc`) y los digests de los tres `Cargo.lock` coinciden con los de la compilación que acaba de hacer.
 2. Copie a `%LOCALAPPDATA%\Ommatix` la configuración **de ese commit** (`tools\s0\*.toml` y el manifiesto de `docs\thesis\plantillas\` de ese commit), sustituyendo las actuales. Conserve antes las actuales si piensa volver a ellas.
 3. Si los pesos o los runtimes de esa entrega eran otros, sus digests están en la configuración y en el manifiesto de ese commit; colóquelos (§4) antes de arrancar.
-4. Verifique con el §6, ahora con el árbol de trabajo de la versión anterior.
+4. Verifique con el §6, ahora con el árbol de trabajo de la versión anterior, pero con `--out ..\environment-anterior.json`: `..\Ommatix-anterior` está junto al repositorio, y `..\environment.json` ya es el registro de la entrega actual.
 
 Convención recomendada (no la exige el motor): guardar cada entrega como `%LOCALAPPDATA%\Ommatix\releases\<commit>\` con su `ommatix.exe`, su `environment.json` y las configuraciones que usó, para volver sin recompilar. Un binario guardado se verifica comparando su SHA-256 con el anotado.
 
