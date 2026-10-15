@@ -67,7 +67,7 @@ compiler-enforced boundary.
 
 | Crate | May depend on |
 |---|---|
-| `ommatix-domain` | `thiserror`, plus pure-computation crates listed here: `unicode-normalization` (NFC for labels). No I/O, no threads, no clocks, no serialisation, no other Ommatix crate |
+| `ommatix-domain` | `thiserror`, plus pure-computation crates listed here: `unicode-normalization` (NFC for labels) and `rstar` (pinned `=0.13.0`: the R*-tree that enumerates candidate controls for Algorithm 2, ADR-0027; its default features only, no I/O, no randomness in the library). No I/O, no threads, no clocks, no serialisation, no other Ommatix crate |
 | `ommatix-application` | `ommatix-domain` + `thiserror`. No adapter crate; time only through the `Clock` port. Standard-library scoped threads only for the stages of one observation (ADR-0019) |
 | `ommatix-adapter-*` | `ommatix-application`, `ommatix-domain`, their own external libs. **Never another adapter** (dev-dependencies for integration tests are fine) |
 | `ommatix` (app) | everything; it is the only place where concrete adapters are chosen |

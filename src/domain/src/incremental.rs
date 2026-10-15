@@ -1272,4 +1272,53 @@ mod tests {
             "no_committed_base"
         );
     }
+
+    /// IDX-11 (RF-03, ADR-0027): a chain of supports closes completely, or it runs out of
+    /// rounds and the caller takes the full refresh. No order publishes a partial closure.
+    /// A1 is not indexed in this increment: this is the closure that an index must keep.
+    #[test]
+    fn idx_11_a_support_chain_closes_or_exhausts_its_budget_never_partially() {
+        let r = bx(0.0, 0.0, 1.0, 1.0);
+        let a = bx(0.5, 0.0, 2.0, 1.0);
+        let b = bx(1.5, 0.0, 3.0, 1.0);
+        let bounds = bx(-10.0, -10.0, 10.0, 10.0);
+        let whole = bx(0.0, 0.0, 3.0, 1.0);
+        for order in [[a, b], [b, a]] {
+            assert_eq!(
+                halo_close(r, &order, &[], bounds, 3).unwrap(),
+                Closure::Closed(whole)
+            );
+            match halo_close(r, &order, &[], bounds, 2).unwrap() {
+                Closure::Closed(closed) => {
+                    assert_eq!(closed, whole, "a closure is the whole chain");
+                }
+                Closure::BudgetExhausted => {}
+            }
+        }
+        assert_eq!(
+            halo_close(r, &[b, a], &[], bounds, 2).unwrap(),
+            Closure::BudgetExhausted
+        );
+    }
+
+    /// IDX-12 (RF-03, ADR-0027): a region in the gap between the two ends of a relation does not
+    /// touch either end, so the relation stays inactive, however large the envelope of its ends.
+    /// A region that touches one end brings in both.
+    #[test]
+    fn idx_12_a_region_in_the_gap_between_relation_ends_does_not_activate_it() {
+        let a = bx(0.0, 0.0, 10.0, 10.0);
+        let b = bx(100.0, 0.0, 110.0, 10.0);
+        let gap = bx(50.0, 0.0, 60.0, 10.0);
+        let bounds = bx(-10.0, -10.0, 200.0, 50.0);
+        assert!(a.union(&b).overlaps(&gap));
+        assert_eq!(
+            halo_close(gap, &[], &[(a, b)], bounds, 2).unwrap(),
+            Closure::Closed(gap)
+        );
+        let touching = bx(5.0, 5.0, 6.0, 6.0);
+        match halo_close(touching, &[], &[(a, b)], bounds, 2).unwrap() {
+            Closure::Closed(closed) => assert!(closed.contains(&a) && closed.contains(&b)),
+            Closure::BudgetExhausted => panic!("one touched end closes within two rounds"),
+        }
+    }
 }

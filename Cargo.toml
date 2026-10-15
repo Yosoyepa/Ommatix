@@ -45,6 +45,10 @@ jsonschema = { version = "0.58", default-features = false }
 # ONNX Runtime library by SHA-256. rc.13 keeps the workspace MSRV (rc.14 needs 1.92).
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic"] }
 rmcp = { version = "3.5", default-features = false }
+# Pinned exactly: the R*-tree that enumerates candidate controls for Algorithm 2 (ADR-0027).
+# Pure computation (no I/O, no clock, no randomness in the library); its optional `serde` and
+# `mint` features stay off. Its direct dependencies are heapless, num-traits and smallvec.
+rstar = { version = "=0.13.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
