@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-15T07:15:44.865963+00:00",
+  "timestamp_utc": "2026-10-15T07:39:32.630960+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -9,14 +9,14 @@
     "valid_examples": 9,
     "invalid_examples": 8,
     "jsonl_messages": 13,
-    "feature_files": 6,
-    "gherkin_scenarios": 38,
+    "feature_files": 7,
+    "gherkin_scenarios": 39,
     "requirements": 28,
-    "planned_tests": 89,
+    "planned_tests": 90,
     "references": 24,
     "adrs": 24
   },
-  "checks_run": 467,
+  "checks_run": 472,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -946,6 +946,21 @@
       "detail": ""
     },
     {
+      "check": "gherkin_cabecera:07_retencion.feature",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_id_unico:BDD-39",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "gherkin_estructura:BDD-39",
+      "passed": true,
+      "detail": ""
+    },
+    {
       "check": "escenarios_matriz_completos",
       "passed": true,
       "detail": ""
@@ -1137,6 +1152,11 @@
     },
     {
       "check": "trazabilidad:BDD-38",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "trazabilidad:BDD-39",
       "passed": true,
       "detail": ""
     },
@@ -2272,6 +2292,11 @@
     },
     {
       "check": "doc01_prueba_enlazada:SEC-06",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "check": "doc01_prueba_enlazada:SEC-07",
       "passed": true,
       "detail": ""
     },

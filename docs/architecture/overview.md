@@ -291,7 +291,7 @@ until they can be checked.
 Any delivery, whatever its outcome, spends the snapshot: the next action needs a new
 observation (`STALE_SNAPSHOT`), while journal replays still return the stored result.
 
-The MVP closes with the reduced scope that the owner decided on 15 October 2026 ([CHANGELOG 1.0.52](../thesis/CHANGELOG.md), [ADR-0023](../adr/0023-licence-and-reduced-mvp-scope.md)): RNF-05 is accepted as a documented near-miss and is not met (two regions, p95 153 ms against 150 ms); the reduced S4 protocol replaces the 450 runs of EV-02 for this MVP; EV-01, EV-02, IT-07 and the REL-01 corpus move to the next cut. Two of the ten Definition of Done boxes of [chapter 06 §6.7](../thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) are ticked, each with its evidence.
+The MVP closes with the reduced scope that the owner decided on 15 October 2026 ([CHANGELOG 1.0.52](../thesis/CHANGELOG.md), [ADR-0023](../adr/0023-licence-and-reduced-mvp-scope.md)): RNF-05 is accepted as a documented near-miss and is not met (two regions, p95 153 ms against 150 ms); the reduced S4 protocol replaces the 450 runs of EV-02 for this MVP; EV-01, EV-02, IT-07 and the REL-01 corpus move to the next cut. Three of the ten Definition of Done boxes of [chapter 06 §6.7](../thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) are ticked, each with its evidence. Since 1.0.53 the engine deletes its state and cache when the MCP session ends, and the optimised tile comparison is checked against a scalar reference on generated frames ([CHANGELOG 1.0.53](../thesis/CHANGELOG.md); SEC-07, BDD-39, UT-08). Deletion on demand, without ending the session, is still missing.
 
 | Area | Thesis | Today | Completed in |
 |---|---|---|---|
