@@ -107,6 +107,21 @@ class FakeHost(soak.Host):
         return self.engine
 
 
+class FlatWorkingSet(FakeHost):
+    """The working set does not move while the private bytes grow 120 MiB per hour."""
+
+    def counters(self, pid):
+        return {"rss": 300 * soak.MIB, "private": (250 + self.t / 30) * soak.MIB, "handles": 500}
+
+
+class GrowingHandles(FakeHost):
+    """One handle more every minute."""
+
+    def counters(self, pid):
+        return {"rss": 300 * soak.MIB, "private": 250 * soak.MIB,
+                "handles": 500 + int(self.t // 60)}
+
+
 class Case(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -125,7 +140,8 @@ class Case(unittest.TestCase):
             out=self.out, minutes=2.0, interval=5.0, animate_ms=100, animate_labels=2,
             window_minutes=1.0, warmup_minutes=10.0, foreground_wait=3.0,
             max_foreground_losses=3, max_observe_errors=3, call_timeout=10.0,
-            max_rss_growth_mib_per_hour=None, max_pending_regions=None)
+            max_rss_growth_mib_per_hour=10.0, max_handle_growth_per_hour=0.0,
+            max_pending_regions=None)
         values.update(extra)
         return SimpleNamespace(**values)
 
@@ -168,13 +184,38 @@ class Completed(Case):
         self.run_soak(FakeHost(), minutes=10.0)
         self.assertEqual(self.written[0], "running")
 
-    def test_thresholds_are_reported_only_when_the_owner_gives_them(self):
-        none, _ = self.run_soak(FakeHost())
-        self.assertEqual(none["criteria"], {})
-        some, _ = self.run_soak(FakeHost(), max_pending_regions=1,
-                                max_rss_growth_mib_per_hour=1000)
-        self.assertFalse(some["criteria"]["pending_regions_max"]["met"])
-        self.assertTrue(some["criteria"]["private_growth_mib_per_hour"]["met"])
+    def test_the_working_set_and_the_handles_are_always_judged(self):
+        report, _ = self.run_soak(FakeHost())
+        self.assertEqual(set(report["criteria"]),
+                         {"working_set_growth_mib_per_hour", "handle_growth_per_hour"})
+
+    def test_the_queue_is_judged_only_when_it_has_a_bound(self):
+        unbounded, _ = self.run_soak(FakeHost())
+        self.assertNotIn("pending_regions_max", unbounded["criteria"])
+        bounded, _ = self.run_soak(FakeHost(), max_pending_regions=1)
+        self.assertFalse(bounded["criteria"]["pending_regions_max"]["met"])  # max 2 > 1
+
+    def test_a_working_set_growing_faster_than_ten_mib_per_hour_is_not_met(self):
+        report, _ = self.run_soak(FakeHost(), minutes=20.0, warmup_minutes=2.0, interval=10.0)
+        criterion = report["criteria"]["working_set_growth_mib_per_hour"]
+        self.assertFalse(criterion["met"])
+        self.assertAlmostEqual(criterion["measured"], 60.0, places=1)  # 1 MiB per minute
+        self.assertEqual(criterion["limit"], 10.0)
+
+    def test_the_rss_threshold_judges_the_working_set_and_not_the_private_bytes(self):
+        report, _ = self.run_soak(FlatWorkingSet(), minutes=20.0, warmup_minutes=2.0,
+                                  interval=10.0)
+        self.assertTrue(report["criteria"]["working_set_growth_mib_per_hour"]["met"])
+        self.assertNotIn("private_growth_mib_per_hour", report["criteria"])
+        self.assertGreater(report["resources"]["private_mib"]["slope_per_hour"], 100)
+
+    def test_a_growing_handle_count_is_not_met_and_a_flat_one_is(self):
+        grows, _ = self.run_soak(GrowingHandles(), minutes=20.0, warmup_minutes=2.0,
+                                 interval=10.0)
+        self.assertFalse(grows["criteria"]["handle_growth_per_hour"]["met"])
+        flat, _ = self.run_soak(FakeHost(), minutes=20.0, warmup_minutes=2.0, interval=10.0)
+        self.assertTrue(flat["criteria"]["handle_growth_per_hour"]["met"])
+        self.assertEqual(flat["criteria"]["handle_growth_per_hour"]["measured"], 0.0)
 
 
 class Refusals(Case):
@@ -277,11 +318,36 @@ class Analysis(unittest.TestCase):
         self.assertEqual(soak.growth([], "rss", 0), {"n": 0})
 
 
+class Verdict(unittest.TestCase):
+    def test_the_owners_thresholds_judge_the_section_12_numbers_as_they_were_recorded(self):
+        """S0 section 12 (1.0.55): working set +1.6 MiB/h; handles 947 in every sample."""
+        resources = {"working_set_mib": {"n": 1320, "slope_per_hour": 1.6},
+                     "handles": {"n": 1320, "slope_per_hour": 0.0}}
+        args = SimpleNamespace(max_rss_growth_mib_per_hour=10.0,
+                               max_handle_growth_per_hour=0.0, max_pending_regions=None)
+        result = soak.criteria(resources, {"n": 1440, "max": 0}, args)
+        self.assertTrue(result["working_set_growth_mib_per_hour"]["met"])
+        self.assertTrue(result["handle_growth_per_hour"]["met"])
+        self.assertNotIn("pending_regions_max", result)  # the owner has set no queue bound
+
+    def test_any_positive_handle_slope_is_not_met_and_a_missing_trend_is_not_met(self):
+        args = SimpleNamespace(max_rss_growth_mib_per_hour=10.0,
+                               max_handle_growth_per_hour=0.0, max_pending_regions=None)
+        grows = soak.criteria({"working_set_mib": {"slope_per_hour": 0.0},
+                               "handles": {"slope_per_hour": 0.5}}, {"n": 0}, args)
+        self.assertFalse(grows["handle_growth_per_hour"]["met"])
+        none = soak.criteria({"working_set_mib": {"n": 1}, "handles": {"slope_per_hour": 0.0}},
+                             {"n": 0}, args)
+        self.assertFalse(none["working_set_growth_mib_per_hour"]["met"])
+
+
 class Command(unittest.TestCase):
-    def test_the_default_duration_is_the_two_hours_of_rnf_06(self):
+    def test_the_defaults_are_the_two_hours_of_rnf_06_and_the_owners_thresholds(self):
         args = soak.parse_args(["--config", "c.toml", "--out", "o.json"])
         self.assertEqual(args.minutes, 120.0)
-        self.assertIsNone(args.max_rss_growth_mib_per_hour)  # the dossier gives no threshold
+        self.assertEqual((args.max_rss_growth_mib_per_hour, args.max_handle_growth_per_hour),
+                         (10.0, 0.0))
+        self.assertIsNone(args.max_pending_regions)  # the owner has set no bound for the queue
 
     def test_the_tool_has_no_way_to_send_an_action(self):
         source = Path(soak.__file__).read_text(encoding="utf-8")
