@@ -47,5 +47,5 @@ Before the live part, from `main` at `9ef66ef` on `docs/s4-ninth-round`, with no
 ## What the next round needs
 
 - The owner's decision on finding 1, and on whether the round continues under the same protocol (finding 6).
-- If it continues: the Calculator's Standard step from a new `--round-start` (the ledger is at 429), with the same preflight; then the editor and File Explorer probes, which are the ones the eighth round could not complete.
+- If it continues, the cap is the owner's decision: either this round's `--round-start 427` (198 of 200 requests left), or a new round with its own `--round-start` (the ledger is at 429). Either way, the same preflight before each live invocation, then the editor and File Explorer probes, which the eighth round could not complete.
 - Findings 2 and 3, if the owner wants them before the next run: one client change with its own tests and a new hash, in a round of its own.

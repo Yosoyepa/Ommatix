@@ -1469,9 +1469,9 @@ Sin cambio. `matrices/plan_pruebas.csv` mantiene S4R-02, E2E-02 y E2E-03 en `NO_
 ### 9. Qué queda y cómo reanudar
 
 1. **Responsable:** decidir si la ronda continúa tras la parada de seguridad, y en qué condiciones (hallazgo 6). Sin esa decisión no se ejecuta nada en vivo, ni siquiera un sondeo.
-2. **Responsable:** decidir cómo investigar el clic 2 (hallazgo 1): una lectura de sólo lectura del panel con el responsable presente, en una ronda aparte, o aceptar el riesgo y reanudar.
+2. **Responsable:** decidir cómo investigar el clic 2 (hallazgo 1): una lectura de sólo lectura del panel con el responsable presente, o aceptar el riesgo y reanudar. El cupo se decide en el punto 4.
 3. **Cliente (ronda aparte, con prueba y hash nuevo):** hallazgos 2 y 3, para que el resumen y el modo al detenerse digan lo que pasó.
-4. **Si la ronda continúa:** `--calc-standard` desde un `--round-start` nuevo (el cuaderno está en 429), con el mismo preflight; después los sondeos de E2E-02 y E2E-03, que la octava ronda no completó.
+4. **Si la ronda continúa:** el cupo lo decide el responsable. O se sigue con `--round-start 427`, que deja 198 solicitudes de las 200 autorizadas, o se abre una ronda nueva con su propio `--round-start` (el cuaderno está en 429). En cualquier caso, el mismo preflight antes de cada invocación; después, los sondeos de E2E-02 y E2E-03, que la octava ronda no completó.
 5. **Cuaderno:** 429. La siguiente ronda usa su propio `--round-start`.
 
 ### 10. Ejecución
