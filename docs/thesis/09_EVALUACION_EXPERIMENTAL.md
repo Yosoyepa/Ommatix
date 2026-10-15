@@ -113,4 +113,13 @@ Ejecutada el 15 de octubre de 2026 con el protocolo de esta sección, sin cambio
 - **Errores y exclusiones:** ninguno. Los 240 procesos terminaron completos.
 - **PERF-01 sin carga (§13.7):** el desplazamiento de p95 de 0,2 a 0,35 ms no se reproduce; persiste una mediana de 0,05 a 0,09 ms mayor, sin atribuir.
 
-La configuración de origen no tiene `[models] accessibility = "uia"`, así que estas cifras son sin accesibilidad. Quedan para el responsable la repetición con `uia` y la investigación de los elementos que faltan con dos regiones (§13.9). RNF-05 no cambia de estado. PERF-02 no cambia en `plan_pruebas.csv`: sigue faltando el caso de caché y la igualdad de modelos.
+La configuración de origen no tiene `[models] accessibility = "uia"`, así que estas cifras son sin accesibilidad; la repetición con `uia` y la investigación de los elementos que faltan están en el apartado siguiente. RNF-05 no cambia de estado. PERF-02 no cambia en `plan_pruebas.csv`: sigue faltando el caso de caché y la igualdad de modelos.
+
+### 9.9.2 Seguimiento: pérdida de elementos y repetición con `uia` (1.0.57)
+
+Sin cambiar el protocolo. Detalle, condiciones y límites en [`S0_RESULTADOS.md`](S0_RESULTADOS.md) §13.10 a §13.13.
+
+- **Elementos que faltan con dos regiones (`incr2`), sin accesibilidad.** No es un defecto del Algoritmo 1: en las observaciones 2 a 8 de un compilado de diagnóstico, ninguna de las 18 a 68 cajas de la base que solapan una región queda cortada por ella (el cierre del halo las contiene todas). La diferencia es lo que el detector devuelve sobre el recorte: unos 20 de 75 controles de B0 no tienen pareja en B1 (IoU ≥ 0,5), de ellos 15 a 17 en las dos regiones (14 iconos de la bandeja del sistema), y los dos recortes juntos devuelven 3 o 4 controles, tres de ellos una caja del tamaño del recorte. Sobre un mismo fotograma, un recorte de 1280×720 reproduce el 67 a 72 % de lo que ve el fotograma completo y uno de 224×151 sólo 4 de 11: el recorte entra a escala 1,0 y el fotograma completo se reduce a 2/3. Es un coste de calidad de la incrementalidad con este modelo; el algoritmo no cambia.
+- **Repetición con `[models] accessibility = "uia"`** (`inc02-b0b1-uia-20261015`, 40 procesos por variante y caso, sin entrada). Una región: Δ = +2,4 ms [IC 95 %: +0,8; +4,1] (B1 deja de ser más rápida: la lectura de UIA, ≈ 117 ms, fija el total en las dos variantes). Dos regiones: Δ = +46,6 ms [+44,6; +48,7]; B1 mediana 166,2 ms y p95 186,3 ms [185,6; 186,9]. Refresco completo (control): Δ = −5,4 ms [−7,3; −3,6], en la captura y la planificación. Acuerdo (Dice): 0,97, 0,83 y 0,98. Con dos regiones B1 publica una mediana de 62 elementos frente a 80.
+- **RNF-05: sin cambio de estado.** Con `uia` y la animación de 30 ms del protocolo el p95 de dos regiones no llega a 150 ms; lo decide el responsable.
+- **`region_area_px` de las observaciones inactivas** se escribía como `-0.0`; corregido con prueba de regresión (§13.12).

@@ -1,6 +1,6 @@
 # Estado del proyecto y relevo / Project status and handoff
 
-Fecha: 2026-10-15 (versión 1.0.56). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
+Fecha: 2026-10-15 (versión 1.0.57). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
 persona o agente continúe sin rehacer nada. La especificación es el dossier de
 [`docs/thesis/`](thesis/README.md); las reglas del repositorio están en
 [`AGENTS.md`](../AGENTS.md).
@@ -57,8 +57,9 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | Sesión B, PERF-03 / RNF-06 (rama `docs/perf03-soak`, CHANGELOG 1.0.55): soak de 120 minutos completo con `tools/perf/soak.py` sobre la aplicación de prueba, sin entrada y sin umbral: 1440 de 1440 observaciones, cero pérdidas de primer plano, memoria privada del motor +1,6 MiB/h, cola de regiones pendientes en cero. Matriz: PERF-03 `EJECUTADO_SUPERVISADO_PARCIAL`; RNF-06 sin veredicto hasta que el responsable fije el umbral. Informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §12. | Pendiente la aprobación del PR y el umbral del responsable |
 | — | INC-05, enumerador R*-tree experimental de los candidatos del Algoritmo 2 (rama `feat/inc05-rstar-index`, CHANGELOG 1.0.51, [ADR-0027](adr/0027-candidate-enumeration-with-an-rstar-index.md)): `[engine] candidate_search = "rstar"`, desactivado por defecto, con los mismos resultados que el recorrido. Medición del núcleo en [`thesis/INDICE_A2_RESULTADOS.md`](thesis/INDICE_A2_RESULTADOS.md): G4 cumplido en cuadrícula y formularios desde 512 controles; G5 incumplido en dos celdas de solapamiento con 128 controles. No se adopta como valor por defecto. | PR abierto |
 | — | INC-02, B0 frente a B1 en vivo y PERF-01 sin carga (rama `docs/inc02-b0b1`, CHANGELOG 1.0.56, [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §13 y [`thesis/09_EVALUACION_EXPERIMENTAL.md`](thesis/09_EVALUACION_EXPERIMENTAL.md) §9.9.1): 240 procesos en vivo sobre la aplicación de prueba, sin entrada. Con una región B1 tarda 18,6 ms menos; con dos, 45,8 ms más, porque cada región es una inferencia completa. Con dos regiones B1 publica 67 elementos por observación frente a 85, por investigar. PERF-01 sin carga no reproduce el desplazamiento de p95 de +0,2 a +0,35 ms. RNF-05 sin cambio. | PR abierto |
+| — | Seguimiento de INC-02 (rama `fix/inc02-region-loss`, CHANGELOG 1.0.57, [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §13.10 a §13.13 y [`thesis/09_EVALUACION_EXPERIMENTAL.md`](thesis/09_EVALUACION_EXPERIMENTAL.md) §9.9.1): la pérdida de elementos con dos regiones (B1 publica ≈ 20 de 75 controles menos) **no es un defecto del Algoritmo 1**: el cierre del halo no corta ninguna caja; es el comportamiento del detector sobre recortes (escala 1,0 frente a 0,67 del fotograma completo y falta de contexto: la bandeja de 14 iconos se vuelve una caja del tamaño del recorte). B0/B1 repetido con `[models] accessibility = "uia"` (240 procesos, sin entrada): con una región B1 ya no ahorra (+2,4 ms; la lectura de UIA, ≈ 117 ms, fija el total) y con dos regiones es +46,6 ms más lenta, con p95 de 186,3 ms (RNF-05 sin cambio de estado). Corregido el `-0.0` de `region_area_px` en observaciones inactivas, con prueba. Pendiente (no autorizado): INC-07, política adaptativa entre refresco completo y regional. | PR abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.56)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.57)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
@@ -278,7 +279,7 @@ La tercera continuación de la undécima ronda (1.0.46, rama `docs/s4-eleventh-r
 4. **Pendientes que no están en el alcance cedido**: el borrado bajo demanda del operador, sin terminar la sesión (capítulo 08 §8.4; el borrado al terminar la sesión existe desde 1.0.53, SEC-07); la parte de percepción de PERF-02 (p99 y variantes de caché); y SEC-02, SEC-05 e IT-01 a IT-05 en parte. La prueba diferencial del diferenciador (capítulo 05 §5.5) está hecha desde 1.0.53.
 5. **Próximo corte** (fuera de este MVP): EV-01, EV-02, IT-07 y el corpus de REL-01, con el plan del paquete Paper (INC-00 a INC-09; no se copia aquí). RNF-05 sigue como incumplimiento documentado.
 
-**Fuera del cierre del MVP, pendientes de INC-02 (1.0.56):** repetir B0 y B1 con `[models] accessibility = "uia"` para compararlo con §10.4 (la configuración de origen no la tiene); investigar los elementos que faltan con dos regiones (el registro no guarda cajas); y un control B0 frente a B0 del acuerdo. Detalle en [`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §13.9.
+**Fuera del cierre del MVP, pendientes tras INC-02 (1.0.57):** INC-07 (política adaptativa entre refresco completo y regional, no autorizada); un control B0 frente a B0 del acuerdo; la captura de `full` y el residuo de PERF-01; investigar con `uia` la pérdida de elementos y separar la causa de la lectura lenta de UIA. Hechos en 1.0.57: la repetición con `uia`, la atribución de la pérdida de elementos y el `-0.0`. Detalle en [`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §13.13.
 
 **Lo que ya no hace falta decidir:** la licencia del código y de los documentos (15 de octubre de 2026) y el propietario de los requisitos.
 
