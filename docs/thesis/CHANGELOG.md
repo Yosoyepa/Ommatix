@@ -1,5 +1,15 @@
 # Historial documental
 
+## 1.0.45 — 2026-10-15: S4, undécima ronda, segunda continuación: E2E-03 se ejecutó en vivo por primera vez; la sonda y el piloto pasan, tres de diez corridas puntuadas pasan, y la ronda se detuvo por entrada entre invocaciones (rama `docs/s4-eleventh-round-run2`)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni matriz. No cambia ninguna crate de Rust, el motor, el editor ni los clientes. **Solicitudes reales: 15** (cuaderno de 515 a 530, con `--round-start 429`: 101 usadas de 200, 99 libres). Clientes sin cambio: `tools/s4/e2e_driver.py` `768e77e3…7202d` y `tools/s4/e2e_dossier.py` `359f6f28…0afc2`; motor `a137ccd1…d548`; editor `f358b3a9…1d20`.
+
+- **Sonda sin entrada (0 solicitudes):** cumple la compuerta. «carpeta-a» y la miga de la raíz tienen cada una un único elemento de motor `button` utilizable con actionability `confirmed`; «Atrás» es `unknown`, como se esperaba sin historial.
+- **Piloto (3 solicitudes):** pasa. Éxito del cliente, 3 de 3 comprobaciones del sistema, cero falsos éxitos, cero controles erróneos y anclaje previo `ok` en los tres pasos.
+- **Serie puntuada:** las corridas 2 a 4 tienen éxito. Tres negativas `STALE_SNAPSHOT`, todas antes de cualquier entrada, se reintentaron y se entregaron. La corrida 5 no se envió: el contador de inactividad marcó entrada de teclado o ratón que la ronda no provocó, y la compuerta detuvo la serie (salida 5). Corridas puntuadas: 3 de 10.
+- **Matriz:** E2E-03 sigue `PENDIENTE_PRODUCTO`; exige diez de diez con cero falsos éxitos.
+- **Documentación:** sección «Undécima ronda (continuación 2)» de `docs/thesis/S4_ACEPTACION_REDUCIDA.md`; revisión `docs/reviews/2026-10-14-s4-eleventh-round.md`, hallazgos 5 a 9; `docs/handoff.md`; `README.md` y `README.es.md`.
+
 ## 1.0.44 — 2026-10-15: S4, undécima ronda, continuación: la línea base nueva cumple la comprobación previa, pero el equipo recibió entrada y la ronda se detuvo antes de la sonda (rama `docs/s4-eleventh-round-run`, sin entrada ni solicitud real)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni matriz. No cambia ninguna crate de Rust, el motor, el editor ni los clientes. **No se envió entrada ni ninguna solicitud real** (cuaderno 515, de 200 desde `--round-start 429`, sin cambio). Clientes sin cambio: `tools/s4/e2e_driver.py` `768e77e3…7202d` y `tools/s4/e2e_dossier.py` `359f6f28…0afc2`; motor `a137ccd1…d548`; editor `f358b3a9…1d20`.

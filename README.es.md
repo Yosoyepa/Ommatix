@@ -181,6 +181,8 @@ La undécima ronda ([CHANGELOG 1.0.43](docs/thesis/CHANGELOG.md)) no envió ning
 
 La continuación de la undécima ronda ([CHANGELOG 1.0.44](docs/thesis/CHANGELOG.md)) tampoco envió ninguna solicitud real. Con la línea base nueva que indicó el responsable (ninguna ventana del Explorador visible en el shell, y la oculta intacta), la comprobación previa cumplió todas sus condiciones, pero el contador de inactividad marcó una entrada de teclado o ratón hacia las 00:23 (hora local), después de su respuesta y sin comandos que la provocaran. Por la regla de la ronda no se ejecutó nada de E2E-03; el responsable debe confirmar si el equipo estaba en uso antes de cualquier entrada.
 
+La segunda continuación de la undécima ronda ([CHANGELOG 1.0.45](docs/thesis/CHANGELOG.md)) ejecutó E2E-03 en vivo por primera vez. Su sonda cumplió la compuerta sin entrada, y su piloto pasó: tres de tres comprobaciones del sistema, ningún falso éxito y ningún control erróneo. Después pasaron tres de las diez corridas puntuadas (cuaderno de 515 a 530; quedan 99 de las 200 solicitudes de la ronda). Antes de la cuarta invocación puntuada (corrida 5), la regla de entrada del responsable detuvo la serie: el contador de inactividad marcó entrada de teclado o ratón que la ronda no provocó, entre una corrida y la siguiente. La matriz de E2E-03 no cambia (`PENDIENTE_PRODUCTO`; exige diez de diez). El responsable debe decir si esa entrada fue suya antes de que la serie reanude.
+
 ## Hoja de ruta
 
 Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
