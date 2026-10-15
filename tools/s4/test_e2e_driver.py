@@ -1394,7 +1394,7 @@ class CalcCheckModeTest(QuietTest):
     def test_the_check_is_a_calculator_only_invocation_of_its_own(self):
         def args(**kw):
             base = dict(app="calculator", calc_standard=False, check_mode=True, max_live=0,
-                        ambiguous_crash=False)
+                        ambiguous_crash=False, measure_click=False)
             base.update(kw)
             return SimpleNamespace(**base)
 
@@ -1406,7 +1406,7 @@ class CalcCheckModeTest(QuietTest):
     def test_calc_standard_with_no_live_budget_is_refused_when_the_arguments_are_parsed(self):
         def args(**kw):
             base = dict(app="calculator", calc_standard=True, check_mode=False, max_live=2,
-                        ambiguous_crash=False)
+                        ambiguous_crash=False, measure_click=False)
             base.update(kw)
             return SimpleNamespace(**base)
 
@@ -2648,7 +2648,7 @@ class FakeEngine:
     scripted answers, in order: (answer, whether the click was delivered)."""
 
     def __init__(self, clicks, session, *, answers=(), deliver=False, answer_first=False,
-                 lines=()):
+                 lines=(), meta=None, rtt=1.0):
         self.clicks = clicks
         self.session = session
         self.answers = list(answers)
@@ -2657,6 +2657,8 @@ class FakeEngine:
         self.proc = FakeProc()
         self.stderr = list(lines)
         self.calls = []
+        self.meta = meta or {}  # the _meta of the answers (the action timings)
+        self.rtt = rtt  # the round trip the client measures for them
 
     def call(self, name, args):
         self.calls.append(args)
@@ -2671,7 +2673,7 @@ class FakeEngine:
         answer, delivers = self.answers.pop(0)
         if delivers:
             self.clicks[0] += 1
-        return answer, False, {}, 1.0
+        return answer, False, self.meta, self.rtt
 
     def close(self):
         return 0
@@ -2951,7 +2953,8 @@ class CrashPureTest(unittest.TestCase):
     def test_the_arguments_of_the_case_are_checked_before_anything_starts(self):
         def args(**kw):
             base = dict(app="testapp", calc_standard=False, check_mode=False, max_live=3,
-                        runs=1, ambiguous_crash=True, crash_after_ms=40)
+                        runs=1, ambiguous_crash=True, measure_click=False,
+                        crash_after_ms=40, crash_after_from=None)
             base.update(kw)
             return SimpleNamespace(**base)
 
@@ -2961,7 +2964,170 @@ class CrashPureTest(unittest.TestCase):
         self.assertIn("--runs 1", driver.argument_problem(args(runs=2), live=True))
         self.assertIn("--max-live", driver.argument_problem(args(max_live=2), live=True))
         self.assertIn("--crash-after-ms", driver.argument_problem(args(crash_after_ms=5), live=True))
-        self.assertIn("--crash-after-ms", driver.argument_problem(args(crash_after_ms=90), live=True))
+        self.assertIn("--crash-after-ms", driver.argument_problem(args(crash_after_ms=101), live=True))
+
+
+# ---- C0, the measured click that gives IT-05's kill delay ------------------------------------
+
+TIMINGS = {"io.ommatix/action_timings": {"gate_us": 300, "freshness_us": 20000,
+                                         "delivery_us": 2000, "focus_us": 0,
+                                         "verification_us": 60000, "total_us": 82300}}
+
+
+class MeasurementWindowTest(unittest.TestCase):
+    def test_the_delay_is_the_midpoint_between_the_delivery_and_the_answer(self):
+        stages = {"action_gate": 0.3, "action_freshness": 20.0, "action_delivery": 2.0,
+                  "action_focus": 0.0, "action_verification": 60.0, "action_total": 82.3}
+        window = driver.measurement_window(stages, 85.0)
+        self.assertEqual(window["delivered_ms"], 22.3)
+        self.assertEqual(window["suggested_ms"], 54)  # round((22.3 + 85) / 2)
+        self.assertTrue(window["window_ok"])
+
+    def test_a_reported_focus_stage_counts_as_delivery(self):
+        stages = {"action_gate": 0.3, "action_freshness": 20.0, "action_delivery": 2.0,
+                  "action_focus": 5.0}
+        self.assertEqual(driver.measurement_window(stages, 85.0)["delivered_ms"], 27.3)
+
+    def test_a_measurement_without_its_stages_or_round_trip_gives_no_window(self):
+        window = driver.measurement_window({}, 85.0)
+        self.assertIsNone(window["delivered_ms"])
+        self.assertIsNone(window["suggested_ms"])
+        self.assertFalse(window["window_ok"])
+        stages = {"action_gate": 0.3, "action_freshness": 20.0, "action_delivery": 2.0}
+        self.assertIsNone(driver.measurement_window(stages, None)["delivered_ms"])
+
+    def test_a_window_that_does_not_hold_or_leaves_the_guard_is_not_used(self):
+        late = driver.measurement_window({"action_gate": 60.0, "action_freshness": 20.0,
+                                          "action_delivery": 2.0}, 70.0)
+        self.assertFalse(late["window_ok"], "the click left after the answer")
+        early = driver.measurement_window({"action_gate": 0.1, "action_freshness": 2.0,
+                                           "action_delivery": 0.5}, 14.0)
+        self.assertFalse(early["window_ok"], "a delay under the guard's floor of 15 ms")
+        slow = driver.measurement_window({"action_gate": 0.3, "action_freshness": 40.0,
+                                          "action_delivery": 2.0}, 200.0)
+        self.assertFalse(slow["window_ok"], "a delay over the guard's ceiling of 100 ms")
+
+
+class CrashDelayTest(unittest.TestCase):
+    def record(self, **changes):
+        measurement = {"delivered_ms": 22.3, "rtt_ms": 85.0, "suggested_ms": 54,
+                       "window_ok": True}
+        record = {"kind": "measure-click", "success": True, "measurement": measurement}
+        record.update(changes)
+        return record
+
+    def test_the_delay_is_the_measured_suggestion(self):
+        self.assertEqual(driver.crash_delay_from(self.record()), 54)
+
+    def test_a_record_that_is_not_a_normal_measured_click_gives_no_delay(self):
+        with self.assertRaises(driver.Abort):
+            driver.crash_delay_from(self.record(kind="crash"))
+        with self.assertRaises(driver.Abort):
+            driver.crash_delay_from(self.record(success=False))
+        broken = self.record(measurement={"delivered_ms": 22.3, "rtt_ms": 85.0,
+                                          "suggested_ms": 54, "window_ok": False})
+        with self.assertRaises(driver.Abort):
+            driver.crash_delay_from(broken)
+
+    def test_the_last_measurement_of_a_file_is_the_one_that_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "c0.jsonl"
+            first = self.record(measurement={"window_ok": True, "suggested_ms": 40})
+            crash = {"kind": "crash", "success": True}
+            second = self.record()
+            path.write_text("\n".join(json.dumps(line) for line in [first, crash, second]) + "\n",
+                            encoding="utf-8")
+            self.assertEqual(driver.last_measurement(path), second)
+            path.write_text(json.dumps(crash) + "\n", encoding="utf-8")
+            with self.assertRaises(driver.Abort):
+                driver.last_measurement(path)
+            with self.assertRaises(driver.Abort):
+                driver.last_measurement(Path(tmp) / "missing.jsonl")
+
+
+class MeasureClickCaseTest(QuietTest):
+    def run_measure(self, engine, clicks, **kwargs):
+        desk = FakeCrashDesk(self.tmp, engine, clicks, **kwargs)
+        res = driver.new_result("C0-plan", 1, "C0")
+        res["kind"] = "measure-click"
+        desk.measure_click(res, ["ommatix.exe"])
+        return desk, res
+
+    def test_an_ordinary_click_is_measured_and_nothing_is_killed(self):
+        clicks = [0]
+        engine = FakeEngine(clicks, "s-c0", answers=[(EFFECT, True)], meta=TIMINGS, rtt=85.0)
+        desk, res = self.run_measure(engine, clicks)
+        self.assertTrue(res["success"], res["failure"])
+        self.assertEqual(res["measurement"]["suggested_ms"], 54)
+        self.assertTrue(res["measurement"]["window_ok"])
+        self.assertEqual(res["valor"], {"before": 0, "after": 1})
+        self.assertEqual((engine.proc.kills, desk.ledger_total()), (0, 1))
+
+    def test_a_click_that_is_not_a_normal_one_is_not_a_measurement(self):
+        clicks = [0]
+        engine = FakeEngine(clicks, "s-c0", answers=[(REJECTED_SESSION, False)], meta=TIMINGS,
+                            rtt=85.0)
+        _, res = self.run_measure(engine, clicks)
+        self.assertFalse(res["success"])
+        self.assertIn("did not behave as a normal click", res["failure"])
+
+    def test_a_click_the_counter_does_not_show_is_not_a_measurement(self):
+        clicks = [0]
+        engine = FakeEngine(clicks, "s-c0", answers=[(EFFECT, False)], meta=TIMINGS, rtt=85.0)
+        _, res = self.run_measure(engine, clicks)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["valor"]["after"], 0)
+
+    def test_an_answer_without_the_action_timings_is_not_a_measurement(self):
+        clicks = [0]
+        engine = FakeEngine(clicks, "s-c0", answers=[(EFFECT, True)], meta={}, rtt=85.0)
+        _, res = self.run_measure(engine, clicks)
+        self.assertFalse(res["success"])
+        self.assertIsNone(res["measurement"]["delivered_ms"])
+
+    def test_the_record_is_written_the_application_closed_and_no_stop_engaged(self):
+        clicks = [0]
+        engine = FakeEngine(clicks, "s-c0", answers=[(EFFECT, True)], meta=TIMINGS, rtt=85.0)
+        desk = FakeCrashDesk(self.tmp, engine, clicks)
+        desk.run_measure(["ommatix.exe"])
+        recorded = json.loads((self.tmp / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual((recorded["kind"], recorded["success"]), ("measure-click", True))
+        self.assertEqual(recorded["measurement"]["suggested_ms"], 54)
+        self.assertEqual(desk.closed, [4242])
+        self.assertFalse((self.tmp / "stop.flag").exists())
+
+
+class MeasureAndDelayArgumentsTest(unittest.TestCase):
+    def args(self, **kw):
+        base = dict(app="testapp", calc_standard=False, check_mode=False, max_live=3, runs=1,
+                    ambiguous_crash=False, measure_click=False, crash_after_ms=None,
+                    crash_after_from=None)
+        base.update(kw)
+        return SimpleNamespace(**base)
+
+    def test_the_measurement_takes_one_click_and_no_delay(self):
+        measure = dict(measure_click=True, max_live=1)
+        self.assertIsNone(driver.argument_problem(self.args(**measure), live=True))
+        self.assertIn("run mode", driver.argument_problem(self.args(**measure), live=False))
+        self.assertIn("--runs 1", driver.argument_problem(self.args(**measure, runs=2), live=True))
+        self.assertIn("--max-live", driver.argument_problem(self.args(**{**measure, "max_live": 0}),
+                                                            live=True))
+        self.assertIn("no kill delay", driver.argument_problem(
+            self.args(**measure, crash_after_ms=40), live=True))
+        self.assertIn("separate", driver.argument_problem(
+            self.args(**measure, ambiguous_crash=True), live=True))
+
+    def test_the_kill_needs_exactly_one_delay_source(self):
+        crash = dict(ambiguous_crash=True)
+        self.assertIsNone(driver.argument_problem(self.args(**crash, crash_after_ms=40),
+                                                  live=True))
+        self.assertIsNone(driver.argument_problem(
+            self.args(**crash, crash_after_from=Path("c0.jsonl")), live=True))
+        self.assertIn("exactly one", driver.argument_problem(self.args(**crash), live=True))
+        self.assertIn("exactly one", driver.argument_problem(
+            self.args(**crash, crash_after_ms=40, crash_after_from=Path("c0.jsonl")), live=True))
+        self.assertIn("--crash-after-ms", driver.argument_problem(
+            self.args(**crash, crash_after_ms=101), live=True))
 
 
 if __name__ == "__main__":
