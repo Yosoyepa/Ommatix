@@ -498,9 +498,14 @@ class DossierProtocol(driver.Protocol):
     def front_window(self) -> dict:
         return driver.foreground()
 
+    def front(self) -> dict:
+        return self.front_window()
+
     def bring_front(self, hwnd) -> None:
-        driver.maximize_on_primary(hwnd)
-        driver.bring_to_front(hwnd)
+        """Window management, not input: the recorded window maximized on the primary monitor
+        (the request for the foreground is `await_front`'s, by handle)."""
+        if not driver.on_primary_maximized(hwnd):
+            driver.maximize_on_primary(hwnd)
 
     # -- the checks of the flows
     def read_end_state(self, hwnd):
@@ -579,14 +584,27 @@ class DossierProtocol(driver.Protocol):
         return res
 
     def settle_observation(self, res: dict, check):
+        """Observes until the visible state is as `check` says. The editor's also needs
+        accessibility-sourced elements: its field and its button are named by UI Automation
+        only, and the first read can come before the window holds the keyboard focus."""
         snap, elements = None, []
         for _ in range(6):
             snap, elements, obs = self.observe()
             res["observations"].append(obs)
-            if self.ocr_ok(elements, check):
+            seen = self.ocr_ok(elements, check)
+            if seen and (self.args.app != "editor"
+                         or any(e.get("label_source") == "accessibility" for e in elements)):
                 return snap, elements, True
             time.sleep(0.5)
-        return snap, elements, False
+        return snap, elements, self.ocr_ok(elements, check)
+
+    def focus_owner(self, pid: int | None) -> dict:
+        """Read-only: the process, class and control type of the element UI Automation reports
+        with keyboard focus (never its name or value), and whether it belongs to `pid`."""
+        owner = driver.uia_focus_owner()
+        if owner is not None:
+            owner["is_app"] = pid is not None and owner["pid"] == pid
+        return owner or {"unreadable": True}
 
     def run_editor(self, res: dict, n: int) -> None:
         tree = self.tree = RunTree(self.temp_root, new_run_id(f"s4-e2e02-r{n}"))
@@ -595,15 +613,24 @@ class DossierProtocol(driver.Protocol):
         self.started.add(pid)
         ok, requests = self.wait_foreground(pid)
         res["activation_requests"] = requests
+        res.update(driver.activation_fields(self.activation))
         if not ok:
             res["failure"] = "the editor did not reach the foreground maximized"
             return
-        hwnd = self.current_hwnd()
+        hwnd = self.app_window(pid)
         self.app_hwnd = hwnd
         time.sleep(self.args.settle)
         snap, elements, visible = self.settle_observation(res, self.flow["initial"])
         if not visible:
             res["failure"] = "initial state not visible by OCR"
+        accessible = sum(1 for e in elements if e.get("label_source") == "accessibility")
+        res["accessibility_elements"] = accessible
+        if accessible == 0 and res["failure"] is None:
+            # The field's name and role come from UI Automation only: without evidence from it
+            # there is nothing to click or type into. Say whose window holds the keyboard focus
+            # (the engine attests the application by it) and stop before any input.
+            res["uia_focus"] = self.focus_owner(pid)
+            res["failure"] = "no accessibility evidence from the editor"
         if self.args.mode == "probe":
             self.probe_print(elements)
         if res["failure"] is None:
@@ -635,7 +662,9 @@ class DossierProtocol(driver.Protocol):
             self.pin_file.write_text(str(hwnd), encoding="ascii")
             res["pin_written"] = True
         self.bring_front(hwnd)
-        if not self.wait_explorer_front(hwnd):
+        arrived = self.wait_explorer_front(hwnd)
+        res.update(driver.activation_fields(self.activation))
+        if not arrived:
             res["failure"] = "the Explorer window did not reach the foreground maximized"
             return
         time.sleep(self.args.settle)
@@ -669,21 +698,16 @@ class DossierProtocol(driver.Protocol):
                        uia=[[*key, n] for key, n in sorted(uia.items(), key=str)])
 
     def wait_explorer_front(self, hwnd: int) -> bool:
-        """The recorded window in front and maximized on the primary monitor. Window
-        management only: no input. Asks for the front every 2 s."""
-        deadline = time.monotonic() + self.args.foreground_wait
-        last = 0.0
-        requests = 0
-        while time.monotonic() < deadline:
-            fg = self.front_window()
-            if fg["hwnd"] == hwnd and fg["exe"] == EXPLORER_EXE and fg["maximized_primary"]:
-                return True
-            time.sleep(0.25)
-            if time.monotonic() - last >= 2.0:
-                last = time.monotonic()
-                requests += 1
-                self.bring_front(hwnd)
-        return False
+        """The recorded window in front and maximized on the primary monitor, asked for by its
+        handle (the shell's explorer.exe owns many windows, so never by process). Window
+        management only: no input. See `Protocol.await_front`."""
+        def ok(fg):
+            return (fg["hwnd"] == hwnd and fg["exe"] == EXPLORER_EXE
+                    and bool(fg["maximized_primary"]))
+
+        arrived, _ = self.await_front(ok, lambda: hwnd, lambda: self.bring_front(hwnd),
+                                      lambda: self.diagnose(None, hwnd))
+        return arrived
 
     def finish(self, res: dict) -> None:
         """Closes what this run opened and deletes what it created. Never raises: whatever
@@ -755,6 +779,13 @@ def main() -> int:
     p.add_argument("--session-id", default="s4d")
     p.add_argument("--output", type=int, default=0)
     p.add_argument("--foreground-wait", type=float, default=60.0)
+    p.add_argument("--operator-activation", action="store_true",
+                   help="off by default: when the window cannot be brought to the front under the "
+                        "Windows foreground lock, print to stderr that the operator must click the "
+                        "flashing taskbar button of the application, and wait (bounded by "
+                        "--operator-activation-wait) until the recorded window is the foreground "
+                        "window; nothing is sent before that")
+    p.add_argument("--operator-activation-wait", type=float, default=120.0)
     p.add_argument("--foreground-wait-explorer", type=float, default=15.0,
                    help="seconds to wait for the new Explorer window to appear")
     p.add_argument("--pause", type=float, default=1.0)

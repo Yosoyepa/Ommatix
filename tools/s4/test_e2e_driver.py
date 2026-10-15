@@ -495,6 +495,9 @@ class FakeCalculator(driver.Protocol):
     def current_hwnd(self):
         return 77
 
+    def window_of(self, pid):
+        return None
+
     def require_foreground(self):
         return {"exe": "calculatorapp.exe", "pid": 4242, "hwnd": 77, "maximized_primary": True}
 
@@ -745,15 +748,45 @@ class StandardItemPollTest(QuietTest):
         self.assertGreater(item["waited_ms"], 0)
         self.assertLess(item["waited_ms"], driver.STANDARD_POLL_WINDOW_S * 1000)
 
-    def test_the_item_is_found_by_its_automation_id_with_a_name_the_old_step_did_not_know(self):
-        desk, summary = self.run_step(std_name="Calculadora estándar")
-        self.assertEqual(desk.clicks, ["Abrir navegación", "Calculadora estándar"])
-        self.assertEqual([c["grounded"] for c in summary["clicks"]], [True, True])
-        self.assertTrue(summary["switched"])
-        item = summary["standard_item"]
-        self.assertEqual((item["control_type"], item["automation_id"], item["name_accepted"]),
-                         ("ListItem", "Standard", True))
-        self.assertEqual([i["status"] for i in summary["identity"]], ["ok", "ok"])
+    def test_the_item_is_found_by_its_automation_id_whatever_its_name_is(self):
+        for name in ("Calculadora Estándar", "Calculadora estándar", "Texto del propietario 4711"):
+            desk, summary = self.run_step(std_name=name)
+            self.assertEqual(desk.clicks, ["Abrir navegación", name], name)
+            self.assertEqual([c["grounded"] for c in summary["clicks"]], [True, True])
+            self.assertTrue(summary["switched"])
+            item = summary["standard_item"]
+            self.assertEqual((item["control_type"], item["automation_id"]), ("ListItem", "Standard"))
+            self.assertEqual([i["status"] for i in summary["identity"]], ["ok", "ok"])
+
+    def test_the_item_name_is_used_in_memory_only_and_never_written_or_logged(self):
+        secret = "Calculadora Estándar 4711"
+        for kwargs in ({}, {"std_aid": "Otro"}, {"uia_std": 2}):
+            self.setUp()  # fresh log mock and results file
+            desk, summary = self.run_step(std_name=secret, **kwargs)
+            written = (self.tmp / "results.jsonl").read_text(encoding="utf-8")
+            logged = json.dumps(driver.log.call_args_list, ensure_ascii=False, default=str)
+            for text in (json.dumps(summary, ensure_ascii=False), written, logged):
+                self.assertNotIn(secret, text, kwargs)
+            self.assertNotIn("name", summary["standard_item"], kwargs)
+            self.assertNotIn("name_accepted", summary["standard_item"], kwargs)
+
+    def test_the_name_list_is_gone(self):
+        for gone in ("CALC_STANDARD_NAMES", "accepted_standard_name"):
+            self.assertFalse(hasattr(driver, gone), gone)
+
+    def test_an_item_with_no_runtime_id_means_no_click(self):
+        desk = FakeCalculator(self.tmp)
+        original = desk.standard_item_rows
+        desk.standard_item_rows = lambda hwnd: [dict(r, runtime_id="") for r in original(hwnd)]
+        summary = desk.calc_standard()
+        self.assertEqual(desk.clicks, ["Abrir navegación"])
+        self.assertEqual(summary["standard_item"]["stopped_by"], "unidentifiable")
+
+    def test_an_engine_element_that_is_not_unique_means_no_click(self):
+        desk, summary = self.run_step(std_count=2, uia_std=1)
+        self.assertEqual(desk.clicks, ["Abrir navegación"])
+        self.assertFalse(summary["switched"])
+        self.assertIn("ambiguous label", summary["failure"])
 
     def test_two_items_with_the_automation_id_mean_no_click(self):
         desk, summary = self.run_step(uia_std=2)
@@ -762,19 +795,6 @@ class StandardItemPollTest(QuietTest):
         self.assertEqual(summary["standard_item"]["stopped_by"], "several_candidates")
         self.assertEqual(summary["standard_item"]["candidates"], 2)
         self.assertEqual(desk.closed, [4242])
-
-    def test_an_unknown_name_means_no_click_and_the_name_is_not_recorded(self):
-        secret = "Texto del propietario 4711"
-        desk, summary = self.run_step(std_name=secret)
-        self.assertEqual(desk.clicks, ["Abrir navegación"])
-        self.assertFalse(summary["switched"])
-        item = summary["standard_item"]
-        self.assertEqual((item["stopped_by"], item["name_accepted"]), ("unknown_name", False))
-        self.assertIsNone(item["name"])
-        written = (self.tmp / "results.jsonl").read_text(encoding="utf-8")
-        logged = json.dumps(driver.log.call_args_list, ensure_ascii=False, default=str)
-        for text in (json.dumps(summary, ensure_ascii=False), written, logged):
-            self.assertNotIn(secret, text)
 
     def test_a_timeout_means_no_click_and_is_recorded(self):
         desk, summary = self.run_step(pane_delay=10_000)
@@ -787,30 +807,13 @@ class StandardItemPollTest(QuietTest):
         self.assertEqual(driver.STANDARD_POLL_WINDOW_S, 3.0)
         self.assertEqual(driver.STANDARD_POLL_STEP_S, 0.15)
         self.assertEqual(desk.ledger_total(), 1, "only the navigation click was spent")
-        self.assertEqual(set(item["by_name"]), {"candidates", "offscreen", "control_types"})
 
     def test_an_item_under_another_automation_id_times_out_and_the_record_says_so(self):
         desk, summary = self.run_step(std_aid="Otro")
         item = summary["standard_item"]
         self.assertEqual(desk.clicks, ["Abrir navegación"], "never found by name alone")
         self.assertEqual((item["status"], item["stopped_by"]), ("not_found", "timeout"))
-        self.assertEqual(item["by_name"],
-                         {"candidates": 1, "offscreen": 0, "control_types": ["ListItem"]})
         self.assertNotIn("Estándar", json.dumps(item, ensure_ascii=False))
-
-    def test_a_failed_read_by_name_does_not_hide_the_stop(self):
-        desk = FakeCalculator(self.tmp, pane_delay=10_000)
-        original = desk.identify
-
-        def identify(hwnd, label, control_types):
-            if len(control_types) > 5:  # the read by name; the grounding lookups use role types
-                raise OSError("powershell is gone")
-            return original(hwnd, label, control_types)
-
-        desk.identify = identify
-        summary = desk.calc_standard()
-        self.assertEqual(summary["standard_item"]["stopped_by"], "timeout")
-        self.assertIsNone(summary["standard_item"]["by_name"])
 
     def test_an_unreadable_pane_is_polled_until_the_timeout_and_never_clicked(self):
         desk = FakeCalculator(self.tmp)
@@ -847,7 +850,7 @@ class StandardItemPollTest(QuietTest):
         self.assertIsNone(desk.pinned_runtime_id)
 
     def test_the_mode_after_is_recorded_when_the_step_stops(self):
-        for kwargs in ({"pane_delay": 10_000}, {"uia_std": 2}, {"std_name": "Otra cosa"},
+        for kwargs in ({"pane_delay": 10_000}, {"uia_std": 2},
                        {"pane_opens": False}, {"std_count": 0, "uia_std": 1}):
             _, summary = self.run_step(**kwargs)
             self.assertEqual(summary["mode_after"], "other", kwargs)
@@ -912,17 +915,15 @@ class StandardItemRuleTest(unittest.TestCase):
         return {"runtime_id": "1.2", "automation_id": "Standard", "control_type": "ListItem",
                 "offscreen": False, "name": "Estándar", **kw}
 
-    def test_exactly_one_on_screen_item_with_an_accepted_name_is_ok(self):
-        for name in ("Estándar", "Calculadora estándar"):
+    def test_exactly_one_on_screen_item_is_ok_whatever_its_name_is(self):
+        for name in ("Estándar", "Calculadora estándar", "Calculadora Estándar", "estándar", ""):
             status, found = driver.standard_item_decision([self.row(name=name)])
-            self.assertEqual((status, found["name"]), ("ok", name))
+            self.assertEqual((status, found["runtime_id"]), ("ok", "1.2"), name)
 
-    def test_names_are_compared_exactly_after_normalisation_only(self):
-        decomposed = "Estándar"
-        self.assertEqual(driver.standard_item_decision([self.row(name=decomposed)])[0], "ok")
-        for bad in ("estándar", "Estandar", "Estándar ", "Calculadora", ""):
-            self.assertEqual(driver.standard_item_decision([self.row(name=bad)])[0],
-                             "unknown_name", bad)
+    def test_the_name_is_returned_in_nfc_for_the_exact_match_with_the_engine_label(self):
+        decomposed = "Estándar"
+        status, found = driver.standard_item_decision([self.row(name=decomposed)])
+        self.assertEqual((status, found["name"]), ("ok", "Estándar"))
 
     def test_only_the_closed_list_of_control_types_counts(self):
         for ctype in ("ListItem", "TreeItem", "TabItem", "MenuItem", "RadioButton"):
@@ -937,7 +938,7 @@ class StandardItemRuleTest(unittest.TestCase):
 
     def test_off_screen_items_are_ignored(self):
         status, found = driver.standard_item_decision([self.row(), self.row(offscreen=True)])
-        self.assertEqual((status, found["name"]), ("ok", "Estándar"))
+        self.assertEqual((status, found["runtime_id"]), ("ok", "1.2"))
         self.assertEqual(driver.standard_item_decision([self.row(offscreen=True)])[0], "not_found")
 
     def test_several_on_screen_items_and_unreadable_reads_decide_nothing(self):
@@ -950,12 +951,14 @@ class StandardItemRuleTest(unittest.TestCase):
         status, _ = driver.standard_item_decision([self.row(runtime_id="")])
         self.assertEqual(status, "unidentifiable")
 
-    def test_the_record_never_holds_a_name_outside_the_set(self):
-        record = driver.standard_item_record("unknown_name", [self.row(name="Privado")], 3, 0.45)
-        self.assertNotIn("Privado", json.dumps(record, ensure_ascii=False))
-        self.assertEqual((record["name"], record["name_accepted"]), (None, False))
-        record = driver.standard_item_record("ok", [self.row()], 1, 0.0)
-        self.assertEqual((record["name"], record["name_accepted"]), ("Estándar", True))
+    def test_the_record_never_holds_a_name(self):
+        for name in ("Privado", "Estándar"):
+            record = driver.standard_item_record("ok", [self.row(name=name)], 3, 0.45)
+            self.assertNotIn(name, json.dumps(record, ensure_ascii=False))
+            self.assertNotIn("name", record)
+            self.assertNotIn("name_accepted", record)
+            self.assertEqual((record["control_type"], record["automation_id"]),
+                             ("ListItem", "Standard"))
 
     def test_the_rows_are_parsed_strictly(self):
         import base64
@@ -1698,6 +1701,313 @@ class IslandRestoreTest(QuietTest):
     def test_the_record_holds_no_names(self):
         _, _, _, record = self.restore()
         self.assertNotIn("Editar", json.dumps(record, ensure_ascii=False))
+
+
+class HelperWindowTest(QuietTest):
+    """Eighth round, finding 2: winit's event target is a VISIBLE 16 x 16 window of the same
+    process. The client maximized it (which also activated it), so it became the foreground
+    window and passed for the maximized application."""
+
+    def test_the_event_target_and_the_input_method_windows_are_helpers(self):
+        for name in ("Winit Thread Event Target", "MSCTFIME UI", "IME"):
+            self.assertTrue(driver.is_helper_class(name), name)
+        for name in ("Window Class", "ApplicationFrameWindow", "CabinetWClass", "Notepad"):
+            self.assertFalse(driver.is_helper_class(name), name)
+
+    def test_placing_a_process_never_touches_its_helper_windows(self):
+        fake = mock.MagicMock()
+        classes = {1: "Winit Thread Event Target", 2: "Window Class", 3: "MSCTFIME UI"}
+        with mock.patch.object(driver, "user32", fake), \
+                mock.patch.object(driver, "app_windows", return_value=[1, 2, 3]), \
+                mock.patch.object(driver, "_class", side_effect=lambda h: classes[h]), \
+                mock.patch.object(driver, "on_primary_maximized", return_value=False):
+            moved = driver.place_on_primary(5151)
+        self.assertEqual(moved, 1)
+        touched = {call.args[0] for call in fake.ShowWindow.call_args_list}
+        self.assertEqual(touched, {2}, "only the main window is restored and maximized")
+        self.assertEqual({c.args[0] for c in fake.SetWindowPos.call_args_list}, {2})
+
+    def test_a_helper_window_in_front_is_not_the_application_in_front(self):
+        front = FakeFront()
+        helper = {"exe": "ommatix-testeditor.exe", "pid": 5151, "hwnd": 1, "maximized_primary": True,
+                  "class": "Winit Thread Event Target"}
+        main = dict(helper, hwnd=2, **{"class": "Window Class"})
+        self.assertFalse(front.is_front(helper, 5151))
+        self.assertTrue(front.is_front(main, 5151))
+        self.assertFalse(front.is_front(dict(main, maximized_primary=False), 5151))
+        self.assertFalse(front.is_front(dict(main, pid=9), 5151))
+
+    def test_the_gate_refuses_a_foreground_that_is_a_helper_window(self):
+        front = FakeFront()
+        front.engaged = []
+        front.engage_stop = lambda reason: front.engaged.append(reason) or (_ for _ in ()).throw(
+            driver.Abort(reason))
+        with mock.patch.object(driver, "foreground", return_value={
+                "exe": "ommatix-testeditor.exe", "pid": 5151, "hwnd": 1,
+                "maximized_primary": True, "class": "Winit Thread Event Target"}):
+            with self.assertRaises(driver.Abort):
+                front.require_foreground()
+
+    def test_the_steps_read_the_main_window_not_the_foreground_helper(self):
+        front = FakeFront()
+        front.windows = {5151: 2}
+        front.fg = {"exe": "ommatix-testeditor.exe", "pid": 5151, "hwnd": 1,
+                    "maximized_primary": True, "class": "Winit Thread Event Target"}
+        self.assertEqual(front.app_window(5151), 2)
+        front.windows = {}
+        self.assertEqual(front.app_window(5151), 1, "else the foreground window")
+
+
+class FakeFront(driver.Protocol):
+    """A Protocol whose window management is a script: no window, no input, a virtual clock."""
+
+    def __init__(self, exe="ommatix-testeditor.exe", operator=False, wait=10.0, operator_wait=20.0,
+                 arrives_after=None, arrives_by=None, notepad=None, arrives_hwnd=2):
+        self.args = SimpleNamespace(foreground_wait=wait, operator_activation=operator,
+                                    operator_activation_wait=operator_wait)
+        self.flow = {"exe": exe}
+        self.started = {5151}
+        self.notepad = notepad
+        self.placements = 0
+        self.activation = driver.new_activation()
+        self.now = 0.0
+        self.windows = {5151: 2}
+        self.fg = {"exe": "other.exe", "pid": 1, "hwnd": 50, "maximized_primary": True,
+                   "class": "Chrome_WidgetWin_1"}
+        self.arrives_by = arrives_by  # the method name after which the window is in front
+        self.arrives_after = arrives_after  # the virtual time at which the operator clicks
+        self.arrives_hwnd = arrives_hwnd
+        self.activations = []  # the handles asked for
+        self.announced = []
+        self.sent = []  # anything that would be input: must stay empty
+        self.placed = 0
+        self.diag = {"windows": [{"class": "Window Class", "visible": True, "iconic": False,
+                                  "zoomed": True, "primary_monitor": True}],
+                     "foreground": {"class": "Chrome_WidgetWin_1", "exe": "msedge.exe"}}
+
+    def mono(self):
+        return self.now
+
+    def pause(self, seconds):
+        self.now += seconds
+        if self.arrives_after is not None and self.now >= self.arrives_after:
+            self.bring(self.arrives_hwnd)
+
+    def bring(self, hwnd):
+        self.fg = {"exe": self.flow["exe"], "pid": 5151, "hwnd": hwnd, "maximized_primary": True,
+                   "class": "Window Class"}
+
+    def front(self):
+        return self.fg
+
+    def front_hwnd(self):
+        return self.fg["hwnd"]
+
+    def place(self, pid):
+        self.placed += 1
+        return 0
+
+    def window_of(self, pid):
+        return self.windows.get(pid)
+
+    def current_hwnd(self):
+        return self.fg["hwnd"]
+
+    def activate(self, hwnd):
+        self.activations.append(hwnd)
+        if self.arrives_by is not None and len(self.activations) >= self.arrives_by[1]:
+            self.bring(hwnd)
+            return self.arrives_by[0]
+        return None
+
+    def diagnose(self, pid, hwnd=None):
+        return self.diag
+
+    def announce(self, text):
+        self.announced.append(text)
+
+
+class WaitForegroundTest(QuietTest):
+    """Eighth round, finding 2 (owner's observation): the window opens, its taskbar button
+    flashes and it stays behind: the Windows foreground lock. The window is asked for by its
+    handle with a ladder of methods, the one that works is recorded, and nothing is sent."""
+
+    def test_the_window_is_asked_for_by_handle_and_the_method_that_worked_is_recorded(self):
+        front = FakeFront(arrives_by=("attach_show_top", 3))
+        ok, requests = front.wait_foreground(5151)
+        self.assertTrue(ok)
+        self.assertEqual(front.activations, [2, 2, 2], "the main window's handle, never a pid")
+        self.assertEqual(requests, 3)
+        fields = driver.activation_fields(front.activation)
+        self.assertEqual(fields["activation_method"], "attach_show_top")
+        self.assertEqual(fields["activation_tried"], {"attach_show_top": 1, "none": 2})
+        self.assertIs(fields["operator_activation"], False)
+        self.assertNotIn("activation_diagnostic", fields)
+
+    def test_a_window_already_in_front_needs_no_request(self):
+        front = FakeFront()
+        front.bring(2)
+        self.assertEqual(front.wait_foreground(5151), (True, 0))
+        self.assertEqual(front.activations, [])
+
+    def test_the_placement_runs_every_round_and_counts(self):
+        front = FakeFront(arrives_by=("attach_foreground", 1))
+        front.place = lambda pid: 1
+        front.wait_foreground(5151)
+        self.assertGreaterEqual(front.placements, 1)
+
+    def test_a_window_that_never_arrives_leaves_a_read_only_diagnostic(self):
+        front = FakeFront()
+        ok, requests = front.wait_foreground(5151)
+        self.assertFalse(ok)
+        self.assertGreater(requests, 3)
+        fields = driver.activation_fields(front.activation)
+        diag = fields["activation_diagnostic"]
+        self.assertEqual(diag["windows"][0]["class"], "Window Class")
+        self.assertEqual(diag["foreground"], {"class": "Chrome_WidgetWin_1", "exe": "msedge.exe"})
+        self.assertIsNone(fields["activation_method"])
+        self.assertIs(fields["operator_activation"], False)
+        self.assertEqual(front.announced, [], "no operator prompt unless it was asked for")
+
+    def test_the_real_diagnostic_holds_classes_and_flags_but_never_a_title(self):
+        facts = {"class": "Window Class", "visible": True, "iconic": False, "zoomed": True,
+                 "primary_monitor": True}
+        with mock.patch.object(driver, "process_windows", return_value=[2]), \
+                mock.patch.object(driver, "window_facts", return_value=facts), \
+                mock.patch.object(driver, "user32") as user32, \
+                mock.patch.object(driver, "_class", return_value="Chrome_WidgetWin_1"), \
+                mock.patch.object(driver, "_pid", return_value=7), \
+                mock.patch.object(driver, "_exe", return_value="msedge.exe"):
+            user32.GetForegroundWindow.return_value = 50
+            diag = driver.activation_diagnostic(5151)
+        self.assertEqual(diag, {"windows": [facts],
+                                "foreground": {"class": "Chrome_WidgetWin_1", "exe": "msedge.exe"}})
+        self.assertFalse(user32.GetWindowTextW.called)
+        self.assertEqual(set(facts), {"class", "visible", "iconic", "zoomed", "primary_monitor"})
+
+    def test_the_run_records_carry_the_activation_fields(self):
+        front = FakeFront()
+        front.wait_foreground(5151)
+        record = json.loads(json.dumps(driver.activation_fields(front.activation)))
+        self.assertEqual(set(record), {"activation_method", "activation_tried",
+                                       "operator_activation", "activation_diagnostic"})
+
+    def test_the_notepad_window_is_asked_for_by_its_recorded_handle(self):
+        front = FakeFront(exe="notepad.exe", notepad={"pid": 8960, "hwnd": 777})
+        front.started = set()
+        front.wait_foreground(8960)
+        self.assertEqual(set(front.activations), {777})
+
+
+class OperatorActivationTest(QuietTest):
+    """Eighth round, finding 2 (b): off by default. When the lock still wins, the operator is
+    told to click the flashing taskbar button; the client only waits, bounded, for the recorded
+    window to be the foreground window, and sends nothing before that."""
+
+    def test_it_is_a_flag_that_is_off_by_default(self):
+        import inspect
+        self.assertIn('"--operator-activation", action="store_true"', inspect.getsource(driver.main))
+        self.assertFalse(getattr(SimpleNamespace(foreground_wait=1.0), "operator_activation", False))
+
+    def test_the_operator_is_asked_on_stderr_and_the_client_waits_for_the_recorded_handle(self):
+        front = FakeFront(operator=True, arrives_after=14.0)
+        ok, _ = front.wait_foreground(5151)
+        self.assertTrue(ok)
+        self.assertEqual(len(front.announced), 1)
+        self.assertIn("taskbar button", front.announced[0])
+        self.assertIn("ommatix-testeditor.exe", front.announced[0])
+        self.assertIs(front.activation["operator_activation"], True)
+        self.assertIs(driver.activation_fields(front.activation)["operator_activation"], True)
+        self.assertEqual(front.sent, [])
+
+    def test_only_the_recorded_handle_in_front_is_the_operators_answer(self):
+        front = FakeFront(operator=True, wait=4.0, operator_wait=6.0, arrives_after=7.0,
+                          arrives_hwnd=1)
+        ok, _ = front.wait_foreground(5151)
+        self.assertFalse(ok, "another window of the same application is not the recorded one")
+        self.assertIs(front.activation["operator_activation"], False)
+
+    def test_the_wait_is_bounded_and_the_record_says_it_failed(self):
+        front = FakeFront(operator=True, wait=4.0, operator_wait=6.0)
+        ok, _ = front.wait_foreground(5151)
+        self.assertFalse(ok)
+        self.assertLessEqual(front.now, 4.0 + 6.0 + 0.5)
+        self.assertIs(front.activation["operator_activation"], False)
+        self.assertEqual(len(front.announced), 1)
+
+    def test_nothing_is_announced_when_the_method_ladder_works(self):
+        front = FakeFront(operator=True, arrives_by=("attach_foreground", 1))
+        ok, _ = front.wait_foreground(5151)
+        self.assertTrue(ok)
+        self.assertEqual(front.announced, [])
+        self.assertIs(front.activation["operator_activation"], False)
+
+    def test_there_is_nothing_to_wait_for_without_a_recorded_window(self):
+        front = FakeFront(operator=True, wait=2.0)
+        front.windows = {}
+        ok, _ = front.wait_foreground(5151)
+        self.assertFalse(ok)
+        self.assertEqual(front.announced, [])
+
+
+class ActivationLadderTest(unittest.TestCase):
+    """The methods are tried in turn and verified by GetForegroundWindow, never by their own
+    return value."""
+
+    @staticmethod
+    def ladder(works_at=None, raises=()):
+        state = {"fg": 50, "calls": []}
+
+        def method(name):
+            def apply(hwnd):
+                state["calls"].append(name)
+                if name in raises:
+                    raise OSError(name)
+                if name == works_at:
+                    state["fg"] = hwnd
+            return name, apply
+
+        names = ("attach_foreground", "attach_show_top", "attach_all_topmost")
+        return state, tuple(method(n) for n in names)
+
+    def run_ladder(self, **kwargs):
+        state, methods = self.ladder(**kwargs)
+        found = driver.activate_window(2, methods, lambda: state["fg"], pause=lambda s: None)
+        return found, state["calls"]
+
+    def test_the_first_method_that_puts_the_window_in_front_is_returned(self):
+        self.assertEqual(self.run_ladder(works_at="attach_show_top"),
+                         ("attach_show_top", ["attach_foreground", "attach_show_top"]))
+        self.assertEqual(self.run_ladder(works_at="attach_foreground"),
+                         ("attach_foreground", ["attach_foreground"]))
+
+    def test_a_window_already_in_front_calls_no_method(self):
+        state, methods = self.ladder()
+        state["fg"] = 2
+        self.assertEqual(driver.activate_window(2, methods, lambda: state["fg"]),
+                         "already_foreground")
+        self.assertEqual(state["calls"], [])
+
+    def test_when_no_method_works_the_answer_is_none(self):
+        self.assertEqual(self.run_ladder(), (None, ["attach_foreground", "attach_show_top",
+                                                    "attach_all_topmost"]))
+
+    def test_a_method_that_raises_is_skipped(self):
+        self.assertEqual(self.run_ladder(works_at="attach_all_topmost", raises=("attach_foreground",))[0],
+                         "attach_all_topmost")
+
+    def test_the_methods_are_named_and_ordered(self):
+        self.assertEqual([n for n, _ in driver.ACTIVATION_METHODS],
+                         ["attach_foreground", "attach_show_top", "attach_all_topmost"])
+
+    def test_no_method_sends_input_or_changes_a_setting(self):
+        import inspect
+        source = "".join(inspect.getsource(f) for _, f in driver.ACTIVATION_METHODS)
+        source += inspect.getsource(driver.activate_window)
+        for forbidden in ("SystemParametersInfo", "keybd_event", "SendInput", "mouse_event",
+                          "Shell_TrayWnd", "SendMessage", "PostMessage", "LockSetForegroundWindow",
+                          "ForegroundLockTimeout", "VK_MENU"):
+            self.assertNotIn(forbidden, source)
 
 
 if __name__ == "__main__":

@@ -151,7 +151,7 @@ def foreground() -> dict:
     window is maximized on the primary monitor, and its pid. No window text is read."""
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
-        return {"exe": None, "pid": None, "maximized_primary": False, "hwnd": None}
+        return {"exe": None, "pid": None, "maximized_primary": False, "hwnd": None, "class": ""}
     pid = _pid(hwnd)
     exe = _exe(pid)
     if _class(hwnd) == "ApplicationFrameWindow" and exe == "applicationframehost.exe":
@@ -163,7 +163,7 @@ def foreground() -> dict:
     primary = bool(monitor) and bool(user32.GetMonitorInfoW(monitor, ctypes.byref(info)))
     on_primary = primary and bool(info.dwFlags & 1)
     return {"exe": exe, "pid": pid, "maximized_primary": on_primary and bool(user32.IsZoomed(hwnd)),
-            "hwnd": hwnd}
+            "hwnd": hwnd, "class": _class(hwnd)}
 
 
 WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -194,6 +194,16 @@ def app_windows(pid: int) -> list:
     return found
 
 
+# winit's hidden event target and the input method windows belong to the same process.
+HELPER_WINDOW_MARKERS = ("Event Target", "IME", "MSCTFIME")
+
+
+def is_helper_class(class_name: str) -> bool:
+    """Whether a window class is one of the helper windows a GUI process owns besides its main
+    window. The event target of winit is VISIBLE (16 x 16 at the origin)."""
+    return any(marker in class_name for marker in HELPER_WINDOW_MARKERS)
+
+
 def on_primary_maximized(hwnd) -> bool:
     monitor = user32.MonitorFromWindow(hwnd, 0)
     info = s3.MONITORINFO(cbSize=ctypes.sizeof(s3.MONITORINFO))
@@ -202,12 +212,14 @@ def on_primary_maximized(hwnd) -> bool:
 
 
 def place_on_primary(pid: int) -> int:
-    """Window management, not input: moves the windows of a process the protocol started
+    """Window management, not input: moves the main windows of a process the protocol started
     to the primary monitor and maximizes them (the Calculator remembers the monitor where
-    it last closed). Returns how many windows were moved."""
+    it last closed). Returns how many windows were moved. A helper window of the process (the
+    visible winit event target) is never touched: maximizing it activated it, so it became
+    the foreground window and passed for the maximized application (eighth-round fix, finding 2)."""
     moved = 0
     for hwnd in app_windows(pid):
-        if on_primary_maximized(hwnd):
+        if is_helper_class(_class(hwnd)) or on_primary_maximized(hwnd):
             continue
         user32.ShowWindow(hwnd, SW_RESTORE)
         user32.SetWindowPos(hwnd, None, 100, 100, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)
@@ -260,16 +272,12 @@ def pids_of(image: str) -> set[int]:
 user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
 kernel32.GetCurrentThreadId.restype = wintypes.DWORD
-# winit's hidden event target and the input method windows belong to the same process.
-HELPER_WINDOW_MARKERS = ("Event Target", "IME", "MSCTFIME")
-
-
 def pick_main_window(windows: list[tuple[int, str, int]]) -> int | None:
     """The main window among (handle, class name, area) tuples: the largest one that is not a
     helper window. In the third S4 round AppActivate(pid) did not bring the test application
     to the foreground (164 requests over 333 s), while the process also owns a helper window
     that enumeration lists; activation therefore targets the main window explicitly."""
-    main = [w for w in windows if not any(marker in w[1] for marker in HELPER_WINDOW_MARKERS)]
+    main = [w for w in windows if not is_helper_class(w[1])]
     return max(main, key=lambda w: w[2])[0] if main else None
 
 
@@ -297,6 +305,147 @@ def bring_to_front(hwnd) -> bool:
     finally:
         if attached:
             user32.AttachThreadInput(me, fg_thread, False)
+
+
+# ---- activation under the Windows foreground lock (eighth round, finding 2) -------------------
+#
+# A background process cannot take the foreground (the taskbar button of the window flashes
+# instead). Everything below is window management: no key, no mouse event, no click on the
+# taskbar, no SystemParametersInfo and no change to any user setting. Each method is tried in
+# turn and verified with GetForegroundWindow; the first that works is recorded by name.
+SW_SHOW = 5
+HWND_TOPMOST, HWND_NOTOPMOST = -1, -2
+SWP_NOMOVE, SWP_SHOWWINDOW = 0x0002, 0x0040
+ACTIVATION_SETTLE_S = 0.15
+user32.BringWindowToTop.argtypes = [wintypes.HWND]
+user32.SetActiveWindow.argtypes = [wintypes.HWND]
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+
+
+def _threads(hwnd) -> tuple[int, int, int]:
+    """(this thread, the foreground window's thread, `hwnd`'s thread)."""
+    return (kernel32.GetCurrentThreadId(),
+            user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None),
+            user32.GetWindowThreadProcessId(hwnd, None))
+
+
+class _Attached:
+    """AttachThreadInput(a, b) for the duration of a block: shares input state between two
+    threads, sends no event."""
+
+    def __init__(self, pairs: list[tuple[int, int]]):
+        self.pairs = [(a, b) for a, b in pairs if a and b and a != b]
+        self.done: list[tuple[int, int]] = []
+
+    def __enter__(self):
+        for a, b in self.pairs:
+            if user32.AttachThreadInput(a, b, True):
+                self.done.append((a, b))
+        return self
+
+    def __exit__(self, *exc):
+        for a, b in reversed(self.done):
+            user32.AttachThreadInput(a, b, False)
+
+
+def _show_for_activation(hwnd) -> None:
+    user32.ShowWindow(hwnd, SW_RESTORE if user32.IsIconic(hwnd) else SW_SHOW)
+
+
+def _activate_attach_foreground(hwnd) -> None:
+    """The client's thread joins the foreground window's input queue, then SetForegroundWindow."""
+    me, fg, _ = _threads(hwnd)
+    with _Attached([(me, fg)]):
+        user32.SetForegroundWindow(hwnd)
+
+
+def _activate_attach_show_top(hwnd) -> None:
+    """The same, with the window shown (restored when minimized), raised and made active."""
+    me, fg, _ = _threads(hwnd)
+    with _Attached([(me, fg)]):
+        _show_for_activation(hwnd)
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        user32.SetActiveWindow(hwnd)
+
+
+def _activate_attach_all_topmost(hwnd) -> None:
+    """The window's own thread joins the foreground queue too, and the window is flipped to
+    topmost and back before the request (z-order only)."""
+    me, fg, own = _threads(hwnd)
+    with _Attached([(me, fg), (own, fg)]):
+        _show_for_activation(hwnd)
+        flags = SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW
+        user32.SetWindowPos(hwnd, wintypes.HWND(HWND_TOPMOST), 0, 0, 0, 0, flags)
+        user32.SetWindowPos(hwnd, wintypes.HWND(HWND_NOTOPMOST), 0, 0, 0, 0, flags)
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+
+
+ACTIVATION_METHODS = (("attach_foreground", _activate_attach_foreground),
+                      ("attach_show_top", _activate_attach_show_top),
+                      ("attach_all_topmost", _activate_attach_all_topmost))
+
+
+def foreground_hwnd() -> int:
+    return int(user32.GetForegroundWindow() or 0)
+
+
+def activate_window(hwnd, methods=ACTIVATION_METHODS, foreground_now=foreground_hwnd,
+                    pause=time.sleep, polls: int = 3) -> str | None:
+    """Asks for the foreground for `hwnd` (by handle, never by process) with each method in
+    turn and verifies with GetForegroundWindow. Returns the name of the method after which
+    `hwnd` is the foreground window (``already_foreground`` when it was), or None when none
+    worked. A method that raises is skipped."""
+    hwnd = int(hwnd)
+    if foreground_now() == hwnd:
+        return "already_foreground"
+    for name, apply in methods:
+        try:
+            apply(hwnd)
+        except OSError:
+            continue
+        for _ in range(polls):
+            if foreground_now() == hwnd:
+                return name
+            pause(ACTIVATION_SETTLE_S / polls)
+    return None
+
+
+def window_facts(hwnd) -> dict:
+    """What a failed activation records about one window (never its title)."""
+    monitor = user32.MonitorFromWindow(hwnd, 0)
+    info = s3.MONITORINFO(cbSize=ctypes.sizeof(s3.MONITORINFO))
+    known = bool(monitor) and bool(user32.GetMonitorInfoW(monitor, ctypes.byref(info)))
+    return {"class": _class(hwnd), "visible": bool(user32.IsWindowVisible(hwnd)),
+            "iconic": bool(user32.IsIconic(hwnd)), "zoomed": bool(user32.IsZoomed(hwnd)),
+            "primary_monitor": known and bool(info.dwFlags & 1)}
+
+
+def process_windows(pid: int) -> list:
+    """Every top-level window of `pid`, visible or not (a diagnostic only)."""
+    found = []
+
+    def visit(hwnd, _):
+        if _pid(hwnd) == pid:
+            found.append(hwnd)
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(visit), 0)
+    return found
+
+
+def activation_diagnostic(pid: int | None, hwnd=None) -> dict:
+    """Read-only record for a window that did not reach the foreground: the top-level windows
+    of the process (class, visible, iconic, zoomed, on the primary monitor), or just `hwnd`,
+    and the foreground window's class and process image. Never a title."""
+    windows = [hwnd] if hwnd is not None else process_windows(pid) if pid is not None else []
+    front = user32.GetForegroundWindow()
+    return {"windows": [window_facts(h) for h in windows],
+            "foreground": {"class": _class(front) if front else None,
+                           "exe": _exe(_pid(front)) if front else None}}
 
 
 CALC_DISPLAY_PS = r"""
@@ -447,7 +596,7 @@ else { [Console]::Out.Write("0`t`t" + $sci) }
 
 # The elements of a window with an exact AutomationId, as ``RuntimeId, AutomationId, ControlType,
 # IsOffscreen, Name`` rows with the name in base64 (a tab or a newline in a name must not break the
-# row). Read-only; the client records the name only when it is in CALC_STANDARD_NAMES.
+# row). Read-only; the client keeps the name in memory only and never records it.
 UIA_BY_AUTOMATION_ID_PS = r"""
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
@@ -585,6 +734,49 @@ def read_calc_mode(hwnd) -> str:
         return "unknown"
     parsed = parse_calc_mode(out)
     return "unknown" if parsed is None else calc_mode(*parsed)
+
+
+# The element UI Automation reports with keyboard focus, as ``pid TAB class TAB control type TAB
+# top-level window class``. Read-only; never a name or a value. The engine attests the foreground
+# application through this element (src/adapters/accessibility), so when it is not in the
+# application the engine reads no accessibility evidence from it.
+UIA_FOCUS_OWNER_PS = r"""
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+$f = [System.Windows.Automation.AutomationElement]::FocusedElement
+if ($f) {
+  $w = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $root = [System.Windows.Automation.AutomationElement]::RootElement
+  $top = $f
+  for ($i = 0; $i -lt 64; $i++) {
+    $p = $w.GetParent($top)
+    if (-not $p -or [System.Windows.Automation.Automation]::Compare($p, $root)) { break }
+    $top = $p
+  }
+  $type = $f.Current.ControlType.ProgrammaticName -replace '^ControlType\.', ''
+  [Console]::Out.Write("$($f.Current.ProcessId)`t$($f.Current.ClassName)`t$type`t$($top.Current.ClassName)")
+}
+"""
+
+
+def parse_focus_owner(output: str) -> dict | None:
+    """``{pid, class, control_type, top_level_class}`` from UIA_FOCUS_OWNER_PS; None when the
+    output does not have that shape (nothing had focus, or the read failed)."""
+    parts = output.strip("\r\n").split("\t")
+    if len(parts) != 4 or not parts[0].strip().isdigit():
+        return None
+    return {"pid": int(parts[0]), "class": parts[1].strip(), "control_type": parts[2].strip(),
+            "top_level_class": parts[3].strip()}
+
+
+def uia_focus_owner() -> dict | None:
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", UIA_FOCUS_OWNER_PS],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             check=False, creationflags=CREATE_NO_WINDOW, timeout=30).stdout
+    except subprocess.TimeoutExpired:
+        return None
+    return parse_focus_owner(out)
 
 
 def uia_chain_at(x: int, y: int) -> list[dict]:
@@ -738,10 +930,12 @@ CLEAR_CONTROLS = ("Borrar", "Borrar todo", "Borrar entrada")
 CALC_NAV_LABEL = "Abrir navegación"
 # The pane's Standard item is found by its AutomationId in UI Automation (seventh round, finding
 # C1), never by its text alone: its Name is accepted only from a closed set, and only a control
-# type of a closed list of list-item-like controls counts. It is polled for a bounded time after
-# the navigation click, because the pane opens with an animation.
+# type of a closed list of list-item-like controls counts. Its Name is not a condition (eighth
+# round, finding 1: the real name is not one the client knew): the item is the one on-screen
+# element with that AutomationId, with a RuntimeId. The name is read into memory only, to select
+# the engine's element by exact label, and is never written to a record or a log. It is polled
+# for a bounded time after the navigation click, because the pane opens with an animation.
 CALC_STANDARD_AUTOMATION_ID = "Standard"
-CALC_STANDARD_NAMES = ("Estándar", "Calculadora estándar")
 STANDARD_ITEM_TYPES = ("ListItem", "TreeItem", "TabItem", "MenuItem", "RadioButton")
 STANDARD_POLL_WINDOW_S = 3.0
 STANDARD_POLL_STEP_S = 0.15
@@ -840,18 +1034,12 @@ def is_standard_item_row(row: dict) -> bool:
             and row["control_type"] in STANDARD_ITEM_TYPES)
 
 
-def accepted_standard_name(name: str) -> str | None:
-    """The canonical (NFC) name when it is exactly one of CALC_STANDARD_NAMES, else None."""
-    name = unicodedata.normalize("NFC", name)
-    return name if name in CALC_STANDARD_NAMES else None
-
-
 def standard_item_decision(rows: list[dict] | None) -> tuple[str, dict | None]:
     """Whether the pane's Standard item was found: ``ok`` only for exactly one on-screen item
-    with a RuntimeId and a Name in CALC_STANDARD_NAMES (compared after NFC, case and spaces
-    exactly); the item returned carries that canonical name. ``unreadable``, ``not_found``,
-    ``ambiguous``, ``unidentifiable`` and ``unknown_name`` all mean no click. An off-screen
-    element cannot receive the engine's click, so it is not a candidate."""
+    with a RuntimeId, whatever its Name is. The item returned carries its name in NFC, for the
+    caller's memory only (it selects the engine's element by exact label). ``unreadable``,
+    ``not_found``, ``ambiguous`` and ``unidentifiable`` mean no click. An off-screen element
+    cannot receive the engine's click, so it is not a candidate."""
     if rows is None:
         return "unreadable", None
     found = [r for r in rows if is_standard_item_row(r) and not r["offscreen"]]
@@ -862,29 +1050,22 @@ def standard_item_decision(rows: list[dict] | None) -> tuple[str, dict | None]:
     item = found[0]
     if not item["runtime_id"]:
         return "unidentifiable", None
-    name = accepted_standard_name(item["name"])
-    if name is None:
-        return "unknown_name", None
-    return "ok", {**item, "name": name}
+    return "ok", {**item, "name": unicodedata.normalize("NFC", item["name"])}
 
 
 def standard_item_record(status: str, rows: list[dict] | None, polls: int, waited_s: float) -> dict:
     """What the poll for the Standard item records: the decision, counts, the item's control
-    type and AutomationId when exactly one, and its name only when it is in CALC_STANDARD_NAMES
-    (a name outside the set is never recorded)."""
+    type and AutomationId when exactly one. The item's name is never recorded."""
     found = [r for r in rows or [] if is_standard_item_row(r) and not r["offscreen"]]
     record = {"status": status, "polls": polls, "waited_ms": round(waited_s * 1000),
               "window_s": STANDARD_POLL_WINDOW_S, "step_s": STANDARD_POLL_STEP_S,
               "candidates": len(found),
               "offscreen_ignored": sum(1 for r in rows or []
                                        if is_standard_item_row(r) and r["offscreen"]),
-              "control_type": None, "automation_id": None, "name_accepted": False, "name": None,
-              "stopped_by": None}
+              "control_type": None, "automation_id": None, "stopped_by": None}
     if len(found) == 1:
-        name = accepted_standard_name(found[0]["name"])
         record.update(control_type=found[0]["control_type"],
-                      automation_id=found[0]["automation_id"],
-                      name_accepted=name is not None, name=name)
+                      automation_id=found[0]["automation_id"])
     return record
 
 
@@ -1254,6 +1435,24 @@ def round_problem(live: bool, round_start: int | None, ledger_now: int) -> str |
     return None
 
 
+def new_activation() -> dict:
+    """What a wait for the foreground records: the methods tried (counts by name, ``none`` for
+    a request after which the window was not in front), the one that worked last, whether the
+    operator had to bring the window to the front, and, when it never arrived, the read-only
+    diagnostic."""
+    return {"method": None, "tried": {}, "operator_activation": False}
+
+
+def activation_fields(activation: dict) -> dict:
+    """The keys of a run record that describe the activation."""
+    fields = {"activation_method": activation["method"],
+              "activation_tried": dict(sorted(activation["tried"].items())),
+              "operator_activation": activation["operator_activation"]}
+    if "diagnostic" in activation:
+        fields["activation_diagnostic"] = activation["diagnostic"]
+    return fields
+
+
 class Protocol:
     def __init__(self, args, server, stop_file: Path | None, flow: dict, ledger: Path):
         self.args = args
@@ -1269,6 +1468,7 @@ class Protocol:
         self.notepad: dict | None = None
         self.app_hwnd = None
         self.placements = 0
+        self.activation: dict = new_activation()
 
     # -- safety
     def engage_stop(self, reason: str) -> None:
@@ -1294,7 +1494,8 @@ class Protocol:
 
     def require_foreground(self) -> dict:
         fg = foreground()
-        if fg["exe"] != self.flow["exe"] or not fg["maximized_primary"]:
+        if (fg["exe"] != self.flow["exe"] or not fg["maximized_primary"]
+                or is_helper_class(fg.get("class", ""))):
             self.engage_stop(
                 f"foreground is not {self.flow['exe']} maximized on the primary monitor "
                 f"(got {'the target, not maximized' if fg['exe'] == self.flow['exe'] else 'another application' if fg['exe'] else 'none'})")
@@ -1421,32 +1622,120 @@ class Protocol:
         self.started.add(pid)
         return pid
 
+    # -- window management (overridden by the tests; none of it sends input)
+    def front(self) -> dict:
+        return foreground()
+
+    def front_hwnd(self) -> int:
+        return foreground_hwnd()
+
+    def place(self, pid: int) -> int:
+        return place_on_primary(pid)
+
+    def window_of(self, pid: int) -> int | None:
+        return main_window(pid)
+
+    def activate(self, hwnd) -> str | None:
+        return activate_window(hwnd)
+
+    def diagnose(self, pid: int | None, hwnd=None) -> dict:
+        return activation_diagnostic(pid, hwnd)
+
+    def announce(self, text: str) -> None:
+        print(text, file=sys.stderr, flush=True)
+
+    def app_window(self, pid: int | None) -> int | None:
+        """The window the application's steps read: its main window (never a helper window,
+        which may be the foreground window), else the foreground window."""
+        hwnd = self.window_of(pid) if pid is not None else None
+        return hwnd if hwnd is not None else self.current_hwnd()
+
+    def is_front(self, fg: dict, pid: int | None) -> bool:
+        """The target application is in front, maximized on the primary monitor, and the
+        foreground window is not one of its helper windows."""
+        return (fg["exe"] == self.flow["exe"] and (pid is None or fg["pid"] == pid)
+                and bool(fg["maximized_primary"]) and not is_helper_class(fg.get("class", "")))
+
+    def await_front(self, ok, target, tick=None, diagnostic=None) -> tuple[bool, int]:
+        """The generic wait of the activation: until ``ok(foreground())`` (at most
+        ``--foreground-wait`` seconds), `tick` runs every 0.25 s (window placement), and every
+        2 s the window ``target()`` is asked for the foreground by handle with the methods of
+        ACTIVATION_METHODS (the method that worked is recorded). When it never arrives the
+        read-only ``diagnostic()`` is recorded and, with ``--operator-activation``, the operator
+        is asked to click the flashing taskbar button and the wait goes on, bounded, until the
+        recorded window is the foreground window: nothing is sent before that. Returns
+        (arrived, activation requests)."""
+        deadline = self.mono() + self.args.foreground_wait
+        requests = 0
+        last = None
+        hwnd = None
+        self.activation = new_activation()
+        while self.mono() < deadline:
+            if tick is not None:
+                tick()
+            if ok(self.front()):
+                return True, requests
+            self.pause(0.25)
+            if last is None or self.mono() - last >= 2.0:
+                last = self.mono()
+                hwnd = target()
+                if hwnd is None:
+                    continue
+                requests += 1
+                method = self.activate(hwnd)
+                tried = self.activation["tried"]
+                tried[method or "none"] = tried.get(method or "none", 0) + 1
+                if method is not None:
+                    self.activation["method"] = method
+        if diagnostic is not None:
+            self.activation["diagnostic"] = diagnostic()
+            log("activation_failed", requests=requests, **activation_fields(self.activation))
+        hwnd = hwnd if hwnd is not None else target()
+        if getattr(self.args, "operator_activation", False) and hwnd is not None:
+            if self.operator_activation(ok, hwnd, tick):
+                return True, requests
+        return False, requests
+
+    def operator_activation(self, ok, hwnd, tick=None) -> bool:
+        """--operator-activation: the operator brings the recorded window to the front by
+        clicking its flashing taskbar button. The client only waits (bounded) for
+        GetForegroundWindow to equal the recorded handle, then for the usual conditions, and
+        sends nothing before that."""
+        wait = getattr(self.args, "operator_activation_wait", 120.0)
+        self.announce(f"ommatix: the operator must click the flashing taskbar button of "
+                      f"{self.flow['exe']} to bring it to the front (waiting up to "
+                      f"{wait:.0f} s); nothing is sent until then")
+        self.activation["operator_activation"] = "asked"
+        deadline = self.mono() + wait
+        while self.mono() < deadline:
+            if tick is not None:
+                tick()
+            if self.front_hwnd() == int(hwnd) and ok(self.front()):
+                self.activation["operator_activation"] = True
+                return True
+            self.pause(0.25)
+        self.activation["operator_activation"] = False
+        return False
+
     def wait_foreground(self, pid: int | None) -> tuple[bool, int]:
         """Windows refuses the foreground to a background process while the user is active
-        (ForegroundLockTimeout); the main window is brought to the front every 2 s (window
-        management only: no input is sent)."""
-        deadline = time.monotonic() + self.args.foreground_wait
-        requests = 0
-        last = 0.0
+        (the foreground lock); the main window is asked for it by handle every 2 s (window
+        management only: no input is sent). See await_front."""
         self.placements = 0
-        while time.monotonic() < deadline:
+
+        def tick():
             if pid is not None and pid in self.started:
-                self.placements += place_on_primary(pid)
-            fg = foreground()
-            if fg["exe"] == self.flow["exe"] and (pid is None or fg["pid"] == pid):
-                if fg["maximized_primary"]:
-                    return True, requests
-            time.sleep(0.25)
-            if pid is not None and time.monotonic() - last >= 2.0:
-                last = time.monotonic()
-                requests += 1
-                if self.notepad is not None:
-                    bring_to_front(self.notepad["hwnd"])  # that window only
-                else:
-                    target = main_window(pid)
-                    if target is not None:
-                        bring_to_front(target)
-        return False, requests
+                self.placements += self.place(pid)
+
+        def target():
+            if self.notepad is not None:
+                return self.notepad["hwnd"]  # that window only
+            return self.window_of(pid) if pid is not None else None
+
+        def diagnostic():
+            return self.diagnose(pid, self.notepad["hwnd"] if self.notepad is not None else None)
+
+        return self.await_front(lambda fg: self.is_front(fg, pid), target, tick, diagnostic)
 
     def close(self, pid: int | None) -> None:
         if pid is None or pid not in self.started:
@@ -1479,6 +1768,7 @@ class Protocol:
             ok, requests = self.wait_foreground(pid)
         res["activation_requests"] = requests
         res["window_placements"] = self.placements
+        res.update(activation_fields(self.activation))
         res["foreground_wait_s"] = round(time.perf_counter() - start, 2)
         if not ok:
             res["failure"] = "the application did not reach the foreground maximized"
@@ -1487,7 +1777,7 @@ class Protocol:
             res["total_s"] = round(time.perf_counter() - start, 2)
             return res
         self.current = pid if self.args.restart == "never" else None
-        hwnd = foreground()["hwnd"]
+        hwnd = self.app_window(pid)
         self.app_hwnd = hwnd
         if not reuse:
             time.sleep(self.args.settle)  # let a new window finish its first paints
@@ -1558,6 +1848,7 @@ class Protocol:
 
     # The descent record of the latest cursor_chain (or diag_at_element) read: None before any.
     last_descent: dict | None = None
+    activation: dict = new_activation()
     # While set, a click is sent only if the identity lookup finds this very element (the
     # Standard item that was polled); any other RuntimeId under the same name means no click.
     pinned_runtime_id: str | None = None
@@ -1715,13 +2006,10 @@ class Protocol:
         click: the one on-screen element with AutomationId CALC_STANDARD_AUTOMATION_ID of a
         control type in STANDARD_ITEM_TYPES, for at most STANDARD_POLL_WINDOW_S in steps of
         STANDARD_POLL_STEP_S (each read costs a PowerShell start, so a step is a lower bound).
-        Returns the item when its name is one of CALC_STANDARD_NAMES; otherwise None, with the
+        Returns the item (whatever its name is; the name stays in memory) or None, with the
         reason in ``summary["standard_item"]["stopped_by"]``: ``timeout`` (nothing, or nothing
-        readable, in the window), ``several_candidates``, ``unknown_name`` or ``unidentifiable``.
-        The three last stop at once: waiting does not make them better. A stop also records
-        ``by_name``: how many elements UI Automation sees under the accepted names, of any
-        control type and AutomationId (counts and types, never names), which tells an
-        AutomationId that is not ``Standard`` from a pane that never showed the item."""
+        readable, in the window), ``several_candidates`` or ``unidentifiable``. The two last
+        stop at once: waiting does not make them better."""
         started = self.mono()
         polls = 0
         while True:
@@ -1729,7 +2017,7 @@ class Protocol:
             polls += 1
             status, item = standard_item_decision(rows)
             waited = self.mono() - started
-            if status in ("ok", "ambiguous", "unknown_name", "unidentifiable"):
+            if status in ("ok", "ambiguous", "unidentifiable"):
                 break
             if waited >= STANDARD_POLL_WINDOW_S:
                 break
@@ -1737,10 +2025,7 @@ class Protocol:
         record = standard_item_record(status, rows, polls, waited)
         record["stopped_by"] = (None if item is not None else
                                 "several_candidates" if status == "ambiguous" else
-                                status if status in ("unknown_name", "unidentifiable") else
-                                "timeout")
-        if item is None:  # what UI Automation sees under the accepted names, by any AutomationId
-            record["by_name"] = self.uia_candidates(hwnd, CALC_STANDARD_NAMES)
+                                "unidentifiable" if status == "unidentifiable" else "timeout")
         summary["standard_item"] = record
         return item
 
@@ -1766,12 +2051,12 @@ class Protocol:
         series. Two clicks through the engine's gate, each with identity grounding: the
         navigation toggle, selected by its exact label, and then the pane's Standard item. The
         item is first polled in UI Automation by its AutomationId (await_standard_item), its
-        name is read from a closed set (``Estándar``, ``Calculadora estándar``), the engine's
+        name is read into memory only (it is not a condition and is never recorded), the engine's
         element is selected by that exact name after a new observation (unique and confirmed)
         and the click must reach that very element (``pinned_runtime_id``). The mode is read
         through UI Automation before (no click when it is Standard already, or cannot be read)
         and after, also when the step stops. Nothing else is clicked: a pane that does not
-        show the item, an item that is not unique, a name outside the set, an engine element
+        show the item, an item that is not unique, an engine element
         that is not unique and confirmed, an identity that is not exactly one or a click that is
         not grounded ends the step. Only the Calculator this step started is closed."""
         res = new_result("MODE", 0, FLOW_ID["calculator"])
@@ -1788,10 +2073,11 @@ class Protocol:
             pid = self.launch()
             ok, requests = self.wait_foreground(pid)
             summary.update(foreground_wait_s=round(time.perf_counter() - waiting, 2),
-                           activation_requests=requests, window_placements=self.placements)
+                           activation_requests=requests, window_placements=self.placements,
+                           **activation_fields(self.activation))
             if not ok:
                 raise Abort("the Calculator did not reach the foreground maximized")
-            hwnd = self.current_hwnd()
+            hwnd = self.app_window(pid)
             self.app_hwnd = hwnd
             time.sleep(self.args.settle)
             summary["mode_before"] = self.calc_mode(hwnd)
@@ -2155,6 +2441,13 @@ def main() -> int:
     p.add_argument("--session-id", default="s4r2")
     p.add_argument("--output", type=int, default=0)
     p.add_argument("--foreground-wait", type=float, default=600.0)
+    p.add_argument("--operator-activation", action="store_true",
+                   help="off by default: when the window cannot be brought to the front under the "
+                        "Windows foreground lock, print to stderr that the operator must click the "
+                        "flashing taskbar button of the application, and wait (bounded by "
+                        "--operator-activation-wait) until it is the foreground window; nothing "
+                        "is sent before that")
+    p.add_argument("--operator-activation-wait", type=float, default=120.0)
     p.add_argument("--pause", type=float, default=1.0)
     p.add_argument("--settle", type=float, default=1.5,
                    help="seconds to wait after a newly started window reaches the foreground")
