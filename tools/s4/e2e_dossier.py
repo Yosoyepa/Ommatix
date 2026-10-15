@@ -977,6 +977,9 @@ class DossierProtocol(driver.Protocol):
                "verified": out.get("verified"), "observed_effect": out.get("observed_effect"),
                "error": err, "rtt_ms": round(ms, 1), "stages_ms": driver.stage_ms(meta),
                "target_role": field["role"], "label_source": field["label_source"]}
+        refusal = driver.engine_error(out)
+        if refusal:  # a refusal or an uncertainty: the engine's own sentence
+            act["message"] = refusal["message"]
         res["actions"].append(act)
         driver.log("action", run=res["run"], **act)
         grounding_ok = False
@@ -991,6 +994,7 @@ class DossierProtocol(driver.Protocol):
                 res["grounding_wrong"] = 1
         # The repetition, exactly: the stored result, and no second delivery.
         self.spend_live()
+        res["actions_requested"] += 1
         again, _, _, _ = self.srv.call("execute_action", args)
         again_error = (again.get("error") or {}).get("code")
         after = self.metrics()
@@ -1005,6 +1009,7 @@ class DossierProtocol(driver.Protocol):
             "placement": placement,
             "focus_before": res["focus_before"],
             "focus_after": focus_summary(focus_after, pid),
+            "replay": driver.answer_record(again),
             "grounding_ok": grounding_ok,
             "replay_is_stored": ((again.get("status"), again_error, again.get("input_delivered"))
                                  == (out.get("status"), err, out.get("input_delivered"))),

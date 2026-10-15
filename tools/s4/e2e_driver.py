@@ -1717,6 +1717,32 @@ def stage_ms(meta: dict) -> dict:
     return stages
 
 
+ENGINE_MESSAGE_LIMIT = 200  # the engine's messages are one short sentence each
+
+
+def engine_error(out: dict) -> dict | None:
+    """The engine's refusal or uncertainty in an answer, as ``{code, message}``, or None when the
+    answer carries none. The message is the engine's own sentence and never screen content: the
+    engine's error messages are constant texts, and the one built from a value (NotActionable) is a
+    closed set of three reasons. Truncated to ENGINE_MESSAGE_LIMIT characters."""
+    error = (out or {}).get("error")
+    if not error:
+        return None
+    return {"code": error.get("code"),
+            "message": str(error.get("message", ""))[:ENGINE_MESSAGE_LIMIT]}
+
+
+def answer_record(out: dict) -> dict:
+    """What a record keeps of one engine answer: the status, the delivery and the verification, and
+    the error code and message when the answer has an error (see engine_error)."""
+    error = engine_error(out)
+    record = {"status": out.get("status"), "error": error["code"] if error else None,
+              "input_delivered": out.get("input_delivered"), "verified": out.get("verified")}
+    if error:
+        record["message"] = error["message"]
+    return record
+
+
 def new_result(e2e: str, run: int, flow_id: str | None = None) -> dict:
     """A run's record, with every counter that `Protocol.steps` increments initialised."""
     return {"e2e": e2e, "flow_id": flow_id, "run": run, "success": False, "steps": 0,
@@ -2785,6 +2811,9 @@ class Protocol:
                        "observed_effect": out.get("observed_effect"), "error": err,
                        "rtt_ms": round(ms, 1), "stages_ms": stage_ms(meta),
                        "target_role": target["role"], "label_source": target["label_source"]}
+                refusal = engine_error(out)
+                if refusal:  # a refusal or an uncertainty: the engine's own sentence
+                    act["message"] = refusal["message"]
                 res["actions"].append(act)
                 log("action", run=res["run"], **act)
                 if out.get("input_delivered"):
@@ -3032,13 +3061,11 @@ class Protocol:
             killer.cancel()
         res["kill_window"] = kill_window(answered, killer.fired)
         if answered:
-            res["answer"] = {"status": out.get("status"),
-                             "error": (out.get("error") or {}).get("code"),
-                             "input_delivered": out.get("input_delivered")}
+            res["answer"] = answer_record(out)
         if res["kill_window"] != "crashed_mid_request":
             res["failure"] = f"the case was not exercised (kill window: {res['kill_window']})"
             return
-        old.close()  # the killed process is reaped; its stderr is complete
+        killed_exit_code = old.close()  # the killed process is reaped; its stderr is complete
         time.sleep(1.0)
         after_crash = self.counter(hwnd)
         new = s3.Server(argv)  # no session identifier: the engine makes its own (live input)
@@ -3053,14 +3080,17 @@ class Protocol:
             samples.append(self.counter(hwnd))
         stable = all(value == after_crash for value in samples)
         self.spend_live()  # the repetition, exactly: it must find no stored result
+        res["actions_requested"] += 1
         replay, _, _, _ = new.call("execute_action", request)
-        replay_code = (replay.get("error") or {}).get("code")
+        res["replay"] = answer_record(replay)
+        replay_code = res["replay"]["error"]
         after_replay = self.counter(hwnd)
         snap3, elements3, _ = self.observe()
         target3 = self.target(elements3, CRASH_TARGET)
         new_click_ok, final = False, None
         if target3 is not None:
             fg3 = self.require_foreground()
+            res["steps"] = 2  # the new click is the second step: its identity record says so
             ident3 = self.identify_before(res, fg3, CRASH_TARGET, target3)
             if ident3 is not None:
                 pre3 = self.pre_click_grounding(2, fg3, CRASH_TARGET, target3, ident3)
@@ -3070,6 +3100,7 @@ class Protocol:
                     res["actions_requested"] += 1
                     out3, _, _, _ = new.call(
                         "execute_action", self.click_request(snap3, target3, f"s4-it05-r{res['run']}-2"))
+                    res["new_click"] = answer_record(out3)
                     time.sleep(0.5)
                     final = self.counter(hwnd)
                     new_click_ok = (out3.get("status") == "effect_observed"
@@ -3085,6 +3116,7 @@ class Protocol:
             "replay_delivered": bool(replay.get("input_delivered")),
             "replay_moved_counter": after_replay != after_crash,
             "new_click_ok": new_click_ok,
+            "killed_exit_code": killed_exit_code,
             "killed_said_session_ended": any(SESSION_END in line for line in old.stderr),
             "new_session_ended_lines": sum(SESSION_END in line for line in new.stderr),
         }
@@ -3115,16 +3147,15 @@ class Protocol:
         out, _, meta, rtt = self.srv.call("execute_action", request)
         stages = stage_ms(meta)
         window = measurement_window(stages, rtt)
-        res["answer"] = {"status": out.get("status"),
-                         "error": (out.get("error") or {}).get("code"),
-                         "input_delivered": out.get("input_delivered"),
-                         "verified": out.get("verified")}
-        res["measurement"] = {**window, "stages_ms": stages}
+        delivered = out.get("input_delivered") is True
+        res["answer"] = answer_record(out)
+        # The timing of a click that left. A refused click has no delivery to time: null.
+        res["measurement"] = {**window, "stages_ms": stages} if delivered else None
         time.sleep(0.5)  # the title may lag the repaint of the click
         after = self.counter(hwnd)
         res["valor"] = {"before": 0, "after": after}
-        ok = (out.get("status") == "effect_observed" and out.get("input_delivered") is True
-              and after == 1 and window["delivered_ms"] is not None)
+        ok = (out.get("status") == "effect_observed" and delivered and after == 1
+              and window["delivered_ms"] is not None)
         res["failure"] = None if ok else ("the measuring click did not behave as a normal click "
                                           "(status, delivery, counter or timings)")
         res["success"] = ok
