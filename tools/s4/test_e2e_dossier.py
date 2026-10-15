@@ -1653,6 +1653,12 @@ class DecoyRunTest(QuietTest):
         self.assertTrue(res["decoy"]["replay_is_stored"])
         self.assertTrue(res["decoy"]["grounding_ok"])
         self.assertEqual(desk.ledger_total(), 2, "the request and its repetition")
+        self.assertEqual(res["actions_requested"], 2, "the repetition is a live request too")
+        self.assertEqual(res["actions"][0]["message"], "no key was sent",
+                         "the engine's sentence is recorded with the action")
+        self.assertEqual(res["decoy"]["replay"]["status"], "indeterminate")
+        self.assertEqual(res["decoy"]["replay"]["message"], "no key was sent",
+                         "the stored answer repeats the sentence, and nothing new was sent")
         self.assertNotIn("keys_without_focus", res)
         self.assertEqual(res["grounding_wrong"], 0)
         self.assertEqual(desk.spawned, [["editor.exe", "--folder", str(desk.folder),

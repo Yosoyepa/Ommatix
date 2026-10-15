@@ -484,7 +484,7 @@ class FakeCalculator(driver.Protocol):
         out = {"status": status, "input_delivered": status != "rejected", "verified": True,
                "observed_effect": "visual_change"}
         if status == "rejected":
-            out["error"] = {"code": "INVALID_ARGUMENT"}
+            out["error"] = {"code": "INVALID_ARGUMENT", "message": "the arguments are not valid"}
         meta = {driver.ACTION_TIMINGS_KEY: {"total_us": 82_800, "gate_us": 200}}
         return out, False, meta, 5.0
 
@@ -958,6 +958,8 @@ class NavigatingStepTest(QuietTest):
         self.assertNotIn("post_grounded", res)
         self.assertEqual(res["grounding_wrong"], 0)
         self.assertIn("rejected", res["failure"])
+        self.assertEqual(res["actions"][0]["message"], "the arguments are not valid",
+                         "the refusal's sentence is recorded with the action")
 
 
 class ResultCountersTest(QuietTest):
@@ -2659,6 +2661,7 @@ class FakeEngine:
         self.calls = []
         self.meta = meta or {}  # the _meta of the answers (the action timings)
         self.rtt = rtt  # the round trip the client measures for them
+        self.exit_code = 0  # what close() returns: the process's exit code
 
     def call(self, name, args):
         self.calls.append(args)
@@ -2676,13 +2679,14 @@ class FakeEngine:
         return answer, False, self.meta, self.rtt
 
     def close(self):
-        return 0
+        return self.exit_code
 
 
 SESSION_END = "ommatix: session ended; the engine's state and cache were deleted"
-REJECTED_SESSION = {"status": "rejected", "input_delivered": False,
+REJECTED_SESSION = {"status": "rejected", "input_delivered": False, "verified": False,
                     "error": {"code": "SESSION_MISMATCH", "retryable": False,
-                              "next_step": "observe_again"}}
+                              "next_step": "observe_again",
+                              "message": "the action belongs to another session"}}
 EFFECT = {"status": "effect_observed", "input_delivered": True, "verified": True,
           "observed_effect": "visual_change"}
 
@@ -2747,6 +2751,7 @@ def crash_engines(clicks, *, deliver=True, answer_first=False, old_lines=("value
     then delivers one new click, as the protocol expects."""
     old = FakeEngine(clicks, "s-old", deliver=deliver, answer_first=answer_first,
                      lines=old_lines)
+    old.exit_code = 1  # what a process killed by TerminateProcess leaves behind
     new_lines = new_lines if new_lines is not None else ["values redacted", SESSION_END]
     new = FakeEngine(clicks, "s-new", lines=new_lines,
                      answers=[(replay, replay.get("input_delivered", False)),
@@ -2847,6 +2852,37 @@ class CrashCaseTest(QuietTest):
             self.run_case(old, new, clicks, max_live=0)
         self.assertFalse(old.proc.killed.wait(0.3), "no kill was armed")
         self.assertEqual(old.calls, [])
+
+    def test_the_requests_counted_are_the_ledger_spend_repetition_included(self):
+        # The repetition is a live request too: the record counts what the ledger spent, one for one.
+        clicks = [0]
+        old, new = crash_engines(clicks)
+        desk, res = self.run_case(old, new, clicks)
+        self.assertEqual(res["actions_requested"], desk.ledger_total())
+        self.assertEqual(res["actions_requested"], 3)
+
+    def test_the_repetition_and_the_new_click_keep_the_engine_answers(self):
+        clicks = [0]
+        old, new = crash_engines(clicks)
+        _, res = self.run_case(old, new, clicks)
+        self.assertEqual(res["replay"], {"status": "rejected", "error": "SESSION_MISMATCH",
+                                         "input_delivered": False, "verified": False,
+                                         "message": "the action belongs to another session"})
+        self.assertEqual(res["new_click"]["status"], "effect_observed")
+        self.assertNotIn("message", res["new_click"], "a success carries no sentence")
+
+    def test_the_killed_engine_exit_code_is_recorded(self):
+        clicks = [0]
+        old, new = crash_engines(clicks)
+        _, res = self.run_case(old, new, clicks)
+        self.assertEqual(res["crash"]["killed_exit_code"], 1)
+        self.assertEqual(res["crash"]["restarted_exit_code"], 0)
+
+    def test_the_new_click_is_the_second_step_in_its_identity_record(self):
+        clicks = [0]
+        old, new = crash_engines(clicks)
+        _, res = self.run_case(old, new, clicks)
+        self.assertEqual([record["step"] for record in res["identity"]], [1, 2])
 
     def test_the_restart_is_started_without_a_session_identifier(self):
         clicks = [0]
@@ -2974,6 +3010,26 @@ TIMINGS = {"io.ommatix/action_timings": {"gate_us": 300, "freshness_us": 20000,
                                          "verification_us": 60000, "total_us": 82300}}
 
 
+class EngineErrorRecordTest(unittest.TestCase):
+    def test_an_answer_without_an_error_carries_no_sentence(self):
+        self.assertIsNone(driver.engine_error(EFFECT))
+        self.assertEqual(driver.answer_record(EFFECT),
+                         {"status": "effect_observed", "error": None, "input_delivered": True,
+                          "verified": True})
+
+    def test_a_refusal_keeps_the_engine_code_and_its_sentence(self):
+        self.assertEqual(driver.engine_error(REJECTED_SESSION),
+                         {"code": "SESSION_MISMATCH",
+                          "message": "the action belongs to another session"})
+        self.assertEqual(driver.answer_record(REJECTED_SESSION)["message"],
+                         "the action belongs to another session")
+
+    def test_a_long_sentence_is_cut_to_the_record_limit(self):
+        long_answer = {"error": {"code": "X", "message": "a" * 500}}
+        self.assertEqual(len(driver.engine_error(long_answer)["message"]),
+                         driver.ENGINE_MESSAGE_LIMIT)
+
+
 class MeasurementWindowTest(unittest.TestCase):
     def test_the_delay_is_the_midpoint_between_the_delivery_and_the_answer(self):
         stages = {"action_gate": 0.3, "action_freshness": 20.0, "action_delivery": 2.0,
@@ -3084,6 +3140,18 @@ class MeasureClickCaseTest(QuietTest):
         _, res = self.run_measure(engine, clicks)
         self.assertFalse(res["success"])
         self.assertIsNone(res["measurement"]["delivered_ms"])
+
+    def test_a_refused_click_has_no_measurement_and_keeps_the_engine_sentence(self):
+        # The first C0 of the round was refused (STALE_SNAPSHOT) and its record measured it anyway.
+        clicks = [0]
+        engine = FakeEngine(clicks, "s-c0", answers=[(REJECTED_SESSION, False)], meta=TIMINGS,
+                            rtt=85.0)
+        _, res = self.run_measure(engine, clicks)
+        self.assertIsNone(res["measurement"], "nothing was delivered, so nothing is timed")
+        self.assertEqual(res["answer"], {"status": "rejected", "error": "SESSION_MISMATCH",
+                                         "input_delivered": False, "verified": False,
+                                         "message": "the action belongs to another session"})
+        self.assertFalse(res["success"])
 
     def test_the_record_is_written_the_application_closed_and_no_stop_engaged(self):
         clicks = [0]
