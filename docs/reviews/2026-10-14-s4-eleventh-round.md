@@ -34,3 +34,25 @@ Hashes checked by the read-only preflight, before the probe: `tools/s4/e2e_drive
 
 - The owner's answer to finding 1: whether the PC is free, whether the two minimized windows were closed by the owner, and whether the current state (no visible `CabinetWClass` window; the hidden baseline kept) is the new baseline. If so, the preflight passes as it is, with no exception, and the round runs in the order of its prompt: the probe without input; a pilot with `--max-live 8`; then ten scored runs, one invocation each with the gate between them, from a series budget of 60. The ledger has 114 requests left under `--round-start 429`.
 - If not, an investigation of what closed the windows and what sent the input, before any input is sent.
+
+## Continuation (2026-10-15): the owner's baseline, then input before the probe
+
+The continuation (run 2 of the round, branch `docs/s4-eleventh-round-run`, CHANGELOG 1.0.44) took the owner's answers of 2026-10-15: the owner closed the two minimized Explorer windows, has stopped using the PC, and set the new baseline to no visible `CabinetWClass` window, with the hidden shell window (PID 36160) kept and never touched. The preflight and the gate were updated to that state, and the pre-live checks passed. The round still stopped before its probe, because the idle counter showed keyboard or mouse input the round did not cause. No probe, pilot or scored run was started, and no live request was spent: the ledger still reads 515.
+
+### Findings
+
+| # | Severity | Finding | Resolution | Regression test |
+|---|---|---|---|---|
+| 3 | Observation, owner's PC use (open; owner decision) | The read-only preflight at 00:24 local met every condition of the new baseline: ledger 515; the pinned hashes; no visible `CabinetWClass` window; the hidden window of PID 36160 only; Notepad PID 23164 with two windows; no test process; the client's temp tree empty; `stop.flag` and `window.pin` absent. Its idle counter read 77.7 s, so keyboard or mouse input arrived at about 00:23 local: after the owner's answers and after the pre-live checks, which ended at 00:22 with no input. No command of this round sends input. A second read-only check at 00:25 read 128.7 s, which is the 77.7 s plus the 51 s that passed, so no input came between the two reads. The owner's rule (input the round did not cause: stop all live work and report) applied | Not run: the probe, the pilot and the series. The owner decides whether the PC was in use at about 00:23 local and whether the round resumes under a new authorization; its state then has to pass the same preflight and gate, from ledger 515 | None: no code changed |
+| 4 | Observation, scope of the input check (open; owner decision) | The idle counter also counts the clients' own input, so during an invocation it cannot tell an outside keystroke from the client's. The gate (`e2e11b_gate.py`, outside the repository) checks the intervals between invocations: the counter must have grown by the time that passed. Within an invocation the in-run checks decide: the foreground window, the point grounding before each click, the folder check after each navigating click, and the stop on any safety event. Watching the counter continuously would be a new decision | None: no code changed | None |
+
+### Verification and read-only checks
+
+- Pre-live checks, from `docs/s4-eleventh-round-run` at `c91862f`, with no code change; each exited 0: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; the same with `dxgi,sendinput,directml,winrt-ocr,uia`; `cargo test --workspace`: 447 passed, 0 failed, 1 ignored; `python -m unittest discover -s tools/s4 -p "test_*.py"`: 297 OK; the editor's clippy and `cargo test`: 24 passed; `referencia_ejecutable/run_tests.py`: 48 of 48; `validar_paquete.py`: 451 checks, 0 failed. The oracle and validator result files changed only in timestamps, Python and platform strings and a duration, and were restored with `git restore`.
+- Hashes: `tools/s4/e2e_driver.py` `768e77e3…7202d`; `tools/s4/e2e_dossier.py` `359f6f28…0afc2`; `target/release/ommatix.exe` `a137ccd1…d548` (not rebuilt: no change under `src` or `tools/s4/testeditor` since `0cb126f`); `ommatix-testeditor.exe` `f358b3a9…1d20`; `s4r10-live.toml` `0428daf8…c1e2`; `s4r10-explorer.toml` `ab6c33b5…33d7`; the manifest, ONNX Runtime and DirectML pins unchanged.
+- Read-only preflights at 00:24 and 00:25 local: no problems in either. The second one shows the same state, and its idle counter is explained by the elapsed time.
+
+### What the next round needs
+
+- The owner's answer to finding 3: whether the PC was in use at about 00:23 local, and whether it is free now. If the round continues, it needs a new authorization. It starts from the same preflight and gate at ledger 515 with `--round-start 429`, and runs in the order of its prompt: the probe without input; the pilot with `--max-live 8`, only if the probe gate holds; then ten scored runs, one invocation each, with the gate between them and a series budget of 60.
+- The decision on finding 4: whether a continuous idle monitor is wanted.

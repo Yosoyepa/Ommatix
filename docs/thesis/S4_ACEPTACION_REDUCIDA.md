@@ -2090,3 +2090,44 @@ La segunda comprobación ya no tiene ventanas visibles que contar, así que la c
 
 - `docs/handoff.md`: se elimina una copia obsoleta de la fila y del párrafo de la ADR-0022. La copia obsoleta citaba un hash de `e2e_driver.py` anterior (`a758d172…`) y las cifras de un estado intermedio (286 pruebas, 33 fallidas sin el cambio). La copia vigente (`768e77e3…`, 297 pruebas, 41 fallidas sin el cambio) se conserva.
 - `README.md` y `README.es.md`: un párrafo de la undécima ronda en cada uno, después del de la regla de anclaje.
+
+## Undécima ronda (continuación): con la línea base nueva del responsable, el equipo recibe entrada antes de la sonda
+
+**Fecha:** 15 de octubre de 2026. **Estado:** detenida antes de cualquier entrada, por la regla de entrada ajena. Rama `docs/s4-eleventh-round-run` desde `main` en `c91862f` (fusión de #31). CHANGELOG 1.0.44. Revisión: [`reviews/2026-10-14-s4-eleventh-round.md`](../reviews/2026-10-14-s4-eleventh-round.md), hallazgos 3 y 4. **No se envió ninguna solicitud real** (cuaderno 515, sin cambio): ninguna sonda, ningún piloto y ninguna corrida puntuada.
+
+### 1. La línea base nueva del responsable
+
+El responsable indicó que cerró él mismo las dos ventanas minimizadas que se usaban como línea base, que había dejado de usar el equipo y que la línea base nueva es: ninguna ventana `CabinetWClass` visible, y la oculta del proceso del shell (1920 × 1032 en (0, 0), PID 36160) intacta y sin tocar. La comprobación previa y la compuerta de las invocaciones se actualizaron a ese estado, sin excepciones: el número de ventanas visibles debe ser cero.
+
+### 2. Verificación previa a la entrada en vivo
+
+- **Código y motor.** `main` en `c91862f`, sin cambios locales. `git diff --stat 0cb126f..HEAD -- src tools/s4/testeditor` no muestra cambios, así que el motor y el editor no se recompilan: `target/release/ommatix.exe` `a137ccd1…d548` y `ommatix-testeditor.exe` `f358b3a9…1d20` coinciden.
+- **Clientes, configuraciones y artefactos fijados**, comprobados con su SHA-256 en la comprobación previa: `tools/s4/e2e_driver.py` `768e77e3…7202d`; `tools/s4/e2e_dossier.py` `359f6f28…0afc2`; `s4r10-live.toml` `0428daf8…c1e2`; `s4r10-explorer.toml` `ab6c33b5…33d7`; manifiesto, ONNX Runtime y DirectML sin cambio.
+- **Comprobaciones de la rama**, todas con código de salida 0: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; la misma con las características de Windows; `cargo test --workspace` (447 pasadas, 0 fallidas, 1 ignorada); `python -m unittest discover -s tools/s4` (297 pruebas correctas); el editor (`cargo clippy -- -D warnings` y 24 pruebas pasadas); `referencia_ejecutable/run_tests.py` (48 de 48); `validar_paquete.py` (451 comprobaciones, 0 fallidas).
+
+### 3. La comprobación previa cumple, y el contador de inactividad marca entrada
+
+- **A las 00:24 (hora local del equipo), con el cuaderno en 515:** ninguna ventana `CabinetWClass` visible; la oculta del PID 36160; Notepad (PID 23164) con sus dos ventanas; sin procesos de prueba; carpeta temporal del cliente vacía; `stop.flag` y `window.pin` ausentes. Todas las condiciones se cumplen.
+- **Pero** el contador de inactividad marcaba 77,7 s: la última entrada de teclado o ratón fue hacia las 00:23. La verificación previa terminó a las 00:22 y ningún comando de la ronda envía entrada. La regla del responsable es explícita: si el contador muestra entrada que no provocó durante la ronda, se detiene todo el trabajo en vivo y se informa. Por eso no se empezó nada.
+- **Segunda lectura, de sólo lectura, a las 00:25:** 128,7 s, es decir, los 77,7 s más los 51 s que pasaron. No hubo entrada entre las dos lecturas. La entrada de las 00:23 quedó sin explicar.
+
+### 4. Lo que no se ejecutó
+
+No hubo sonda, piloto ni serie de E2E-03. No se abrió ninguna ventana del Explorador, no se cambió el primer plano y no se envió ninguna entrada.
+
+### 5. Lo que decide el responsable
+
+1. ¿Estaba el equipo en uso hacia las 00:23? ¿Fue una entrada suya?
+2. Si el equipo está libre y acepta la línea base nueva, la ronda sólo puede reanudarse con una autorización nueva: sonda sin entrada; piloto con `--max-live 8`; y, sólo si el piloto pasa, diez corridas puntuadas en diez invocaciones de una corrida, con compuerta entre ellas y un presupuesto de serie de 60.
+3. Sobre el alcance de la compuerta: el contador cuenta también las entradas del propio cliente, así que dentro de una invocación no distingue una entrada ajena de la suya. La compuerta comprueba los intervalos entre invocaciones (el contador tiene que crecer lo que haya pasado); dentro de cada invocación deciden las comprobaciones del sistema (primer plano, control bajo el punto y carpeta). Vigilar el contador de forma continua sería una decisión nueva.
+
+### 6. Estado de E2E-03 y del cupo
+
+- **E2E-03:** `PENDIENTE_PRODUCTO`, sin cambio en la matriz.
+- **Cupo:** cuaderno 515 con `--round-start 429`: 86 solicitudes usadas de 200; 114 disponibles. Si se reanuda, el plan usa 8 en el piloto y 60 en la serie: 68 en total.
+- **Escritorio:** sin procesos de prueba, carpeta temporal vacía, `stop.flag` y `window.pin` ausentes, Notepad sin cambios y la ventana oculta de línea base sin tocar.
+
+### 7. Otros cambios de documentación
+
+- `docs/handoff.md`: una fila y un párrafo de esta continuación.
+- `README.md` y `README.es.md`: un párrafo en cada uno, después del de la undécima ronda.
