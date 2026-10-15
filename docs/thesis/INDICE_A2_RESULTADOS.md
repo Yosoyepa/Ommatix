@@ -101,10 +101,21 @@ Límites del protocolo que se cumplió tal cual, y que conviene leer con cuidado
 - Con nueve repeticiones el **p95 es el máximo** de las nueve (rango más próximo: ⌈0,95 · 9⌉ = 9). El criterio G5 compara así máximos de nueve repeticiones: es un criterio grueso.
 - El intervalo del cociente de medianas usa 2 000 remuestreos de nueve pares: es orientativo.
 
-### 3.2 Defecto de medición: la consulta del recorrido no es válida
+### 3.2 Defecto de medición: la consulta del recorrido no es válida en la corrida definitiva
 
-En la variante `scan`, la etapa de consultas se optimizó. El visitante `|i| sink = sink.wrapping_add(i)` sobre el rango `0..n` tiene forma cerrada, y el compilador lo sustituyó por una constante: por eso la columna «consultas recorrido» da microsegundos donde deberían darse decenas de milisegundos (8 562 palabras por 8 192 controles en la cuadrícula). **Esa columna y el resto que se deriva por diferencia en el recorrido no son válidos, y no se usan.** El total de `fuse` sí es válido: su resultado se usa, y sus comprobaciones no se pueden eliminar. La decisión se apoya sólo en totales. La construcción y las consultas del índice (`rstar`) son válidas: la consulta recoge y ordena los candidatos. Corregir el visitante con `black_box` y repetir la descomposición queda pendiente (§3.10); no cambia los totales.
+En la variante `scan`, la etapa de consultas se optimizó. El visitante `|i| sink = sink.wrapping_add(i)` sobre el rango `0..n` tiene forma cerrada, y el compilador lo sustituyó por una constante: por eso la columna «consultas recorrido» de §3.4 da microsegundos donde deberían darse milisegundos (8 562 palabras por 8 192 controles en la cuadrícula). **En §3.4, la columna «consultas recorrido» y el resto que se deriva por diferencia en el recorrido corresponden a la corrida anterior a la corrección, y no son válidas.** El total de `fuse` sí es válido: su resultado se usa, y sus comprobaciones no se pueden eliminar. La decisión se apoya sólo en totales. La construcción y las consultas del índice (`rstar`) son válidas: la consulta recoge y ordena los candidatos.
 
+**Corrección (commit `b15fdf4`).** Cada posición visitada pasa por `black_box`, y así el recorrido se ejecuta. Una corrida de validación a 128 y 512 controles, con tres repeticiones y sin tope (no es la medición del protocolo; `indice_a2_validacion_black_box.json`, en el mismo commit), da la consulta del recorrido medida y coherente con el trabajo: entre 0,2 y 0,5 ns por posición visitada. Ejemplos a 512 controles (mediana, ms; consulta del recorrido / consulta del índice; construcción del índice):
+
+| Familia | Palabras / brechas | Consulta del recorrido | Consulta del índice | Construcción del índice |
+|---|---:|---:|---:|---:|
+| Cuadrícula dispersa | 539 / 0 | 0,125 | 0,087 | 0,097 |
+| Formularios de varias columnas | 801 / 998 | 0,312 | 0,221 | 0,092 |
+| Contenedores anidados | 296 / 0 | 0,069 | 0,068 | 0,095 |
+| Solapamiento extremo | 512 / 0 | 0,119 | 3,473 | 0,124 |
+| Cajas idénticas | 257 / 33 024 | 4,257 | 57,054 | 0,088 |
+
+La descomposición de la corrida definitiva a todos los tamaños no se repitió: queda marcada como medida antes de la corrección, y se repetirá con la celda de cajas idénticas de 8 192 controles (§3.10).
 ### 3.3 Equivalencia (G1 y G2)
 
 - **178 comprobaciones completadas, ninguna con diferencia:** 44 celdas por 4 comprobaciones (umbrales de propiedad 0,75, 0 y 1, y propietarios con 0,75), más 2 de la celda *IdenticalBoxes, 8 192*.
@@ -204,7 +215,7 @@ Antes de la corrida definitiva se hizo otra del mismo código (commit `d3837fa`,
 
 ### 3.10 Trabajo pendiente
 
-- Corregir el visitante del recorrido con `black_box` y repetir la descomposición.
+- Repetir la descomposición de la corrida definitiva a todos los tamaños, ya con el visitante corregido (`b15fdf4`); hoy sólo se valida a 128 y 512 controles.
 - Medir la observación completa (`Engine::observe_screen`) antes de afirmar nada sobre la latencia de Ommatix.
 - Calibrar un selector por tamaño y selectividad, si alguna vez se quiere adoptar el índice por defecto.
 - Repetir la celda *IdenticalBoxes, 8 192* sin tope, para completar sus cuatro comprobaciones de equivalencia.
