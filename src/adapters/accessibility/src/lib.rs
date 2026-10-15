@@ -21,6 +21,7 @@
 //! screen does not show, or send input (the crate's input and pattern calls are forbidden
 //! by this crate's `clippy.toml`).
 
+use std::collections::VecDeque;
 use std::time::Duration;
 
 use ommatix_domain::fusion::Role;
@@ -171,6 +172,59 @@ impl Spent {
     }
 }
 
+/// How a bounded [`walk`] ended.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Walked {
+    /// A bound (elements or time) ended the walk with nodes still to visit.
+    pub out_of_budget: bool,
+    /// The depth bound stopped the walk at a node that has children.
+    pub depth_cut: bool,
+}
+
+/// Visits the tree under `root` **breadth first**, within `budget`.
+///
+/// Shallowest first, because a walk that ends on its budget loses the end of its order and
+/// the controls an agent acts on (toolbars, address bars, tab strips, buttons) sit near the
+/// top of an application's tree while its content (file lists, documents, long menus) sits
+/// below. Depth first spent the whole budget on the first large subtree before the next
+/// sibling's chrome was read (E2E-03, tenth round: File Explorer's navigation pane before
+/// its address bar).
+///
+/// `enter` is called once per visited node, in order, and says whether to descend into it
+/// (`false` skips its subtree); `children` is called only for a node that was entered.
+/// `elapsed` is the walk's wall time so far; `spent` carries the count across calls, so one
+/// budget can span several windows.
+pub fn walk<N>(
+    root: N,
+    budget: &Budget,
+    spent: &mut Spent,
+    mut elapsed: impl FnMut() -> Duration,
+    mut enter: impl FnMut(&N) -> bool,
+    mut children: impl FnMut(&N) -> Vec<N>,
+) -> Walked {
+    let mut walked = Walked::default();
+    let mut queue = VecDeque::from([(root, 0usize)]);
+    while let Some((node, depth)) = queue.pop_front() {
+        spent.elapsed = elapsed();
+        if !spent.allows_more(budget) {
+            walked.out_of_budget = true;
+            break;
+        }
+        spent.visited += 1;
+        if !enter(&node) {
+            continue;
+        }
+        let below = children(&node);
+        if depth < budget.max_depth {
+            queue.extend(below.into_iter().map(|child| (child, depth + 1)));
+        } else {
+            // The depth bound cuts the walk only where something lies below it.
+            walked.depth_cut |= !below.is_empty();
+        }
+    }
+    walked
+}
+
 #[cfg(test)]
 mod tests {
     use super::control_type as ct;
@@ -260,5 +314,104 @@ mod tests {
             elapsed: budget.max_duration,
         };
         assert!(!late.allows_more(&budget));
+    }
+
+    /// A tree as child lists: node `i` has the children `tree[i]`.
+    fn visit_order(
+        tree: &[Vec<usize>],
+        budget: &Budget,
+        skip: &[usize],
+        mut now: impl FnMut() -> Duration,
+    ) -> (Vec<usize>, Walked) {
+        let mut order = Vec::new();
+        let mut spent = Spent::default();
+        let walked = walk(
+            0,
+            budget,
+            &mut spent,
+            &mut now,
+            |&n| {
+                order.push(n);
+                !skip.contains(&n)
+            },
+            |&n| tree[n].clone(),
+        );
+        assert_eq!(spent.visited, order.len());
+        (order, walked)
+    }
+
+    /// Node 0 is a window with a toolbar (1, with buttons 4 and 5) and a long content list
+    /// (2, with items 6..=9) and a status bar (3).
+    fn window() -> Vec<Vec<usize>> {
+        vec![
+            vec![1, 2, 3],
+            vec![4, 5],
+            vec![6, 7, 8, 9],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ]
+    }
+
+    #[test]
+    fn a_walk_reads_the_chrome_before_the_content() {
+        let (order, walked) = visit_order(&window(), &Budget::default(), &[], || Duration::ZERO);
+        assert_eq!(order, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        assert_eq!(walked, Walked::default());
+    }
+
+    #[test]
+    fn a_walk_cut_by_elements_loses_the_deepest_nodes_not_a_later_sibling() {
+        // E2E-03: depth first would visit 0, 1, 4, 5, 2 and never reach the status bar (3);
+        // breadth first has read every level above the cut.
+        let budget = Budget {
+            max_elements: 5,
+            ..Budget::default()
+        };
+        let (order, walked) = visit_order(&window(), &budget, &[], || Duration::ZERO);
+        assert_eq!(order, [0, 1, 2, 3, 4]);
+        assert!(walked.out_of_budget);
+    }
+
+    #[test]
+    fn a_walk_cut_by_time_stops_where_the_clock_runs_out() {
+        let budget = Budget::default();
+        let mut ticks = 0;
+        let (order, walked) = visit_order(&window(), &budget, &[], || {
+            ticks += 1;
+            if ticks > 3 {
+                budget.max_duration
+            } else {
+                Duration::ZERO
+            }
+        });
+        assert_eq!(order, [0, 1, 2]);
+        assert!(walked.out_of_budget);
+    }
+
+    #[test]
+    fn a_skipped_subtree_is_not_entered() {
+        let (order, walked) = visit_order(&window(), &Budget::default(), &[2], || Duration::ZERO);
+        assert_eq!(order, [0, 1, 2, 3, 4, 5]);
+        assert_eq!(walked, Walked::default());
+    }
+
+    #[test]
+    fn the_depth_bound_is_reported_only_where_something_lies_below_it() {
+        let budget = Budget {
+            max_depth: 1,
+            ..Budget::default()
+        };
+        let (order, walked) = visit_order(&window(), &budget, &[], || Duration::ZERO);
+        assert_eq!(order, [0, 1, 2, 3], "nothing below depth 1 is visited");
+        assert!(walked.depth_cut);
+        assert!(!walked.out_of_budget);
+        let flat = vec![vec![1, 2], vec![], vec![]];
+        let (_, walked) = visit_order(&flat, &budget, &[], || Duration::ZERO);
+        assert!(!walked.depth_cut, "the nodes at the bound have no children");
     }
 }
