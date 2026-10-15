@@ -36,7 +36,7 @@ Proposed: if the owner accepts this ADR, the freshness check of a live action ge
 2. **Window group.** With `"target_window"`, the pixel comparison runs on the tiles that intersect the **window group** of the target. The group is:
    - the top-level window that contains the target (the window the OS reports under the target's point at observation);
    - the foreground window;
-   - every top-level window whose visible rectangle overlaps one of those.
+   - every top-level window whose rectangle overlaps one of those.
 
    Rectangles are in physical pixels of the observed output, clipped to the frame. The group is read in the same observation as the frame (see point 6).
 3. **Group identity.** `last_look` (`act.rs:450`) reads the group again. Any difference in its ordered list (z-order, handle, rectangle) refuses with `STALE_SNAPSHOT`, with the existing message, and spends the snapshot. A move, a resize, a change of z-order, a window that appears in or leaves the group, or a change of foreground window is therefore a refusal, even when the pixels of the old rectangle did not change. The group check runs after the existing last look, so an application change keeps its current refusal code.
@@ -66,7 +66,7 @@ The analysis is for D, with the group identity check.
 | A transparent overlay that receives clicks | Yes, if it overlaps; then it is in the group | Refused (group identity). A click-through overlay cannot receive the click, and it is refused too if it overlaps |
 | A window raised above the target (z-order) | Yes, if it overlaps | Refused (order of the group compared) |
 | The target window moves or resizes | Yes | Refused (rectangle compared), even when the old rectangle is unchanged |
-| The taskbar clock, another application, the desktop | No, unless the window they belong to overlaps the target window. A window that does not extend under the taskbar leaves the clock outside its rectangle [D] | Accepted, as intended |
+| The taskbar clock, another application, the desktop | No, unless the taskbar or the other window overlaps the target window. A window that does not extend under the taskbar leaves the clock outside its rectangle [D] | Accepted, as intended |
 | The visible Orca terminal or any other window | No, unless it overlaps the target window | Accepted if outside; refused if overlapping |
 | The caret, or any animation inside the target window | Changes pixels of the group, not the click's destination | Refused, as intended (no mask) |
 | DPI, resolution, monitor layout, epoch | Yes | Refused (whole-frame geometry check) |
@@ -121,7 +121,7 @@ The identifiers below are proposed; they enter `plan_pruebas.csv` only with the 
 | UT-60 | `a_geometry_or_epoch_change_refuses_in_target_window_mode` | The whole-frame geometry guard (D) | Refused (`GeometryChanged`) |
 | UT-61 | `an_actuator_that_cannot_attest_rectangles_checks_the_whole_frame` | Fail-closed fallback | Same result as `screen` |
 | UT-62 | `the_visual_effect_is_measured_against_the_whole_frame` | Effect reporting unchanged | `visual_change` identical under both values |
-| UT-63 | `target_window_accepts_exactly_when_no_changed_tile_meets_the_group` | Differential test against the whole frame, as UT-08 does for tiles | On generated frames and groups, the two scopes agree whenever the changed tiles lie inside the group |
+| UT-63 | `target_window_accepts_exactly_when_no_changed_tile_meets_the_group` | Differential test against the whole frame, as UT-08 does for tiles | On generated frames and groups, `target_window` accepts exactly when no changed tile lies inside the group, and `screen` refuses whenever any tile changed |
 | UT-64 | `the_default_freshness_scope_is_the_whole_frame_and_unknown_values_are_refused` | Default off; configuration validated | Default `screen`; an unknown value fails at start |
 | IT-08 | Live check of the target-window scope (M2 below) | The behaviour on the reference PC | Pre-registered criteria, set by the owner |
 
