@@ -1477,3 +1477,110 @@ Sin cambio. `matrices/plan_pruebas.csv` mantiene S4R-02, E2E-02 y E2E-03 en `NO_
 ### 10. Ejecución
 
 Dos invocaciones en vivo: el sondeo de la Calculadora (sin solicitudes) y `--calc-standard` (dos solicitudes). Las únicas entradas fueron dos clics de la Calculadora: «Abrir navegación» (`Button`, `AutomationId` `TogglePaneButton`) y «Estándar» (`ListItem`, `AutomationId` `Standard`). No se escribió nada, no se usó ninguna otra aplicación y no se tocó ninguna ventana del propietario. Las lecturas de UI Automation son de sólo lectura. El preflight y la instantánea de ventanas (ambos fuera del repositorio) no envían entrada ni cambian ventanas.
+
+## Novena ronda (continuación): ninguna solicitud nueva; S4R-02 no se ejecutó, el piloto de E2E-02 no pasó y E2E-03 no se ejecutó en vivo
+
+**Fecha:** 14 de octubre de 2026. Rama `docs/s4-ninth-round-continuation`, desde `main` en `a5cd1f9` (fusión de #22). No cambia ningún código: ni los clientes, ni el editor, ni las crates de Rust. Autorización del responsable para la continuación: la Calculadora se pasó a modo Estándar a mano y no se vuelven a usar los clics de `--calc-standard`; el cupo sigue en 200 solicitudes desde `--round-start 427`; `--operator-activation` apagado; el responsable no usó el equipo. La parada de seguridad de la primera parte queda levantada para esta continuación; la regla se mantiene.
+
+**Resultado:** ninguna corrida puntuada y **ninguna solicitud real nueva**. El cuaderno sigue en 429 (2 de 200 de la ronda; 198 disponibles). No se envió entrada a ninguna aplicación: cada invocación en vivo se detuvo antes de su primera acción.
+
+- **S4R-02 (Calculadora):** no se ejecutó. La comprobación de modo, de sólo lectura, dio `other` en dos lecturas (§3.1).
+- **E2E-02 (editor):** dos sondeos sin entrada y un piloto. Ninguno tuvo evidencia de accesibilidad: el foco de teclado lo tiene el escritorio, no el editor. El piloto no pasó, así que bloquea la serie (§3.2).
+- **E2E-03 (Explorador):** el sondeo sin entrada muestra que los objetivos de la navegación no se encuentran como el flujo los define. No se ejecutó en vivo (§3.3).
+
+### 1. Verificación previa a la entrada en vivo
+
+- Clientes, sin cambio: `tools/s4/e2e_driver.py` `cbe6905c…4821265`; `tools/s4/e2e_dossier.py` `c1ba4a37…1020e`. Comprobados por SHA-256 antes de cada invocación en vivo.
+- Motor, `cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia`: ya al día; SHA-256 `3a451211…cbb1a`, igual que en la novena ronda.
+- Editor, `cargo build --release` en `tools/s4/testeditor`: ya al día; SHA-256 `541fc0a8…2793`.
+- Configuraciones, sin cambio: `s4r9-live.toml` `0428daf8…5ec1e2`; `s4r9-explorer.toml` `ab6c33b5…233d7`. Manifiesto float16, ONNX Runtime y DirectML, los del comprobador (`f8b04be9…fe47`, `e7eedec6…7bff40`, `9c9e6d82…e92da1`).
+- Antes de cada invocación del cliente, el comprobador de la ronda (fuera del repositorio, sólo lectura) verificó lo anterior, la ausencia de `stop.flag` y de `window.pin`, el valor del cuaderno (429) y la ausencia de procesos de prueba. La segunda lectura de modo no tuvo ese comprobador delante: su propio script verificó el SHA-256 del cliente, y después se comprobaron el cuaderno, `stop.flag` y `window.pin`, sin cambios.
+- Comprobaciones previas: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia --all-targets -- -D warnings`; `cargo test --workspace` con 383 pasadas, 0 fallidas y 1 ignorada; editor: `cargo build --release`, `cargo clippy -- -D warnings` y `cargo test` con 16 pasadas; `python -m unittest discover -s tools/s4 -p "test_*.py"` con 230 correctas; desde `docs/thesis`, `referencia_ejecutable/run_tests.py` con 48 de 48 y `validar_paquete.py` con 218 comprobaciones y 0 fallidas. Todo ello antes de la primera acción en vivo.
+
+### 2. Invocaciones en vivo
+
+| Paso | Invocación (resumen) | Solicitudes | Resultado |
+|---|---|---|---|
+| S4R-02, comprobación de modo | Lectura de sólo lectura con `read_calc_mode` del cliente, en un script externo que lanza la Calculadora, la lee y cierra sólo su proceso | 0 | `other` en las dos lecturas (§3.1). |
+| S4R-02, piloto y serie | No se ejecutaron | 0 | Modo distinto de Estándar: no se hizo clic en ningún control de modo ni de navegación. |
+| E2E-02, sondeo 1 | `e2e_dossier.py --app editor --mode probe --runs 1` con `s4r9-live.toml` | 0 | Sin elementos de accesibilidad. Primer plano `already_foreground`. Foco de teclado en el escritorio. |
+| E2E-02, sondeo 2 | Igual, con `--settle 5` | 0 | Igual. |
+| E2E-02, piloto | `--app editor --mode run --runs 1 --max-live 8` | 0 | No pasó: sin evidencia de accesibilidad; se detuvo antes de toda entrada. Bloquea la serie. |
+| E2E-02, serie | No se ejecutó | 0 | Bloqueada por el piloto. |
+| E2E-03, sondeo | `e2e_dossier.py --app explorer --mode probe --runs 1` con `s4r9-explorer.toml` | 0 | Primer plano por `attach_show_top` en la primera solicitud de activación (gestión de ventanas, sin entrada). Ventana registrada, cerrada por su identificador; árbol temporal borrado (2 archivos y 3 carpetas); archivo de ventana escrito y borrado. Objetivos: §3.3. |
+| E2E-03, piloto y serie | No se ejecutaron | 0 | El sondeo no encuentra los objetivos del flujo. |
+
+Cada invocación con el cliente se hizo con rutas absolutas y el cuaderno en 429. La configuración de sondeo no envía entrada: el motor se arranca sin `--input sendinput`.
+
+### 3. Resultados
+
+#### 3.1 S4R-02: no se ejecutó
+
+- **Por qué no se usó `--calc-standard --max-live 0`.** Es la invocación que propone el protocolo, pero (verificado en el código, no en vivo) con un modo distinto de Estándar llega a `Protocol.spend_live`: `steps()` pasa por `require_foreground()` e `identify_before()`, y `spend_live()` con cupo 0 llama a `engage_stop`, que **crea `stop.flag`** antes de abortar. Esa parada habría detenido también E2E-02 y E2E-03, que el responsable ordenó ejecutar sea cual sea el modo. La lectura se hizo con un script de sólo lectura que importa el cliente sin cambios y usa su función de UI Automation; ese script no llega a la ruta de ejecución y no escribe en el cuaderno ni crea `stop.flag`.
+- **Lectura.** `other` en las dos lecturas (la segunda, con las señales por recuento). El encabezado existe, pero su nombre no es «Estándar» ni «Calculadora estándar», y no hay controles propios de Científica. Este registro no distingue dos explicaciones: la Calculadora está en otro modo (Programador, Fecha o Conversor), o el nombre del modo Estándar en esta compilación no es el de la lista del cliente. Ninguna lectura en vivo de `--calc-standard` ha dado `standard`: las de las rondas 5, 7 (continuación), 8 y 9 dan `other`, y la señal del encabezado no se había leído en vivo (§«Preparación de E2E-02 y E2E-03», «Sin comprobar en vivo»).
+- **Consecuencia.** El cambio a mano que el responsable hizo en la Calculadora no aparece en la lectura del cliente. El paso no se ejecuta según la regla del responsable (§5, hallazgo 8).
+
+#### 3.2 E2E-02: el editor no recibe el foco de teclado
+
+- Los dos sondeos y el piloto dieron `activation_method` `already_foreground`: la ventana del editor ya es el primer plano y está maximizada, así que no se aplicó ninguno de los métodos de activación. UI Automation indica como propietario del foco de teclado el escritorio (clase `#32769`, tipo `Pane`), no la aplicación (`is_app` falso). Con 1,5 s de espera (sondeo 1) y con 5 s (sondeo 2), seis observaciones cada uno sin ningún elemento con origen de accesibilidad. El cliente se detuvo antes de toda entrada, como está diseñado.
+- **Causa no verificada.** Candidato: la escalera de activación no hace nada cuando la ventana ya es el primer plano, así que nada pide el foco de teclado para ella. Comprobarlo exige un cambio de cliente o del editor con prueba; hasta que el motor vea el campo no hay corrida posible con entrada.
+- El piloto no pasó, por lo que la serie queda bloqueada según la regla del responsable (un piloto que no pasa, por cualquier causa, bloquea su serie).
+
+#### 3.3 E2E-03: los objetivos de la navegación no son los que define el flujo
+
+Lo que muestra el sondeo, sin ningún clic:
+
+- **«carpeta-a»** (el flujo lo busca en `left_sidebar` como `TreeItem`): el motor ve un elemento confirmado con esa etiqueta, en zona `unknown` y rol `unknown`. UI Automation ve un único elemento en pantalla con ese nombre y tipo `ListItem`; no hay ningún `TreeItem` con ese nombre.
+- **«carpeta-b»**: no está en pantalla antes de elegir «carpeta-a». Es lo esperado: el árbol sólo lo muestra después del primer clic, que el sondeo no hace.
+- **La raíz** (el flujo la busca en `top_bar` como `Button` o `SplitButton`): el motor la ve confirmada, en zona `unknown`; UI Automation la ve como `SplitButton`, que sí es un tipo permitido.
+- Con los filtros de zona y de tipo del flujo, ninguno de los objetivos de navegación se encuentra, así que el cliente no habría enviado clic alguno. La regla del responsable para este caso (no ejecutar en vivo si los objetivos no son alcanzables con clics sencillos) se aplicó.
+- **No verificado:** por qué el motor da zona `unknown` en esta ventana, y si el «carpeta-a» de tipo `ListItem` pertenece al panel de navegación o a la lista de archivos.
+
+#### 3.4 Totales y seguridad
+
+- Solicitudes reales en la continuación: **0**. Cuaderno: 429 antes y después (ronda: 2 de 200).
+- Corridas puntuadas: 0. Pilotos aprobados: 0. Falsos éxitos, clics anclados mal, `indeterminate`, `POLICY_DENIED`, `STALE_SNAPSHOT` y rechazos: 0, porque no hubo acciones.
+- Parada de seguridad: no se activó. `stop.flag` ausente al terminar y nunca creado; `window.pin` ausente.
+- Capturas y texto de pantalla: ninguno guardado. Los registros contienen estados, contadores, identificadores, tipos de control y las etiquetas fijas del editor y de los flujos. Los nombres de carpeta son los que el propio cliente creó.
+- Aborto: el piloto de E2E-02 se detuvo por falta de evidencia de accesibilidad, antes de cualquier entrada. No hubo otra parada.
+
+#### 3.5 Latencias
+
+No hubo acciones, así que no hay latencias de `_meta`. Los tiempos de cada invocación (de 5,5 s a 5,9 s por corrida) no miden RNF-05 (S0 §10).
+
+### 4. Escritorio final
+
+- Calculadora: la lanzó y la cerró el script de lectura, dos veces, cerrando sólo su proceso. Ninguna queda en ejecución.
+- Editor: lo lanzó y cerró el cliente en tres invocaciones. Ninguno queda en ejecución.
+- Explorador: una ventana `CabinetWClass` abierta y cerrada por el cliente en el sondeo. El árbol temporal se borró (`%TEMP%\ommatix-e2e` queda vacío, sin entradas). `window.pin` se borró.
+- Bloc de notas del responsable: procesos 8960 y 23164, sin cambio. Ninguna invocación de esta continuación lo tocó.
+- `explorer.exe` (el shell): sin cambio. No se terminó ningún proceso del sistema.
+
+### 5. Hallazgos de la continuación
+
+| # | Severidad | Hallazgo | Estado y siguiente paso |
+|---|---|---|---|
+| 8 | Mayor (S4R-02) | El modo Estándar no se ha leído nunca en vivo. Toda lectura de `--calc-standard` da `other`, también la de esta continuación, después del cambio a mano del responsable. | Abierto, decisión del responsable. Propuesta: un diagnóstico de sólo lectura (número y tipo de elementos `Header`, sin nombres) antes de la siguiente ronda; si la lista de nombres resulta errónea, un cambio de cliente con prueba y hash nuevo. |
+| 9 | Menor, protocolo | Con `--calc-standard --max-live 0` y un modo distinto de Estándar, la invocación crea `stop.flag` antes de abortar (verificado en el código, no en vivo). No se usó. | Abierto. Corrección propuesta: que el paso no intente ningún clic con cupo 0, con una prueba que falle sin el cambio, en una ronda aparte. |
+| 10 | Mayor (E2E-02) | El foco de teclado de UI Automation lo tiene el escritorio mientras el editor es el primer plano. Cero elementos de accesibilidad en dos sondeos y en el piloto. | Abierto. Causa no verificada; candidato: la escalera de activación no se aplica con `already_foreground`. Requiere un cambio de cliente o del editor, con prueba y hash, en una ronda aparte. |
+| 11 | Mayor (E2E-03) | Los objetivos de la navegación no se encuentran como los define el flujo: zona `unknown` en el motor para «carpeta-a» y para la raíz, y «carpeta-a» es `ListItem` donde el flujo pide `TreeItem`. | Abierto, decisión del responsable: aceptar otro tipo y otra zona (cliente, prueba, hash), cambiar el contrato del flujo (cambio de escenario, con su entrada en el CHANGELOG) o investigar por qué el motor no asigna zona. |
+| 12 | Observación | El hallazgo 5 de la primera parte (el escalón de activación no se había ejercido) se ejerce en parte: el Explorador usó `attach_show_top` en la primera solicitud; el editor ya estaba en primer plano. | Parcialmente cubierto. |
+| 13 | Observación, gate | La prueba `ommatix-application --lib` que falló una vez en la primera parte no se reprodujo: `cargo test --workspace` de esta continuación pasó entero (383). | Abierto, sin cambio. |
+
+Los hallazgos 1 a 7 de la primera parte siguen como estaban, salvo el 5 (ver el 12). Los hallazgos 2 y 3 (registro) siguen esperando un cambio de cliente en una ronda aparte.
+
+### 6. Matriz
+
+Sin cambio. `matrices/plan_pruebas.csv` mantiene S4R-02, E2E-02 y E2E-03 en `NO_EJECUTADO` y `PENDIENTE_PRODUCTO`: no hay corridas puntuadas ni piloto aprobado que lo justifique. RF-18, RNF-03, RNF-05 y las casillas de la Definition of Done no cambian.
+
+### 7. Qué decide el responsable
+
+1. **Si la ronda continúa y bajo qué condiciones.** El cupo no ha cambiado: quedan 198 solicitudes con `--round-start 427`, o puede abrirse una ronda nueva con su propio `--round-start` (el cuaderno está en 429).
+2. **Hallazgo 8.** Si autoriza el diagnóstico de sólo lectura del encabezado antes de la siguiente ronda, o si acepta la lectura actual como definitiva.
+3. **Hallazgo 10.** Cómo llevar el foco de teclado al editor (cambio de cliente, del editor o de ambos), con prueba que falle sin el cambio.
+4. **Hallazgo 11.** Si E2E-03 sigue en esta ronda: cambiar el contrato de la navegación (dossier, con CHANGELOG), aceptar el tipo y la zona que hay (cliente, prueba, hash), o dejar E2E-03 fuera.
+5. **Hallazgos 2, 3 y 9.** Cambios del cliente, en una ronda aparte, con prueba que falle sin el cambio y hash nuevo.
+
+### 8. Ejecución
+
+Las invocaciones de esta continuación fueron: la comprobación de modo (dos lecturas de sólo lectura), `e2e_dossier.py --app editor --mode probe` (dos veces, la segunda con `--settle 5`), `e2e_dossier.py --app editor --mode run --runs 1 --max-live 8` (el piloto, detenido antes de toda entrada) y `e2e_dossier.py --app explorer --mode probe --runs 1`. Los registros y los resultados JSONL están en la carpeta de ejecuciones, fuera del repositorio; ninguno contiene capturas ni texto de pantalla.
