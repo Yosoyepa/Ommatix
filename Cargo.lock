@@ -2247,6 +2247,7 @@ dependencies = [
  "ommatix-domain",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "toml",
 ]
@@ -2264,6 +2265,8 @@ dependencies = [
  "ommatix-application",
  "ommatix-domain",
  "serde_json",
+ "sha2",
+ "toml",
 ]
 
 [[package]]

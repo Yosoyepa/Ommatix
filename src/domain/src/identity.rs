@@ -180,30 +180,7 @@ impl Registry {
 
         let same_geometry = geometry_epoch == self.geometry_epoch;
         let tracks: Vec<&Track> = self.tracks.values().collect();
-        let compatible = |t: &Track, o: &Observation| {
-            same_geometry
-                && t.observation.role == o.role
-                && key(t.observation.label.as_deref()) == key(o.label.as_deref())
-                && key(t.observation.discriminant.as_deref()) == key(o.discriminant.as_deref())
-                && t.observation.bbox.iou(&o.bbox) >= policy.min_iou
-        };
-        let by_track: Vec<Vec<usize>> = tracks
-            .iter()
-            .map(|t| {
-                (0..order.len())
-                    .filter(|&j| compatible(t, order[j]))
-                    .collect()
-            })
-            .collect();
-        let mut matched_track = vec![None; order.len()];
-        for (i, candidates) in by_track.iter().enumerate() {
-            if let [j] = candidates[..] {
-                let rivals = by_track.iter().filter(|c| c.contains(&j)).count();
-                if rivals == 1 {
-                    matched_track[j] = Some(i);
-                }
-            }
-        }
+        let matched_track = associate(&tracks, &order, same_geometry, policy.min_iou);
 
         let mut next = Self {
             session_id: self.session_id.clone(),
@@ -297,7 +274,73 @@ impl Registry {
 
 /// Label or discriminant as compared for association: normalised, absent equals empty.
 fn key(text: Option<&str>) -> String {
+    #[cfg(test)]
+    tests::KEY_CALLS.with(|calls| calls.set(calls.get() + 1));
     text.map(normalized).unwrap_or_default()
+}
+
+/// What makes an observation a candidate for a track besides where it is: role, normalised
+/// label and normalised discriminant.
+type Identity = (Role, String, String);
+
+fn identity_of(observation: &Observation) -> Identity {
+    (
+        observation.role,
+        key(observation.label.as_deref()),
+        key(observation.discriminant.as_deref()),
+    )
+}
+
+/// The one-to-one association of `order` (observations) with `tracks`: for each observation,
+/// the index of the track it keeps the identity of. A track keeps its ID only when exactly
+/// one observation is compatible with it (same role, label and discriminant by their
+/// normalised form, and an IoU of at least `min_iou`) and it is the only track compatible
+/// with that observation; anything ambiguous matches nothing. A new geometry epoch
+/// associates nothing.
+///
+/// The normalised keys are computed once per element and observations are grouped by them,
+/// so a track is compared only with the observations of its own identity: normalising a
+/// label for every pair of tracks and observations cost 57 ms of the 60 ms of a warm
+/// observation of 300 controls and 600 text spans (PERF-01).
+fn associate(
+    tracks: &[&Track],
+    order: &[&Observation],
+    same_geometry: bool,
+    min_iou: f64,
+) -> Vec<Option<usize>> {
+    let mut matched_track = vec![None; order.len()];
+    if !same_geometry {
+        return matched_track;
+    }
+    let observed: Vec<Identity> = order.iter().map(|o| identity_of(o)).collect();
+    let mut groups: BTreeMap<&Identity, Vec<usize>> = BTreeMap::new();
+    for (j, identity) in observed.iter().enumerate() {
+        groups.entry(identity).or_default().push(j);
+    }
+    let by_track: Vec<Vec<usize>> = tracks
+        .iter()
+        .map(|t| {
+            groups
+                .get(&identity_of(&t.observation))
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&j| t.observation.bbox.iou(&order[j].bbox) >= min_iou)
+                .collect()
+        })
+        .collect();
+    let mut rivals = vec![0usize; order.len()];
+    for &j in by_track.iter().flatten() {
+        rivals[j] += 1;
+    }
+    for (i, candidates) in by_track.iter().enumerate() {
+        if let [j] = candidates[..]
+            && rivals[j] == 1
+        {
+            matched_track[j] = Some(i);
+        }
+    }
+    matched_track
 }
 
 /// The references an action carries, as the agent sent them.
@@ -382,8 +425,15 @@ impl ActionStatus {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
     use crate::fusion::Actionability;
+
+    thread_local! {
+        /// How many times this thread normalised a label or a discriminant for association.
+        pub(super) static KEY_CALLS: Cell<usize> = const { Cell::new(0) };
+    }
 
     fn bx(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
         BBox::new(x0, y0, x1, y1).unwrap()
@@ -756,6 +806,156 @@ mod tests {
                 .observe(1, &[], AssociationPolicy { min_iou: 0.0 })
                 .unwrap_err(),
             IdentityError::InvalidMinIou(0.0)
+        );
+    }
+
+    // ---- the association, against its definition ----
+
+    /// The association as its definition reads: every track against every observation,
+    /// normalising as it goes. Kept apart from `associate` as the independent baseline of
+    /// the optimised one (chapter 05 §5.5: a scalar baseline, not the same function twice).
+    fn reference_associate(
+        tracks: &[&Track],
+        order: &[&Observation],
+        same_geometry: bool,
+        min_iou: f64,
+    ) -> Vec<Option<usize>> {
+        let norm = |t: Option<&str>| t.map(normalized).unwrap_or_default();
+        let compatible = |t: &Track, o: &Observation| {
+            same_geometry
+                && t.observation.role == o.role
+                && norm(t.observation.label.as_deref()) == norm(o.label.as_deref())
+                && norm(t.observation.discriminant.as_deref()) == norm(o.discriminant.as_deref())
+                && t.observation.bbox.iou(&o.bbox) >= min_iou
+        };
+        let by_track: Vec<Vec<usize>> = tracks
+            .iter()
+            .map(|t| {
+                (0..order.len())
+                    .filter(|&j| compatible(t, order[j]))
+                    .collect()
+            })
+            .collect();
+        let mut matched = vec![None; order.len()];
+        for (i, candidates) in by_track.iter().enumerate() {
+            if let [j] = candidates[..]
+                && by_track.iter().filter(|c| c.contains(&j)).count() == 1
+            {
+                matched[j] = Some(i);
+            }
+        }
+        matched
+    }
+
+    /// A small deterministic generator (no randomness in the domain, none in its tests).
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self, bound: u64) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (self.0 >> 33) % bound
+        }
+    }
+
+    /// Labels that differ only in case, in composition or in surrounding blanks are one
+    /// label after normalisation, and a few are really different or absent.
+    const LABELS: [Option<&str>; 8] = [
+        Some("Save"),
+        Some("save"),
+        Some(" SAVE "),
+        Some("Ça"),
+        Some("C\u{327}a"),
+        Some("Open"),
+        Some(""),
+        None,
+    ];
+
+    fn random_observations(rng: &mut Lcg, n: usize, jitter: f64) -> Vec<Observation> {
+        (0..n)
+            .map(|_| {
+                let (x, y) = (rng.next(6) as f64 * 40.0, rng.next(4) as f64 * 30.0);
+                let (dx, dy) = (rng.next(5) as f64 * jitter, rng.next(5) as f64 * jitter);
+                Observation {
+                    bbox: bx(x + dx, y + dy, x + dx + 36.0, y + dy + 26.0),
+                    role: if rng.next(3) == 0 {
+                        Role::Input
+                    } else {
+                        Role::Button
+                    },
+                    label: LABELS[rng.next(LABELS.len() as u64) as usize].map(str::to_owned),
+                    discriminant: (rng.next(4) == 0)
+                        .then(|| ["a", "A", " b "][rng.next(3) as usize].to_owned()),
+                    affordance: Affordance {
+                        actionability: Actionability::Confirmed,
+                        enabled: true,
+                        visible: true,
+                    },
+                }
+            })
+            .collect()
+    }
+
+    /// PERF-01: the grouped association is the pairwise definition, on crowded scenes full
+    /// of repeated, near-identical and differently-written labels, across geometry epochs.
+    #[test]
+    fn perf_01_the_association_is_the_pairwise_definition() {
+        let mut rng = Lcg(2026);
+        let mut matched_any = 0;
+        for case in 0..400 {
+            let n = 1 + rng.next(40) as usize;
+            let first = random_observations(&mut rng, n, 0.0);
+            let (registry, _) = Registry::new("s", 1)
+                .observe(1, &first, AssociationPolicy::default())
+                .unwrap();
+            let m = 1 + rng.next(40) as usize;
+            // The second screen: the first one moved a little, plus strangers.
+            let mut second = random_observations(&mut rng, m, 1.0);
+            second.extend(first.iter().take(rng.next(n as u64 + 1) as usize).cloned());
+            let order: Vec<&Observation> = second.iter().collect();
+            let tracks: Vec<&Track> = registry.tracks().collect();
+            for (same_geometry, min_iou) in [(true, 0.5), (true, 0.9), (false, 0.5), (true, 1.0)] {
+                let expected = reference_associate(&tracks, &order, same_geometry, min_iou);
+                let actual = associate(&tracks, &order, same_geometry, min_iou);
+                assert_eq!(actual, expected, "case {case}, {same_geometry}, {min_iou}");
+                matched_any += actual.iter().flatten().count();
+            }
+        }
+        assert!(
+            matched_any > 200,
+            "the cases associate something: {matched_any}"
+        );
+    }
+
+    /// PERF-01 regression (docs/thesis/S0_RESULTADOS.md §11): a warm observation of 300
+    /// controls and 600 text spans spent 57 of its 60 ms normalising labels once for every
+    /// pair of track and observation. Each element is now normalised once, however many
+    /// elements there are.
+    #[test]
+    fn perf_01_every_element_is_normalised_once_not_once_per_pair() {
+        let observations: Vec<Observation> = (0..600)
+            .map(|i| {
+                let (col, row) = (f64::from(i % 30), f64::from(i / 30));
+                button(
+                    bx(col * 40.0, row * 30.0, col * 40.0 + 36.0, row * 30.0 + 26.0),
+                    &format!("Item {i}"),
+                )
+            })
+            .collect();
+        let (registry, _) = Registry::new("s", 1)
+            .observe(1, &observations, AssociationPolicy::default())
+            .unwrap();
+        KEY_CALLS.with(|calls| calls.set(0));
+        let (next, changes) = observe(&registry, &observations);
+        let calls = KEY_CALLS.with(Cell::get);
+        // Two keys (label, discriminant) for each of 600 tracks and 600 observations.
+        assert!(calls <= 2 * (600 + 600), "{calls} normalisations");
+        // And the answer is the same: every track kept its identity, nothing changed.
+        assert_eq!(next.tracks().count(), 600);
+        assert!(
+            changes.created.is_empty() && changes.updated.is_empty() && changes.retired.is_empty()
         );
     }
 }

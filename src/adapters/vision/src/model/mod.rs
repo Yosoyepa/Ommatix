@@ -1,7 +1,9 @@
 //! Model-independent pieces of the ONNX detector, in safe Rust and testable without any
 //! model: the manifest, the integrity check, the letterbox and its inverse, the decoding
-//! of the output tensor and NMS. The `onnx` feature adds the runtime that uses them.
+//! of the output tensor and NMS, and the supply-chain gate that checks every file before
+//! anything is loaded. The `onnx` feature adds the runtime that uses them.
 
+pub mod artifacts;
 pub mod decode;
 pub mod integrity;
 pub mod letterbox;

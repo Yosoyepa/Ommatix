@@ -41,11 +41,14 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | S4, novena ronda (rama `docs/s4-ninth-round`, CHANGELOG 1.0.33): en vivo, dos solicitudes reales (cuaderno 427 → 429) en `--calc-standard`; el segundo clic («Estándar») se entregó sin quedar anclado y, por la regla de seguridad del responsable, se detuvo todo el trabajo en vivo. Sin corridas puntuadas; E2E-02 y E2E-03 no se ejecutaron. Matrices sin cambio |
 | — | S4, continuación de la novena ronda (rama `docs/s4-ninth-round-continuation`, CHANGELOG 1.0.34): ninguna solicitud real (cuaderno sigue en 429, de 200). S4R-02 no se ejecutó: la comprobación de modo, de sólo lectura, dio «otro» en dos lecturas. El piloto de E2E-02 no pasó sin entrada (sin evidencia de accesibilidad: el foco de teclado lo tiene el escritorio). E2E-03 no se ejecutó: el sondeo no encuentra los objetivos de navegación como el flujo los define. Ninguna corrida puntuada; matrices sin cambio. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md), «Novena ronda (continuación)» |
 | — | S4, bloqueos de la novena ronda (rama `fix/s4-round9-blockers`, CHANGELOG 1.0.36, sin ejecución en vivo ni entrada; cuaderno 429): señal de modo de la Calculadora por «contiene estándar/standard» (nombre real desconocido), `--check-mode` de sólo lectura, `--calc-standard --max-live 0` rechazado, contadores y espera de `mode_after` en el resumen, foco de Win32 del editor (verificado en lectura) y flujo del Explorador desde `carpeta-b` (miga de pan, miga de pan, «Atrás»; zona sólo registrada). 258 pruebas de `tools/s4`, 21 del editor. Hashes en `docs/thesis/S4_ACEPTACION_REDUCIDA.md`, «Preparación de la décima ronda». | Hecho (sin verificación en vivo) |
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.36)
+| — | Pruebas de la Definition of Done que no necesitan entrada real ni pantalla (rama `feat/dod-offline-tests`, CHANGELOG 1.0.35, [ADR-0021](adr/0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md), aprobada el 14 de octubre de 2026): IT-06, SEC-03, SEC-04, SEC-06, PERF-01 y DOC-01 en Rust (`IMPLEMENTADO_EN_RUST_S4`) y REL-01 con sus comprobaciones y su guía (sigue `PENDIENTE_PRODUCTO`: falta el corpus de aceptación). Defecto hallado por PERF-01 y corregido: la asociación de identidad normalizaba cada etiqueta una vez por par de pista y observación (57 de los 60 ms de una observación en caliente de 300 controles y 600 textos); ahora p95 del núcleo ≤ 4 ms (3,97 ms; RNF-04, [`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §11). Otros hallazgos: los pesos se comprobaban después de cargar el runtime, el archivo de íconos curados no tenía hash (`[cache] prototypes_sha256`, obligatorio), `Unknown tool` y `Method not found` repetían texto del agente, UT-45 no tenía ninguna prueba con su identificador. Toolchain fijado en `1.99.0` (CI incluida); `validar_paquete.py` comprueba DOC-01 (449 comprobaciones). Informe en [`thesis/S4_REPRODUCIBILIDAD.md`](thesis/S4_REPRODUCIBILIDAD.md) | Abierto |
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.37)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
-en parte, IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05. Las demás IT y SEC no se han ejecutado.
+en parte, IT-01, IT-03, IT-04, IT-05, SEC-02 y SEC-05. IT-06, SEC-03, SEC-04 y SEC-06 están
+implementadas en Rust sobre dobles, el escritorio simulado y archivos temporales (1.0.35), sin
+corridas supervisadas; IT-07 no se ha ejecutado.
 El protocolo S4 reducido (1.0.13) ejecuta en parte E2E-01 y PERF-02, con 20 corridas sólo
 con clics. No son las 450 del protocolo (EV-02), y RF-18, RNF-03 y RNF-05 siguen pendientes.
 La segunda ronda (1.0.15) confirma por nombre de accesibilidad los controles de E2E-01 y E2E-02
@@ -167,7 +170,9 @@ Los bloqueos de la novena ronda se corrigen en `fix/s4-round9-blockers` (1.0.36,
     comprobados contra el manifiesto, letterbox, decodificación y NMS; roles y affordances
     del manifiesto) y `WinRtTextRecognizer` (feature `winrt-ocr`: `Windows.Media.Ocr` para
     un único idioma, sin alternativa). Las piezas independientes del modelo (`model`, `crop`,
-    `ocr`) se compilan y prueban siempre.
+    `ocr`) se compilan y prueban siempre, entre ellas `model::artifacts::verify`, que lee y
+    comprueba cada archivo del detector (manifiesto, DirectML, ONNX Runtime, pesos) **antes** de
+    cargar ninguna biblioteca (SEC-06, ADR-0021).
   - Un único `windows = "=0.62.2"` en el workspace; cada crate añade sus features.
 - **`ommatix` (app)**: `serve` y `demo` ejecutan el motor nuevo con las opciones `--config`,
   `--source sim|images|screen|dxgi` (`sim` por defecto; `screen` con la feature `screen`,
@@ -189,8 +194,9 @@ Los bloqueos de la novena ronda se corrigen en `fix/s4-round9-blockers` (1.0.36,
   fuentes `images`, `screen` y `dxgi`; las rutas relativas lo son al archivo de
   configuración; cualquier fallo de integridad, feature o idioma detiene el motor antes de
   abrir la captura. `[cache]` admite un archivo JSON lines de prototipos curados con
-  `context`, `gradient_tau`, `max_distance` y `min_margin`, todos juntos y sin valores por
-  defecto; el archivo se rechaza entero ante cualquier error o si supera `max_entries`.
+  `prototypes_sha256` (su SHA-256, que se comprueba antes de leerlo), `context`,
+  `gradient_tau`, `max_distance` y `min_margin`, todos juntos y sin valores por defecto; el
+  archivo se rechaza entero ante cualquier error, un digest distinto o si supera `max_entries`.
 - **Aceptación**: `src/acceptance/tests/thesis.rs` ejecuta BDD-01..37 desde
   `docs/thesis/features/` (BDD-01..10 y 13..21 sobre el núcleo; BDD-11, 12 y 22..27 a través
   del motor y del adaptador MCP; BDD-28..32 igual, sobre `LiveDouble`, un doble del actuador
@@ -294,11 +300,14 @@ Los bloqueos de la novena ronda se corrigen en `fix/s4-round9-blockers` (1.0.36,
      `cargo test -p ommatix-adapter-capture --features dxgi -- --ignored` toma un frame sin
      guardarlo), IT-02 (detector y OCR reales, deshacer el letterbox; necesita modelos),
      IT-03 (conteo de `SendInput`, permisos y foco), IT-04 (postcondición y plazo sin
-     reintento), IT-05 (idempotencia ante caídas), IT-06 (telemetría redactada), IT-07 (DPI
-     100/125/150 %, epoch y fuera de perfil).
+     reintento), IT-05 (idempotencia ante caídas), IT-06 (telemetría redactada: en Rust desde
+     1.0.35; falta revisar los registros de una corrida en vivo), IT-07 (DPI 100/125/150 %,
+     epoch y fuera de perfil).
    - SEC-01..06: el agente no puede habilitarse, parada, prompt injection visual, sin
      capturas ni secretos, precheck de foco y ventana con carreras, integridad de modelo y
-     caché.
+     caché. SEC-03, SEC-04 y SEC-06 existen en Rust desde 1.0.35; falta repetir SEC-03 con el
+     OCR y el árbol de UI Automation reales ante una página de texto hostil, y SEC-06 con los
+     archivos reales del operador (ya comprobados por `tools/repro/environment.py`).
 4. **Resto de S3**: comprobar la ventana con el foco antes de escribir (BDD-28, SEC-05), un
    mecanismo de parada del operador que active `LocalPolicy::stopped` e interrumpa una
    secuencia (BDD-32, SEC-02), verificar los efectos de foco, valor y desplazamiento,
@@ -319,6 +328,7 @@ Los bloqueos de la novena ronda se corrigen en `fix/s4-round9-blockers` (1.0.36,
   sus funciones puras. Un escenario sobre un doble del actuador se marca
   `EJECUTADO_SOBRE_CONTRATO_S3_DOBLE` y no cierra la prueba IT o SEC que lo acompaña.
 - Cada cambio de estado en las matrices lleva entrada en `docs/thesis/CHANGELOG.md`.
+- El toolchain de Rust está fijado a una versión (`rust-toolchain.toml`, hoy 1.99.0) y la CI instala la misma: al subirlo se cambian los dos a la vez (una prueba lo comprueba). Una prueba de Rust acredita una prueba planificada sólo si lleva su identificador (`ut_45_…`, `sec_03_…`); `src/acceptance/tests/repository.rs` lo comprueba.
 - Commits en Conventional Commits; PR con `.github/pull_request_template.md`; documentos con
   gemelo `*.es.md` se actualizan en el mismo PR.
 - Nada en el repositorio menciona el nombre anterior del proyecto. No se versionan capturas,

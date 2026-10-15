@@ -143,8 +143,9 @@ The continuation of that round ([CHANGELOG 1.0.34](docs/thesis/CHANGELOG.md)) se
   (p95 98 ms) and a one-region update (p95 102 ms) but not, by 3 ms, for two regions
   (p95 153 ms), so RNF-05 is not closed), so by default the detector is the bootstrap's flat-colour region finder (roles
   `unknown`) and there is no OCR; no third-party MCP client has been tested; IT-02 ran only
-  in part (S0); and IT-06, IT-07, SEC-03, SEC-04 and SEC-06 have not been run under
-  supervision. Live input stays **off** unless the
+  in part (S0); IT-07 has not been run; and IT-06, SEC-03, SEC-04 and SEC-06 are tested in Rust
+  over test doubles and the simulated desktop ([CHANGELOG 1.0.35](docs/thesis/CHANGELOG.md)), not
+  yet under supervision with the real stages. Live input stays **off** unless the
   operator enables it (below). The [overview](docs/architecture/overview.md#where-the-code-is-today) lists what
   remains.
 - First platform: **Windows 11 x64**, one monitor, DPI 100/125/150 %
@@ -179,7 +180,7 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
 
 ## Quick start
 
-Requires Rust stable (pinned in `rust-toolchain.toml`) and Python 3.11 or later for the
+Requires Rust 1.99.0 (the release pinned in `rust-toolchain.toml`) and Python 3.11 or later for the
 thesis checks.
 
 ```bash
@@ -296,10 +297,11 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
   page reports its `age_ms` instead), and `actuation_enabled = true` with an input adapter
   that is not live.
 
-`[cache]` may also turn on the icon resolver (Algorithm 3A) with five keys that go together:
+`[cache]` may also turn on the icon resolver (Algorithm 3A) with six keys that go together:
 `prototypes` (a JSON-lines file, relative to the configuration file, one
 `{"label", "context", "grid"}` per line, where `grid` is the 9×8 greyscale crop as 72 values),
-`context` (the application the prototypes apply to; until S3 identifies the foreground
+`prototypes_sha256` (the file's SHA-256: it is checked before the file is parsed, so a prototype
+added after the operator reviewed it stops the server, SEC-06), `context` (the application the prototypes apply to; until S3 identifies the foreground
 application, the operator names it), `gradient_tau` (1–255), `max_distance` and `min_margin`
 (0–1). None has a default, because the thesis calibrates them on its corpus (H4); any of them
 without the others is refused, and so is the whole file on any invalid line or more than
@@ -368,6 +370,7 @@ docs/
 tools/                     measurement and acceptance tools outside the workspace (never linked
 ├── s0/                    into the binary): model export (`--fp16`, `--dynamic`), synthetic frames,
 │                          operator configurations
+├── repro/                 `environment.py`: commit, toolchain, lockfiles, machine and pinned artefacts (REL-01)
 ├── s3/, s4/               MCP drivers, the controlled test application (`s4/testapp`, with
 │                          the hidden `--animate` flags of the RNF-05 measurements) and the
 │                          editor (`s4/testeditor`) and client (`s4/e2e_dossier.py`) of the

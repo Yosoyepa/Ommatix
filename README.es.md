@@ -155,8 +155,10 @@ La continuación de esa ronda ([CHANGELOG 1.0.34](docs/thesis/CHANGELOG.md)) no 
   completo (p95 98 ms) y para una región (p95 102 ms), pero no, por 3 ms, para dos regiones
   (p95 153 ms), así que RNF-05 no queda cerrado), así que por defecto el detector es el buscador de regiones de color
   plano del arranque (roles `unknown`) y no hay OCR; no se ha probado un cliente MCP de
-  terceros; IT-02 sólo se ejecutó en parte (S0); e IT-06, IT-07, SEC-03,
-  SEC-04 y SEC-06 no se han ejecutado de forma supervisada. La
+  terceros; IT-02 sólo se ejecutó en parte (S0); IT-07 no se ha ejecutado; e IT-06, SEC-03, SEC-04
+  y SEC-06 se prueban en Rust sobre dobles de prueba y el escritorio simulado
+  ([CHANGELOG 1.0.35](docs/thesis/CHANGELOG.md)), todavía no de forma supervisada con las etapas
+  reales. La
   entrada real sigue **apagada** salvo que el operador la habilite (abajo). La
   [visión general](docs/architecture/overview.es.md#dónde-está-el-código-hoy) detalla lo que
   falta.
@@ -193,7 +195,7 @@ Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADM
 
 ## Inicio rápido
 
-Requiere Rust estable (fijado en `rust-toolchain.toml`) y Python 3.11 o posterior para las
+Requiere Rust 1.99.0 (la versión fijada en `rust-toolchain.toml`) y Python 3.11 o posterior para las
 comprobaciones de la tesis.
 
 ```bash
@@ -314,10 +316,11 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
   (cada página informa su `age_ms`) y `actuation_enabled = true` con un adaptador de entrada
   que no es real.
 
-`[cache]` puede además encender el resolvedor de íconos (algoritmo 3A) con cinco claves que
+`[cache]` puede además encender el resolvedor de íconos (algoritmo 3A) con seis claves que
 van juntas: `prototypes` (un archivo JSON lines, relativo al archivo de configuración, con un
 `{"label", "context", "grid"}` por línea, donde `grid` es el recorte 9×8 en escala de grises
-como 72 valores), `context` (la aplicación a la que valen los prototipos; hasta que S3
+como 72 valores), `prototypes_sha256` (el SHA-256 del archivo: se comprueba antes de leerlo, así
+que un prototipo añadido después de la revisión del operador detiene el servidor, SEC-06), `context` (la aplicación a la que valen los prototipos; hasta que S3
 identifique la aplicación en primer plano, la nombra el operador), `gradient_tau` (1–255),
 `max_distance` y `min_margin` (0–1). Ninguna tiene valor por defecto, porque la tesis los
 calibra en su corpus (H4); cualquiera de ellas sin las demás se rechaza, y también el archivo
@@ -388,6 +391,7 @@ docs/
 tools/                     herramientas de medición y aceptación fuera del workspace (nunca
 ├── s0/                    enlazadas al binario): exportación del modelo (`--fp16`, `--dynamic`),
 │                          frames sintéticos, configuraciones del operador
+├── repro/                 `environment.py`: commit, toolchain, lockfiles, máquina y artefactos fijados (REL-01)
 ├── s3/, s4/               clientes MCP, la aplicación de prueba controlada (`s4/testapp`, con
 │                          las banderas ocultas `--animate` de las mediciones de RNF-05) y el
 │                          editor (`s4/testeditor`) y el cliente (`s4/e2e_dossier.py`) del

@@ -22,6 +22,8 @@ Los mocks sólo verifican intención y contratos de llamada. Un mock de SendInpu
 
 UT-01 a UT-15 cubren incrementalidad y commit; UT-16 a UT-26, fusión y affordance; UT-27 a UT-31, hashing/caché; UT-32 a UT-37, identidad; UT-38 a UT-43, referencias y simulación; UT-44, evidencia de accesibilidad (ADR-0017); UT-45, alcance de ventana de la política local (ADR-0020). La matriz contiene expectativa y correspondencia OR cuando existe.
 
+**Pruebas que no necesitan entrada real ni pantalla (1.0.35).** IT-06, SEC-03, SEC-04, SEC-06, PERF-01 y DOC-01 se implementan en Rust y llevan su identificador en el nombre de cada función (`sec_03_…`, `it_06_…`, `perf_01_…`), sobre dobles de los puertos, el escritorio simulado y archivos temporales falsos: nunca sobre pesos, capturas ni entrada reales. REL-01 tiene sus comprobaciones automáticas (`rel_01_…`), pero su estado sigue pendiente (corpus de aceptación congelado, commit de entrega e instalación, ver `S4_REPRODUCIBILIDAD.md`). El estado de cada una en la matriz es `IMPLEMENTADO_EN_RUST_S4` sólo cuando se cumple su criterio con esa evidencia; lo que exige la máquina de referencia con las etapas reales (OCR y árbol de UI Automation reales ante texto hostil, revisión de los registros de una corrida en vivo) queda dicho en el `CHANGELOG.md`, no se marca como hecho. Una prueba de Rust acredita una prueba planificada sólo si lleva su identificador, y `src/acceptance/tests/repository.rs` comprueba en ambos sentidos que la matriz y el código coinciden.
+
 Las lagunas explícitas incluyen: value frente a placeholder, matching perceptivo uno-a-uno, virtualización de filas, reglas contextuales del caché, concurrencia real y transformaciones de detector/OCR. Estos casos no se marcan verdes por semejanza con una prueba más simple.
 
 ## 5.5 Fixtures y corpus
@@ -40,7 +42,7 @@ Los tests de carga y modelos van en jobs separados, con versiones y hardware ide
 
 Desde `docs/thesis/`: `python referencia_ejecutable/run_tests.py`. Requiere Python 3.11+ y biblioteca estándar. Produce log y JSON en `referencia_ejecutable/resultados/`. El tiempo reportado es duración de tests en el entorno de prueba, no latencia del motor.
 
-El validador adicional `validar_paquete.py` comprueba JSON Schemas y ejemplos cuando `jsonschema` está instalado. Su chequeo de Gherkin es estructural, no un parser Cucumber completo. La plantilla Rust muestra fronteras de diseño, no una implementación compilada. En el repositorio, `cargo test --workspace` prueba el código de `src/`, que se realinea con este dossier por etapas; un test Rust aprobado sólo acredita su UT cuando lleva su identificador.
+El validador adicional `validar_paquete.py` comprueba JSON Schemas y ejemplos cuando `jsonschema` está instalado. Su chequeo de Gherkin es estructural, no un parser Cucumber completo. Desde 1.0.35 comprueba también la trazabilidad de DOC-01: cada requisito resuelve sus pruebas planificadas (rangos y prefijos incluidos), cita ADR que existen, tiene propietario y evidencia cuyos archivos existen, ninguna prueba planificada queda sin requisito, escenario o riesgo, cada ADR nombra pruebas que existen y cada estado sale del vocabulario de las matrices. No decide si la evidencia basta: eso es el estado de cada prueba. La plantilla Rust muestra fronteras de diseño, no una implementación compilada. En el repositorio, `cargo test --workspace` prueba el código de `src/`, que se realinea con este dossier por etapas; un test Rust aprobado sólo acredita su UT cuando lleva su identificador.
 
 ## 5.8 Evidencia de cierre
 

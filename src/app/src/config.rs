@@ -8,11 +8,11 @@
 //! instead of accepting them silently, and [`Config::notes`] lists the accepted values that
 //! the engine does not enforce yet, for stderr.
 //!
-//! `[cache]` may add, beyond the template, a curated prototypes file for Algorithm 3A and
-//! the thresholds to use it with. The thesis calibrates those thresholds (H4), so none has
-//! a default: the resolver is on only when the file, the context, `gradient_tau`,
-//! `max_distance` and `min_margin` are all set, and any of them without the others is
-//! refused.
+//! `[cache]` may add, beyond the template, a curated prototypes file for Algorithm 3A, its
+//! SHA-256 and the thresholds to use it with. The thesis calibrates those thresholds (H4),
+//! so none has a default: the resolver is on only when the file, its digest, the context,
+//! `gradient_tau`, `max_distance` and `min_margin` are all set, and any of them without the
+//! others is refused. The file is checked against the digest before it is parsed (SEC-06).
 //!
 //! The file is the operator's: nothing the agent sends can change it, and no CLI flag
 //! loosens `[safety]`.
@@ -331,6 +331,9 @@ pub struct CacheSection {
     /// Curated prototypes, JSON lines (see `prototypes.rs`); relative to the configuration
     /// file. Empty: no prototypes, every icon stays unknown.
     pub prototypes: String,
+    /// The SHA-256 (64 hexadecimal characters) of the prototypes file the operator reviewed
+    /// (chapter 08 §8.2: hash of the cache). Required with `prototypes`.
+    pub prototypes_sha256: String,
     /// The application or screen whose prototypes apply. Until the engine can identify
     /// the foreground application (S3), the operator names it here.
     pub context: String,
@@ -348,6 +351,7 @@ impl Default for CacheSection {
             max_entries: 4096,
             persist: false,
             prototypes: String::new(),
+            prototypes_sha256: String::new(),
             context: String::new(),
             gradient_tau: None,
             max_distance: None,
@@ -360,6 +364,7 @@ impl CacheSection {
     /// Whether any key of the icon resolver is set.
     fn resolver_requested(&self) -> bool {
         !self.prototypes.is_empty()
+            || !self.prototypes_sha256.is_empty()
             || !self.context.is_empty()
             || self.gradient_tau.is_some()
             || self.max_distance.is_some()
@@ -386,13 +391,18 @@ impl CacheSection {
         if c.resolver_requested() {
             check(
                 !c.prototypes.trim().is_empty()
+                    && !c.prototypes_sha256.is_empty()
                     && !c.context.is_empty()
                     && c.gradient_tau.is_some()
                     && c.max_distance.is_some()
                     && c.min_margin.is_some(),
-                "[cache] the icon resolver needs all of prototypes, context, gradient_tau, \
-                 max_distance and min_margin (the thesis calibrates them; there are no \
-                 defaults)",
+                "[cache] the icon resolver needs all of prototypes, prototypes_sha256, context, \
+                 gradient_tau, max_distance and min_margin (the thesis calibrates them; there \
+                 are no defaults)",
+            );
+            check(
+                c.prototypes_sha256.is_empty() || is_sha256(&c.prototypes_sha256),
+                "[cache] prototypes_sha256 must be a SHA-256 digest (64 hexadecimal characters)",
             );
             check(
                 c.context.is_empty()
@@ -613,8 +623,9 @@ impl Config {
         let policy = CachePolicy::new(max_distance, min_margin)
             .context("[cache] max_distance and min_margin must be between 0 and 1")?;
         let path = self.resolve_path(&c.prototypes);
-        let cache =
-            crate::prototypes::load(&path, c.max_entries, tau).context("[cache] prototypes")?;
+        let pin = Sha256Digest::parse(&c.prototypes_sha256).context("[cache] prototypes_sha256")?;
+        let cache = crate::prototypes::load(&path, c.max_entries, tau, &pin)
+            .context("[cache] prototypes")?;
         Ok(Some(IconResolverConfig {
             cache,
             policy,
@@ -804,6 +815,10 @@ mod tests {
             ("[cache]\npersist = true\n", "persist"),
             ("[cache]\nmax_entries = 0\n", "max_entries"),
             ("[cache]\nprototypes = \"icons.jsonl\"\n", "no defaults"),
+            (
+                "[cache]\nprototypes_sha256 = \"abc\"\n",
+                "prototypes_sha256",
+            ),
             ("[cache]\nmax_distance = 0.1\n", "no defaults"),
             ("[cache]\ncontext = \"app\"\n", "no defaults"),
             ("[cache]\ngradient_tau = 0\n", "gradient_tau"),
@@ -1091,13 +1106,20 @@ allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
         assert_eq!(config.local_policy(), LocalPolicy::default());
     }
 
-    const RESOLVER: &str = "[cache]\nprototypes = \"icons.jsonl\"\ncontext = \"notepad.exe\"\n\
-                            gradient_tau = 3\nmax_distance = 0.1\nmin_margin = 0.1\n";
+    /// A resolver section pinned by `digest` (64 hexadecimal characters).
+    fn resolver(digest: &str) -> String {
+        format!(
+            "[cache]\nprototypes = \"icons.jsonl\"\nprototypes_sha256 = \"{digest}\"\n\
+             context = \"notepad.exe\"\ngradient_tau = 3\nmax_distance = 0.1\nmin_margin = 0.1\n"
+        )
+    }
+
+    const NO_PIN: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
     #[test]
     fn the_icon_resolver_is_off_unless_fully_configured() {
         assert_eq!(Config::default().icon_resolver().unwrap(), None);
-        let config = Config::parse(RESOLVER).unwrap();
+        let config = Config::parse(&resolver(NO_PIN)).unwrap();
         assert_eq!(config.cache.context, "notepad.exe");
         // The file is read relative to the configuration file and refused when missing.
         let config = Config {
@@ -1106,29 +1128,40 @@ allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
         };
         let message = format!("{:#}", config.icon_resolver().unwrap_err());
         assert!(
-            message.contains("cannot read") && message.contains("here"),
+            message.contains("cannot load") && message.contains("here"),
             "{message}"
         );
+        // The digest is part of the set: without it, or malformed, the file is refused.
+        let unpinned = resolver(NO_PIN).replace(&format!("prototypes_sha256 = \"{NO_PIN}\"\n"), "");
+        let message = format!("{:#}", Config::parse(&unpinned).unwrap_err());
+        assert!(message.contains("prototypes_sha256"), "{message}");
+        let message = format!("{:#}", Config::parse(&resolver("12345")).unwrap_err());
+        assert!(message.contains("64 hexadecimal"), "{message}");
     }
 
-    #[test]
-    fn a_curated_prototypes_file_configures_the_resolver() {
-        let dir = std::env::temp_dir().join(format!("ommatix-config-{}", std::process::id()));
+    /// The operator's directory with a reviewed prototypes file and a configuration that
+    /// pins it. Returns the directory and the file's text.
+    fn reviewed_prototypes(tag: &str) -> (PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("ommatix-config-{tag}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let grid: Vec<String> = [0, 90, 90, 0, 0, 90, 90, 0, 0]
             .repeat(8)
             .iter()
             .map(ToString::to_string)
             .collect();
-        std::fs::write(
-            dir.join("icons.jsonl"),
-            format!(
-                "{{\"label\":\"Save\",\"context\":\"notepad.exe\",\"grid\":[{}]}}\n",
-                grid.join(",")
-            ),
-        )
-        .unwrap();
-        std::fs::write(dir.join("ommatix.toml"), RESOLVER).unwrap();
+        let prototypes = format!(
+            "{{\"label\":\"Save\",\"context\":\"notepad.exe\",\"grid\":[{}]}}\n",
+            grid.join(",")
+        );
+        std::fs::write(dir.join("icons.jsonl"), &prototypes).unwrap();
+        let digest = Sha256Digest::of(prototypes.as_bytes()).to_hex();
+        std::fs::write(dir.join("ommatix.toml"), resolver(&digest)).unwrap();
+        (dir, prototypes)
+    }
+
+    #[test]
+    fn a_curated_prototypes_file_configures_the_resolver() {
+        let (dir, _) = reviewed_prototypes("resolver");
         let config = Config::load(Some(&dir.join("ommatix.toml"))).unwrap();
         let resolver = config.icon_resolver().unwrap().expect("configured");
         std::fs::remove_dir_all(&dir).unwrap();
@@ -1136,6 +1169,21 @@ allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
         assert_eq!(resolver.tau, 3);
         assert_eq!(resolver.cache.prototypes().len(), 1);
         assert_eq!(resolver.policy, CachePolicy::new(0.1, 0.1).unwrap());
+    }
+
+    /// SEC-06, end to end through the configuration: a prototype added to the reviewed
+    /// file after the operator pinned it stops the engine before any icon is labelled.
+    #[test]
+    fn sec_06_a_poisoned_prototypes_file_stops_the_resolver() {
+        let (dir, prototypes) = reviewed_prototypes("poisoned");
+        let config = Config::load(Some(&dir.join("ommatix.toml"))).unwrap();
+        assert!(config.icon_resolver().unwrap().is_some());
+        let extra = prototypes.replace("Save", "Delete everything");
+        std::fs::write(dir.join("icons.jsonl"), format!("{prototypes}{extra}")).unwrap();
+        let message = format!("{:#}", config.icon_resolver().unwrap_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(message.contains("SHA-256 mismatch"), "{message}");
+        assert!(message.contains("[cache] prototypes"), "{message}");
     }
 
     #[test]

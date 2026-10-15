@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use ommatix_adapter_mcp::{Connection, MODERN_PROTOCOL_VERSION, McpConfig, McpServer};
 use ommatix_application::contract::ValidatedAction;
@@ -110,6 +111,7 @@ struct Screen {
     frame: BgraFrame,
     seq: u64,
     clock: Arc<ManualClock>,
+    cost: Duration,
 }
 
 impl FrameCapturer for Screen {
@@ -119,6 +121,7 @@ impl FrameCapturer for Screen {
 
     fn capture(&mut self) -> Result<CapturedFrame, PortError> {
         self.seq += 1;
+        self.clock.advance(self.cost);
         Ok(CapturedFrame {
             frame: self.frame.clone(),
             frame_seq: self.seq,
@@ -127,7 +130,7 @@ impl FrameCapturer for Screen {
     }
 }
 
-struct Detector(Arc<Scene>);
+struct Detector(Arc<Scene>, Arc<ManualClock>, Duration);
 
 impl VisionDetector for Detector {
     fn name(&self) -> &'static str {
@@ -139,6 +142,7 @@ impl VisionDetector for Detector {
     }
 
     fn detect(&mut self, _: &BgraFrame, regions: &[BBox]) -> Result<Vec<Control>, PortError> {
+        self.1.advance(self.2);
         Ok(self
             .0
             .controls
@@ -149,7 +153,7 @@ impl VisionDetector for Detector {
     }
 }
 
-struct Recognizer(Arc<Scene>);
+struct Recognizer(Arc<Scene>, Arc<ManualClock>, Duration);
 
 impl TextRecognizer for Recognizer {
     fn name(&self) -> &'static str {
@@ -157,6 +161,7 @@ impl TextRecognizer for Recognizer {
     }
 
     fn recognize(&mut self, _: &BgraFrame, regions: &[BBox]) -> Result<Vec<Word>, PortError> {
+        self.1.advance(self.2);
         Ok(self
             .0
             .words
@@ -201,8 +206,27 @@ impl PolicyStore for FixedPolicy {
 
 pub const SESSION_ID: &str = "test-session";
 
+/// How long each double takes on the engine's virtual clock. The stages then run one after
+/// the other, so that their durations are exact.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Costs {
+    pub capture: Duration,
+    pub detect: Duration,
+    pub recognize: Duration,
+}
+
 pub fn engine_with(scene: Scene, policy: LocalPolicy) -> Engine {
+    build_engine(scene, policy, None)
+}
+
+/// Like [`engine_with`], with doubles that take `costs` and stages that run in sequence.
+pub fn engine_with_costs(scene: Scene, policy: LocalPolicy, costs: Costs) -> Engine {
+    build_engine(scene, policy, Some(costs))
+}
+
+fn build_engine(scene: Scene, policy: LocalPolicy, costs: Option<Costs>) -> Engine {
     let clock = Arc::new(ManualClock::new());
+    let costs_in_use = costs.unwrap_or_default();
     let pixels = vec![0x80_u8; scene.width as usize * scene.height as usize * 4];
     let frame = BgraFrame::new(
         scene.width,
@@ -218,15 +242,18 @@ pub fn engine_with(scene: Scene, policy: LocalPolicy) -> Engine {
             frame,
             seq: 0,
             clock: clock.clone(),
+            cost: costs_in_use.capture,
         }),
-        detector: Box::new(Detector(scene.clone())),
-        recognizer: Box::new(Recognizer(scene)),
+        detector: Box::new(Detector(scene.clone(), clock.clone(), costs_in_use.detect)),
+        recognizer: Box::new(Recognizer(scene, clock.clone(), costs_in_use.recognize)),
         accessibility: Box::new(ommatix_application::NoAccessibility),
         actuator: Box::new(NullActuator::default()),
         policy: Arc::new(FixedPolicy(policy)),
         clock,
     };
-    Engine::new(EngineConfig::new(SESSION_ID), ports)
+    let mut config = EngineConfig::new(SESSION_ID);
+    config.concurrent_stages = costs.is_none();
+    Engine::new(config, ports)
 }
 
 pub fn server_with(scene: Scene, config: McpConfig) -> McpServer {

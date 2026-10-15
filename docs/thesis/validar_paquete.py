@@ -108,6 +108,67 @@ def main() -> int:
     check('escenarios_matriz_completos',set(found)=={x['scenario'] for x in scenarios})
     for row in scenarios:
         check('trazabilidad:'+row['scenario'],row['requirement'] in rid and row['planned_test'] in tid and found.get(row['scenario'])==row['file'])
+    # DOC-01 (RNF-10): cada requisito está ligado a pruebas que existen, a evidencia que
+    # existe, a ADR que existen y a un propietario; ninguna prueba queda sin requisito,
+    # escenario o riesgo; los estados salen del vocabulario de las matrices. No decide si la
+    # evidencia basta (eso es el estado de cada prueba), sólo que el vínculo no está roto.
+    risks=read_csv('matrices/riesgos.csv')
+    tests_by_prefix={}
+    for x in planned:
+        tests_by_prefix.setdefault(x['id'].split('-')[0],[]).append(x['id'])
+    def expand(text: str):
+        """Identificadores de prueba que nombra `text` (rangos `UT-01..UT-08`, `E2E-01..E2E-03`, prefijos `UT/SEC`) y lo que no resuelve."""
+        collected,unresolved=set(),[]
+        for token in re.split(r'[;,/]|\s+y\s+|\s+and\s+',text):
+            token=token.strip().rstrip('.')
+            if not token:
+                continue
+            span=re.fullmatch(r'([A-Z0-9]+)-(\d+)\.\.(?:\1-)?(\d+)',token)
+            if span:
+                width=len(span.group(2))
+                ids=[f'{span.group(1)}-{n:0{width}d}' for n in range(int(span.group(2)),int(span.group(3))+1)]
+                (collected.update(ids) if set(ids)<=tid else unresolved.append(token))
+            elif token in tid:
+                collected.add(token)
+            elif token in tests_by_prefix:
+                collected.update(tests_by_prefix[token])
+            else:
+                unresolved.append(token)
+        return collected,unresolved
+    referenced=set()
+    adr_numbers={p.name[:4] for p in ADRS}
+    repo=ROOT.parent.parent
+    for x in requirements:
+        named,unresolved=expand(x['pruebas_planificadas'])
+        referenced|=named
+        check('doc01_pruebas_existen:'+x['id'],bool(named) and not unresolved,str(unresolved))
+        check('doc01_adr_existen:'+x['id'],
+              bool(re.findall(r'ADR-\d{4}',x['adr'])) and {n[4:] for n in re.findall(r'ADR-\d{4}',x['adr'])}<=adr_numbers,x['adr'])
+        check('doc01_propietario:'+x['id'],bool(x['propietario'].strip()))
+        paths=re.findall(r'(?<![\w/.])((?:docs|src|tools)/[\w./-]+\.(?:md|rs|py|json|csv|toml))',x['evidencia'])
+        missing=[p for p in paths if not (repo/p).exists()]
+        check('doc01_evidencia_existe:'+x['id'],bool(x['evidencia'].strip()) and not missing,str(missing))
+    for x in scenarios:
+        referenced.add(x['planned_test'])
+    for x in risks:
+        named,unresolved=expand(x['validation'])
+        referenced|=named
+        check('doc01_riesgo_pruebas:'+x['id'],bool(named) and not unresolved,str(unresolved))
+    for adr in ADRS:
+        section=re.search(r'(?ms)^## Required validation\s*$(.*?)(?=^## |\Z)',adr.read_text(encoding='utf-8'))
+        mentioned=set(re.findall(r'\b(?:UT|IT|CT|SEC|E2E|S4R|PERF|EV|REL|DOC)-\d+(?:\.\.(?:UT|IT|CT|SEC|E2E|S4R|PERF|EV|REL|DOC)-\d+)?',section.group(1))) if section else set()
+        unresolved=[t for t in mentioned if expand(t)[1]]
+        check('doc01_adr_pruebas:'+adr.name,not unresolved,str(unresolved))
+    for x in planned:
+        check('doc01_prueba_enlazada:'+x['id'],x['id'] in referenced)
+    plan_statuses={'IMPLEMENTADO_EN_RUST_S1','IMPLEMENTADO_EN_RUST_S2','IMPLEMENTADO_EN_RUST_S4','EJECUTADO_SUPERVISADO',
+                   'EJECUTADO_SUPERVISADO_PARCIAL','EJECUTADO_PARCIAL_SPIKE_S0','PENDIENTE_PRODUCTO'}
+    scenario_statuses={'EJECUTADO_SOBRE_NUCLEO_S1','EJECUTADO_SOBRE_NUCLEO_S2','EJECUTADO_SOBRE_CONTRATO_S2','EJECUTADO_SOBRE_CONTRATO_S3_DOBLE'}
+    check('doc01_estados_de_pruebas',all(x['estado_aceptacion_producto'] in plan_statuses for x in planned),
+          str(sorted({x['estado_aceptacion_producto'] for x in planned}-plan_statuses)))
+    check('doc01_estados_de_escenarios',all(x['status'] in scenario_statuses for x in scenarios),
+          str(sorted({x['status'] for x in scenarios}-scenario_statuses)))
+    check('doc01_estado_de_requisitos',{x['estado_producto'] for x in requirements}=={'PENDIENTE_IMPLEMENTACION_O_VALIDACION'})
     oracle=load('referencia_ejecutable/resultados/oraculo_report.json')
     check('reporte_oraculo_aprobado',oracle.get('success') is True and oracle.get('tests_run')==48,
           'Se lee el informe previo; para volver a ejecutar use referencia_ejecutable/run_tests.py')
