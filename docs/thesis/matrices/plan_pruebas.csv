@@ -71,7 +71,7 @@ CT-08,Legacy opt-in,Handshake únicamente en perfil legacy,NO_EJECUTADO,IMPLEMEN
 CT-09,Tools/errors,Listado y separación error herramienta/protocolo,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
 CT-10,Tamaño,"64 KiB entrada/salida, inputs inválidos",NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S2
 SEC-01,Política local,Agente no puede habilitarse,NO_EJECUTADO,EJECUTADO_SUPERVISADO
-SEC-02,Parada,Detener nuevas inyecciones,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
+SEC-02,Parada,Detener nuevas inyecciones,NO_EJECUTADO,EJECUTADO_SUPERVISADO
 SEC-03,Prompt injection visual,OCR no cambia permisos,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S4
 SEC-04,Exfiltración,Sin screenshots ni secretos por defecto,NO_EJECUTADO,IMPLEMENTADO_EN_RUST_S4
 SEC-05,Precheck de acción,Foco/ventana/frescura y carreras,NO_EJECUTADO,EJECUTADO_SUPERVISADO_PARCIAL
