@@ -2131,3 +2131,77 @@ No hubo sonda, piloto ni serie de E2E-03. No se abrió ninguna ventana del Explo
 
 - `docs/handoff.md`: una fila y un párrafo de esta continuación.
 - `README.md` y `README.es.md`: un párrafo en cada uno, después del de la undécima ronda.
+
+## Undécima ronda (continuación 2): E2E-03 se ejecuta en vivo; la sonda y el piloto pasan, tres corridas puntuadas pasan, y la ronda se detiene por entrada entre invocaciones
+
+**Fecha:** 15 de octubre de 2026 (hora local del equipo, UTC-5). **Estado:** detenida antes de la quinta corrida puntuada, por la regla de entrada del responsable. Rama `docs/s4-eleventh-round-run2` desde `main` en `bd025e3` (fusión de #32). CHANGELOG 1.0.45. Revisión: [`reviews/2026-10-14-s4-eleventh-round.md`](../reviews/2026-10-14-s4-eleventh-round.md), hallazgos 5 a 9. **Solicitudes reales: 15** (cuaderno de 515 a 530, con `--round-start 429`: 101 usadas de 200, 99 libres). Matriz: E2E-03 sigue `PENDIENTE_PRODUCTO`.
+
+### 1. Las reglas del responsable (2026-10-15)
+
+El responsable confirmó que la entrada de las 00:23 fue suya, anterior a la parte en vivo, y que había dejado de usar el equipo. Aprobó una regla de entrada que sustituye a la anterior:
+
+- Una etapa en vivo (sonda, piloto o cada invocación puntuada) sólo empieza si el contador de inactividad marca al menos 90 s justo antes. Si no llega a 90 s en diez minutos, se detiene todo y se informa.
+- Entre invocaciones, la entrada que la ronda no provocó (un contador menor que el tiempo transcurrido desde el fin de la invocación anterior) detiene todo el trabajo en vivo.
+- Línea base: ninguna ventana `CabinetWClass` visible; la oculta del proceso del shell (PID 36160) intacta y sin tocar.
+
+### 2. Verificación previa y artefactos fijados
+
+- **Código.** `main` en `bd025e3`. `git diff --stat 0cb126f..HEAD -- src tools/s4/testeditor` no muestra cambios, así que el motor y el editor no se recompilan.
+- **Comprobaciones previas a la entrada**, todas con código de salida 0: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; la misma con `dxgi,sendinput,directml,winrt-ocr,uia`; `cargo test --workspace` (447 pasadas, 0 fallidas, 1 ignorada); `python -m unittest discover -s tools/s4 -p "test_*.py"` (297 correctas); el editor (`cargo clippy -- -D warnings` y 24 pruebas pasadas); `referencia_ejecutable/run_tests.py` (48 de 48); `validar_paquete.py` (451 comprobaciones, 0 fallidas).
+- **Clientes, configuraciones y artefactos**, comprobados con su SHA-256 en la comprobación previa de cada etapa: `tools/s4/e2e_driver.py` `768e77e3…7202d`; `tools/s4/e2e_dossier.py` `359f6f28…0afc2`; `target/release/ommatix.exe` `a137ccd1…d548`; `ommatix-testeditor.exe` `f358b3a9…1d20`; `s4r10-live.toml` `0428daf8…c1e2`; `s4r10-explorer.toml` `ab6c33b5…33d7`. El manifiesto, ONNX Runtime y DirectML no cambian.
+- **Entorno del cliente.** Cada invocación corrió con `PYTHONIOENCODING=utf-8`. El cliente no cambió (hallazgo 7).
+
+### 3. Sonda sin entrada: la compuerta se cumple
+
+A las 00:49:36, la lectura previa marcó un contador de 150,2 s, cuaderno 515 y sin problemas. La sonda (`e2e_dossier.py --app explorer --mode probe`, `s4r10-explorer.toml`, cero solicitudes) dio: «carpeta-a» y la miga de la raíz, cada una con un único elemento de motor utilizable `confirmed` (zona `unknown`; en UIA, `SplitButton` y `Text`); «Atrás», `unknown` (UIA `Button`), como se esperaba sin historial. La ventana se cerró, la carpeta temporal se eliminó (2 archivos y 3 directorios) y no quedó pin. Lectura posterior a las 00:49:45, sin problemas.
+
+### 4. Comprobación del alcance (ACTIVE CONTROL)
+
+Antes del primer piloto, `serve` con la configuración del Explorador y `--input sendinput`, con la entrada tomada de `/dev/null` y sin solicitudes: código 0 y ninguna salida estándar. La línea ACTIVE CONTROL nombra `explorer.exe`, la clase `CabinetWClass` y el archivo de pin, sin advertencias de alcance.
+
+### 5. Piloto (corrida 1, `--max-live 8`): pasa
+
+Criterios fijados antes de la ejecución: éxito del cliente; los tres pasos entregados y verificados por el sistema; cero falsos éxitos, controles erróneos y fallos de comprobación; ventana, carpeta temporal y pin retirados; ningún aborto ni parada de seguridad. Resultado: 3 solicitudes (cuaderno 515 → 518); 3 entregadas con `effect_observed`; 3 de 3 comprobaciones del sistema; 0 falsos éxitos; 0 controles erróneos; anclaje previo `ok` en los tres pasos; identidad `ok` (`SplitButton`, `SplitButton` y `Button`, con un candidato cada una); cierre por manejador; árbol sin cambios.
+
+**Lo que muestran los registros de la cadena posterior al clic.** Tras los pasos 1 y 2, el elemento bajo el cursor fue un `Text` dentro de un `SplitButton` cuyo `RuntimeId` no es el identificado, y ninguna de las cinco filas de la cadena es el elemento identificado. Tras el paso 3 («Atrás»), el elemento bajo el cursor era el `Button` identificado. Esto es coherente con la causa (a) de la [ADR-0022](../adr/0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md): la navegación reconstruye la miga bajo otro `RuntimeId`. El registro no distingue si el control anterior se destruyó o cambió de lugar, así que no lo confirma del todo. La comprobación del sistema (la carpeta) decidió esos pasos, como exige la ADR.
+
+### 6. Serie puntuada: tres de diez corridas pasan; la cuarta no se envió
+
+| Invocación | Éxito | Solicitudes (entregadas + rechazadas) | Comprobaciones del sistema | Falsos éxitos | Control erróneo | Cuaderno | Hora local |
+|---|---|---|---|---|---|---|---|
+| Corrida 1 (piloto) | sí | 3 (3 + 0) | 3 de 3 | 0 | 0 | 515 → 518 | 00:50 |
+| Corrida 2 | sí | 3 (3 + 0) | 3 de 3 | 0 | 0 | 518 → 521 | 00:52 |
+| Corrida 3 | sí | 4 (3 + 1) | 3 de 3 | 0 | 0 | 521 → 525 | 00:54 |
+| Corrida 4 | sí | 5 (3 + 2) | 3 de 3 | 0 | 0 | 525 → 530 | 00:56 |
+| Corrida 5 | no enviada | — | — | — | — | 530 | — |
+
+Las tres negativas `STALE_SNAPSHOT` (corrida 3 en el paso 1; corrida 4 en los pasos 1 y 2) se produjeron con `input_delivered: false`: se rechazaron antes de cualquier entrada, se reintentaron y se entregaron. Cada reintento cuenta como una solicitud del cuaderno. Presupuesto de la serie: 60 desde el cuaderno 518; usadas 12 (corridas 2 a 4).
+
+**La entrada que detuvo la serie.** La corrida 4 terminó con código 0 hacia las 00:56:10; la lectura posterior (00:56:12) marcó 3,7 s. La espera previa a la corrida 5 hizo 18 lecturas entre las 00:56:13 y las 00:59:23, y ninguna llegó a 90 s. Por tanto hubo entrada de teclado o ratón más de una vez en ese intervalo: al menos otra entre las 00:56:10 y las 00:57:40, y la última hacia las 00:57:50 (a las 00:59:23 el contador marcaba 93,0 s; sin entrada habrían sido 194,3 s). La compuerta anterior a la corrida 5 detuvo la serie (salida 5), y no se envió ninguna solicitud después. Ningún proceso de la ronda estaba en marcha en ese intervalo: el cliente había terminado, y la espera y la comprobación sólo leían. El registro del sistema no tiene eventos de cambio de hora, de energía ni del servicio de hora en las últimas tres horas, así que el faltante de 101,3 s no lo explica un salto del reloj.
+
+### 7. Latencias (12 acciones entregadas: piloto y corridas 2 a 4)
+
+- `action_total`: mediana 77,2 ms; p95 91,6 ms (mínimo 66,3 ms; máximo 91,6 ms).
+- `rtt`: mediana 77,5 ms; p95 91,9 ms.
+
+Con doce valores, el p95 es prácticamente el máximo. Son acciones aisladas, no RNF-05.
+
+### 8. Escritorio final y cupo
+
+- **Lectura de sólo lectura a las 01:00:44:** sin problemas. Ningún proceso de prueba; carpeta temporal `%TEMP%\ommatix-e2e` vacía; `stop.flag` y `window.pin` ausentes; ninguna ventana `CabinetWClass` visible; la oculta del PID 36160 intacta; Notepad (PID 23164) con sus dos ventanas, sin cambios.
+- **Cupo:** cuaderno 530; con `--round-start 429`, 101 de 200 usadas y 99 libres. Si la serie reanuda, quedan las corridas 5 a 11 (siete); el presupuesto de la serie lo fija el responsable.
+
+### 9. Lo que decide el responsable
+
+1. ¿Fue suya la entrada entre las 00:56 y las 00:58? Hubo al menos dos momentos de entrada en ese intervalo.
+2. Si el equipo queda libre, ¿reanuda la serie? Necesita una autorización nueva desde el cuaderno 530, para las corridas 5 a 11. La compuerta y el presupuesto los fija esa autorización.
+3. Hallazgo 6: la compuerta compara el contador de inactividad con el reloj de pared, y un salto del reloj daría la misma señal que una entrada. ¿Se cambia a una medida sólo de ticks?
+4. Hallazgo 7: el cliente de E2E-03 no escribe su salida en UTF-8 al redirigirla. La corrección es un cambio del cliente con prueba y hash nuevo, es decir, una ronda nueva. Esta ronda usó `PYTHONIOENCODING=utf-8`.
+5. Hallazgo 8: ¿basta la cadena posterior al clic para aceptar como observada la causa (a) de la ADR-0022?
+
+### 10. Otros cambios de documentación
+
+- `docs/handoff.md`: una fila y un párrafo de esta continuación; el historial cita 1.0.1–1.0.45.
+- `README.md` y `README.es.md`: un párrafo en cada uno, después del de la continuación de la undécima ronda.
+- Revisión `docs/reviews/2026-10-14-s4-eleventh-round.md`: hallazgos 5 a 9.
+- Matriz `docs/thesis/matrices/plan_pruebas.csv`: sin cambio.

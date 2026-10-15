@@ -149,6 +149,8 @@ The eleventh round ([CHANGELOG 1.0.43](docs/thesis/CHANGELOG.md)) sent no live r
 
 The continuation of the eleventh round ([CHANGELOG 1.0.44](docs/thesis/CHANGELOG.md)) also sent no live request. With the new baseline the owner gave (no visible Explorer window of the shell; its hidden window kept), the read-only preflight met every condition, but the idle counter showed keyboard or mouse input at about 00:23 local, after the owner's answer and with no command of the round sending input. Under the round's rule nothing was started: E2E-03's probe, pilot and series did not run. The owner has to say whether the PC was in use before any input is sent.
 
+The second continuation of the eleventh round ([CHANGELOG 1.0.45](docs/thesis/CHANGELOG.md)) ran E2E-03 live for the first time. Its probe met the gate without input, and its pilot passed: three of three OS-side folder checks, no false success and no wrong control. Three of the ten scored runs then passed (ledger 515 to 530; 99 of the round's 200 requests are left). Before the fourth scored invocation (run 5), the owner's input rule stopped the series: the idle counter showed keyboard or mouse input the round did not cause, between one run and the next. E2E-03's matrix status is unchanged (`PENDIENTE_PRODUCTO`; it needs ten of ten). The owner has to say whether that input was theirs before the series resumes.
+
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML;
