@@ -63,7 +63,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 31
+PASS adrs_encontradas 32
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -108,6 +108,7 @@ PASS referencias:0028-operator-purge-file.md []
 PASS referencias:0029-accepted-by-scope-requirement-status.md []
 PASS referencias:0030-adaptive-full-or-regional-plan.md []
 PASS referencias:0031-refuse-scaling-outside-the-dpi-profile.md []
+PASS referencias:0032-freshness-scoped-to-the-target-window.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 
@@ -436,6 +437,7 @@ PASS doc01_adr_pruebas:0028-operator-purge-file.md []
 PASS doc01_adr_pruebas:0029-accepted-by-scope-requirement-status.md []
 PASS doc01_adr_pruebas:0030-adaptive-full-or-regional-plan.md []
 PASS doc01_adr_pruebas:0031-refuse-scaling-outside-the-dpi-profile.md []
+PASS doc01_adr_pruebas:0032-freshness-scoped-to-the-target-window.md []
 PASS doc01_prueba_enlazada:UT-01 
 PASS doc01_prueba_enlazada:UT-02 
 PASS doc01_prueba_enlazada:UT-03 
