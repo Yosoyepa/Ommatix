@@ -1,5 +1,13 @@
 # Historial documental
 
+## 1.0.43 — 2026-10-14: S4, undécima ronda: E2E-03 no llegó a la sonda; la comprobación previa halló que las ventanas minimizadas del propietario ya no están y que el equipo recibió entrada (rama `docs/s4-eleventh-round`, sin entrada ni solicitud real)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni matriz. No cambia ninguna crate de Rust, el motor, el editor ni los clientes. **No se envió entrada ni ninguna solicitud real** (cuaderno 515, de 200 desde `--round-start 429`, sin cambio). Clientes sin cambio: `tools/s4/e2e_driver.py` `768e77e3…7202d` y `tools/s4/e2e_dossier.py` `359f6f28…0afc2`; motor `a137ccd1…d548`; editor `f358b3a9…1d20`.
+
+- **Comprobación previa a la entrada:** las dos ventanas `CabinetWClass` minimizadas, fuera de pantalla, del shell (PID 36160) que el responsable confirmó como línea base ya no existen en la segunda comprobación, y el contador de inactividad indica una entrada de teclado o ratón entre ambas. Por la regla del preflight no se envió nada: no hubo sonda, piloto ni serie de E2E-03.
+- **Matriz:** E2E-03 sigue `PENDIENTE_PRODUCTO`.
+- **Documentación:** sección «Undécima ronda» de `docs/thesis/S4_ACEPTACION_REDUCIDA.md`; revisión `docs/reviews/2026-10-14-s4-eleventh-round.md`; `docs/handoff.md` (se eliminan una fila y un párrafo duplicados y obsoletos de la ADR-0022, y se añade la ronda); `README.md` y `README.es.md`.
+
 ## 1.0.42 — 2026-10-14: S4, la regla de anclaje de los clics que reconstruyen su propio control: anclar el punto antes de cada clic y verificar el sistema tras los de navegación (rama `fix/s4-navigating-click-grounding`, sin ejecución en vivo ni entrada)
 
 No cambia ningún requisito, algoritmo, contrato ni escenario. Cambian los dos clientes de S4 y sus pruebas, más la [ADR-0022](../adr/0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md) (**aceptada** por el responsable el 14 de octubre de 2026). No cambia ninguna crate de Rust, el motor ni el editor. **No se envió entrada ni ninguna solicitud real** (cuaderno 494, sin cambio). Clientes: `tools/s4/e2e_driver.py` `768e77e3aaa065c72aef4cf78ba65a41787f13df624b4f414c55813d3997202d` (antes `143ea454…aee3d`); `tools/s4/e2e_dossier.py` `359f6f281feff1a86c86fceb9530b849bfef02bc267e247a10ee4b2be020afc2` (antes `85111edb…316df`).
