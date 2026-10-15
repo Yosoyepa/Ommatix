@@ -39,6 +39,23 @@ Scenarios (see docs/thesis/S3_CORRIDAS_SUPERVISADAS.md):
           ``delivered_actions`` grows by exactly one, replay the request_id, then close
           the menu with a click in a fresh observation).
 
+Live regression round (owner present; Notepad «Editar» only, so ``--menu-labels Editar,Edit``;
+each step also needs the settings it names in the configuration):
+
+``sec02r`` SEC-02: click, stop file created by this run mid-sequence, replay of that
+          request_id (stored result), a new request (POLICY_DENIED), stop file removed (only
+          the one this run created), menu closed with a second click.
+``purge`` ADR-0028 (``[safety] purge_file``): after the file is created, an action on the old
+          snapshot is STALE_SNAPSHOT with nothing delivered and a new observation reuses no id.
+``ttl``   ADR-0025: waits ``[engine] max_snapshot_age_ms`` + ``--ttl-margin-ms``, then a dry
+          run and a live request are STALE_SNAPSHOT, nothing delivered.
+``sec05m`` SEC-05: the OWNER switches the foreground by hand (``--switch-to``, within
+          ``--owner-wait-s``); this script only reads the foreground, then requests one click
+          (POLICY_DENIED). It starts no process. Needs a snapshot window above the wait.
+
+An expectation that fails is a ``check`` event with ``ok: false`` and a non-zero exit code; an
+unexpected delivery engages the operator's stop.
+
 Example (from the repository root, PowerShell)::
 
     python tools/s3/mcp_driver.py --exe target\\release\\ommatix.exe ^
@@ -71,6 +88,10 @@ META = {
 TIMINGS_KEY = "io.ommatix/timings"
 PAGE_LIMIT = 50
 CREATE_NO_WINDOW = 0x08000000
+LIVE_STEPS = ("close", "it03", "it05", "it04", "sec02", "sec05", "sec02r", "purge", "ttl", "sec05m")
+EDITAR_ONLY = frozenset({"Editar", "Edit"})
+MAX_TTL_WINDOW_MS = 120_000
+DEFAULT_MAX_SNAPSHOT_AGE_MS = 10_000
 
 
 class Abort(Exception):
@@ -212,10 +233,17 @@ def log(event: str, **fields) -> None:
 
 
 class Run:
-    def __init__(self, args: argparse.Namespace, server: Server, stop_file: Path | None):
+    def __init__(self, args: argparse.Namespace, server: Server, stop_file: Path | None, *,
+                 purge_file: Path | None = None, max_age_ms: int = DEFAULT_MAX_SNAPSHOT_AGE_MS,
+                 allowed_apps: tuple[str, ...] = ()):
         self.args = args
         self.srv = server
         self.stop_file = stop_file
+        self.purge_file = purge_file
+        self.max_age_ms = max_age_ms
+        self.allowed_apps = tuple(a.lower() for a in allowed_apps)
+        self.failed = False
+        self.last_elements: list[dict] = []
         self.session = args.session_id
         self.live_sent = 0
         self.menu_labels = tuple(x.strip() for x in args.menu_labels.split(","))
@@ -227,6 +255,21 @@ class Run:
             self.stop_file.write_text("", encoding="utf-8")
         log("operator_stop_engaged", reason=reason, stop_file_set=self.stop_file is not None)
         raise Abort(reason)
+
+    def check(self, name: str, ok: bool, *, abort: bool = False, **fields) -> bool:
+        """Records one expectation. A failed one is a finding (the run goes on and ends with
+        a non-zero exit code); with ``abort`` it is a safety breach: the stop is engaged."""
+        log("check", name=name, ok=ok, **fields)
+        if not ok:
+            self.failed = True
+            if abort:
+                self.engage_stop(f"unexpected result: {name}")
+        return ok
+
+    def require_editar_only(self, step: str) -> None:
+        """The live-round steps click only «Editar» in Notepad (owner decision)."""
+        if not set(self.menu_labels) <= EDITAR_ONLY:
+            raise Abort(f"{step} clicks only Editar/Edit: pass --menu-labels Editar,Edit")
 
     def require_foreground(self, expected: str) -> None:
         name, maximized = foreground()
@@ -347,6 +390,7 @@ class Run:
     def observe_target(self, tag: str, attempts: int = 3) -> tuple[dict, dict]:
         for i in range(attempts):
             snap, elements = self.observe(f"{tag}#{i + 1}")
+            self.last_elements = elements
             target = self.menu_target(elements)
             if target is not None:
                 return snap, target
@@ -433,6 +477,9 @@ class Run:
             self.observe("sec02.after")
         if "sec05" in steps:
             self.sec05()
+        for name in ("sec02r", "purge", "ttl", "sec05m"):
+            if name in steps:
+                getattr(self, name)()
         self.metrics("end")
 
     def it04(self) -> None:
@@ -506,6 +553,179 @@ class Run:
         log("delta", tag="sec05", delivered=m1["delivered_actions"] - m0["delivered_actions"],
             rejected=m1["rejected_actions"] - m0["rejected_actions"])
 
+    # -- live regression round (owner present; Notepad «Editar» only)
+    @staticmethod
+    def say(message: str) -> None:
+        print(message, file=sys.stderr, flush=True)
+
+    def delta(self, tag: str, before: dict) -> tuple[int, int]:
+        after = self.metrics(f"{tag}.after")
+        delivered = after["delivered_actions"] - before["delivered_actions"]
+        rejected = after["rejected_actions"] - before["rejected_actions"]
+        log("delta", tag=tag, delivered=delivered, rejected=rejected)
+        return delivered, rejected
+
+    def sec02r(self) -> None:
+        """SEC-02: the stop engaged mid-sequence, the request_id of an earlier delivery
+        replayed under it (stored result, nothing new delivered), then a new request
+        (POLICY_DENIED, nothing delivered). Only a stop file this step created is removed."""
+        self.require_editar_only("sec02r")
+        if self.stop_file is None:
+            raise Abort("sec02r needs [safety] stop_file")
+        opened = self.live_click("s3-sec02r-open", "sec02r.open", "visual_change")
+        open_args = dict(self.last_args)
+        if not self.check("sec02r.opened", bool(opened.get("input_delivered"))):
+            return
+        time.sleep(1.0)
+        snap, target = self.observe_target("sec02r.stop")
+        m0 = self.metrics("sec02r.before")
+        self.stop_file.write_text("", encoding="utf-8")
+        log("operator_stop", engaged=True, created_by_this_run=True)
+        self.say("sec02r: this run created the operator stop file and will remove it itself")
+        time.sleep(0.5)
+        self.require_foreground("notepad.exe")
+        self.live_sent += 1
+        replay = self.send_action(dict(open_args), tag="sec02r.replay")
+        self.check("sec02r.replay_stored",
+                   replay.get("status") == opened.get("status")
+                   and replay.get("input_delivered") == opened.get("input_delivered"),
+                   abort=True)
+        denied = self.act("s3-sec02r-new", snap, target, dry_run=False,
+                          expected_effect="visual_change")
+        self.check("sec02r.new_delivered_nothing", not denied.get("input_delivered"), abort=True)
+        self.check("sec02r.new_denied",
+                   denied.get("status") == "rejected"
+                   and (denied.get("error") or {}).get("code") == "POLICY_DENIED")
+        delivered, rejected = self.delta("sec02r", m0)
+        self.check("sec02r.counters", delivered == 0 and rejected == 1, abort=delivered != 0)
+        if self.stop_file.exists():
+            self.stop_file.unlink()
+            log("operator_stop", engaged=False, removed_by_this_run=True)
+            self.say("sec02r: the stop file this run created was removed")
+        time.sleep(1.0)
+        # Restores the menu the opening click left open: one click on the same label.
+        self.live_click("s3-sec02r-close", "sec02r.close", "visual_change")
+        time.sleep(1.0)
+        self.observe("sec02r.after")
+
+    def purge(self) -> None:
+        """ADR-0028: the operator purge file. The action on the old snapshot is refused with
+        nothing delivered, and a new observation issues identifiers none of which was issued
+        before (compared in memory; no label is printed)."""
+        self.require_editar_only("purge")
+        if self.purge_file is None:
+            raise Abort("purge needs [safety] purge_file")
+        if self.purge_file.exists():
+            raise Abort("the purge file exists before the step; the operator removes it first")
+        m0 = self.metrics("purge.before")
+        snap, target = self.observe_target("purge.before")
+        ids_before = {e["target_id"] for e in self.last_elements}
+        self.purge_file.write_text("purge", encoding="utf-8")
+        log("operator_purge", requested=True, created_by_this_run=True)
+        self.say("purge: this run created the operator purge file and will remove it itself")
+        try:
+            dry = self.act("s3-purge-dry", snap, target, dry_run=True,
+                           expected_effect="visual_change")
+            if self.check("purge.dry_refused",
+                          (dry.get("error") or {}).get("code") == "STALE_SNAPSHOT"):
+                live = self.act("s3-purge-live", snap, target, dry_run=False,
+                                expected_effect="visual_change")
+                self.check("purge.live_delivered_nothing", not live.get("input_delivered"),
+                           abort=True)
+                self.check("purge.refused",
+                           (live.get("error") or {}).get("code") == "STALE_SNAPSHOT")
+            after, elements = self.observe("purge.after")
+            ids_after = {e["target_id"] for e in elements}
+            self.check("purge.ids_fresh", not (ids_before & ids_after),
+                       reused=len(ids_before & ids_after))
+            self.check("purge.new_snapshot", after["snapshot_id"] != snap["snapshot_id"])
+        finally:
+            if self.purge_file.exists():
+                self.purge_file.unlink()
+                log("operator_purge", requested=False, removed_by_this_run=True)
+                self.say("purge: the purge file this run created was removed")
+        delivered, _ = self.delta("purge", m0)
+        self.check("purge.counters", delivered == 0, abort=delivered != 0)
+
+    def ttl(self) -> None:
+        """ADR-0025: the snapshot window, live. A dry run inside the window is simulated (the
+        control); after the window plus a margin a dry run and then a live request are both
+        STALE_SNAPSHOT with nothing delivered."""
+        self.require_editar_only("ttl")
+        if not 1 <= self.max_age_ms <= MAX_TTL_WINDOW_MS:
+            raise Abort(f"the snapshot window ({self.max_age_ms} ms) is outside "
+                        f"1..{MAX_TTL_WINDOW_MS} ms")
+        wait_s = (self.max_age_ms + self.args.ttl_margin_ms) / 1000
+        m0 = self.metrics("ttl.before")
+        snap, target = self.observe_target("ttl")
+        control = self.act("s3-ttl-control", snap, target, dry_run=True,
+                           expected_effect="visual_change")
+        if not self.check("ttl.control_simulated", control.get("status") == "simulated"):
+            return
+        log("ttl_wait", seconds=wait_s)
+        time.sleep(wait_s)
+        dry = self.act("s3-ttl-dry", snap, target, dry_run=True, expected_effect="visual_change")
+        error = dry.get("error") or {}
+        expired = error.get("code") == "STALE_SNAPSHOT" and "older than" in (error.get("message") or "")
+        if self.check("ttl.dry_refused", expired):
+            live = self.act("s3-ttl-live", snap, target, dry_run=False,
+                            expected_effect="visual_change")
+            self.check("ttl.live_delivered_nothing", not live.get("input_delivered"), abort=True)
+            self.check("ttl.live_refused",
+                       (live.get("error") or {}).get("code") == "STALE_SNAPSHOT")
+        delivered, _ = self.delta("ttl", m0)
+        self.check("ttl.counters", delivered == 0, abort=delivered != 0)
+
+    def sec05m(self) -> None:
+        """SEC-05: a foreground change the OWNER makes by hand. This step never activates
+        anything: it tells the owner, polls the foreground read-only and, once it is one of
+        the expected non-allowlisted applications, requests one click (POLICY_DENIED)."""
+        self.require_editar_only("sec05m")
+        wait_s = self.args.owner_wait_s
+        switch = {x.strip().lower() for x in self.args.switch_to.split(",") if x.strip()}
+        if switch & set(self.allowed_apps):
+            raise Abort("a --switch-to application is in the allowlist; sec05m needs one that is not")
+        if self.max_age_ms < wait_s * 1000 + 5000:
+            raise Abort("[engine] max_snapshot_age_ms must be at least the owner wait plus 5 s "
+                        "for sec05m, or the refusal would be the snapshot's age")
+        m0 = self.metrics("sec05m.before")
+        snap, target = self.observe_target("sec05m")
+        shown = ", ".join(sorted(switch))
+        self.say(f"OWNER: switch the foreground now to {shown} by hand "
+                 f"(within {wait_s} s); this run sends nothing until you do")
+        deadline = time.monotonic() + wait_s
+        name = None
+        while time.monotonic() < deadline:
+            name, _ = foreground()
+            if name is not None and name != "notepad.exe":
+                break
+            name = None
+            time.sleep(0.5)
+        if name is None:
+            log("sec05m", skipped="the owner did not switch in time; nothing sent")
+            return
+        time.sleep(1.0)
+        name, _ = foreground()
+        if name not in switch:
+            log("sec05m", skipped="the foreground is not an expected application; nothing sent")
+            return
+        out = self.act("s3-sec05m-1", snap, target, dry_run=False,
+                       expected_effect="visual_change", expect_foreground=None)
+        self.check("sec05m.delivered_nothing", not out.get("input_delivered"), abort=True)
+        self.check("sec05m.denied",
+                   out.get("status") == "rejected"
+                   and (out.get("error") or {}).get("code") == "POLICY_DENIED")
+        delivered, _ = self.delta("sec05m", m0)
+        self.check("sec05m.counters", delivered == 0, abort=delivered != 0)
+        self.say("OWNER: switch the foreground back to Notepad by hand now")
+        deadline = time.monotonic() + wait_s
+        while time.monotonic() < deadline:
+            name, maximized = foreground()
+            if name == "notepad.exe" and maximized:
+                break
+            time.sleep(0.5)
+        log("sec05m", notepad_back=name == "notepad.exe")
+
 
 PROBE_SESSION_ID = "s3-supervised"
 
@@ -535,6 +755,12 @@ def main() -> int:
     p.add_argument("--output", type=int, default=0)
     p.add_argument("--observations", type=int, default=3, help="warm-up observations")
     p.add_argument("--max-live", type=int, default=0, help="dry_run:false requests allowed")
+    p.add_argument("--ttl-margin-ms", type=int, default=2000,
+                   help="ttl: wait this much beyond [engine] max_snapshot_age_ms")
+    p.add_argument("--owner-wait-s", type=int, default=90,
+                   help="sec05m: seconds the owner has to switch the foreground (and to return)")
+    p.add_argument("--switch-to", default="calculatorapp.exe,applicationframehost.exe",
+                   help="sec05m: foreground executables that count as the owner's switch")
     p.add_argument("--menu-labels", default="Archivo,File,Editar,Edit,Ver,View",
                    help="allowed menu labels, in order of preference")
     args = p.parse_args()
@@ -543,6 +769,10 @@ def main() -> int:
     config = tomllib.loads(raw.decode("utf-8"))
     stop = config.get("safety", {}).get("stop_file") or None
     stop_file = (args.config.parent / stop) if stop else None
+    purge = config.get("safety", {}).get("purge_file") or None
+    purge_file = (args.config.parent / purge) if purge else None
+    max_age_ms = config.get("engine", {}).get("max_snapshot_age_ms", DEFAULT_MAX_SNAPSHOT_AGE_MS)
+    allowed = tuple(config.get("safety", {}).get("allowed_applications", []))
     if stop_file is not None and stop_file.exists():
         log("abort", reason="the stop file exists before the run")
         return 2
@@ -560,7 +790,8 @@ def main() -> int:
         return 2
 
     srv = Server(argv)
-    run = Run(args, srv, stop_file)
+    run = Run(args, srv, stop_file, purge_file=purge_file, max_age_ms=max_age_ms,
+              allowed_apps=allowed)
     code = 0
     try:
         if live:
@@ -579,12 +810,14 @@ def main() -> int:
         time.sleep(0.2)
         # stderr is the engine's own diagnostics (no screen text by design); only its
         # line count and the lines this run relies on are shown.
-        keep = ("ACTIVE CONTROL", "STOP engaged", "stop cleared", "source=")
+        keep = ("ACTIVE CONTROL", "STOP engaged", "stop cleared", "source=",
+                "state and cache were deleted")
         for line in srv.stderr:
             if any(k in line for k in keep):
                 log("stderr", line=line[:300])
-        log("end", server_exit=exit_code, stderr_lines=len(srv.stderr), live_requests=run.live_sent)
-    return code
+        log("end", server_exit=exit_code, stderr_lines=len(srv.stderr), live_requests=run.live_sent,
+            checks_failed=run.failed)
+    return code or (1 if run.failed else 0)
 
 
 if __name__ == "__main__":
