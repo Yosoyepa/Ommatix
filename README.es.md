@@ -184,6 +184,8 @@ La continuación de la undécima ronda ([CHANGELOG 1.0.44](docs/thesis/CHANGELOG
 
 La segunda continuación de la undécima ronda ([CHANGELOG 1.0.45](docs/thesis/CHANGELOG.md)) ejecutó E2E-03 en vivo por primera vez. Su sonda cumplió la compuerta sin entrada, y su piloto pasó: tres de tres comprobaciones del sistema, ningún falso éxito y ningún control erróneo. Después pasaron tres de las diez corridas puntuadas (cuaderno de 515 a 530; quedan 99 de las 200 solicitudes de la ronda). Antes de la cuarta invocación puntuada (corrida 5), la regla de entrada del responsable detuvo la serie: el contador de inactividad marcó entrada de teclado o ratón que la ronda no provocó, entre una corrida y la siguiente. La matriz de E2E-03 no cambia (`PENDIENTE_PRODUCTO`; exige diez de diez). El responsable debe decir si esa entrada fue suya antes de que la serie reanude.
 
+La tercera continuación de la undécima ronda ([CHANGELOG 1.0.46](docs/thesis/CHANGELOG.md)) completó la serie puntuada de E2E-03. Las corridas 5 a 11 pasaron todas, cada una con sus tres comprobaciones de carpetas del sistema, sin falsos éxitos ni controles erróneos; así, diez de diez corridas puntuadas pasan. El estado de E2E-03 en la matriz es ahora `EJECUTADO_SUPERVISADO_PARCIAL`. Dos corridas se retuvieron antes de cualquier solicitud por la regla de entrada: una, con una lectura anterior a la entrada del responsable; otra, con una entrada que la coordinación atribuyó después al responsable, y la serie reanudó desde una lectura nueva. El registro sólo permite fechar esa entrada, no verificar su origen.
+
 ## Hoja de ruta
 
 Según el [capítulo 06 de la tesis](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):

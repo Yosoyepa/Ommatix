@@ -2205,3 +2205,67 @@ Con doce valores, el p95 es prácticamente el máximo. Son acciones aisladas, no
 - `README.md` y `README.es.md`: un párrafo en cada uno, después del de la continuación de la undécima ronda.
 - Revisión `docs/reviews/2026-10-14-s4-eleventh-round.md`: hallazgos 5 a 9.
 - Matriz `docs/thesis/matrices/plan_pruebas.csv`: sin cambio.
+
+## Undécima ronda (continuación 3): la serie de E2E-03 se completa; diez de diez corridas puntuadas pasan sin falsos éxitos, y E2E-03 pasa a `EJECUTADO_SUPERVISADO_PARCIAL`
+
+**Fecha:** 15 de octubre de 2026 (hora local del equipo, UTC-5). **Estado:** serie completa (corridas 2 a 11), sin invocaciones en vivo pendientes. Rama `docs/s4-eleventh-round-run3` desde `main` en `ecd8986` (fusión de #35). CHANGELOG 1.0.46. Revisión: [`reviews/2026-10-14-s4-eleventh-round.md`](../reviews/2026-10-14-s4-eleventh-round.md), hallazgos 10 a 14. **Solicitudes reales en esta continuación: 28** (cuaderno de 530 a 558). Desde el cuaderno 515, inicio de la parte en vivo: 43 solicitudes, de ellas piloto 3, corridas 2 a 4 12 y corridas 5 a 11 28. Cupo: 129 de 200 usadas, 71 libres. Serie: 40 de 60. Matriz: E2E-03 `EJECUTADO_SUPERVISADO_PARCIAL`.
+
+### 1. Reglas, decisiones y paradas
+
+- **Reglas (sin cambio):** una etapa en vivo sólo empieza con el contador de inactividad en al menos 90 s justo antes; entre invocaciones, la entrada que la ronda no provocó detiene todo el trabajo en vivo; línea base: ninguna ventana `CabinetWClass` visible y la oculta del PID 36160 intacta.
+- **Corrida 5, primer intento: detenido, sin solicitud.** La compuerta se anclaba en la lectura posterior a la corrida 4 de la continuación 2 (01:00:44, contador de 173,8 s). La espera leyó 199,5 s a las 01:38:24, y la compuerta esperaba 2 433,5 s sin entrada: hubo entrada de teclado o ratón, la última a las 01:35:04. La compuerta detuvo la serie (salida 5). El cuaderno sigue en 530 y no se envió nada.
+- **Corrida 5, segundo intento: ejecutada.** La coordinación pidió anclar en una lectura nueva. Lectura de referencia a las 01:39:15 (contador de 250,9 s, sin problemas). La espera leyó 264,4 s a las 01:39:29, y la compuerta confirmó que no hubo entrada (264,4 s frente a 264,5 s esperados). Corrida 5 con `--max-live 48`.
+- **Corrida 6, primer intento: detenido, sin solicitud.** La espera hizo nueve lecturas; la última, a las 01:41:38, marcó 91,4 s. La compuerta esperaba 111,9 s desde la lectura posterior a la corrida 5 (01:39:50, contador de 4,4 s). La diferencia de 20,5 s, contada desde el último clic de la corrida 5 (01:39:46), sitúa una entrada de teclado o ratón a las 01:40:06,6. La compuerta detuvo la serie (salida 5); el cliente no arrancó, el cuaderno sigue en 533 y no se envió nada. Una lectura de sólo lectura a las 01:42:13 marcó 127,1 s, sin problemas y sin entrada desde las 01:40:06,6.
+- **Decisión de reanudar (coordinación, 15 de octubre).** La coordinación respondió que la entrada de las 01:40:06 es del responsable, que seguía en el equipo leyendo la confirmación de la coordinación antes de irse; que su cifra de las 02:16 fue un error de su reloj, y que la referencia es el reloj de este equipo. Decidió reanudar: una lectura nueva, espera hasta 90 s de inactividad, corrida 6 con `--max-live 45`, y la compuerta en cada invocación posterior. Cualquier entrada posterior a esa lectura detiene todo el trabajo y se informa a la coordinación. **Motivo registrado:** la entrada se atribuye al responsable, que la confirmó; la ronda no puede verificar el origen de una entrada, sólo su hora. Lectura nueva a las 01:43:01: contador de 174,3 s; la última entrada sigue siendo la de las 01:40:06,6, así que no hubo entrada nueva. Corrida 6 ejecutada con `--max-live 45`.
+
+### 2. Verificación previa y artefactos fijados
+
+- **Código.** `main` pasó de `b33e330` (fusión de #34) a `ecd8986` (fusión de #35) antes de la verificación, en avance rápido. Entre ambos sólo cambia `src/acceptance/tests/repository.rs` bajo `src`, una prueba de integridad del repositorio fuera del binario: el motor no se recompila y su SHA-256 no cambia.
+- **Comprobaciones previas a la entrada** (`e2e11d_verify.sh`, fuera del repositorio, en `ecd8986`; todas con código de salida 0): `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D warnings`; la misma con `dxgi,sendinput,directml,winrt-ocr,uia`; `cargo test --workspace` (449 pasadas, 0 fallidas, 1 ignorada); `python -m unittest discover -s tools/s4 -p "test_*.py"` (297 correctas); el editor (`cargo clippy -- -D warnings` y 24 pruebas); `referencia_ejecutable/run_tests.py` (48 de 48); `validar_paquete.py` (451 comprobaciones, 0 fallidas).
+- **Artefactos fijados.** Los mismos SHA-256 que en la continuación 2, comprobados completos por la lectura previa antes de cada etapa: `tools/s4/e2e_driver.py` `768e77e3…7202d`; `tools/s4/e2e_dossier.py` `359f6f28…0afc2`; `target/release/ommatix.exe` `a137ccd1…d548`; `ommatix-testeditor.exe` `f358b3a9…1d20`; `s4r10-live.toml` `0428daf8…c1e2`; `s4r10-explorer.toml` `ab6c33b5…33d7`. El manifiesto, ONNX Runtime y DirectML no cambian. Cada invocación corrió con `PYTHONIOENCODING=utf-8`.
+
+### 3. Corridas 5 a 11
+
+| Corrida | Éxito | Solicitudes (entregadas + rechazadas) | Comprobaciones del sistema | Falsos éxitos | Control erróneo | Cuaderno | Lectura previa (hora local) | Duración del cliente |
+|---|---|---|---|---|---|---|---|---|
+| 5 | sí | 3 (3 + 0) | 3 de 3 | 0 | 0 | 530 → 533 | 01:39:29 | 17 s |
+| 6 | sí | 3 (3 + 0) | 3 de 3 | 0 | 0 | 533 → 536 | 01:43:07 | 15 s |
+| 7 | sí | 5 (3 + 2) | 3 de 3 | 0 | 0 | 536 → 541 | 01:44:52 | 21 s |
+| 8 | sí | 4 (3 + 1) | 3 de 3 | 0 | 0 | 541 → 545 | 01:46:45 | 19 s |
+| 9 | sí | 4 (3 + 1) | 3 de 3 | 0 | 0 | 545 → 549 | 01:48:43 | 38 s |
+| 10 | sí | 5 (3 + 2) | 3 de 3 | 0 | 0 | 549 → 554 | 01:50:44 | 21 s |
+| 11 | sí | 4 (3 + 1) | 3 de 3 | 0 | 0 | 554 → 558 | 01:52:48 | 132 s |
+
+Las negativas `STALE_SNAPSHOT` (corridas 7 a 11: 2, 1, 1, 2 y 1) tenían `input_delivered: false`: se rechazaron antes de cualquier entrada, se reintentaron y se entregaron. Las 28 solicitudes son 21 entregadas y 7 rechazadas. Cada corrida terminó con código 0 y sin salida de error; sin aborto, parada de seguridad ni `POLICY_DENIED`; `pre_grounded` e identidad `ok` en cada solicitud. Como en el piloto, tras los pasos 1 y 2 el elemento bajo el cursor no era el identificado, y tras el paso 3 («Atrás») sí lo era, en las siete corridas: el mismo patrón de la causa (a) de la [ADR-0022](../adr/0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md).
+
+**Latencias** (21 acciones entregadas de las corridas 5 a 11; acciones aisladas, no RNF-05): `action_total` mediana 77,9 ms, p95 85,3 ms (mínimo 67,7; máximo 87,6); `rtt` mediana 78,2 ms, p95 85,5 ms. Con las 30 acciones de la serie completa (corridas 2 a 11), `action_total` tiene mediana 77,9 ms y p95 91,6 ms.
+
+### 4. La corrida 11 tardó 132 s
+
+Las corridas 5 a 10 tardaron entre 15 y 38 s. El registro de la corrida 11 tiene 50,6 s entre la lectura de métricas y su primera acción (una negativa `STALE_SNAPSHOT` antes de entrada), y 56,6 s entre la acción del paso 1 y la del paso 2. El cliente no escribe un evento en esas fases, así que el registro no muestra su causa. Los contadores de descenso (65, 62 y 65 nodos visitados, sin truncar) y los tiempos de acción (74 a 88 ms) son los de la corrida 10. Las tres comprobaciones del sistema pasaron y la limpieza está completa. Queda abierto el hallazgo 12 de la revisión.
+
+### 5. Escritorio final
+
+Lectura de sólo lectura a las 01:57:15 (`e2e11d.final-state.json`): sin problemas; cuaderno 558; ningún proceso de prueba; carpeta temporal `%TEMP%\ommatix-e2e` vacía; `stop.flag` y `window.pin` ausentes; ninguna ventana `CabinetWClass` visible; la oculta del PID 36160 intacta; Notepad (PID 23164) con sus dos ventanas, sin cambios. No se guardó ninguna captura ni texto de pantalla: las lecturas registran clase, PID y visibilidad.
+
+### 6. Matrices y trazabilidad
+
+- `matrices/plan_pruebas.csv`: E2E-03 pasa a `EJECUTADO_SUPERVISADO_PARCIAL`. El validador acepta ese estado (`doc01_estados_de_pruebas`).
+- `matrices/requisitos_trazabilidad.csv`: la nota de RF-18 decía que E2E-02, E2E-03 y S4R-02 estaban sin ejecutar; la matriz ya marcaba las tres como `EJECUTADO_SUPERVISADO_PARCIAL`. La nota dice ahora lo que marca la matriz. RF-18 sigue `PENDIENTE_IMPLEMENTACION_O_VALIDACION`, y su casilla del DoD no cambia.
+- Documentos fechados el 14 de octubre: `03_ESPECIFICACION_REQUISITOS.md` (línea 81) y `06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md` (línea 54) describen la evidencia de ese día, que no incluía E2E-03. No se cambian, porque son evidencia fechada; el responsable decide si se actualizan.
+
+### 7. Lo que decide el responsable
+
+1. Confirmar que la entrada de las 01:40:06 fue suya, como atribuyó la coordinación. La ronda sólo tiene la hora de la entrada.
+2. Si la duración de la corrida 11 (132 s) se revisa. Un evento de fase en el cliente lo mostraría; cambiar el cliente exige un hash nuevo y una ronda nueva.
+3. Hallazgo 6 (la compuerta compara el contador con el reloj de pared): ¿se compara sólo con ticks? Sin cambio.
+4. Hallazgo 7 (codificación de la salida del cliente del dossier): sigue el uso de `PYTHONIOENCODING=utf-8`. Sin cambio.
+5. Hallazgo 8: ¿basta la cadena posterior al clic para aceptar como observada la causa (a) de la ADR-0022? Las siete corridas de esta continuación muestran el mismo patrón.
+6. Los documentos fechados de la sección 6 y la línea «pendiente y no hecho» de la ADR-0020 siguen diciendo que E2E-03 no se ha ejecutado. No se cambian en esta ronda.
+
+### 8. Otros cambios de documentación
+
+- `docs/handoff.md`: una fila y un párrafo de esta continuación; el historial cita 1.0.1–1.0.46; la frase de «Qué sigue» sobre E2E-02 y E2E-03 se corrige.
+- `README.md` y `README.es.md`: un párrafo en cada uno, después del de la continuación 2.
+- Revisión `docs/reviews/2026-10-14-s4-eleventh-round.md`: hallazgos 10 a 14.
+- Matrices: `plan_pruebas.csv` (E2E-03) y `requisitos_trazabilidad.csv` (nota de RF-18).
