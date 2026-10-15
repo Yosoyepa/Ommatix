@@ -14,7 +14,7 @@ Para atribuir mejoras se modifica un componente a la vez. Las versiones defectuo
 
 Estratos: cambios pequeños, menú, scroll, animación extensa, notificación, sustitución de contenido, iconos repetidos/desconocidos, formularios densos, targets pequeños, escalas DPI y temas. Etiquetar área sucia antes/después del halo, identidad de objeto y accionabilidad. Separar familias de pantallas entre calibración y test y evitar frames vecinos en ambos conjuntos.
 
-El corpus está **por construir**. Se entregan plantillas, no capturas supuestamente etiquetadas. Para el piloto se propone comenzar con 30 secuencias y dos anotadores; ampliar según diversidad y precisión de intervalos. Los conjuntos públicos [S15–S16] orientan evaluación, pero no se declara que se hayan descargado ni ejecutado.
+El corpus está **por construir**. Desde el 15 de octubre de 2026 pasa al próximo corte del MVP (capítulo 06 §6.7). Se entregan plantillas, no capturas supuestamente etiquetadas. Para el piloto se propone comenzar con 30 secuencias y dos anotadores; ampliar según diversidad y precisión de intervalos. Los conjuntos públicos [S15–S16] orientan evaluación, pero no se declara que se hayan descargado ni ejecutado.
 
 ## 9.4 Instrumentación
 

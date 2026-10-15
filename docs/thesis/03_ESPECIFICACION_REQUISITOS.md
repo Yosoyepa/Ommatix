@@ -80,6 +80,8 @@ Ejecutar flujos reales verificables en 3 aplicaciones permitidas. Trazabilidad: 
 
 **Evidencia puntuada a 14 de octubre de 2026 (RF-18 sigue sin cumplirse).** Hay corridas puntuadas, con verificador independiente del motor y sin falsos éxitos, en dos aplicaciones: la aplicación de prueba propia (E2E-01, parcial: una tarea, un DPI y un tema) y el Bloc de notas (S4R-03: abrir y cerrar «Editar», diez de diez corridas, sólo clics). Falta la Calculadora (S4R-02: no se ha ejecutado, porque el cambio al modo Estándar no se había logrado), falta el editor con escritura y guardado de un archivo temporal (E2E-02) y el explorador de archivos (E2E-03), y faltan los DPI, los temas y las 450 corridas del diseño.
 
+**Alcance del MVP (15 de octubre de 2026).** Para este MVP, la evidencia de RF-18 es el protocolo reducido de S4: E2E-01, E2E-02, E2E-03, S4R-02 y S4R-03, cada uno con diez de diez corridas puntuadas y cero falsos éxitos. En `main`, E2E-01 (cuarta ronda, con la parcialidad que registra la matriz: una tarea, un DPI y un tema), E2E-02 (serie de la décima ronda), S4R-02 (décima ronda) y S4R-03 (séptima ronda, continuación) cumplen ese criterio. E2E-03 tiene tres de diez (undécima ronda, continuación 2) y su serie sigue. RF-18 no se marca hasta que E2E-03 llegue a diez de diez. S4R-02 y S4R-03 no sustituyen a E2E-02 ni a E2E-03, que son flujos distintos y siguen en el protocolo. Lo que el protocolo reducido sustituye, para este MVP, son las 450 corridas de EV-02 (capítulo 06 §6.7).
+
 ## 3.3 Requisitos no funcionales
 
 ### RNF-01. Corrección del core
@@ -90,9 +92,13 @@ Ejecutar flujos reales verificables en 3 aplicaciones permitidas. Trazabilidad: 
 
 Precisión aceptada >=98% y cobertura >=85% en corpus de aceptación. Evidencia requerida: EV-01.
 
+**Alcance del MVP (15 de octubre de 2026).** EV-01 pasa al próximo corte: el corpus de 300 capturas etiquetadas no existe (capítulo 09 §9.3) y no se versiona (ADR-0012). Sin él no hay precisión ni cobertura medidas, y este requisito no se cumple en el MVP.
+
 ### RNF-03. Éxito de tareas
 
 Éxito global de al menos 90% y por aplicación de al menos 85% en el protocolo definido. Evidencia requerida: EV-02.
+
+**Alcance del MVP (15 de octubre de 2026).** Para este MVP, la evidencia de éxito de tareas es el protocolo reducido de S4 (RF-18): diez de diez corridas con cero falsos éxitos en cada uno de sus cinco flujos. Las 450 corridas de EV-02 pasan al próximo corte, y con ellas el criterio numérico de este requisito (al menos 90 % global y 85 % por aplicación). Este requisito no se marca como cumplido.
 
 ### RNF-04. Latencia core
 
@@ -104,6 +110,8 @@ p95 <=10 ms para 300 controles y 600 spans; sólo core, hardware fijado S0. Evid
 
 Metas iniciales: incremental p95 <=150 ms; full warm p95 <=700 ms. Evidencia requerida: PERF-02.
 
+**Decisión de alcance del MVP (15 de octubre de 2026): incumplimiento aceptado y documentado, no cumplido.** Con las etapas concurrentes y la red en float16 ([`S0_RESULTADOS.md`](S0_RESULTADOS.md) §10), en la máquina de referencia y con la aplicación de prueba, el refresco completo en caliente tiene p95 de 98 ms (cumple) y el incremental con una región p95 de 102 ms (cumple). El incremental con dos regiones tiene p95 de 153,0 ms con 440 observaciones (150,3 ms en una repetición de 197): **no cumple**, por unos 3 ms. Con una animación continua de 33 fotogramas por segundo, una región tampoco cumple (p95 156 ms). El responsable acepta este resultado como incumplimiento documentado para el MVP, según el apartado 3.6: RNF-05 **no se marca como cumplido**, el informe lo muestra y la decisión de alcance es explícita. La medición de percepción sigue en parcial (PERF-02): la matriz pide también el caso de caché y la igualdad de modelos, y §10 no publica p99. Cerrar el caso de dos regiones (quitar entre 3 y 5 ms a la inferencia por región, o evitar la enumeración de ventanas) queda para el próximo corte.
+
 ### RNF-06. Recursos
 
 Medir RSS/VRAM totales, cola acotada y sin crecimiento sostenido en soak de 2 h. Evidencia requerida: PERF-03.
@@ -112,9 +120,13 @@ Medir RSS/VRAM totales, cola acotada y sin crecimiento sostenido en soak de 2 h.
 
 Win11 x64, monitor seleccionado y DPI 100/125/150%; rechazo explícito fuera de perfil. Evidencia requerida: IT-07.
 
+**Alcance del MVP (15 de octubre de 2026).** IT-07 pasa al próximo corte: exige cambiar la escala del monitor a mano con el responsable presente, y el motor aún no rechaza las escalas fuera de perfil (sólo rechaza una pantalla rotada y un formato distinto de BGRA8; `tools/perf/dpi_probe.py` registra ese hallazgo). El perfil del MVP es Windows 11 x64, un monitor y DPI 100 %, y así lo documenta [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) §10. Este requisito no se marca como cumplido fuera de ese perfil.
+
 ### RNF-08. Reproducibilidad
 
 Commit, lockfiles, modelos con hash/licencia, hardware y corpus congelados. Evidencia requerida: REL-01.
+
+**Alcance del MVP (15 de octubre de 2026).** El corpus de aceptación congelado pasa al próximo corte, junto con EV-01 y EV-02. Lockfiles, hashes, licencias, instalación y reversión están documentados ([`S4_REPRODUCIBILIDAD.md`](S4_REPRODUCIBILIDAD.md), [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md)); la ejecución de la instalación en una máquina limpia sigue pendiente (sesión A de [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md)). Este requisito no se marca como cumplido.
 
 ### RNF-09. Protocolo acotado
 
@@ -137,6 +149,8 @@ Cada RF/RNF tiene propietario, prueba, estado y evidencia; cambios mediante ADR.
 Tres familias: formulario HTML local controlado, editor de texto y explorador de archivos con datos desechables. Cinco tareas por familia; diez repeticiones por tarea y por DPI (100%, 125%, 150%): 450 ejecuciones E2E planificadas. Repartir temas claro/oscuro de forma balanceada y registrar los casos no soportados. Las tareas no deben enviar datos, comprar, transferir dinero ni borrar información real.
 
 Para percepción se propone un corpus separado de al menos 300 capturas etiquetadas y secuencias adversariales con cambios de identidad, oclusión y layout. El número es un objetivo operativo inicial, no un cálculo de potencia estadística. La aceptación del MVP no demuestra las hipótesis científicas de no inferioridad; éstas requieren su propio análisis muestral.
+
+**Alcance del MVP (15 de octubre de 2026).** Las 450 ejecuciones planificadas, el corpus de 300 capturas y las pruebas a 125 y 150 % de DPI pasan al próximo corte, con sus motivos: (i) el corpus de capturas etiquetadas no existe, no se versiona (ADR-0012) y exige capturas autorizadas y su etiquetado; (ii) las 450 ejecuciones exigen muchas invocaciones supervisadas con el responsable presente, y cada ronda tiene un cupo de 200 solicitudes reales, mientras que un flujo puntuado consume entre dos y ocho solicitudes por corrida, según el flujo; (iii) el cambio de escala se hace a mano (IT-07). Para este MVP, la evidencia de tareas es el protocolo reducido de S4 (RF-18 del apartado 3.2 y el capítulo 06 §6.7).
 
 ## 3.6 Presupuesto y condición de rendimiento
 

@@ -1,5 +1,5 @@
 {
-  "timestamp_utc": "2026-10-15T04:49:29.034515+00:00",
+  "timestamp_utc": "2026-10-15T06:58:38.221063+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
@@ -14,9 +14,9 @@
     "requirements": 28,
     "planned_tests": 80,
     "references": 24,
-    "adrs": 22
+    "adrs": 23
   },
-  "checks_run": 451,
+  "checks_run": 453,
   "checks_failed": 0,
   "success": true,
   "checks": [
@@ -348,7 +348,7 @@
     {
       "check": "adrs_encontradas",
       "passed": true,
-      "detail": "22"
+      "detail": "23"
     },
     {
       "check": "referencias:00_AUDITORIA_TECNICA.md",
@@ -522,6 +522,11 @@
     },
     {
       "check": "referencias:0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "referencias:0023-licence-and-reduced-mvp-scope.md",
       "passed": true,
       "detail": "[]"
     },
@@ -1852,6 +1857,11 @@
     },
     {
       "check": "doc01_adr_pruebas:0022-ground-the-point-before-a-click-and-verify-the-os-after-a-navigating-click.md",
+      "passed": true,
+      "detail": "[]"
+    },
+    {
+      "check": "doc01_adr_pruebas:0023-licence-and-reduced-mvp-scope.md",
       "passed": true,
       "detail": "[]"
     },

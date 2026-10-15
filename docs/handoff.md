@@ -1,6 +1,6 @@
 # Estado del proyecto y relevo / Project status and handoff
 
-Fecha: 2026-10-14. Este documento resume dónde quedó el trabajo y qué sigue, para que otra
+Fecha: 2026-10-15 (versión 1.0.52). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
 persona o agente continúe sin rehacer nada. La especificación es el dossier de
 [`docs/thesis/`](thesis/README.md); las reglas del repositorio están en
 [`AGENTS.md`](../AGENTS.md).
@@ -50,8 +50,9 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | S4, continuación de la undécima ronda (rama `docs/s4-eleventh-round-run`, CHANGELOG 1.0.44; cuaderno 515, de 200 desde 429): la línea base nueva del responsable (ninguna ventana `CabinetWClass` visible; la oculta del PID 36160 intacta) cumple la comprobación previa, pero el contador de inactividad marca una entrada de teclado o ratón hacia las 00:23 (hora local), después de su respuesta; por la regla, sin sonda, piloto ni serie. Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md), «Undécima ronda (continuación)», y revisión `reviews/2026-10-14-s4-eleventh-round.md`, hallazgos 3 y 4. | Pendiente la respuesta del responsable: ¿estaba el equipo en uso hacia las 00:23? |
 | — | S4, segunda continuación de la undécima ronda (rama `docs/s4-eleventh-round-run2`, CHANGELOG 1.0.45; cuaderno de 515 a 530, de 200 desde 429): E2E-03 se ejecutó en vivo por primera vez. La sonda cumple la compuerta y el piloto pasa (3 de 3 comprobaciones del sistema, cero falsos éxitos, cero controles erróneos); las corridas puntuadas 2 a 4 pasan; la corrida 5 no se envió, porque el contador de inactividad marcó entrada que la ronda no provocó entre invocaciones. Matriz: E2E-03 sigue `PENDIENTE_PRODUCTO` (3 de 10). Informe en [`thesis/S4_ACEPTACION_REDUCIDA.md`](thesis/S4_ACEPTACION_REDUCIDA.md), «Undécima ronda (continuación 2)», y revisión `reviews/2026-10-14-s4-eleventh-round.md`, hallazgos 5 a 9. | Pendiente la respuesta del responsable: ¿fue suya la entrada entre las 00:56 y las 00:58? ¿Reanuda la serie (corridas 5 a 11)? |
 | — | Preparación de la evidencia que exige la máquina del responsable (rama `feat/dod-machine-evidence-prep`, CHANGELOG 1.0.47, sin ejecutar nada ni enviar entrada): guía de instalación y reversión ([`S4_INSTALACION_Y_REVERSION.md`](thesis/S4_INSTALACION_Y_REVERSION.md), REL-01), `tools/perf/soak.py` (PERF-03 / RNF-06: recursos y soak de 2 h) y `tools/perf/dpi_probe.py` (IT-07: DPI 100/125/150 %), ambas de sólo lectura y con pruebas sobre dobles, y [`S4_SESIONES_PENDIENTES.md`](thesis/S4_SESIONES_PENDIENTES.md) con lo que cada sesión supervisada necesita del responsable. Prueba `rel_01_the_install_guide_points_at_files_that_exist` y `tools/repro/test_install_guide.py`. Ninguna fila de las matrices ni casilla cambia. | PR abierto |
+| — | Alcance del MVP y licencia (rama `docs/mvp-scope-and-licence`, CHANGELOG 1.0.52, [ADR-0023](adr/0023-licence-and-reduced-mvp-scope.md), decisiones del responsable del 15 de octubre de 2026): código `MIT OR Apache-2.0` y documentos CC BY 4.0 (`LICENSE-MIT`, `LICENSE-APACHE`, `LICENSE-DOCS`); propietario de los 28 requisitos; RNF-05 aceptado como incumplimiento documentado; el protocolo reducido de S4 sustituye las 450 corridas de EV-02 para este MVP; EV-01, EV-02, IT-07 y el corpus de REL-01 pasan al próximo corte; reevaluación de la Definition of Done con 2 de 10 casillas marcadas y su evidencia (capítulo 06 §6.7). Prueba `rel_01_the_repository_declares_its_licences`. Ninguna matriz cambia. | PR abierto |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.45)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.52)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
@@ -117,6 +118,8 @@ La undécima ronda (1.0.43, rama `docs/s4-eleventh-round`) no envió ninguna sol
 La continuación de la undécima ronda (1.0.44, rama `docs/s4-eleventh-round-run`) tampoco envió ninguna solicitud real (cuaderno 515, de 200 desde `--round-start 429`). Con la línea base nueva que indicó el responsable, la comprobación previa cumplió todas sus condiciones, pero el contador de inactividad marcó una entrada de teclado o ratón hacia las 00:23 (hora local), después de su respuesta y sin comandos que la provocaran. Por la regla de la ronda, E2E-03 no se sondeó ni se pilotó. Decide el responsable: si el equipo estaba en uso y si la ronda continúa con una autorización nueva.
 
 La segunda continuación de la undécima ronda (1.0.45, rama `docs/s4-eleventh-round-run2`) envió 15 solicitudes reales (cuaderno de 515 a 530, de 200 desde `--round-start 429`; quedan 99). La sonda de E2E-03 cumplió la compuerta sin entrada; el piloto pasó (3 de 3 comprobaciones del sistema, cero falsos éxitos); las corridas puntuadas 2 a 4 pasaron. La corrida 5 no se envió: el contador de inactividad marcó entrada que la ronda no provocó, varias veces entre las 00:56 y las 00:58 (hora local), y la compuerta detuvo la serie. Decide el responsable: si esa entrada fue suya y si la serie reanuda con una autorización nueva. Matriz: E2E-03 sigue `PENDIENTE_PRODUCTO`.
+
+El 15 de octubre de 2026 el responsable fijó el alcance reducido del MVP y la licencia (1.0.52, [ADR-0023](adr/0023-licence-and-reduced-mvp-scope.md)). RNF-05 se acepta como incumplimiento documentado (dos regiones, p95 153 ms frente a 150 ms). El protocolo reducido de S4 sustituye las 450 corridas de EV-02 para este MVP: E2E-01, E2E-02, S4R-02 y S4R-03 tienen diez de diez corridas puntuadas sin falsos éxitos en `main`, y E2E-03 tiene tres de diez. EV-01, EV-02, IT-07 y el corpus de REL-01 pasan al próximo corte. La reevaluación de la Definition of Done (capítulo 06 §6.7) marca dos casillas con su evidencia y deja ocho sin marcar, cada una con lo que le falta.
 
 ## Cómo está el código
 
@@ -256,6 +259,18 @@ La segunda continuación de la undécima ronda (1.0.45, rama `docs/s4-eleventh-r
   afirma un cambio visual, así que no detecta ese error.
 
 ## Qué sigue
+
+**Estado al 15 de octubre de 2026 (1.0.52, alcance reducido del MVP).** Para cerrar el MVP con el alcance reducido queda:
+
+1. **E2E-03 (Explorador)**, serie de diez corridas puntuadas: en `main` tiene 3 de 10. Hace falta una autorización nueva del responsable para reanudar desde el cuaderno 530 (corridas 5 a 11), con la compuerta de la undécima ronda, y la pregunta de si la entrada entre las 00:56 y las 00:58 fue suya. No cuenta hasta su 10 de 10 en `main`; RF-18 y las casillas que dependen de ella no se marcan antes.
+2. **Sesión A**: instalar, verificar y revertir siguiendo [`S4_INSTALACION_Y_REVERSION.md`](thesis/S4_INSTALACION_Y_REVERSION.md) en una máquina limpia, y archivar el `environment.json`. Es la evidencia de REL-01; la casilla de documentación ya está marcada.
+3. **Sesión B**: el soak de 2 h (PERF-03, RNF-06). Antes, el responsable fija el umbral de RNF-06, que el repositorio no tiene.
+4. **Pendientes que no están en el alcance cedido**: el borrado de estado y caché (capítulo 08 §8.4, sin implementación); la prueba diferencial del diferenciador optimizado contra un baseline escalar (capítulo 05 §5.5); la parte de percepción de PERF-02 (p99 y variantes de caché); y SEC-02, SEC-05 e IT-01 a IT-05 en parte.
+5. **Próximo corte** (fuera de este MVP): EV-01, EV-02, IT-07 y el corpus de REL-01, con el plan del paquete Paper (INC-00 a INC-09; no se copia aquí). RNF-05 sigue como incumplimiento documentado.
+
+**Lo que ya no hace falta decidir:** la licencia del código y de los documentos (15 de octubre de 2026) y el propietario de los requisitos.
+
+Las decisiones de antes siguen en la lista de abajo; las que se refieren a la licencia o al alcance de este MVP quedan cerradas por este estado.
 
 1. **Revisar y fusionar** el PR del spike S0 (`feat/s0-omniparser-v3`, #8), después el de
    las corridas supervisadas de S3 (`feat/s3-supervised-runs`, #9, apilado sobre #8) y el
