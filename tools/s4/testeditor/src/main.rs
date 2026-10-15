@@ -22,6 +22,13 @@
 //! number of characters in the field and whether the last save is current), so a run can
 //! check the typing through the OS (`GetWindowTextW`). The independent check of a save is the
 //! file itself, read by the client from the OS.
+//!
+//! With `--decoy-focus` (opt-in; the default window is unchanged) two more fields appear under
+//! the status line: `Campo auxiliar`, and `Campo de destino`, to which that field hands the
+//! keyboard focus whenever it gains it. A `type` on `Campo auxiliar` therefore finds the focus
+//! on another field, and no key may reach either of them (BDD-35 on the real actuator). The
+//! title then also counts the characters of the two fields (`auxiliar=N destino=M`), and no
+//! text of either leaves the process.
 
 #![windows_subsystem = "windows"]
 
@@ -239,12 +246,41 @@ impl SaveFolder {
     }
 }
 
-/// The folder of `--folder <path>`, when the arguments are exactly that.
-fn folder_arg(args: impl IntoIterator<Item = OsString>) -> Option<PathBuf> {
+/// What the command line asks for: the client's folder, and whether the decoy fields are shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Launch {
+    folder: PathBuf,
+    decoy_focus: bool,
+}
+
+/// The arguments the editor takes: `--folder <path>` and, at most once, `--decoy-focus`, in
+/// either order. A repeated or unknown argument, or a missing path, is refused.
+fn launch_args(args: impl IntoIterator<Item = OsString>) -> Option<Launch> {
     let mut args = args.into_iter();
-    let flag = args.next()?;
-    let folder = args.next()?;
-    (flag == "--folder" && args.next().is_none()).then(|| PathBuf::from(folder))
+    let mut folder = None;
+    let mut decoy_focus = false;
+    while let Some(arg) = args.next() {
+        if arg == "--folder" && folder.is_none() {
+            folder = Some(PathBuf::from(args.next()?));
+        } else if arg == "--decoy-focus" && !decoy_focus {
+            decoy_focus = true;
+        } else {
+            return None;
+        }
+    }
+    Some(Launch {
+        folder: folder?,
+        decoy_focus,
+    })
+}
+
+/// The two fields of `--decoy-focus`: what is typed into each, which only the title counts.
+#[derive(Debug, Default)]
+struct Decoy {
+    /// `Campo auxiliar`: a click on it hands the keyboard focus to `target`.
+    text: String,
+    /// `Campo de destino`: where the keyboard focus goes.
+    target: String,
 }
 
 /// What the status line says.
@@ -255,12 +291,13 @@ enum Status {
     Failed,
 }
 
-/// The editor's state: the field's text and whether it was saved.
+/// The editor's state: the field's text, whether it was saved, and the decoy when it is shown.
 #[derive(Debug)]
 struct Editor {
     folder: SaveFolder,
     text: String,
     status: Status,
+    decoy: Option<Decoy>,
 }
 
 impl Editor {
@@ -269,6 +306,7 @@ impl Editor {
             folder,
             text: String::new(),
             status: Status::Pending,
+            decoy: None,
         }
     }
 
@@ -294,17 +332,23 @@ impl Editor {
         }
     }
 
-    /// The window title: the typed length and whether the last save is current.
+    /// The window title: the typed length and whether the last save is current, and with the
+    /// decoy the lengths of its two fields. Lengths only, never the text.
     fn title(&self) -> String {
-        format!(
-            "Ommatix S4 editor [caracteres={} guardado={}]",
-            self.text.chars().count(),
-            if self.status == Status::Saved {
-                "si"
-            } else {
-                "no"
-            }
-        )
+        let saved = if self.status == Status::Saved {
+            "si"
+        } else {
+            "no"
+        };
+        let chars = self.text.chars().count();
+        match &self.decoy {
+            None => format!("Ommatix S4 editor [caracteres={chars} guardado={saved}]"),
+            Some(decoy) => format!(
+                "Ommatix S4 editor [caracteres={chars} guardado={saved} auxiliar={} destino={}]",
+                decoy.text.chars().count(),
+                decoy.target.chars().count()
+            ),
+        }
     }
 }
 
@@ -316,6 +360,13 @@ const FIELD_WIDTH: f32 = 900.0;
 const FIELD_ROWS: usize = 6;
 /// The field's identity, so that a test can give it the keyboard focus without any input.
 const FIELD_ID: &str = "editor-field";
+/// The decoy's two fields (`--decoy-focus`): their identities and their accessible names.
+const DECOY_FIELD_ID: &str = "decoy-field";
+const TARGET_FIELD_ID: &str = "decoy-target";
+const DECOY_LABEL: &str = "Campo auxiliar";
+const TARGET_LABEL: &str = "Campo de destino";
+const DECOY_TEXT: f32 = 32.0;
+const DECOY_WIDTH: f32 = 700.0;
 
 /// The look of the editor, set once before the first frame.
 ///
@@ -327,6 +378,40 @@ const FIELD_ID: &str = "editor-field";
 fn configure(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Light);
     ctx.all_styles_mut(|style| style.visuals.text_cursor.blink = false);
+}
+
+/// The decoy's two fields (`--decoy-focus` only). A click on the first one gives it the keyboard
+/// focus, and as soon as it has it, the focus moves on to the second, so the first never keeps
+/// the focus. That is the case BDD-35 needs: a `type` on the first field waits for a focus that
+/// does not come, and no key may be sent. Nothing here reads or writes the keyboard; the
+/// toolkit's own focus is moved inside the window.
+fn decoy_fields(ui: &mut egui::Ui, decoy: &mut Decoy) {
+    ui.add_space(30.0);
+    let field = ui.add(
+        egui::TextEdit::singleline(&mut decoy.text)
+            .id(egui::Id::new(DECOY_FIELD_ID))
+            .char_limit(TEXT_LIMIT_CHARS)
+            .desired_width(DECOY_WIDTH)
+            .font(egui::FontId::proportional(DECOY_TEXT)),
+    );
+    ui.ctx()
+        .accesskit_node_builder(field.id, |node| node.set_label(DECOY_LABEL));
+    // Every frame in which the decoy holds the focus, the focus goes on to the target: the decoy
+    // never keeps it, whichever frame the click gave it in.
+    if field.has_focus() {
+        ui.ctx()
+            .memory_mut(|memory| memory.request_focus(egui::Id::new(TARGET_FIELD_ID)));
+    }
+    ui.add_space(20.0);
+    let target = ui.add(
+        egui::TextEdit::singleline(&mut decoy.target)
+            .id(egui::Id::new(TARGET_FIELD_ID))
+            .char_limit(TEXT_LIMIT_CHARS)
+            .desired_width(DECOY_WIDTH)
+            .font(egui::FontId::proportional(DECOY_TEXT)),
+    );
+    ui.ctx()
+        .accesskit_node_builder(target.id, |node| node.set_label(TARGET_LABEL));
 }
 
 struct EditorApp {
@@ -397,6 +482,9 @@ impl EditorApp {
                         .size(VALUE_TEXT)
                         .strong(),
                 );
+                if let Some(decoy) = self.editor.decoy.as_mut() {
+                    decoy_fields(ui, decoy);
+                }
             });
         });
         let after = self.editor.title();
@@ -408,14 +496,18 @@ impl EditorApp {
 }
 
 fn main() -> eframe::Result {
-    // Exit code 2, before any window, for anything but `--folder <the client's folder>`.
-    let Some(dir) = folder_arg(std::env::args_os().skip(1)) else {
+    // Exit code 2, before any window, for anything but `--folder <the client's folder>`, with
+    // `--decoy-focus` optionally.
+    let Some(launch) = launch_args(std::env::args_os().skip(1)) else {
         std::process::exit(2);
     };
-    let Ok(folder) = SaveFolder::new(&dir, &std::env::temp_dir()) else {
+    let Ok(folder) = SaveFolder::new(&launch.folder, &std::env::temp_dir()) else {
         std::process::exit(2);
     };
-    let editor = Editor::new(folder);
+    let mut editor = Editor::new(folder);
+    if launch.decoy_focus {
+        editor.decoy = Some(Decoy::default());
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(editor.title())
@@ -578,22 +670,68 @@ mod tests {
     }
 
     #[test]
-    fn the_folder_argument_is_exactly_folder_and_a_path() {
+    fn the_arguments_are_the_folder_and_at_most_one_decoy_flag() {
         let args = |list: &[&str]| list.iter().map(OsString::from).collect::<Vec<_>>();
+        let plain = |folder: &str| Launch {
+            folder: PathBuf::from(folder),
+            decoy_focus: false,
+        };
+        let decoy = |folder: &str| Launch {
+            folder: PathBuf::from(folder),
+            decoy_focus: true,
+        };
         assert_eq!(
-            folder_arg(args(&["--folder", "C:\\t"])),
-            Some(PathBuf::from("C:\\t"))
+            launch_args(args(&["--folder", "C:\\t"])),
+            Some(plain("C:\\t"))
+        );
+        assert_eq!(
+            launch_args(args(&["--folder", "C:\\t", "--decoy-focus"])),
+            Some(decoy("C:\\t"))
+        );
+        assert_eq!(
+            launch_args(args(&["--decoy-focus", "--folder", "C:\\t"])),
+            Some(decoy("C:\\t"))
         );
         for bad in [
             &[][..],
             &["--folder"][..],
+            &["--decoy-focus"][..],
             &["C:\\t"][..],
             &["--dir", "C:\\t"][..],
             &["--folder", "C:\\t", "--folder", "D:\\u"][..],
             &["--folder", "C:\\t", "extra"][..],
+            &["--folder", "C:\\t", "--decoy-focus", "--decoy-focus"][..],
+            &["--folder", "C:\\t", "--decoy"][..],
         ] {
-            assert_eq!(folder_arg(args(bad)), None, "{bad:?}");
+            assert_eq!(launch_args(args(bad)), None, "{bad:?}");
         }
+    }
+
+    /// The decoy's fields are read by the window title only as lengths; the default title is
+    /// the one the other runs check, unchanged.
+    #[test]
+    fn the_decoy_title_counts_its_two_fields_and_the_default_title_is_unchanged() {
+        let root = temp_root();
+        let mut editor = Editor::new(folder(&root, "run1"));
+        let plain = editor.title();
+        assert_eq!(plain, "Ommatix S4 editor [caracteres=0 guardado=no]");
+        editor.decoy = Some(Decoy::default());
+        assert_eq!(
+            editor.title(),
+            "Ommatix S4 editor [caracteres=0 guardado=no auxiliar=0 destino=0]"
+        );
+        if let Some(decoy) = editor.decoy.as_mut() {
+            decoy.text = "ñandú".to_owned();
+            decoy.target = "x".to_owned();
+        }
+        assert_eq!(
+            editor.title(),
+            "Ommatix S4 editor [caracteres=0 guardado=no auxiliar=5 destino=1]",
+            "characters, not bytes, and no text"
+        );
+        editor.decoy = None;
+        assert_eq!(editor.title(), plain);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -836,6 +974,30 @@ mod tests {
         assert_eq!(folded.len(), n);
     }
 
+    /// One frame of the editor at `time` seconds, the window in front and focused; returns what
+    /// it painted.
+    fn paint_frame(ctx: &egui::Context, app: &mut EditorApp, time: f64) -> String {
+        let mut raw = egui::RawInput {
+            time: Some(time),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1920.0, 1080.0),
+            )),
+            ..Default::default()
+        };
+        raw.viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                focused: Some(true),
+                ..Default::default()
+            },
+        );
+        let mut output = ctx.run_ui(raw, |ui| app.show(ui));
+        // The textures are not uploaded anywhere: the toolkit insists they are handled.
+        output.textures_delta.clear();
+        format!("{:?}", output.shapes)
+    }
+
     /// What the editor paints, frame by frame, with the field holding the keyboard focus and
     /// the window in front, at the given times (seconds). No input reaches the OS: the focus
     /// is given to the field inside the toolkit's own context. `look` sets the context up like
@@ -852,36 +1014,57 @@ mod tests {
         app.editor.text.push_str("hola");
         let ctx = egui::Context::default();
         look(&ctx);
-        let mut frame = |time: f64| {
-            let mut raw = egui::RawInput {
-                time: Some(time),
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1920.0, 1080.0),
-                )),
-                ..Default::default()
-            };
-            raw.viewports.insert(
-                egui::ViewportId::ROOT,
-                egui::ViewportInfo {
-                    focused: Some(true),
-                    ..Default::default()
-                },
-            );
-            let mut output = ctx.run_ui(raw, |ui| app.show(ui));
-            // The textures are not uploaded anywhere: the toolkit insists they are handled.
-            output.textures_delta.clear();
-            format!("{:?}", output.shapes)
-        };
         // Fonts and layout settle in the first frames; the field then takes the focus.
         for step in 0..3 {
-            let _ = frame(f64::from(step) * 0.01);
+            let _ = paint_frame(&ctx, &mut app, f64::from(step) * 0.01);
         }
         ctx.memory_mut(|m| m.request_focus(egui::Id::new(FIELD_ID)));
-        let _ = frame(0.04);
-        let painted = times.iter().map(|t| frame(*t)).collect();
+        let _ = paint_frame(&ctx, &mut app, 0.04);
+        let painted = times
+            .iter()
+            .map(|t| paint_frame(&ctx, &mut app, *t))
+            .collect();
         let _ = std::fs::remove_dir_all(&root);
         painted
+    }
+
+    /// The decoy (BDD-35, real actuator side): a click on `Campo auxiliar` gives it the keyboard
+    /// focus, and the focus then moves to `Campo de destino` and stays there. A `type` on the
+    /// first field therefore finds the focus elsewhere, and the engine sends no key.
+    #[test]
+    fn a_click_on_the_decoy_hands_the_keyboard_focus_to_the_target_and_keeps_it() {
+        let root = temp_root();
+        let dir = run_dir(&root, "decoy");
+        let mut editor = Editor::new(SaveFolder::new(&dir, &root).unwrap());
+        editor.decoy = Some(Decoy::default());
+        let mut app = EditorApp {
+            editor,
+            started: Instant::now(),
+            maximized: true,
+            seeker: FocusSeeker::default(),
+        };
+        let ctx = egui::Context::default();
+        configure(&ctx);
+        for step in 0..3 {
+            let _ = paint_frame(&ctx, &mut app, f64::from(step) * 0.01);
+        }
+        // The same state a click leaves: the decoy holds the focus in a frame.
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new(DECOY_FIELD_ID)));
+        let _ = paint_frame(&ctx, &mut app, 0.04);
+        assert_eq!(
+            ctx.memory(egui::Memory::focused),
+            Some(egui::Id::new(TARGET_FIELD_ID)),
+            "the focus left the decoy"
+        );
+        for step in 0..6 {
+            let _ = paint_frame(&ctx, &mut app, 0.05 + f64::from(step) * 0.05);
+            assert_eq!(
+                ctx.memory(egui::Memory::focused),
+                Some(egui::Id::new(TARGET_FIELD_ID)),
+                "the focus stays on the target after frame {step}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Instants spread over two blink periods, one in each half-second of the cycle.

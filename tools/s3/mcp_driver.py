@@ -180,7 +180,8 @@ class Server:
         )
         self.stderr: list[str] = []
         self.next_id = 1
-        threading.Thread(target=self._drain, daemon=True).start()
+        self._reader = threading.Thread(target=self._drain, daemon=True)
+        self._reader.start()
 
     def _drain(self) -> None:
         for line in self.proc.stderr:
@@ -219,10 +220,13 @@ class Server:
         except OSError:
             pass
         try:
-            return self.proc.wait(timeout=30)
+            code = self.proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             self.proc.kill()
-            return self.proc.wait()
+            code = self.proc.wait()
+        # Once the process has exited, its stderr is at EOF: the lines are all in `stderr`.
+        self._reader.join(timeout=5)
+        return code
 
 
 # ---- run -----------------------------------------------------------------------------------

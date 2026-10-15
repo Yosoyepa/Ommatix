@@ -10,6 +10,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -1392,7 +1393,8 @@ class CalcCheckModeTest(QuietTest):
 
     def test_the_check_is_a_calculator_only_invocation_of_its_own(self):
         def args(**kw):
-            base = dict(app="calculator", calc_standard=False, check_mode=True, max_live=0)
+            base = dict(app="calculator", calc_standard=False, check_mode=True, max_live=0,
+                        ambiguous_crash=False)
             base.update(kw)
             return SimpleNamespace(**base)
 
@@ -1403,7 +1405,8 @@ class CalcCheckModeTest(QuietTest):
 
     def test_calc_standard_with_no_live_budget_is_refused_when_the_arguments_are_parsed(self):
         def args(**kw):
-            base = dict(app="calculator", calc_standard=True, check_mode=False, max_live=2)
+            base = dict(app="calculator", calc_standard=True, check_mode=False, max_live=2,
+                        ambiguous_crash=False)
             base.update(kw)
             return SimpleNamespace(**base)
 
@@ -2620,6 +2623,345 @@ class ServeArgvTest(unittest.TestCase):
     def test_a_probe_passes_the_identifier_it_was_given(self):
         argv = driver.serve_argv("ommatix.exe", "out", "probe.toml", False, "check-1")
         self.assertEqual(argv[-2:], ["--session-id", "check-1"])
+
+
+# ---- IT-05, the ambiguous crash ---------------------------------------------------------------
+
+
+class FakeProc:
+    """The Popen handle of a fake engine. It has nothing but `kill`: the client may end the
+    process it holds and nothing else."""
+
+    def __init__(self):
+        self.kills = 0
+        self.killed = threading.Event()
+
+    def kill(self):
+        self.kills += 1
+        self.killed.set()
+
+
+class FakeEngine:
+    """An s3.Server stand-in. Its first request is the click the engine is killed in: when it is
+    not answered first, a delivered click moves the shared counter and the request waits for the
+    kill, then raises as s3.Server does when the server closed its stdout. Later requests get the
+    scripted answers, in order: (answer, whether the click was delivered)."""
+
+    def __init__(self, clicks, session, *, answers=(), deliver=False, answer_first=False,
+                 lines=()):
+        self.clicks = clicks
+        self.session = session
+        self.answers = list(answers)
+        self.deliver = deliver
+        self.answer_first = answer_first
+        self.proc = FakeProc()
+        self.stderr = list(lines)
+        self.calls = []
+
+    def call(self, name, args):
+        self.calls.append(args)
+        if not self.answers:
+            if self.answer_first:
+                return {"status": "effect_observed", "input_delivered": True}, False, {}, 1.0
+            if self.deliver:
+                self.clicks[0] += 1
+            if not self.proc.killed.wait(2.0):
+                raise AssertionError("the engine was never killed")
+            raise driver.Abort("the server closed stdout (exit 1)")
+        answer, delivers = self.answers.pop(0)
+        if delivers:
+            self.clicks[0] += 1
+        return answer, False, {}, 1.0
+
+    def close(self):
+        return 0
+
+
+SESSION_END = "ommatix: session ended; the engine's state and cache were deleted"
+REJECTED_SESSION = {"status": "rejected", "input_delivered": False,
+                    "error": {"code": "SESSION_MISMATCH", "retryable": False,
+                              "next_step": "observe_again"}}
+EFFECT = {"status": "effect_observed", "input_delivered": True, "verified": True,
+          "observed_effect": "visual_change"}
+
+
+class FakeCrashDesk(driver.Protocol):
+    """Protocol.crash_case over fake engines and a fake test application: its click counter is
+    `clicks`, which only delivered clicks move. No window is read, no process is started."""
+
+    def __init__(self, tmp, old, clicks, *, max_live=3, crash_after_ms=20):
+        self.clicks = clicks
+        args = SimpleNamespace(app="testapp", max_live=max_live, settle=0.0,
+                               results=tmp / "results.jsonl", round_start=0,
+                               crash_after_ms=crash_after_ms, mode="run", restart="each",
+                               runs=1, pause=0.0, first_run=1, testapp_exe="testapp.exe")
+        super().__init__(args, old, tmp / "stop.flag", driver.testapp_flow(False),
+                         tmp / "ledger.txt")
+        self.closed = []
+
+    def launch(self):
+        self.started.add(4242)
+        return 4242
+
+    def wait_foreground(self, pid):
+        return True, 0
+
+    def app_window(self, pid):
+        return 88
+
+    def require_foreground(self):
+        return {"exe": "ommatix-testapp.exe", "pid": 4242, "hwnd": 88, "maximized_primary": True}
+
+    def observe(self):
+        page = {"session_id": self.srv.session, "snapshot_id": "s1", "geometry_epoch": 1}
+        elements = [{"label": "Sumar", "role": "button", "actionability": "confirmed",
+                     "target_id": "sum", "revision": 1, "label_source": "accessibility"}]
+        return page, elements, {}
+
+    def ocr_ok(self, elements, check):
+        return True
+
+    def counter(self, hwnd):
+        return self.clicks[0]
+
+    def metrics(self):
+        return {"delivered_actions": 0, "rejected_actions": 0}
+
+    def identity_lookup(self, hwnd, label, target):
+        return ({"status": "ok", "candidates": 1, "offscreen_ignored": 0},
+                {"runtime_id": "R1", "automation_id": "", "control_type": "Button",
+                 "offscreen": False})
+
+    def pre_click_grounding(self, step, fg, label, target, ident):
+        return {"step": step, "grounded": True, "status": "ok"}
+
+    def close(self, pid):
+        self.closed.append(pid)
+
+
+def crash_engines(clicks, *, deliver=True, answer_first=False, old_lines=("values redacted",),
+                  replay=REJECTED_SESSION, new_click=EFFECT, new_lines=None):
+    """The killed engine and the restarted one, scripted: the restart refuses the repetition and
+    then delivers one new click, as the protocol expects."""
+    old = FakeEngine(clicks, "s-old", deliver=deliver, answer_first=answer_first,
+                     lines=old_lines)
+    new_lines = new_lines if new_lines is not None else ["values redacted", SESSION_END]
+    new = FakeEngine(clicks, "s-new", lines=new_lines,
+                     answers=[(replay, replay.get("input_delivered", False)),
+                              (new_click, new_click.get("input_delivered", False))])
+    return old, new
+
+
+class CrashCaseTest(QuietTest):
+    def run_case(self, old, new, clicks, **kwargs):
+        desk = FakeCrashDesk(self.tmp, old, clicks, **kwargs)
+        res = driver.new_result("IT-05-plan", 1, "IT-05")
+        with mock.patch.object(driver.s3, "Server", lambda argv: new):
+            desk.crash_case(res, ["ommatix.exe", "serve", "--input", "sendinput"])
+        return desk, res
+
+    def test_a_click_delivered_before_the_kill_is_counted_once_and_never_repeated(self):
+        clicks = [0]
+        old, new = crash_engines(clicks, deliver=True)
+        desk, res = self.run_case(old, new, clicks)
+        self.assertTrue(res["success"], res["failure"])
+        self.assertEqual(res["kill_window"], "crashed_mid_request")
+        self.assertEqual(res["valor"], {"before": 0, "after_crash": 1, "after_replay": 1,
+                                        "final": 2})
+        self.assertEqual(res["crash"]["os_outcome"], "delivered_once")
+        self.assertEqual((old.proc.kills, len(old.calls), len(new.calls)), (1, 1, 2))
+        self.assertEqual(desk.ledger_total(), 3, "the crash, the repetition, one new click")
+        self.assertNotIn("duplicate_delivery", res)
+
+    def test_the_repetition_is_the_same_request_and_the_click_after_it_is_new(self):
+        clicks = [0]
+        old, new = crash_engines(clicks)
+        self.run_case(old, new, clicks)
+        self.assertEqual(new.calls[0], old.calls[0], "exactly the same arguments")
+        self.assertNotEqual(new.calls[1]["request_id"], old.calls[0]["request_id"])
+
+    def test_a_click_that_never_left_is_reported_as_not_delivered_and_the_new_one_counts(self):
+        clicks = [0]
+        old, new = crash_engines(clicks, deliver=False)
+        _, res = self.run_case(old, new, clicks)
+        self.assertTrue(res["success"], res["failure"])
+        self.assertEqual(res["crash"]["os_outcome"], "not_delivered")
+        self.assertEqual(res["valor"]["final"], 1)
+
+    def test_an_answer_before_the_kill_is_not_the_case_and_nothing_restarts(self):
+        clicks = [0]
+        old, new = crash_engines(clicks, answer_first=True)
+        desk, res = self.run_case(old, new, clicks, crash_after_ms=200)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["kill_window"], "response_first")
+        self.assertIn("not exercised", res["failure"])
+        self.assertEqual((old.proc.kills, new.calls), (0, []))
+        self.assertIs(desk.srv, old)
+        self.assertEqual(desk.ledger_total(), 1, "the one request is spent, never retried")
+
+    def test_a_counter_that_moves_on_the_repetition_is_a_duplicate_and_fails(self):
+        clicks = [0]
+        old, new = crash_engines(clicks, deliver=True,
+                                 replay=dict(EFFECT), new_click=dict(EFFECT))
+        _, res = self.run_case(old, new, clicks)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["duplicate_delivery"], 1)
+        self.assertTrue(res["crash"]["replay_moved_counter"])
+        self.assertIn("repeated request was not refused", res["failure"])
+
+    def test_a_killed_engine_whose_stderr_claims_a_clean_end_fails_the_case(self):
+        clicks = [0]
+        old, new = crash_engines(clicks, old_lines=("values redacted", SESSION_END))
+        _, res = self.run_case(old, new, clicks)
+        self.assertFalse(res["success"])
+        self.assertIn("claims a clean end", res["failure"])
+
+    def test_a_restarted_engine_without_its_clean_end_line_fails_the_case(self):
+        clicks = [0]
+        old, new = crash_engines(clicks, new_lines=["values redacted"])
+        _, res = self.run_case(old, new, clicks)
+        self.assertFalse(res["success"])
+        self.assertIn("exactly one clean end", res["failure"])
+
+    def test_the_run_ends_on_a_duplicate_and_the_record_says_so(self):
+        clicks = [0]
+        old, new = crash_engines(clicks, deliver=True,
+                                 replay=dict(EFFECT), new_click=dict(EFFECT))
+        desk = FakeCrashDesk(self.tmp, old, clicks)
+        with mock.patch.object(driver.s3, "Server", lambda argv: new):
+            with self.assertRaises(driver.Abort):
+                desk.run_crash(["ommatix.exe", "serve"])
+        recorded = json.loads((self.tmp / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertEqual(recorded["duplicate_delivery"], 1)
+        self.assertTrue((self.tmp / "stop.flag").exists(), "the operator's stop is engaged")
+        self.assertEqual(desk.closed, [4242], "the test application is closed")
+
+    def test_a_refused_spend_never_leaves_a_kill_armed(self):
+        # Regression: the timer used to start before the live spend, so a refused spend (the
+        # budget) left a kill armed that nothing cancelled.
+        clicks = [0]
+        old, new = crash_engines(clicks)
+        with self.assertRaises(driver.Abort):
+            self.run_case(old, new, clicks, max_live=0)
+        self.assertFalse(old.proc.killed.wait(0.3), "no kill was armed")
+        self.assertEqual(old.calls, [])
+
+    def test_the_restart_is_started_without_a_session_identifier(self):
+        clicks = [0]
+        old, new = crash_engines(clicks)
+        argv_seen = []
+
+        def server(argv):
+            argv_seen.append(argv)
+            return new
+
+        desk = FakeCrashDesk(self.tmp, old, clicks)
+        res = driver.new_result("IT-05-plan", 1, "IT-05")
+        with mock.patch.object(driver.s3, "Server", server):
+            desk.crash_case(res, driver.serve_argv("ommatix.exe", 0, "live.toml", True, None))
+        self.assertEqual(len(argv_seen), 1)
+        self.assertNotIn("--session-id", argv_seen[0])
+        self.assertIn("--input", argv_seen[0])
+
+
+class KillAfterTest(QuietTest):
+    def test_the_process_handle_is_killed_once_after_the_delay(self):
+        proc = FakeProc()
+        killer = driver.KillAfter(proc, 0.01).start()
+        self.assertTrue(proc.killed.wait(2.0))
+        killer.cancel()
+        self.assertTrue(killer.fired)
+        self.assertEqual(proc.kills, 1)
+
+    def test_a_cancel_before_the_delay_kills_nothing(self):
+        proc = FakeProc()
+        killer = driver.KillAfter(proc, 5.0).start()
+        killer.cancel()
+        killer._thread.join(2.0)
+        self.assertFalse(killer.fired)
+        self.assertEqual(proc.kills, 0)
+
+    def test_a_cancel_after_the_kill_does_not_kill_again(self):
+        proc = FakeProc()
+        killer = driver.KillAfter(proc, 0.0).start()
+        self.assertTrue(proc.killed.wait(2.0))
+        killer.cancel()
+        killer.cancel()
+        self.assertEqual(proc.kills, 1)
+
+    def test_the_client_kills_the_one_handle_it_holds_and_no_process_by_name(self):
+        # The source: one kill call in the client, on the handle, and no kill by image name, by
+        # tree or through os.kill. The editor client never kills anything.
+        source = (HERE / "e2e_driver.py").read_text(encoding="utf-8")
+        self.assertEqual(source.count("self.proc.kill()"), 1)
+        for forbidden in ("/IM", "os.kill(", "kill_by_name", "/T\"]"):
+            self.assertNotIn(forbidden, source, forbidden)
+        dossier = (HERE / "e2e_dossier.py").read_text(encoding="utf-8")
+        self.assertNotIn(".kill(", dossier, "the editor client never kills a process")
+
+
+class CrashPureTest(unittest.TestCase):
+    def test_the_click_counter_is_read_from_the_title(self):
+        title = "Ommatix S4 prueba [valor=3 estado=off pagina=1 texto=]"
+        self.assertEqual(driver.testapp_valor(title), 3)
+        self.assertIsNone(driver.testapp_valor("Notas [sin contador]"))
+
+    def test_the_kill_window_names_each_end(self):
+        self.assertEqual(driver.kill_window(answered=False, fired=True), "crashed_mid_request")
+        self.assertEqual(driver.kill_window(answered=True, fired=False), "response_first")
+        self.assertEqual(driver.kill_window(answered=True, fired=True), "kill_after_answer")
+        self.assertEqual(driver.kill_window(answered=False, fired=False), "unprompted_exit")
+
+    def test_the_counter_outcome_is_not_delivered_once_or_other(self):
+        self.assertEqual(driver.crash_os_outcome(0, 0), "not_delivered")
+        self.assertEqual(driver.crash_os_outcome(0, 1), "delivered_once")
+        self.assertEqual(driver.crash_os_outcome(0, 2), "other")
+        self.assertEqual(driver.crash_os_outcome(0, None), "unreadable")
+
+    def test_the_configuration_allows_the_test_application_only(self):
+        good = {"safety": {"actuation_enabled": True, "stop_file": "stop.flag",
+                           "allowed_applications": ["ommatix-testapp.exe"]},
+                "models": {"accessibility": "uia"}}
+        self.assertEqual(driver.crash_config_problems(good), [])
+        wider = {**good, "safety": {**good["safety"],
+                                    "allowed_applications": ["ommatix-testapp.exe", "notepad.exe"]}}
+        self.assertIn("exactly", driver.crash_config_problems(wider)[0])
+        no_uia = {**good, "models": {"accessibility": "none"}}
+        self.assertTrue(driver.crash_config_problems(no_uia))
+        off = {**good, "safety": {**good["safety"], "actuation_enabled": False}}
+        self.assertIn("actuation_enabled", driver.crash_config_problems(off)[0])
+
+    def test_a_clean_crash_case_has_no_problem_and_each_fault_is_named(self):
+        clean = {"kill_window": "crashed_mid_request", "os_outcome": "delivered_once",
+                 "stable_after_restart": True, "new_session": True,
+                 "replay_code": "SESSION_MISMATCH", "replay_delivered": False,
+                 "replay_moved_counter": False, "new_click_ok": True,
+                 "killed_said_session_ended": False, "new_session_ended_lines": 1}
+        self.assertEqual(driver.crash_problems(clean), [])
+        cases = {"kill_window": "response_first", "os_outcome": "other",
+                 "stable_after_restart": False, "new_session": False,
+                 "replay_code": "EFFECT", "replay_delivered": True,
+                 "new_click_ok": False, "killed_said_session_ended": True,
+                 "new_session_ended_lines": 0}
+        problems = driver.crash_problems({**clean, **cases})
+        for fragment in ("not exercised", "reads other", "moved after", "reused",
+                         "refused with nothing", "one click", "clean end", "exactly one"):
+            self.assertTrue(any(fragment in p for p in problems), fragment)
+
+    def test_the_arguments_of_the_case_are_checked_before_anything_starts(self):
+        def args(**kw):
+            base = dict(app="testapp", calc_standard=False, check_mode=False, max_live=3,
+                        runs=1, ambiguous_crash=True, crash_after_ms=40)
+            base.update(kw)
+            return SimpleNamespace(**base)
+
+        self.assertIsNone(driver.argument_problem(args(), live=True))
+        self.assertIn("testapp", driver.argument_problem(args(app="notepad"), live=True))
+        self.assertIn("run mode", driver.argument_problem(args(), live=False))
+        self.assertIn("--runs 1", driver.argument_problem(args(runs=2), live=True))
+        self.assertIn("--max-live", driver.argument_problem(args(max_live=2), live=True))
+        self.assertIn("--crash-after-ms", driver.argument_problem(args(crash_after_ms=5), live=True))
+        self.assertIn("--crash-after-ms", driver.argument_problem(args(crash_after_ms=90), live=True))
 
 
 if __name__ == "__main__":

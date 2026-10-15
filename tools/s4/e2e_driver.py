@@ -63,6 +63,18 @@ abort, POLICY_DENIED included) ends the whole invocation at once: no further req
 run, the reason recorded (``safety_stop``) and the operator's stop engaged, as three consecutive
 failed runs do. Any other failure lets the next run start.
 
+``--ambiguous-crash`` (IT-05, the test application only, one case, three live requests) is the
+ambiguous crash of the dossier: one click on ``Sumar`` is requested through the gate, and the
+client kills the engine process it started (``KillAfter``: that Popen handle and nothing else)
+``--crash-after-ms`` (40 by default, between 20 and 50) after the request was written, before
+its answer. The engine is started again without a fixed session identifier. The test
+application's title counts its clicks (``valor=``), so the OS side says whether the killed click
+was delivered (0 or 1, both honest), then the client checks, with no request in between, that the
+counter does not move; it repeats the old request_id in the new session (it must be refused,
+nothing stored and nothing delivered: ``SESSION_MISMATCH`` or ``STALE_SNAPSHOT``), and then one new
+click must add exactly one. The killed engine's stderr must not claim a clean end (``session
+ended``). See ``crash_problems`` for every expectation.
+
 ``--check-mode`` (Calculator only) is read-only: it starts the Calculator, waits for the
 foreground, reads the mode through UI Automation (polled for 2 s) and closes the process it
 started; exit 0 when Standard, 1 otherwise. It starts no engine, sends no input and no live
@@ -107,6 +119,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import unicodedata
@@ -1155,7 +1168,10 @@ def identity_hit(expected: dict, chain: list[dict]) -> bool:
 # grounded (``Protocol.pre_click_grounding``).
 NAVIGATING_STEPS = MappingProxyType({"explorer": (1, 2, 3)})
 # The counters of a run's record whose presence is a safety event that ends the invocation.
-SAFETY_COUNTERS = ("grounding_wrong", "engine_false_success")
+# keys_without_focus: a key reached a field the engine had not confirmed (BDD-35, decoy round).
+# duplicate_delivery: the counter moved without a request, or by more than the request (IT-05).
+SAFETY_COUNTERS = ("grounding_wrong", "engine_false_success", "keys_without_focus",
+                   "duplicate_delivery")
 CHAIN_RECORD_ROWS = 6
 
 
@@ -1490,6 +1506,132 @@ E2E_ID = {"testapp": "E2E-01", "calculator": "E2E-02", "notepad": "E2E-03"}
 # (recorded evidence refers to it) and carry `flow_id` going forward.
 FLOW_ID = {"testapp": "E2E-01", "calculator": "S4R-02", "notepad": "S4R-03"}
 
+# ---- the ambiguous crash (IT-05) -----------------------------------------------------------
+# One click on the test application's Sumar, the engine killed while the request is open. The
+# measured round trips of clicks with a visual effect were 68 to 100 ms (S3 section 9 and S4
+# reports), and the delivery comes 15 to 30 ms after the request (action_freshness 14 to 27 ms,
+# action_delivery about 2 ms). The kill comes at 40 ms, between the two: the click is expected to
+# have left in most runs, and the answer is expected not to have come. Whether the click left is
+# not known to the client; the test application's counter says it afterwards, and both outcomes
+# are honest. A run where the answer comes first is reported as not exercised and never retried
+# (the live request is already spent).
+CRASH_TARGET = "Sumar"
+CRASH_AFTER_MS = 40
+CRASH_AFTER_MS_RANGE = (20, 50)
+CRASH_LIVE_REQUESTS = 3  # the crashed click, its repetition in the new session, one new click
+CRASH_STABLE_SAMPLES = 3  # one read per second with no request in between
+SESSION_END = "session ended"
+TESTAPP_VALOR = re.compile(r"valor=(\d+)")
+
+
+def testapp_valor(title: str) -> int | None:
+    """The click counter of the test application, from its window title (``valor=N``)."""
+    match = TESTAPP_VALOR.search(title)
+    return int(match.group(1)) if match else None
+
+
+def kill_window(answered: bool, fired: bool) -> str:
+    """How the engine ended around the request: ``crashed_mid_request`` (the client killed it
+    after the request was written and before any answer: the case), ``response_first`` (the
+    answer came before the kill: the case was not exercised), ``kill_after_answer`` (the timer
+    fired after the answer) or ``unprompted_exit`` (the engine ended without the client's kill)."""
+    if fired and not answered:
+        return "crashed_mid_request"
+    if answered and not fired:
+        return "response_first"
+    if answered:
+        return "kill_after_answer"
+    return "unprompted_exit"
+
+
+def crash_os_outcome(before: int, after: int | None) -> str:
+    """The test application's counter after the crash, against its value before the request:
+    unchanged (not delivered), one more (delivered once), or anything else (a duplicate, or a
+    title that cannot be read). Only the counter decides it; the engine's answer never does."""
+    if after is None:
+        return "unreadable"
+    if after == before:
+        return "not_delivered"
+    if after == before + 1:
+        return "delivered_once"
+    return "other"
+
+
+class KillAfter:
+    """Kills one child process after `delay_s` seconds, unless `cancel` comes first. It kills the
+    handle it was given and nothing else: no process name, no process tree, no PID the client did
+    not get from that Popen object. `fired` tells whether the kill happened."""
+
+    def __init__(self, proc, delay_s: float):
+        self.proc = proc
+        self.delay_s = delay_s
+        self.fired = False
+        self._cancelled = False
+        self._lock = threading.Lock()
+        self._done = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> "KillAfter":
+        self._thread.start()
+        return self
+
+    def _run(self) -> None:
+        if self._done.wait(self.delay_s):
+            return
+        with self._lock:
+            if self._cancelled:
+                return
+            self.fired = True
+            self.proc.kill()
+
+    def cancel(self) -> None:
+        """No kill after this returns: the answer came first, or the case ended."""
+        with self._lock:
+            self._cancelled = True
+        self._done.set()
+
+
+def crash_config_problems(config: dict) -> list[str]:
+    """What the IT-05 case needs from the configuration: live actuation with a stop file, UI
+    Automation evidence (the target is identified through it) and the test application as the
+    only application the engine may act on."""
+    safety = config.get("safety", {})
+    problems = []
+    if not safety.get("actuation_enabled"):
+        problems.append("[safety] actuation_enabled is not true")
+    if not safety.get("stop_file"):
+        problems.append("[safety] stop_file is not set")
+    if config.get("models", {}).get("accessibility") != "uia":
+        problems.append("[models] accessibility is not \"uia\"")
+    if safety.get("allowed_applications") != ["ommatix-testapp.exe"]:
+        problems.append("[safety] allowed_applications must be exactly [\"ommatix-testapp.exe\"]")
+    return problems
+
+
+def crash_problems(facts: dict) -> list[str]:
+    """Why the IT-05 case did not show what IT-05 asks for; empty when it did. Pure: the facts
+    are statuses, codes, counts and booleans that the run read, never screen text."""
+    problems = []
+    if facts["kill_window"] != "crashed_mid_request":
+        problems.append(f"the case was not exercised (kill window: {facts['kill_window']})")
+    if facts["os_outcome"] not in ("not_delivered", "delivered_once"):
+        problems.append(f"the counter after the crash reads {facts['os_outcome']}")
+    if not facts["stable_after_restart"]:
+        problems.append("the counter moved after the restart with no request")
+    if not facts["new_session"]:
+        problems.append("the restarted engine reused the session identifier")
+    if facts["replay_code"] not in ("SESSION_MISMATCH", "STALE_SNAPSHOT") \
+            or facts["replay_delivered"] or facts["replay_moved_counter"]:
+        problems.append("the repeated request was not refused with nothing delivered")
+    if not facts["new_click_ok"]:
+        problems.append("a new request in the new session did not deliver exactly one click")
+    if facts["killed_said_session_ended"]:
+        problems.append("the killed engine's stderr claims a clean end")
+    if facts["new_session_ended_lines"] != 1:
+        problems.append("the restarted engine's stderr does not show exactly one clean end")
+    return problems
+
+
 # ---- the protocol ---------------------------------------------------------------------------
 
 
@@ -1610,6 +1752,9 @@ class Protocol:
         self.app_hwnd = None
         self.placements = 0
         self.activation: dict = new_activation()
+        # Every engine this protocol started, in order (IT-05 starts a second one); all are closed.
+        self.engines = [server]
+        self.crash_pid: int | None = None
 
     # While set (--check-mode) the protocol only reads: it never creates the operator's stop file,
     # never spends a live request and has no engine to send anything to.
@@ -2747,6 +2892,174 @@ class Protocol:
                 self.engage_stop("three consecutive failed runs")
             time.sleep(self.args.pause)
 
+    # -- IT-05, the ambiguous crash (see the module docstring and crash_problems)
+    def click_request(self, snap: dict, target: dict, request_id: str) -> dict:
+        """The arguments of one live click on `target` in the observation `snap`."""
+        return {"request_id": request_id, "session_id": snap["session_id"],
+                "snapshot_id": snap["snapshot_id"], "geometry_epoch": snap["geometry_epoch"],
+                "target_id": target["target_id"], "expected_revision": target["revision"],
+                "action": "click", "dry_run": False, "expected_effect": "visual_change"}
+
+    def counter(self, hwnd) -> int | None:
+        """The test application's click counter from its window title. A few reads, since the
+        title may lag a repaint; the value itself is never compared with a wait."""
+        for _ in range(8):
+            value = testapp_valor(window_title(hwnd))
+            if value is not None:
+                return value
+            time.sleep(0.25)
+        return None
+
+    def crash_case(self, res: dict, argv: list[str]) -> None:
+        """Starts the test application, clicks Sumar through the gate and kills the engine after
+        ``--crash-after-ms``, before its answer; then restarts the engine without a session id and
+        checks the counter, the repetition and one new click. Sets `failure` and sends nothing more
+        at the first stage that cannot be reached."""
+        res["steps"] = 1
+        pid = self.crash_pid = self.launch()
+        ok, requests = self.wait_foreground(pid)
+        res["activation_requests"] = requests
+        res.update(activation_fields(self.activation))
+        if not ok:
+            res["failure"] = "the test application did not reach the foreground maximized"
+            return
+        hwnd = self.app_window(pid)
+        time.sleep(self.args.settle)
+        for _ in range(6):
+            snap, elements, obs = self.observe()
+            res["observations"].append(obs)
+            if self.ocr_ok(elements, self.flow["initial"]):
+                break
+            time.sleep(0.5)
+        else:
+            res["failure"] = "initial state not visible by OCR"
+            return
+        before = res["valor_before"] = self.counter(hwnd)
+        if before != 0:
+            res["failure"] = "the test application does not start at valor 0"
+            return
+        fg = self.require_foreground()
+        target = self.target(elements, CRASH_TARGET)
+        if target is None:
+            res["failure"] = "the Sumar target is not confirmed exactly once"
+            return
+        ident = self.identify_before(res, fg, CRASH_TARGET, target)
+        if ident is None:
+            return
+        pre = self.pre_click_grounding(1, fg, CRASH_TARGET, target, ident)
+        res.setdefault("pre_grounded", []).append({"attempt": 1, **pre})
+        if not pre["grounded"]:
+            res["failure"] = f"no request, the target point is not grounded ({pre['status']})"
+            return
+        old = self.srv
+        request = self.click_request(snap, target, f"s4-it05-r{res['run']}-1")
+        res["crash_after_ms"] = self.args.crash_after_ms
+        self.spend_live()  # before the timer: a refused spend must not leave a kill armed
+        res["actions_requested"] += 1
+        killer = KillAfter(old.proc, self.args.crash_after_ms / 1000).start()
+        answered = False
+        try:
+            out, _, _, _ = old.call("execute_action", request)
+            answered = True
+        except Abort:  # the server closed its stdout: the kill came first
+            pass
+        finally:
+            killer.cancel()
+        res["kill_window"] = kill_window(answered, killer.fired)
+        if answered:
+            res["answer"] = {"status": out.get("status"),
+                             "error": (out.get("error") or {}).get("code"),
+                             "input_delivered": out.get("input_delivered")}
+        if res["kill_window"] != "crashed_mid_request":
+            res["failure"] = f"the case was not exercised (kill window: {res['kill_window']})"
+            return
+        old.close()  # the killed process is reaped; its stderr is complete
+        time.sleep(1.0)
+        after_crash = self.counter(hwnd)
+        new = s3.Server(argv)  # no session identifier: the engine makes its own (live input)
+        self.srv = new
+        self.engines.append(new)
+        self.metrics()  # the restarted engine has answered once before anything is sent to it
+        snap2, _, _ = self.observe()
+        new_session = snap2["session_id"] != snap["session_id"]
+        samples = []
+        for _ in range(CRASH_STABLE_SAMPLES):  # no request in between: the counter must hold
+            time.sleep(1.0)
+            samples.append(self.counter(hwnd))
+        stable = all(value == after_crash for value in samples)
+        self.spend_live()  # the repetition, exactly: it must find no stored result
+        replay, _, _, _ = new.call("execute_action", request)
+        replay_code = (replay.get("error") or {}).get("code")
+        after_replay = self.counter(hwnd)
+        snap3, elements3, _ = self.observe()
+        target3 = self.target(elements3, CRASH_TARGET)
+        new_click_ok, final = False, None
+        if target3 is not None:
+            fg3 = self.require_foreground()
+            ident3 = self.identify_before(res, fg3, CRASH_TARGET, target3)
+            if ident3 is not None:
+                pre3 = self.pre_click_grounding(2, fg3, CRASH_TARGET, target3, ident3)
+                res.setdefault("pre_grounded", []).append({"attempt": 2, **pre3})
+                if pre3["grounded"]:
+                    self.spend_live()
+                    res["actions_requested"] += 1
+                    out3, _, _, _ = new.call(
+                        "execute_action", self.click_request(snap3, target3, f"s4-it05-r{res['run']}-2"))
+                    time.sleep(0.5)
+                    final = self.counter(hwnd)
+                    new_click_ok = (out3.get("status") == "effect_observed"
+                                    and out3.get("input_delivered") is True
+                                    and after_crash is not None and final == after_crash + 1)
+        new_code = new.close()  # its stderr is complete from here on
+        facts = {
+            "kill_window": res["kill_window"],
+            "os_outcome": crash_os_outcome(before, after_crash),
+            "stable_after_restart": stable,
+            "new_session": new_session,
+            "replay_code": replay_code,
+            "replay_delivered": bool(replay.get("input_delivered")),
+            "replay_moved_counter": after_replay != after_crash,
+            "new_click_ok": new_click_ok,
+            "killed_said_session_ended": any(SESSION_END in line for line in old.stderr),
+            "new_session_ended_lines": sum(SESSION_END in line for line in new.stderr),
+        }
+        # Delivered twice, or moved without a request, is the safety event (no further request).
+        duplicate = (not stable or after_replay != after_crash
+                     or (after_crash is not None and final is not None and final > after_crash + 1))
+        if duplicate:
+            res["duplicate_delivery"] = 1
+        res["valor"] = {"before": before, "after_crash": after_crash, "after_replay": after_replay,
+                        "final": final}
+        res["crash"] = {**facts, "restarted_exit_code": new_code}
+        problems = crash_problems(facts)
+        res["failure"] = res.get("failure") or ("; ".join(problems) or None)
+        res["success"] = res["failure"] is None
+
+    def run_crash(self, argv: list[str]) -> None:
+        """IT-05 as the invocation's only case. Its record is appended like a run's, the test
+        application is closed, and a safety event engages the operator's stop, as in run()."""
+        res = new_result("IT-05-plan", 1, "IT-05")
+        ledger_start = self.ledger_total()
+        started = time.perf_counter()
+        try:
+            self.crash_case(res, argv)
+        except Abort as error:
+            res["aborted"] = str(error)
+            raise
+        finally:
+            self.close(self.crash_pid)
+            res["ledger_start"], res["ledger_end"] = ledger_start, self.ledger_total()
+            res["total_s"] = round(time.perf_counter() - started, 2)
+            with open(self.args.results, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(res, ensure_ascii=False) + "\n")
+            log("run", **{k: v for k, v in res.items() if k not in ("observations", "actions")},
+                observations=len(res["observations"]))
+            event = self.safety_event(res)
+            if event is not None:
+                self.engage_stop(f"safety event in the crash case: {event}")
+            elif "aborted" in res and not self.stop_engaged:
+                self.write_stop(f"abort in the crash case: {res['aborted']}")
+
 
 def argument_problem(args, live: bool) -> str | None:
     """Why the arguments cannot run, before anything starts. ``--calc-standard`` clicks, so it
@@ -2764,6 +3077,16 @@ def argument_problem(args, live: bool) -> str | None:
             return "--calc-standard needs --app calculator and run mode"
         if args.max_live < 1:
             return "--calc-standard needs --max-live of at least 1 (it clicks)"
+    if args.ambiguous_crash:
+        if args.app != "testapp" or not live:
+            return "--ambiguous-crash needs --app testapp and run mode"
+        if args.runs != 1:
+            return "--ambiguous-crash is one case: give --runs 1"
+        if args.max_live < CRASH_LIVE_REQUESTS:
+            return f"--ambiguous-crash needs --max-live of at least {CRASH_LIVE_REQUESTS}"
+        low, high = CRASH_AFTER_MS_RANGE
+        if not low <= args.crash_after_ms <= high:
+            return f"--crash-after-ms must be between {low} and {high}"
     return None
 
 
@@ -2804,6 +3127,13 @@ def main() -> int:
                         "and close it; exit 0 when it is Standard, 1 otherwise. Sends no input, "
                         "no live request and never creates the stop file (--app calculator)")
     p.add_argument("--results", type=Path, required=True, help="JSONL file to append runs to")
+    p.add_argument("--ambiguous-crash", action="store_true",
+                   help="IT-05: one click on Sumar through the gate, the engine this client started "
+                        "killed before its answer, then the restart checks (--app testapp, run "
+                        "mode, --runs 1, --max-live 3 or more; see the module docstring)")
+    p.add_argument("--crash-after-ms", type=int, default=CRASH_AFTER_MS,
+                   help=f"--ambiguous-crash only: when the kill comes, after the request was "
+                        f"written ({CRASH_AFTER_MS_RANGE[0]} to {CRASH_AFTER_MS_RANGE[1]} ms)")
     p.add_argument("--testapp-exe", default=str(HERE / "testapp" / "target" / "release" / "ommatix-testapp.exe"))
     p.add_argument("--session-id", default=None,
                    help="probe runs only: the engine's session identifier (a live run takes none)")
@@ -2861,6 +3191,11 @@ def main() -> int:
     if live and not config.get("safety", {}).get("actuation_enabled"):
         log("abort", reason="run mode needs the live configuration")
         return 2
+    if args.ambiguous_crash:
+        problems = crash_config_problems(config)
+        if problems:
+            log("abort", reason="the configuration does not fit the crash case", problems=problems)
+            return 2
     try:
         argv = serve_argv(args.exe, args.output, args.config, live, args.session_id)
     except Abort as e:
@@ -2879,7 +3214,9 @@ def main() -> int:
     try:
         m = proto.metrics()
         log("metrics", mode=m.get("mode"), models_loaded=m.get("models_loaded"))
-        if args.calc_standard:
+        if args.ambiguous_crash:
+            proto.run_crash(argv)
+        elif args.calc_standard:
             code = 0 if proto.calc_standard()["switched"] else 1
         else:
             proto.run()
@@ -2892,11 +3229,14 @@ def main() -> int:
         if proto.notepad is not None and proto.notepad["was_minimized"]:
             user32.ShowWindow(proto.notepad["hwnd"], SW_MINIMIZE)
             log("notepad_window", minimized_again=True)
-        exit_code = srv.close()
-        keep = ("ACTIVE CONTROL", "STOP engaged", "stop cleared", "source=")
-        for line in srv.stderr:
-            if any(k in line for k in keep):
-                log("stderr", line=line[:300])
+        # Every engine this run started (IT-05 starts two): each one's exit and its stderr lines.
+        exit_codes = [engine.close() for engine in proto.engines]
+        exit_code = exit_codes[-1]
+        keep = ("ACTIVE CONTROL", "STOP engaged", "stop cleared", "source=", SESSION_END)
+        for engine in proto.engines:
+            for line in engine.stderr:
+                if any(k in line for k in keep):
+                    log("stderr", line=line[:300])
         ok = sum(r["success"] for r in proto.results)
         log("end", server_exit=exit_code, runs=len(proto.results), successes=ok,
             live_requests=proto.live_sent, ledger_start=ledger_now,

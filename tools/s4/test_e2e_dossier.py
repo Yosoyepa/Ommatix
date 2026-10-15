@@ -1470,5 +1470,354 @@ class DossierServeArgvTest(unittest.TestCase):
         self.assertNotIn("--input", argv)
 
 
+# ---- the decoy case: BDD-35 on the real actuator ---------------------------------------------
+
+DECOY_RIDS = {"main": "7.1", "decoy": "7.3", "target": "7.4", "other": "7.9"}
+
+
+class FakeDecoyDesk(dossier.DossierProtocol):
+    """The decoy case on a fake editor started with --decoy-focus. The engine's `type` is answered
+    as ADR-0018 answers a focus that never came: indeterminate, the focusing click delivered, no key
+    sent. The switches below script each way the case could be wrong."""
+
+    def __init__(self, tmp, temp_root, max_live=10, mode="run"):
+        self.args = SimpleNamespace(
+            app="decoy", max_live=max_live, settle=0.0, results=tmp / "results.jsonl",
+            debug_grounding=False, restart="each", mode=mode, editor_exe="editor.exe",
+            explorer_launch="root", foreground_wait=1.0, foreground_wait_explorer=1.0,
+            first_run=1, runs=1, pause=0.0)
+        self.srv = self
+        self.stop_file = None
+        self.ledger = tmp / "ledger.txt"
+        self.round_start = 0
+        self.live_sent = 0
+        self.results = []
+        self.started = set()
+        self.current = None
+        self.notepad = None
+        self.app_hwnd = None
+        self.placements = 0
+        self.flow = dossier.decoy_flow()
+        self.temp_root = temp_root
+        self.pin_file = None
+        self.tree = None
+        self.explorer_hwnd = None
+        self.editor_pid = None
+        self.root_name = None
+        self.spawned = []
+        self.closed = []
+        self.actions = []
+        self.first = None
+        self.delivered = 0
+        self.rejected = 0
+        self.answer = "indeterminate"  # "effect_observed" scripts a false success
+        self.replay_delivers = False  # the repetition delivers again
+        self.leak = None  # "decoy" or "target": a key reaches that field on the first request
+        self.leaked = None  # the field the keys reached, once the first request is handled
+        self.focus = "target"  # where UI Automation puts the keyboard focus
+        self.click_landed = "decoy"  # the element under the focusing click
+        self.accessible = True
+        self.ambiguous = False
+        self.pre_chain = None
+        self.centre_of = None
+        self.probe_print = lambda elements: None
+
+    # the engine
+    def observe(self):
+        source = "accessibility" if self.accessible else "ocr"
+        elements = [
+            {"label": dossier.DECOY_FIELD, "role": "input", "actionability": "confirmed",
+             "label_source": source, "target_id": "decoy", "revision": 1, "zone": "center_main"},
+            {"label": dossier.DECOY_TARGET, "role": "input", "actionability": "confirmed",
+             "label_source": source, "target_id": "target", "revision": 1, "zone": "center_main"},
+            {"label": "Editor de texto", "role": "input", "actionability": "confirmed",
+             "label_source": "accessibility", "target_id": "main", "revision": 1,
+             "zone": "center_main"},
+            {"label": "Guardar", "role": "button", "actionability": "confirmed",
+             "label_source": "accessibility", "target_id": "save", "revision": 1,
+             "zone": "center_main"},
+            {"label": "Estado: pendiente", "role": "text_node", "actionability": "unknown",
+             "label_source": "ocr", "target_id": "status", "revision": 1, "zone": "center_main"},
+        ]
+        if self.ambiguous:
+            elements.append(dict(elements[0], target_id="decoy2"))
+        return {"session_id": "s", "snapshot_id": "s1", "geometry_epoch": 1}, elements, {}
+
+    def call(self, tool, args):
+        assert tool == "execute_action" and args["dry_run"] is False
+        self.actions.append({"target": args["target_id"], "action": args["action"],
+                             "text": args.get("text")})
+        if self.first is None:
+            self.leaked = self.leak
+            if self.answer == "indeterminate":
+                out = {"status": "indeterminate", "input_delivered": True, "verified": False,
+                       "observed_effect": "unknown",
+                       "error": {"code": "INDETERMINATE_EFFECT", "message": "no key was sent",
+                                 "retryable": False, "next_step": "reconcile_effect"}}
+            else:
+                out = {"status": "effect_observed", "input_delivered": True, "verified": True,
+                       "observed_effect": "visual_change"}
+            self.first = out
+            self.delivered += 1
+            return dict(out), False, {}, 5.0
+        if self.replay_delivers:
+            self.delivered += 1
+        return dict(self.first), False, {}, 0.2  # the stored result
+
+    def metrics(self):
+        return {"delivered_actions": self.delivered, "rejected_actions": self.rejected}
+
+    def identify(self, hwnd, label, control_types):
+        table = {dossier.DECOY_FIELD: row(DECOY_RIDS["decoy"], "Decoy", "Edit"),
+                 dossier.DECOY_TARGET: row(DECOY_RIDS["target"], "Target", "Edit"),
+                 "Editor de texto": row(DECOY_RIDS["main"], "Field", "Edit"),
+                 "Guardar": row("7.2", "Save", "Button")}
+        found = table.get(label)
+        return [found] if found and found["control_type"] in control_types else []
+
+    def element_centre(self, hwnd, label, control_types):
+        self.centre_of = label
+        return (100, 200)
+
+    def point_chain(self, x, y):  # the pre-click read: the control about to be clicked
+        if self.pre_chain is not None:
+            return self.pre_chain
+        return [self.identify(77, self.centre_of, ("Edit", "Button"))[0]]
+
+    def island_walk(self, x, y, host_runtime_id):
+        return None
+
+    def window_under(self, point):
+        return 77
+
+    def cursor_chain(self):  # after the click: the control under the cursor
+        landed = dossier.DECOY_FIELD if self.click_landed == "decoy" else dossier.DECOY_TARGET
+        return [self.identify(77, landed, ("Edit", "Button"))[0]]
+
+    def focus_runtime(self):
+        return {"pid": 5151, "runtime_id": DECOY_RIDS[self.focus]}
+
+    # the OS
+    def spawn(self, argv):
+        self.spawned.append(argv)
+        self.folder = Path(argv[argv.index("--folder") + 1])
+        return 5151
+
+    def wait_foreground(self, pid):
+        return True, 0
+
+    def app_window(self, pid):
+        return 77
+
+    def current_hwnd(self):
+        return 77
+
+    def require_foreground(self):
+        return {"exe": "ommatix-testeditor.exe", "pid": 5151, "hwnd": 77,
+                "maximized_primary": True}
+
+    def title_of(self, hwnd):
+        typed = len(dossier.EDITOR_TEXT) if self.leaked else 0
+        return dossier.editor_title(0, False, (typed if self.leaked == "decoy" else 0,
+                                               typed if self.leaked == "target" else 0))
+
+    def close(self, pid):
+        if pid is not None and pid in self.started:
+            self.closed.append(pid)
+            self.started.discard(pid)
+
+
+
+class DecoyRunTest(QuietTest):
+    def desk(self, **kwargs):
+        return FakeDecoyDesk(self.tmp, self.temp_root, **kwargs)
+
+    def test_the_decoy_run_passes_when_no_key_is_sent_and_the_focus_is_on_the_target(self):
+        desk = self.desk()
+        res = desk.run_once(1)
+        self.assertTrue(res["success"], res["failure"])
+        self.assertEqual(res["e2e"], "BDD-35-live-plan")
+        self.assertEqual(desk.actions, [
+            {"target": "decoy", "action": "type", "text": "prueba 123"},
+            {"target": "decoy", "action": "type", "text": "prueba 123"}], "the repetition")
+        self.assertEqual(res["decoy"]["placement"], "target")
+        self.assertEqual((res["decoy"]["delivered_delta"], res["decoy"]["rejected_delta"]), (1, 0))
+        self.assertTrue(res["decoy"]["replay_is_stored"])
+        self.assertTrue(res["decoy"]["grounding_ok"])
+        self.assertEqual(desk.ledger_total(), 2, "the request and its repetition")
+        self.assertNotIn("keys_without_focus", res)
+        self.assertEqual(res["grounding_wrong"], 0)
+        self.assertEqual(desk.spawned, [["editor.exe", "--folder", str(desk.folder),
+                                         dossier.DECOY_FLAG]])
+        self.assertEqual(desk.closed, [5151])
+        self.assertFalse(desk.folder.exists(), "the run folder is cleaned up")
+
+    def test_a_focus_that_never_moved_does_not_pass_the_case(self):
+        desk = self.desk()
+        desk.focus = "decoy"
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["decoy"]["placement"], "decoy")
+        self.assertIn("not exercised", res["failure"])
+
+    def test_a_focus_on_another_element_is_not_the_redirect_target(self):
+        desk = self.desk()
+        desk.focus = "other"
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["decoy"]["placement"], "elsewhere")
+
+    def test_a_focusing_click_that_landed_on_the_target_is_grounding_wrong(self):
+        desk = self.desk()
+        desk.click_landed = "target"
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["grounding_wrong"], 1)
+        self.assertIn("did not reach Campo auxiliar", res["failure"])
+
+    def test_a_key_that_reached_a_field_is_the_safety_event(self):
+        for field in ("decoy", "target"):
+            desk = self.desk()
+            desk.leak = field
+            res = desk.run_once(1)
+            self.assertFalse(res["success"], field)
+            self.assertEqual(res["keys_without_focus"], 1, field)
+            self.assertIn("safety event", res["failure"], field)
+
+    def test_an_effect_observed_answer_fails_the_case(self):
+        desk = self.desk()
+        desk.answer = "effect_observed"
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertIn("INDETERMINATE_EFFECT", res["failure"])
+
+    def test_a_repetition_that_delivers_again_fails_the_case(self):
+        desk = self.desk()
+        desk.replay_delivers = True
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["decoy"]["delivered_delta"], 2)
+        self.assertIn("counted 2 deliveries", res["failure"])
+
+    def test_no_accessibility_evidence_sends_nothing(self):
+        desk = self.desk()
+        desk.accessible = False
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertIn("no accessibility evidence", res["failure"])
+        self.assertEqual((desk.actions, desk.ledger_total()), ([], 0))
+
+    def test_a_point_that_is_not_the_decoy_sends_nothing(self):
+        desk = self.desk()
+        desk.pre_chain = [row(DECOY_RIDS["target"], "Target", "Edit")]
+        res = desk.run_once(1)
+        self.assertFalse(res["success"])
+        self.assertEqual(res["pre_grounded"][0]["grounded"], False)
+        self.assertEqual((desk.actions, desk.ledger_total()), ([], 0))
+
+    def test_an_ambiguous_decoy_field_aborts_before_any_request(self):
+        desk = self.desk()
+        desk.ambiguous = True
+        with self.assertRaises(driver.Abort):
+            desk.run_once(1)
+        self.assertEqual(desk.actions, [])
+        self.assertFalse(desk.folder.exists(), "the cleanup still happens")
+
+    def test_the_probe_sends_nothing(self):
+        desk = self.desk(mode="probe")
+        res = desk.run_once(1)
+        self.assertEqual((desk.actions, desk.ledger_total(), res["steps"]), ([], 0, 0))
+        self.assertEqual(desk.closed, [5151])
+
+    def test_the_live_budget_still_applies_to_the_repetition(self):
+        desk = self.desk(max_live=1)
+        with self.assertRaises(driver.Abort):
+            desk.run_once(1)
+        self.assertEqual(len(desk.actions), 1, "the repetition is not sent")
+
+
+class DecoyPureTest(unittest.TestCase):
+    def test_the_title_keeps_the_editors_own_format_with_and_without_the_decoy(self):
+        self.assertEqual(dossier.editor_title(10, True), "Ommatix S4 editor [caracteres=10 guardado=si]")
+        self.assertEqual(dossier.editor_title(0, False, (0, 0)),
+                         "Ommatix S4 editor [caracteres=0 guardado=no auxiliar=0 destino=0]")
+
+    def test_the_decoy_title_gives_three_lengths_and_no_text(self):
+        counts = dossier.decoy_counts(
+            "Ommatix S4 editor [caracteres=0 guardado=no auxiliar=10 destino=0]")
+        self.assertEqual(counts, {"caracteres": 0, "auxiliar": 10, "destino": 0})
+        self.assertIsNone(dossier.decoy_counts("Ommatix S4 editor [caracteres=0 guardado=no]"))
+        self.assertTrue(dossier.keys_reached_a_field(counts))
+        self.assertFalse(dossier.keys_reached_a_field({"caracteres": 0, "auxiliar": 0,
+                                                       "destino": 0}))
+
+    def test_the_focus_is_named_by_its_runtime_id_and_process(self):
+        focus = {"pid": 5151, "runtime_id": "7.4"}
+        self.assertEqual(dossier.focus_placement(focus, 5151, "7.3", "7.4"), "target")
+        self.assertEqual(dossier.focus_placement({"pid": 5151, "runtime_id": "7.3"}, 5151,
+                                                 "7.3", "7.4"), "decoy")
+        self.assertEqual(dossier.focus_placement({"pid": 5151, "runtime_id": "7.9"}, 5151,
+                                                 "7.3", "7.4"), "elsewhere")
+        self.assertEqual(dossier.focus_placement({"pid": 9999, "runtime_id": "7.4"}, 5151,
+                                                 "7.3", "7.4"), "elsewhere")
+        self.assertEqual(dossier.focus_placement(None, 5151, "7.3", "7.4"), "unknown")
+        self.assertEqual(dossier.focus_placement({"pid": 5151, "runtime_id": ""}, 5151,
+                                                 "7.3", "7.4"), "unknown")
+
+    def test_the_focus_read_yields_a_process_and_an_identifier_and_nothing_else(self):
+        self.assertEqual(dossier.parse_focus_runtime("5151\t7.4"),
+                         {"pid": 5151, "runtime_id": "7.4"})
+        self.assertIsNone(dossier.parse_focus_runtime("garbage"))
+        self.assertIsNone(dossier.parse_focus_runtime("5151\t7.4\textra"))
+        for name_or_value in (".Current.Name", ".Current.Value", "ValuePattern", "TextPattern"):
+            self.assertNotIn(name_or_value, dossier.UIA_FOCUS_RUNTIME_PS)
+
+    def test_a_passing_case_has_no_problem_and_each_fault_is_named(self):
+        clean = {"status": "indeterminate", "error": "INDETERMINATE_EFFECT",
+                 "input_delivered": True, "verified": False, "retryable": False,
+                 "next_step": "reconcile_effect", "grounding_ok": True, "placement": "target",
+                 "replay_is_stored": True, "delivered_delta": 1, "rejected_delta": 0,
+                 "counts": {"caracteres": 0, "auxiliar": 0, "destino": 0},
+                 "folder_empty": True}
+        self.assertEqual(dossier.decoy_problems(clean), [])
+        faults = {"status": "effect_observed", "error": None, "input_delivered": False,
+                  "verified": True, "retryable": True, "next_step": "observe_again",
+                  "grounding_ok": False, "placement": "elsewhere", "replay_is_stored": False,
+                  "delivered_delta": 2, "rejected_delta": 1, "counts": None,
+                  "folder_empty": False}
+        problems = dossier.decoy_problems({**clean, **faults})
+        for fragment in ("INDETERMINATE_EFFECT", "focusing click was not reported", "retry",
+                         "identity after the click", "elsewhere", "stored result",
+                         "counted 2 deliveries", "cannot be read", "not empty"):
+            self.assertTrue(any(fragment in p for p in problems), fragment)
+        keys = dossier.decoy_problems({**clean, "counts": {"caracteres": 0, "auxiliar": 4,
+                                                           "destino": 0}})
+        self.assertTrue(any("safety event" in p for p in keys))
+
+    def test_the_decoy_flow_checks_three_zero_lengths_and_an_empty_folder(self):
+        flow = dossier.decoy_flow()
+        label, ocr, state, text = flow["steps"][0]
+        self.assertEqual(label, dossier.DECOY_FIELD)
+        self.assertEqual(state, dossier.editor_state(
+            dossier.editor_title(0, False, (0, 0)), "absent"))
+        self.assertEqual(text, dossier.EDITOR_TEXT)
+        self.assertNotIn("navigating", flow)
+        self.assertEqual(dossier.E2E_ID["decoy"], "BDD-35-live-plan")
+
+    def test_the_editor_and_the_decoy_share_one_configuration_rule(self):
+        config = {"safety": {"actuation_enabled": True, "stop_file": "stop.flag",
+                             "allowed_applications": [dossier.EDITOR_EXE]},
+                  "models": {"accessibility": "uia"}}
+        self.assertEqual(dossier.config_problems("decoy", config),
+                         dossier.config_problems("editor", config))
+        self.assertEqual(dossier.config_problems("decoy", config), [])
+
+    def test_the_client_injects_no_input_of_its_own(self):
+        source = (HERE / "e2e_dossier.py").read_text(encoding="utf-8")
+        for forbidden in ("SendInput(", "keybd_event", "mouse_event", "SetCursorPos",
+                          ".kill(", "PostMessageW(hwnd, 0x0100"):
+            self.assertNotIn(forbidden, source, forbidden)
+
+
 if __name__ == "__main__":
     unittest.main()
