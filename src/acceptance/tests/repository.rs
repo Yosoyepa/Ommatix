@@ -278,6 +278,7 @@ fn sec_04_and_doc_01_crate_dependencies_follow_the_hexagon() {
     let domain = dependencies("src/domain/Cargo.toml");
     assert!(
         domain.is_subset(&BTreeSet::from([
+            "rstar".to_owned(),
             "thiserror".to_owned(),
             "unicode-normalization".to_owned()
         ])),
@@ -715,6 +716,7 @@ const PLAN_STATUSES: &[&str] = &[
     "IMPLEMENTADO_EN_RUST_S1",
     "IMPLEMENTADO_EN_RUST_S2",
     "IMPLEMENTADO_EN_RUST_S4",
+    "IMPLEMENTADO_EN_RUST_EXPERIMENTAL",
     "EJECUTADO_SUPERVISADO",
     "EJECUTADO_SUPERVISADO_PARCIAL",
     "EJECUTADO_PARCIAL_SPIKE_S0",
@@ -725,6 +727,7 @@ const SCENARIO_STATUSES: &[&str] = &[
     "EJECUTADO_SOBRE_NUCLEO_S2",
     "EJECUTADO_SOBRE_CONTRATO_S2",
     "EJECUTADO_SOBRE_CONTRATO_S3_DOBLE",
+    "EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL",
 ];
 
 fn rust_sources() -> String {

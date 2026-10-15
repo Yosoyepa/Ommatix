@@ -31,5 +31,12 @@ harness = false
 name = "core_latency"
 test = true
 
+[[example]]
+## ADR-0027 (INC-05): the candidate enumeration of Algorithm 2, the scan against the R*-tree,
+## on generated scenes of the protocol's families. Its unit tests run with `cargo test`; the
+## measurement needs `--release`.
+name = "candidate_index"
+test = true
+
 [lints]
 workspace = true

@@ -39,3 +39,15 @@ BDD-37,RF-11,UT-45,features/06_accion_segura.feature,Ventana no registrada,EJECU
 BDD-38,RF-11,UT-46,features/06_accion_segura.feature,Observación caducada,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-39,RF-16,SEC-07,features/07_retencion.feature,Fin de sesión sin estado conservado,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-40,RF-09,UT-37,features/03_identidad.feature,Identidad nativa sustituida,EJECUTADO_SOBRE_NUCLEO_S2
+BDD-41,RF-06,IDX-03,features/08_indice_candidatos.feature,Texto del control específico,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-42,RF-06,IDX-02,features/08_indice_candidatos.feature,Umbral cero conserva el contrato,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-43,RF-06,IDX-01,features/08_indice_candidatos.feature,Borde compartido no bloquea el corredor,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-44,RF-06,IDX-04,features/08_indice_candidatos.feature,Propietarios equivalentes se abstienen,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-45,RF-06,IDX-05,features/08_indice_candidatos.feature,Segundo candidato impide etiqueta confiada,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-46,RF-06,IDX-06,features/08_indice_candidatos.feature,Panel contenedor no es obstáculo,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-47,RF-10,IDX-09,features/08_indice_candidatos.feature,Versión de evidencia distinta,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-48,RF-04,IDX-10,features/08_indice_candidatos.feature,Fallo de la observación candidata,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-49,RF-06,IDX-08,features/08_indice_candidatos.feature,Etiqueta alta no desaparece,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-50,RF-03,IDX-11,features/08_indice_candidatos.feature,Presupuesto de cierre conserva su significado,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-51,RF-03,IDX-12,features/08_indice_candidatos.feature,Relaciones se activan por sus extremos,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-52,RF-06,IDX-13,features/08_indice_candidatos.feature,Solapamiento extremo no justifica perder candidatos,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL

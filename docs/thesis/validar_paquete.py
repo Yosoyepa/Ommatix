@@ -162,8 +162,8 @@ def main() -> int:
     for x in planned:
         check('doc01_prueba_enlazada:'+x['id'],x['id'] in referenced)
     plan_statuses={'IMPLEMENTADO_EN_RUST_S1','IMPLEMENTADO_EN_RUST_S2','IMPLEMENTADO_EN_RUST_S4','EJECUTADO_SUPERVISADO',
-                   'EJECUTADO_SUPERVISADO_PARCIAL','EJECUTADO_PARCIAL_SPIKE_S0','PENDIENTE_PRODUCTO'}
-    scenario_statuses={'EJECUTADO_SOBRE_NUCLEO_S1','EJECUTADO_SOBRE_NUCLEO_S2','EJECUTADO_SOBRE_CONTRATO_S2','EJECUTADO_SOBRE_CONTRATO_S3_DOBLE'}
+                   'EJECUTADO_SUPERVISADO_PARCIAL','EJECUTADO_PARCIAL_SPIKE_S0','PENDIENTE_PRODUCTO','IMPLEMENTADO_EN_RUST_EXPERIMENTAL'}
+    scenario_statuses={'EJECUTADO_SOBRE_NUCLEO_S1','EJECUTADO_SOBRE_NUCLEO_S2','EJECUTADO_SOBRE_CONTRATO_S2','EJECUTADO_SOBRE_CONTRATO_S3_DOBLE','EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL'}
     check('doc01_estados_de_pruebas',all(x['estado_aceptacion_producto'] in plan_statuses for x in planned),
           str(sorted({x['estado_aceptacion_producto'] for x in planned}-plan_statuses)))
     check('doc01_estados_de_escenarios',all(x['status'] in scenario_statuses for x in scenarios),

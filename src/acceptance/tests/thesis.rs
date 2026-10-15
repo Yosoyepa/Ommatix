@@ -43,16 +43,18 @@ use ommatix_domain::appearance::{
     PrototypeSource, SupportPolicy, UnknownReason, descriptor_distance, gradient_descriptor,
 };
 use ommatix_domain::bbox::BBox;
+use ommatix_domain::candidates::{CandidateSearch, ControlSearch};
 use ommatix_domain::fusion::{
-    Actionability, Affordance, Control, FusionParams, LabelChoice, Role, Word,
-    choose_external_label, fuse, internal_owners, reading_order,
+    Actionability, Affordance, Control, Fusion, FusionParams, LabelChoice, Role, Word,
+    choose_external_label, corridor, fuse, internal_owners, internal_owners_with, reading_order,
 };
 use ommatix_domain::identity::{
     ActionRef, ActionRejection, AssociationPolicy, Changes, Clearance, Delivery, Observation,
     Registry, TargetId,
 };
 use ommatix_domain::incremental::{
-    BgraFrame, Evidence, FullRefreshReason, PlanParams, RegionPlan, TileCoord, Work, plan_regions,
+    BgraFrame, Closure, Evidence, FullRefreshReason, PlanParams, RegionPlan, TileCoord, Work,
+    halo_close, plan_regions,
 };
 use ommatix_domain::snapshot::{CommitError, SnapshotStore, Staged, StoreState};
 use serde_json::{Value, json};
@@ -63,7 +65,8 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-10", "BDD-11", "BDD-12", "BDD-13", "BDD-14", "BDD-15", "BDD-16", "BDD-17", "BDD-18",
     "BDD-19", "BDD-20", "BDD-21", "BDD-22", "BDD-23", "BDD-24", "BDD-25", "BDD-26", "BDD-27",
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
-    "BDD-37", "BDD-38", "BDD-39", "BDD-40",
+    "BDD-37", "BDD-38", "BDD-39", "BDD-40", "BDD-41", "BDD-42", "BDD-43", "BDD-44", "BDD-45",
+    "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52",
 ];
 
 #[derive(Debug, Default, World)]
@@ -93,6 +96,7 @@ struct Engine {
     cache: IconCache,
     icon: Option<IconMatch>,
     agent: Option<Agent>,
+    index: CandidateScene,
 }
 
 fn bx(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
@@ -2546,6 +2550,523 @@ fn a_new_observation_allows_the_click_again(e: &mut Engine) {
     let result = agent.tool_result("execute_action", args);
     assert_eq!(result["isError"], false, "{result}");
     assert_eq!(result["structuredContent"]["status"], "simulated");
+}
+
+// ---- 08_indice_candidatos.feature (ADR-0027): the candidate index against the scan ----
+
+/// The state of the candidate-index scenarios: the controls and words of one fusion, what
+/// each enumerator visited, and what each variant decided.
+#[derive(Debug, Default)]
+struct CandidateScene {
+    controls: Vec<Control>,
+    words: Vec<Word>,
+    threshold: f64,
+    fused: Vec<Fusion>,
+    visited: Vec<usize>,
+    labels: Vec<LabelChoice>,
+    owners: Vec<Vec<Word>>,
+    reference: Vec<Vec<Word>>,
+    closures: Vec<Closure>,
+    region: Option<BBox>,
+    supports: Vec<BBox>,
+    relation: Option<(BBox, BBox)>,
+}
+
+/// The external label margin of the scenarios (`FusionParams::default`).
+const LABEL_MARGIN: f64 = 0.15;
+
+fn fixture_control(bbox: BBox, role: Role, confirmed: bool) -> Control {
+    Control {
+        bbox,
+        role,
+        affordance: Affordance {
+            actionability: if confirmed {
+                Actionability::Confirmed
+            } else {
+                Actionability::Unknown
+            },
+            enabled: true,
+            visible: true,
+        },
+    }
+}
+
+fn boxes_of(controls: &[Control]) -> Vec<BBox> {
+    controls.iter().map(|c| c.bbox).collect()
+}
+
+fn fused_with(e: &Engine, search: CandidateSearch) -> Fusion {
+    fuse(
+        &e.index.controls,
+        &e.index.words,
+        FusionParams {
+            candidate_search: search,
+            ..FusionParams::default()
+        },
+    )
+    .expect("valid parameters")
+}
+
+#[given("un panel con un botón y una palabra contenida en ambos")]
+fn panel_button_and_word(e: &mut Engine) {
+    e.index.controls = vec![
+        fixture_control(bx(0.0, 0.0, 400.0, 300.0), Role::Unknown, false),
+        fixture_control(bx(20.0, 20.0, 140.0, 50.0), Role::Button, true),
+    ];
+    e.index.words = vec![Word::new("Aceptar", bx(40.0, 25.0, 110.0, 45.0))];
+}
+
+#[when("comparo la fusión por recorrido con la variante indexada")]
+fn compare_scan_with_index(e: &mut Engine) {
+    e.index.fused = vec![
+        fused_with(e, CandidateSearch::Scan),
+        fused_with(e, CandidateSearch::RStar),
+    ];
+}
+
+#[then("ambas asignan la palabra al botón")]
+fn both_assign_the_word_to_the_button(e: &mut Engine) {
+    for fusion in &e.index.fused {
+        assert_eq!(fusion.controls[0].inner_words, Vec::<Word>::new());
+        assert_eq!(fusion.controls[1].inner_words, e.index.words);
+    }
+}
+
+#[then("mantienen las mismas affordances")]
+fn same_affordances(e: &mut Engine) {
+    let [scan, tree] = e.index.fused.as_slice() else {
+        panic!("one fusion per variant");
+    };
+    let affordances = |f: &Fusion| {
+        f.controls
+            .iter()
+            .map(|c| c.control.affordance)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(affordances(tree), affordances(scan));
+    assert_eq!(tree, scan);
+}
+
+#[given("un umbral IoC igual a cero y controles disjuntos de la palabra")]
+fn zero_threshold_disjoint_controls(e: &mut Engine) {
+    e.index.threshold = 0.0;
+    e.index.controls = vec![
+        fixture_control(bx(0.0, 0.0, 5.0, 5.0), Role::Button, true),
+        fixture_control(bx(100.0, 100.0, 110.0, 110.0), Role::Button, true),
+    ];
+    e.index.words = vec![Word::new("x", bx(10.0, 10.0, 20.0, 20.0))];
+}
+
+#[when("selecciono propietarios con la variante indexada")]
+fn owners_with_index(e: &mut Engine) {
+    let boxes = boxes_of(&e.index.controls);
+    let word = e.index.words[0].bbox;
+    let search = ControlSearch::new(&boxes, CandidateSearch::RStar);
+    search.owner_candidates(&word, e.index.threshold, |i| e.index.visited.push(i));
+    e.index.owners = internal_owners_with(
+        &boxes,
+        &e.index.words,
+        e.index.threshold,
+        CandidateSearch::RStar,
+    )
+    .expect("valid threshold");
+}
+
+#[then("utilizo el recorrido completo para esa consulta")]
+fn full_traversal(e: &mut Engine) {
+    assert_eq!(e.index.visited, vec![0, 1]);
+}
+
+#[then("obtengo la misma decisión de referencia")]
+fn same_reference_decision(e: &mut Engine) {
+    let reference = internal_owners(
+        &boxes_of(&e.index.controls),
+        &e.index.words,
+        e.index.threshold,
+    )
+    .expect("valid threshold");
+    assert_eq!(e.index.owners, reference);
+    // The smaller control owns the word at zero, as the reference says.
+    assert_eq!(reference[0], e.index.words);
+}
+
+#[given("un control que sólo toca el borde del corredor")]
+fn control_touches_corridor_edge(e: &mut Engine) {
+    e.index.controls = vec![
+        fixture_control(bx(100.0, 100.0, 200.0, 120.0), Role::Input, false),
+        fixture_control(bx(40.0, 100.0, 60.0, 105.0), Role::Unknown, false),
+    ];
+    e.index.words = vec![Word::new("Nombre", bx(0.0, 105.0, 50.0, 115.0))];
+}
+
+#[when("el índice lo devuelve como candidato")]
+fn index_returns_it(e: &mut Engine) {
+    let gap = corridor(&e.index.words[0].bbox, &e.index.controls[0].bbox)
+        .expect("the word is left of the field");
+    let boxes = boxes_of(&e.index.controls);
+    let search = ControlSearch::new(&boxes, CandidateSearch::RStar);
+    search.any_overlapping(&gap, |i| {
+        e.index.visited.push(i);
+        false
+    });
+}
+
+#[then("el predicado de solapamiento de área positiva lo rechaza")]
+fn positive_area_rejects_it(e: &mut Engine) {
+    let gap = corridor(&e.index.words[0].bbox, &e.index.controls[0].bbox)
+        .expect("the word is left of the field");
+    assert!(
+        e.index.visited.contains(&1),
+        "the index returns the touching control"
+    );
+    assert!(
+        !e.index.controls[1].bbox.overlaps(&gap),
+        "the exact predicate rejects it"
+    );
+    let label = choose_external_label(
+        &e.index.controls[0].bbox,
+        &e.index.words,
+        &boxes_of(&e.index.controls),
+        LABEL_MARGIN,
+    )
+    .expect("valid margin");
+    assert_eq!(label, LabelChoice::Label(e.index.words[0].clone()));
+}
+
+#[given("dos controles de áreas iguales que superan el umbral")]
+fn two_equal_owners(e: &mut Engine) {
+    e.index.threshold = 0.75;
+    e.index.controls = vec![fixture_control(bx(0.0, 0.0, 100.0, 100.0), Role::Button, true); 2];
+    e.index.words = vec![Word::new("OK", bx(10.0, 10.0, 30.0, 20.0))];
+}
+
+#[when("comparo ambas variantes")]
+fn compare_both_variants(e: &mut Engine) {
+    let boxes = boxes_of(&e.index.controls);
+    e.index.owners = internal_owners_with(
+        &boxes,
+        &e.index.words,
+        e.index.threshold,
+        CandidateSearch::RStar,
+    )
+    .expect("valid threshold");
+    e.index.reference =
+        internal_owners(&boxes, &e.index.words, e.index.threshold).expect("valid threshold");
+}
+
+#[then("ambas se abstienen de asignar propietario")]
+fn both_abstain(e: &mut Engine) {
+    assert!(e.index.owners.iter().all(Vec::is_empty));
+    assert!(e.index.reference.iter().all(Vec::is_empty));
+}
+
+#[given("dos etiquetas válidas cuyos costes no alcanzan el margen de separación")]
+fn two_close_labels(e: &mut Engine) {
+    e.index.controls = vec![fixture_control(
+        bx(100.0, 100.0, 300.0, 135.0),
+        Role::Input,
+        false,
+    )];
+    e.index.words = vec![
+        Word::new("Correo", bx(100.0, 72.0, 170.0, 92.0)),
+        Word::new("Teléfono", bx(100.0, 72.0, 190.0, 92.0)),
+    ];
+}
+
+#[when("consulto los candidatos")]
+fn consult_candidates(e: &mut Engine) {
+    for search in [CandidateSearch::Scan, CandidateSearch::RStar] {
+        let fusion = fused_with(e, search);
+        let label = fusion.controls[0]
+            .label
+            .clone()
+            .expect("an input takes an external label");
+        e.index.labels.push(label);
+    }
+}
+
+#[then("no trunco la consulta al vecino más cercano")]
+fn no_truncation(e: &mut Engine) {
+    // Both labels cost the same: the decision needs the runner-up, not the first candidate.
+    let label = choose_external_label(
+        &e.index.controls[0].bbox,
+        &e.index.words,
+        &boxes_of(&e.index.controls),
+        LABEL_MARGIN,
+    )
+    .expect("valid margin");
+    assert_eq!(label, LabelChoice::Ambiguous);
+}
+
+#[then("ambas variantes devuelven ambigüedad")]
+fn both_ambiguous(e: &mut Engine) {
+    assert_eq!(
+        e.index.labels,
+        vec![LabelChoice::Ambiguous, LabelChoice::Ambiguous]
+    );
+}
+
+#[given("un panel que contiene al control y atraviesa su corredor")]
+fn panel_contains_control(e: &mut Engine) {
+    // The word lies left of the panel, not inside it: a word inside the panel would be owned
+    // by the panel and would not be offered as a label at all.
+    e.index.controls = vec![
+        fixture_control(bx(100.0, 100.0, 200.0, 120.0), Role::Input, false),
+        fixture_control(bx(-10.0, 0.0, 300.0, 200.0), Role::Unknown, false),
+    ];
+    e.index.words = vec![Word::new("Nombre", bx(-45.0, 105.0, -15.0, 115.0))];
+}
+
+#[when("evalúo obstáculos mediante el índice")]
+fn evaluate_obstacles(e: &mut Engine) {
+    let gap = corridor(&e.index.words[0].bbox, &e.index.controls[0].bbox)
+        .expect("the word is left of the field");
+    let boxes = boxes_of(&e.index.controls);
+    let search = ControlSearch::new(&boxes, CandidateSearch::RStar);
+    search.any_overlapping(&gap, |i| {
+        e.index.visited.push(i);
+        false
+    });
+    for search in [CandidateSearch::Scan, CandidateSearch::RStar] {
+        let fusion = fused_with(e, search);
+        e.index.labels.push(
+            fusion.controls[0]
+                .label
+                .clone()
+                .expect("an input takes a label"),
+        );
+    }
+}
+
+#[then("aplico las exclusiones originales")]
+fn original_exclusions_apply(e: &mut Engine) {
+    // The panel meets the corridor, so the index returns it; the exclusion of a container then
+    // keeps it from blocking.
+    assert!(e.index.visited.contains(&1));
+    assert!(e.index.controls[1].bbox.contains(&e.index.controls[0].bbox));
+}
+
+#[then("el panel no bloquea la etiqueta")]
+fn panel_does_not_block(e: &mut Engine) {
+    let label = LabelChoice::Label(e.index.words[0].clone());
+    assert_eq!(e.index.labels, vec![label.clone(), label]);
+}
+
+#[given("un índice construido sobre una revisión anterior")]
+fn index_over_earlier_revision(e: &mut Engine) {
+    e.index.threshold = 0.75;
+    e.index.controls = vec![
+        fixture_control(bx(0.0, 0.0, 100.0, 40.0), Role::Button, true),
+        fixture_control(bx(0.0, 60.0, 100.0, 100.0), Role::Button, true),
+    ];
+    e.index.words = vec![Word::new("OK", bx(10.0, 70.0, 30.0, 85.0))];
+}
+
+#[when("intento resolver posiciones sobre la evidencia nueva")]
+fn resolve_over_new_evidence(e: &mut Engine) {
+    // The earlier revision's view answers for its own boxes: position 1 is the old button.
+    let old = boxes_of(&e.index.controls);
+    let stale = ControlSearch::new(&old, CandidateSearch::RStar);
+    stale.owner_candidates(&e.index.words[0].bbox, e.index.threshold, |i| {
+        e.index.visited.push(i);
+    });
+    // The evidence changed: the same number of controls, a new box over the word.
+    e.index.controls = vec![
+        fixture_control(bx(5.0, 65.0, 60.0, 90.0), Role::Button, true),
+        fixture_control(bx(0.0, 0.0, 100.0, 40.0), Role::Button, true),
+    ];
+    e.index.owners = internal_owners_with(
+        &boxes_of(&e.index.controls),
+        &e.index.words,
+        e.index.threshold,
+        CandidateSearch::RStar,
+    )
+    .expect("valid threshold");
+}
+
+#[then("rechazo esa vista o la reconstruyo antes de consultarla")]
+fn view_rebuilt(e: &mut Engine) {
+    assert_eq!(
+        e.index.visited,
+        vec![1],
+        "the earlier view knows only its own boxes"
+    );
+    let reference = internal_owners(
+        &boxes_of(&e.index.controls),
+        &e.index.words,
+        e.index.threshold,
+    )
+    .expect("valid threshold");
+    assert_eq!(
+        e.index.owners, reference,
+        "the rebuilt index answers for the new evidence"
+    );
+}
+
+#[then("no publico referencias mezcladas")]
+fn no_mixed_references(e: &mut Engine) {
+    // The word belongs to the new box at position 0, never to the old position 1.
+    assert_eq!(e.index.owners[0], e.index.words);
+    assert_eq!(e.index.owners[1], Vec::<Word>::new());
+}
+
+#[given("un snapshot confirmado y una nueva observación con fallo")]
+fn confirmed_snapshot_and_failing_observation(e: &mut Engine) {
+    e.commit_base(blank(640, 320, 0));
+    e.current = Some(with_pixel(e.base(), 300, 200));
+    e.plan();
+    assert_eq!(e.store.state(), StoreState::Ready);
+}
+
+#[when("abandono el candidato")]
+fn candidate_abandoned(e: &mut Engine) {
+    // The candidate that failed is never committed: its dirty tiles stay pending.
+    let dirty = e.planned().dirty.clone();
+    e.store.record_failure(&dirty);
+}
+
+#[then("conservo coherentes la evidencia y el índice confirmado")]
+fn confirmed_evidence_kept(e: &mut Engine) {
+    assert_eq!(e.store.base(), Some(&blank(640, 320, 0)));
+    assert_eq!(e.store.published(), Some(&vec!["e1".to_owned()]));
+}
+
+#[then("mantengo pendientes y bloqueo de acciones conforme al contrato")]
+fn pending_and_blocked(e: &mut Engine) {
+    assert_eq!(e.store.state(), StoreState::Degraded);
+    assert!(!e.store.actions_allowed());
+}
+
+#[given("una palabra válida cuya altura supera la del control")]
+fn tall_word(e: &mut Engine) {
+    e.index.threshold = 0.75;
+    e.index.controls = vec![fixture_control(
+        bx(100.0, 0.0, 200.0, 350.0),
+        Role::Button,
+        true,
+    )];
+    e.index.words = vec![Word::new("Guardar", bx(120.0, 0.0, 180.0, 400.0))];
+}
+
+#[when("se consulta el propietario del texto con el índice")]
+fn owner_query_with_index(e: &mut Engine) {
+    let boxes = boxes_of(&e.index.controls);
+    let search = ControlSearch::new(&boxes, CandidateSearch::RStar);
+    search.owner_candidates(&e.index.words[0].bbox, e.index.threshold, |i| {
+        e.index.visited.push(i);
+    });
+    e.index.owners = internal_owners_with(
+        &boxes,
+        &e.index.words,
+        e.index.threshold,
+        CandidateSearch::RStar,
+    )
+    .expect("valid threshold");
+}
+
+#[then("la caja de la palabra es la ventana de consulta y el control se devuelve")]
+fn word_box_is_the_window(e: &mut Engine) {
+    assert_eq!(e.index.visited, vec![0]);
+    assert_eq!(e.index.owners[0], e.index.words);
+}
+
+#[then("conservo el IoC exacto del recorrido")]
+fn exact_ioc_kept(e: &mut Engine) {
+    let ioc = e.index.controls[0].bbox.ioc(&e.index.words[0].bbox);
+    assert!(ioc >= 0.75, "the control covers 87.5 % of the word");
+    let reference = internal_owners(
+        &boxes_of(&e.index.controls),
+        &e.index.words,
+        e.index.threshold,
+    )
+    .expect("valid threshold");
+    assert_eq!(e.index.owners, reference);
+}
+
+#[given("una cadena de soportes sensible al orden bajo presupuesto finito")]
+fn support_chain_under_budget(e: &mut Engine) {
+    e.index.region = Some(bx(0.0, 0.0, 1.0, 1.0));
+    e.index.supports = vec![bx(0.5, 0.0, 2.0, 1.0), bx(1.5, 0.0, 3.0, 1.0)];
+}
+
+#[when("se evalúe el cierre de soportes con su presupuesto")]
+fn closure_with_budget(e: &mut Engine) {
+    let region = e.index.region.expect("a region");
+    let (a, b) = (e.index.supports[0], e.index.supports[1]);
+    let bounds = bx(-10.0, -10.0, 10.0, 10.0);
+    e.index.closures = [(&[a, b], 2), (&[b, a], 2), (&[a, b], 3), (&[b, a], 3)]
+        .into_iter()
+        .map(|(order, rounds)| halo_close(region, order, &[], bounds, rounds).expect("valid"))
+        .collect();
+}
+
+#[then("comparo tanto el cierre como la razón de fallback contra la referencia")]
+fn closure_and_fallback_against_reference(e: &mut Engine) {
+    let whole = bx(0.0, 0.0, 3.0, 1.0);
+    assert_eq!(e.index.closures[0], Closure::Closed(whole));
+    assert_eq!(e.index.closures[1], Closure::BudgetExhausted);
+}
+
+#[then("no considero suficiente alcanzar el mismo punto fijo sin presupuesto")]
+fn same_fixed_point_is_not_enough(e: &mut Engine) {
+    let whole = bx(0.0, 0.0, 3.0, 1.0);
+    assert_eq!(e.index.closures[2], Closure::Closed(whole));
+    assert_eq!(e.index.closures[3], Closure::Closed(whole));
+}
+
+#[given("una región en el hueco entre extremos de una relación")]
+fn region_between_relation_ends(e: &mut Engine) {
+    e.index.region = Some(bx(50.0, 0.0, 60.0, 10.0));
+    e.index.relation = Some((bx(0.0, 0.0, 10.0, 10.0), bx(100.0, 0.0, 110.0, 10.0)));
+}
+
+#[when("consulto los soportes de la relación")]
+fn query_relation_supports(e: &mut Engine) {
+    let region = e.index.region.expect("a region");
+    let (a, b) = e.index.relation.expect("a relation");
+    let bounds = bx(-10.0, -10.0, 200.0, 50.0);
+    e.index.closures = vec![halo_close(region, &[], &[(a, b)], bounds, 2).expect("valid")];
+}
+
+#[then("no activo la relación sólo por su envolvente")]
+fn relation_not_activated_by_envelope(e: &mut Engine) {
+    assert_eq!(
+        e.index.closures[0],
+        Closure::Closed(e.index.region.expect("a region"))
+    );
+}
+
+#[given("muchos controles superpuestos")]
+fn many_overlapping_controls(e: &mut Engine) {
+    e.index.threshold = 0.75;
+    e.index.controls = vec![fixture_control(bx(0.0, 0.0, 100.0, 100.0), Role::Button, true); 500];
+    e.index.words = vec![Word::new("x", bx(1.0, 1.0, 2.0, 2.0))];
+}
+
+#[when("el índice no logra reducir la búsqueda")]
+fn index_cannot_reduce(e: &mut Engine) {
+    let boxes = boxes_of(&e.index.controls);
+    let search = ControlSearch::new(&boxes, CandidateSearch::RStar);
+    search.owner_candidates(&e.index.words[0].bbox, e.index.threshold, |i| {
+        e.index.visited.push(i);
+    });
+    e.index.fused = vec![
+        fused_with(e, CandidateSearch::Scan),
+        fused_with(e, CandidateSearch::RStar),
+    ];
+}
+
+#[then("evalúo todos los candidatos requeridos o uso la referencia")]
+fn all_candidates_evaluated(e: &mut Engine) {
+    assert_eq!(e.index.visited.len(), e.index.controls.len());
+}
+
+#[then("no sacrifico equivalencia para cumplir una meta de tiempo")]
+fn equivalence_kept(e: &mut Engine) {
+    let [scan, tree] = e.index.fused.as_slice() else {
+        panic!("one fusion per variant");
+    };
+    assert_eq!(tree, scan);
 }
 
 fn main() {
