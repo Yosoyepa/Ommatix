@@ -26,10 +26,10 @@ This tool never changes the scaling and sends no input: the owner sets the scali
 Outside the profile (a percentage other than 100, 125 or 150) the dossier asks for an explicit
 refusal: the criterion ``out_of_profile`` is ``flagged`` only if every observation was refused
 with ``UNSUPPORTED_GEOMETRY`` (any other refusal is ``refused_with_another_code``, with the code
-in the observation). At the time of writing the engine refuses a rotated output and a format
-that is not BGRA8 (as ``CAPTURE_UNAVAILABLE``) and has no check of the scaling itself, so
-``served_unflagged`` is the outcome to expect there; the tool records what happened and
-claims nothing.
+in the observation). Since ADR-0031 the engine refuses a scaling outside the profile with
+``UNSUPPORTED_GEOMETRY``, so ``flagged`` is the outcome to expect there. ``served_unflagged``
+would be a finding against RNF-07, not a fault of this tool; the tool records what happened
+and claims nothing.
 
 ``--combine a.json b.json ...`` joins the sessions of one campaign.
 
@@ -137,6 +137,13 @@ def check_epoch(timeline: list[dict]) -> dict:
     return {"changes_answered": answered, "changes_unanswered": unanswered,
             "changes_pending_at_end": pending, "decreases": decreases,
             "unexplained_increases": unexplained, "met": met}
+
+
+def error_code_of(page: dict) -> str | None:
+    """The code of a tool error. The wire puts it under ``error`` (tool_error.output), not at
+    the top level of the structured content."""
+    error = page.get("error")
+    return error.get("code") if isinstance(error, dict) else None
 
 
 def out_of_profile_result(percent: int, observations: list[dict]) -> str:
@@ -303,7 +310,7 @@ class Probe:
         page, is_error, _, rtt = engine.call(
             "observe_screen", {"limit": 200}, timeout=self.args.call_timeout)
         if is_error:
-            entry["error_code"] = page.get("code")
+            entry["error_code"] = error_code_of(page)
             return entry
         elements.extend(page.get("elements", []))
         while page.get("next_cursor"):
@@ -311,7 +318,7 @@ class Probe:
                 "observe_screen", {"limit": 200, "cursor": page["next_cursor"]},
                 timeout=self.args.call_timeout)
             if is_error:
-                entry["error_code"] = page.get("code")
+                entry["error_code"] = error_code_of(page)
                 return entry
             elements.extend(page.get("elements", []))
         if self.host.foreground_pid() != app_pid:

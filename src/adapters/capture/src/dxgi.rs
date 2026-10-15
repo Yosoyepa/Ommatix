@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use ommatix_application::{CapturedFrame, Clock, PortError};
-use ommatix_domain::DisplayMapping;
 use ommatix_domain::incremental::BgraFrame;
+use ommatix_domain::{DisplayMapping, Scaling};
 
 use crate::stamp::Stamper;
 
@@ -267,7 +267,7 @@ impl FrameState {
         self.lost = false;
         self.last = Some(frame.clone());
         self.set_mapping(geometry.mapping());
-        self.stamper.stamp(frame, at)
+        self.stamper.stamp(frame, at, Scaling::Dpi(geometry.dpi))
     }
 
     /// A new desktop image, packed BGRA rows of `geometry.size`.
@@ -449,6 +449,19 @@ mod tests {
         // Another size needs a new image.
         let bigger = Geometry { size: (4, 4), ..G };
         assert!(s.unchanged(bigger, Duration::ZERO).is_none());
+    }
+
+    #[test]
+    fn the_captured_frame_carries_the_monitor_scaling() {
+        // RNF-07, ADR-0031: the DPI the output reports reaches the engine with the frame,
+        // both for a new image and for the last frame returned again.
+        let mut s = state();
+        let at_150 = Geometry { dpi: 144, ..G };
+        let a = s.fresh(at_150, vec![0; 8], Duration::ZERO).unwrap();
+        assert_eq!(a.scaling, Scaling::Dpi(144));
+        let at_175 = Geometry { dpi: 168, ..G };
+        let b = s.unchanged(at_175, Duration::ZERO).unwrap();
+        assert_eq!(b.scaling, Scaling::Dpi(168));
     }
 
     #[test]

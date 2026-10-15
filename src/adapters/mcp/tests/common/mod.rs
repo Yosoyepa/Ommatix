@@ -13,6 +13,7 @@ use ommatix_application::{
     CapturedFrame, Clock, DeliveryReceipt, Engine, EngineConfig, FrameCapturer, LocalPolicy,
     ManualClock, OsActuator, PolicyStore, PortError, Ports, TextRecognizer, VisionDetector,
 };
+use ommatix_domain::Scaling;
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{Actionability, Affordance, Control, Role, Word};
 use ommatix_domain::incremental::BgraFrame;
@@ -126,6 +127,7 @@ impl FrameCapturer for Screen {
             frame: self.frame.clone(),
             frame_seq: self.seq,
             captured_at: self.clock.now(),
+            scaling: Scaling::Dpi(96),
         })
     }
 }

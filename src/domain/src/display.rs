@@ -1,6 +1,31 @@
 use crate::bbox::BBox;
 use crate::{DomainError, Point};
 
+/// The effective DPI values of the dossier's display profile (RNF-07, chapter 03): 100, 125
+/// and 150 % of 96 DPI (96 = 100 %). Fixed, not configurable: the dossier names the profile
+/// and nothing else (ADR-0031).
+pub const SUPPORTED_DPI: [u32; 3] = [96, 120, 144];
+
+/// The scaling of the monitor a frame was captured from, as far as its capture adapter can
+/// tell (ADR-0031).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scaling {
+    /// The effective DPI of the monitor (96 = 100 %).
+    Dpi(u32),
+    /// The adapter cannot tell the scaling. Such a frame is not refused for its scaling, and
+    /// it is not counted as in the profile either: no evidence for RNF-07 comes from it.
+    Unknown,
+}
+
+impl Scaling {
+    /// Whether the scaling is known and outside [`SUPPORTED_DPI`]: the only case the engine
+    /// refuses for its scaling.
+    #[must_use]
+    pub fn is_outside_profile(self) -> bool {
+        matches!(self, Self::Dpi(dpi) if !SUPPORTED_DPI.contains(&dpi))
+    }
+}
+
 /// Maps frame pixel coordinates to the coordinate space of the OS input system.
 ///
 /// They differ on HiDPI screens (frames are physical pixels, macOS input is in points)
@@ -126,6 +151,25 @@ mod tests {
         assert_eq!(
             retina.frame_box(10, 10, 20, 30),
             Some(BBox::new(20.0, 20.0, 40.0, 60.0).unwrap())
+        );
+    }
+
+    /// RNF-07, ADR-0031: only a known scaling outside the profile is refused.
+    #[test]
+    fn only_a_known_scaling_outside_the_profile_is_refused() {
+        for dpi in SUPPORTED_DPI {
+            assert!(
+                !Scaling::Dpi(dpi).is_outside_profile(),
+                "{dpi} DPI is in the profile"
+            );
+        }
+        // 97 DPI is not 100 %; 168 DPI is 175 %; 192 DPI is 200 %.
+        for dpi in [0, 97, 168, 192] {
+            assert!(Scaling::Dpi(dpi).is_outside_profile(), "{dpi} DPI");
+        }
+        assert!(
+            !Scaling::Unknown.is_outside_profile(),
+            "unknown is not refused"
         );
     }
 

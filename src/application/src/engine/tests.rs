@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use ommatix_domain::Scaling;
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{Actionability, Affordance, Control, Role, TextKind, Word};
 use ommatix_domain::identity::ActionStatus;
@@ -46,6 +47,8 @@ struct World {
     controls: Vec<Control>,
     words: Vec<Word>,
     epoch: u64,
+    /// The scaling the capturer reports with each frame (RNF-07).
+    scaling: Scaling,
     seq: u64,
     fail_capture: bool,
     fail_detect: bool,
@@ -116,6 +119,7 @@ impl Default for World {
             controls: Vec::new(),
             words: Vec::new(),
             epoch: 1,
+            scaling: Scaling::Dpi(96),
             seq: 0,
             fail_capture: false,
             fail_detect: false,
@@ -255,6 +259,7 @@ impl FrameCapturer for Capturer {
             frame: render(&w),
             frame_seq: w.seq,
             captured_at: self.1.now(),
+            scaling: w.scaling,
         };
         // A capture that takes time: the clock moves on once the frame is stamped.
         let took = w.advance_on_capture;
@@ -1003,6 +1008,98 @@ fn a_frame_with_epoch_zero_is_not_published() {
         error_code(&r.engine.execute_action(&click)),
         Some(ErrorCode::StaleSnapshot)
     );
+}
+
+// ---- display profile (RNF-07, ADR-0031) ----
+
+/// RNF-07 (chapter 03), ADR-0031: a monitor scaled outside the dossier's profile (100, 125 and
+/// 150 %) is refused with UNSUPPORTED_GEOMETRY before anything is planned, inferred or
+/// published, and the refusal leaves the identities of the last snapshot alone.
+#[test]
+fn a_scaling_outside_the_dpi_profile_is_refused_and_publishes_nothing() {
+    let mut r = rig(form());
+    let page = r.observe();
+    let detections = r.world().detect_calls.len();
+    r.world().scaling = Scaling::Dpi(168); // 175 %
+    let refused = r.observe_with(&ObserveRequest::default()).unwrap_err();
+    assert_eq!(
+        (refused.code, refused.retryable, refused.next_step),
+        (ErrorCode::UnsupportedGeometry, false, NextStep::Stop)
+    );
+    // Deterministic: the same refusal again, and nothing ran for it.
+    assert_eq!(
+        r.observe_with(&ObserveRequest::default()).unwrap_err(),
+        refused
+    );
+    assert_eq!(r.world().detect_calls.len(), detections, "no inference ran");
+    assert_eq!(
+        r.engine.engine_metrics().observations,
+        1,
+        "nothing was published"
+    );
+    // Back in the profile the screen is served again, with the same identities.
+    r.world().scaling = Scaling::Dpi(96);
+    let back = r.observe();
+    assert_eq!(Rig::id_of(&back, "Save"), Rig::id_of(&page, "Save"));
+    assert_eq!(r.engine.engine_metrics().observations, 2);
+}
+
+/// RNF-07, ADR-0031: the profile's three scalings and a scaling the adapter cannot tell are
+/// served. Only a known scaling outside the profile is refused.
+#[test]
+fn the_dpi_profile_and_an_unknown_scaling_are_served() {
+    let mut r = rig(form());
+    for scaling in [
+        Scaling::Dpi(96),
+        Scaling::Dpi(120),
+        Scaling::Dpi(144),
+        Scaling::Unknown,
+    ] {
+        r.world().scaling = scaling;
+        assert!(
+            r.observe_with(&ObserveRequest::default()).is_ok(),
+            "{scaling:?} is served"
+        );
+    }
+}
+
+/// RNF-07, ADR-0031: a refused observation blocks actions on the last snapshot, as any failed
+/// observation does (SDD §2.7). A live click on it sends nothing.
+#[test]
+fn an_action_on_the_last_snapshot_is_refused_after_a_scaling_refusal() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    r.world().scaling = Scaling::Dpi(168);
+    assert!(r.observe_with(&ObserveRequest::default()).is_err());
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::None));
+    assert_eq!(error_code(&result), Some(ErrorCode::StaleSnapshot));
+    assert!(r.world().delivered.is_empty(), "no click");
+}
+
+/// RNF-07 / Action path of IT-07 (ADR-0031): a snapshot taken in the profile, then a change
+/// of scaling, which starts a new geometry epoch, and no new observation. The live action is
+/// stopped by the freshness check (STALE_SNAPSHOT) and sends nothing. This passed before
+/// ADR-0031; it is kept as the regression test of that path.
+#[test]
+fn a_live_action_after_a_scaling_change_is_stale_and_sends_nothing() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    {
+        let mut w = r.world();
+        w.scaling = Scaling::Dpi(168);
+        w.epoch = 2;
+    }
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r1", ExpectedEffect::None));
+    assert_eq!(error_code(&result), Some(ErrorCode::StaleSnapshot));
+    assert!(r.world().delivered.is_empty(), "no click");
 }
 
 /// UT-14 at engine level (OR-19): a failed inference publishes nothing, keeps the changed

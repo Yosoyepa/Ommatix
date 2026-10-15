@@ -66,7 +66,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-19", "BDD-20", "BDD-21", "BDD-22", "BDD-23", "BDD-24", "BDD-25", "BDD-26", "BDD-27",
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
     "BDD-37", "BDD-38", "BDD-39", "BDD-40", "BDD-41", "BDD-42", "BDD-43", "BDD-44", "BDD-45",
-    "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52", "BDD-53",
+    "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52", "BDD-53", "BDD-54",
 ];
 
 #[derive(Debug, Default, World)]
@@ -1671,6 +1671,47 @@ fn truncated_with_a_cursor_to_the_same_snapshot(e: &mut Engine) {
     assert_eq!(
         refused["structuredContent"]["error"]["code"],
         "STALE_SNAPSHOT"
+    );
+}
+
+// ---- 05_mcp.feature, RNF-07 (ADR-0031) ----
+
+#[given("un snapshot confirmado con la escala de 100 %")]
+fn snapshot_at_100_percent(e: &mut Engine) {
+    let agent = e.agent.insert(Agent::modern(form_with_title()));
+    agent.observe(json!({}));
+}
+
+#[when("el monitor pasa a 175 % y el agente observa de nuevo")]
+fn monitor_moves_to_175_and_agent_observes(e: &mut Engine) {
+    let agent = e.agent();
+    agent.desktop.set_dpi(168);
+    agent.tool_result("observe_screen", json!({}));
+}
+
+#[then("recibe UNSUPPORTED_GEOMETRY sin reintento y con siguiente paso stop")]
+fn refused_outside_the_profile(e: &mut Engine) {
+    let result = e.agent().last_response()["result"].clone();
+    assert_eq!(result["isError"], true, "{result}");
+    let error = &result["structuredContent"]["error"];
+    assert_eq!(error["code"], "UNSUPPORTED_GEOMETRY", "{result}");
+    assert_eq!(error["retryable"], false, "{result}");
+    assert_eq!(error["next_step"], "stop", "{result}");
+}
+
+#[then("un clic sobre el snapshot anterior se rechaza con STALE_SNAPSHOT sin enviar nada")]
+fn click_on_last_snapshot_refused(e: &mut Engine) {
+    let agent = e.agent();
+    let button = agent.element("Guardar");
+    let args = agent.click_args(&button, "bdd54-click");
+    let result = agent.tool_result("execute_action", args);
+    let outcome = &result["structuredContent"];
+    assert_eq!(outcome["status"], "rejected", "{outcome}");
+    assert_eq!(outcome["error"]["code"], "STALE_SNAPSHOT", "{outcome}");
+    assert_eq!(outcome["input_delivered"], false, "{outcome}");
+    assert!(
+        agent.desktop.handed_actions().is_empty(),
+        "nothing was handed"
     );
 }
 

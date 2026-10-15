@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ommatix_application::{CapturedFrame, Clock, FrameCapturer, PortError};
+use ommatix_domain::Scaling;
 
 use crate::stamp::Stamper;
 
@@ -72,8 +73,9 @@ impl FrameCapturer for ImageSequenceSource {
             })?
             .into_rgba8();
         let (w, h) = img.dimensions();
+        // A recorded image carries no scaling: the adapter cannot tell it (ADR-0031).
         self.stamper
-            .stamp_rgba(ADAPTER, w, h, img.into_raw(), captured_at)
+            .stamp_rgba(ADAPTER, w, h, img.into_raw(), captured_at, Scaling::Unknown)
     }
 }
 

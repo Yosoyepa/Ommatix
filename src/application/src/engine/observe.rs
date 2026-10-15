@@ -586,6 +586,16 @@ impl Engine {
                 "the frame has no valid geometry epoch",
             ));
         }
+        // RNF-07 (chapter 03), ADR-0031: a monitor scaled outside the dossier's profile is
+        // refused, not served. It is refused before planning, so nothing is inferred, tracked or
+        // published, and a scaling the adapter cannot tell is not refused.
+        if captured.scaling.is_outside_profile() {
+            self.store.record_failure(&BTreeSet::new());
+            return Err(ToolError::new(
+                ErrorCode::UnsupportedGeometry,
+                "the monitor's scaling is outside the supported profile (100, 125 or 150 %)",
+            ));
+        }
         let plan = match self.plan(&frame) {
             Ok(plan) => plan,
             Err(error) => {

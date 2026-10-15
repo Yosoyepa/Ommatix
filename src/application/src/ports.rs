@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+use ommatix_domain::Scaling;
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{Control, Role, Word};
 use ommatix_domain::incremental::BgraFrame;
@@ -32,6 +33,8 @@ pub struct CapturedFrame {
     pub frame_seq: u64,
     /// Monotonic capture instant, on the same origin as [`Clock::now`].
     pub captured_at: Duration,
+    /// The scaling of the monitor the frame came from (RNF-07, ADR-0031).
+    pub scaling: Scaling,
 }
 
 /// Captures the selected monitor (DXGI in S3; synthetic fixtures until then).

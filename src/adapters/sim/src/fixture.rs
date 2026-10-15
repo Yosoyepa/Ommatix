@@ -22,6 +22,7 @@ use ommatix_application::{
     CapturedFrame, Clock, DeliveryReceipt, FrameCapturer, ManualClock, OsActuator, PortError,
     TextRecognizer, VisionDetector,
 };
+use ommatix_domain::Scaling;
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{Actionability, Affordance, Control, Role, Word};
 use ommatix_domain::incremental::BgraFrame;
@@ -220,6 +221,8 @@ impl FixtureScene {
 #[derive(Debug)]
 struct FixtureState {
     scene: FixtureScene,
+    /// The monitor's DPI (96 = 100 %): the profile's scaling unless a test changes it.
+    dpi: u32,
     frame_seq: u64,
     fail_capture: bool,
     fail_inference: bool,
@@ -248,6 +251,7 @@ impl FixtureDesktop {
         Self {
             state: Arc::new(Mutex::new(FixtureState {
                 scene,
+                dpi: 96,
                 frame_seq: 0,
                 fail_capture: false,
                 fail_inference: false,
@@ -275,6 +279,14 @@ impl FixtureDesktop {
     /// Changes the scene between captures; returns what `change` returns.
     pub fn update<T>(&self, change: impl FnOnce(&mut FixtureScene) -> T) -> T {
         change(&mut self.lock().scene)
+    }
+
+    /// Changes the monitor's DPI as Windows does: the next captures report it and the geometry
+    /// epoch moves on (RNF-07, ADR-0031). The fixture starts at 96 DPI (100 %).
+    pub fn set_dpi(&self, dpi: u32) {
+        let mut state = self.lock();
+        state.dpi = dpi;
+        state.scene.bump_geometry_epoch();
     }
 
     /// Makes the next captures fail (`CAPTURE_UNAVAILABLE`) until switched off.
@@ -334,6 +346,7 @@ impl FrameCapturer for FixtureCapturer {
             frame: state.scene.render(),
             frame_seq: state.frame_seq,
             captured_at,
+            scaling: Scaling::Dpi(state.dpi),
         })
     }
 }
@@ -449,6 +462,14 @@ mod tests {
             dirty(&before, &replaced.render()),
             vec![TileCoord::new(0, 0)]
         );
+    }
+
+    /// RNF-07, ADR-0031: the fixture is a 100 % monitor, so it is in the profile.
+    #[test]
+    fn the_fixture_reports_100_percent_scaling() {
+        let desktop = FixtureDesktop::with_manual_clock(FixtureScene::new(20, 10));
+        let frame = desktop.capturer().capture().unwrap();
+        assert_eq!(frame.scaling, Scaling::Dpi(96));
     }
 
     #[test]

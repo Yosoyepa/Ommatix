@@ -31,7 +31,7 @@ use ommatix_application::{
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{Control, Word};
 use ommatix_domain::incremental::BgraFrame;
-use ommatix_domain::{Action, Frame};
+use ommatix_domain::{Action, Frame, Scaling};
 
 pub use fixture::{FixtureDesktop, FixtureScene, confirmed};
 pub use state::SimState;
@@ -194,6 +194,7 @@ impl FrameCapturer for SimCapturer {
             frame: to_bgra(&shared.state.render(&palette), SIM_GEOMETRY_EPOCH),
             frame_seq: shared.frame_seq,
             captured_at,
+            scaling: Scaling::Dpi(96),
         })
     }
 }

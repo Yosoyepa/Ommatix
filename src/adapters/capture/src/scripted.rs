@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use ommatix_application::{CapturedFrame, Clock, FrameCapturer, PortError};
-use ommatix_domain::Frame;
 use ommatix_domain::incremental::BgraFrame;
+use ommatix_domain::{Frame, Scaling};
 
 use crate::stamp::Stamper;
 
@@ -83,10 +83,20 @@ impl FrameCapturer for ScriptedSource {
             Script::Rgba(frames) => {
                 let f = &frames[at];
                 let rgba = f.as_rgba().to_vec();
-                self.stamper
-                    .stamp_rgba(ADAPTER, f.width(), f.height(), rgba, captured_at)
+                self.stamper.stamp_rgba(
+                    ADAPTER,
+                    f.width(),
+                    f.height(),
+                    rgba,
+                    captured_at,
+                    Scaling::Dpi(96),
+                )
             }
-            Script::Bgra(frames) => Ok(self.stamper.stamp(frames[at].clone(), captured_at)),
+            Script::Bgra(frames) => {
+                Ok(self
+                    .stamper
+                    .stamp(frames[at].clone(), captured_at, Scaling::Dpi(96)))
+            }
         }
     }
 }

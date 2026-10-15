@@ -124,7 +124,7 @@ Medir RSS/VRAM totales, cola acotada y sin crecimiento sostenido en soak de 2 h.
 
 Win11 x64, monitor seleccionado y DPI 100/125/150%; rechazo explícito fuera de perfil. Evidencia requerida: IT-07.
 
-**Alcance del MVP (15 de octubre de 2026).** IT-07 pasa al próximo corte: exige cambiar la escala del monitor a mano con el responsable presente, y el motor aún no rechaza las escalas fuera de perfil (sólo rechaza una pantalla rotada y un formato distinto de BGRA8; `tools/perf/dpi_probe.py` registra ese hallazgo). El perfil del MVP es Windows 11 x64, un monitor y DPI 100 %, y así lo documenta [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) §10. Este requisito no se marca como cumplido fuera de ese perfil.
+**Alcance del MVP (15 de octubre de 2026).** IT-07 pasa al próximo corte: exige cambiar la escala del monitor a mano con el responsable presente, y el motor no había comprobado la escala hasta la 1.0.70. Desde esa versión rechaza una escala conocida fuera de 100, 125 y 150 % con `UNSUPPORTED_GEOMETRY`, antes de publicar nada, y no rechaza una escala que su adaptador no puede leer ([ADR-0031](../adr/0031-refuse-scaling-outside-the-dpi-profile.md); BDD-54). Ese rechazo no es la evidencia de IT-07: la medida a 100, 125 y 150 % y el cambio de escala en vivo siguen pendientes (`tools/perf/dpi_probe.py`). El perfil del MVP es Windows 11 x64, un monitor y DPI 100 %, y así lo documenta [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) §10. Este requisito no se marca como cumplido fuera de ese perfil.
 
 ### RNF-08. Reproducibilidad
 

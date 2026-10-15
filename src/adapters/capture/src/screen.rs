@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ommatix_application::{CapturedFrame, Clock, FrameCapturer, PortError};
-use ommatix_domain::DisplayMapping;
+use ommatix_domain::{DisplayMapping, Scaling};
 use xcap::Monitor;
 
 use crate::stamp::Stamper;
@@ -115,8 +115,9 @@ impl FrameCapturer for ScreenSource {
         if let Some(reason) = size_change(self.frame_size, (w, h)) {
             *self.mapping.lock().unwrap_or_else(PoisonError::into_inner) = Err(reason);
         }
+        // This interim adapter does not read the monitor's scale: it cannot tell it (ADR-0031).
         self.stamper
-            .stamp_rgba(ADAPTER, w, h, img.into_raw(), captured_at)
+            .stamp_rgba(ADAPTER, w, h, img.into_raw(), captured_at, Scaling::Unknown)
     }
 }
 

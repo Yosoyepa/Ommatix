@@ -185,7 +185,7 @@ sin OCR, entrada en dry run y política que lo niega todo.
 - *Captura* (`dxgi`, `--source dxgi --output N`): DXGI Desktop Duplication de una salida en
   píxeles físicos (el proceso declara conciencia de DPI por monitor v2). La textura del
   escritorio se copia a una textura de staging y se lee fila a fila con su propio stride; los
-  frames sólo viven en memoria. Se rechaza una salida rotada; un cambio de tamaño, DPI u
+  frames sólo viven en memoria. Se rechaza una salida rotada; una escala fuera de 100, 125 y 150 % se rechaza como `UNSUPPORTED_GEOMETRY` ([ADR-0031](../adr/0031-refuse-scaling-outside-the-dpi-profile.md)); un cambio de tamaño, DPI u
   origen incrementa el epoch geométrico; si no llega ninguna actualización del escritorio se
   devuelve de nuevo el último frame; la primera captura tras abrir (o recrear) la
   duplicación espera hasta 500 ms una actualización con una imagen del escritorio presentada
