@@ -8,15 +8,15 @@ use std::time::Duration;
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{Actionability, Affordance, Control, Role, TextKind, Word};
 use ommatix_domain::identity::ActionStatus;
-use ommatix_domain::incremental::BgraFrame;
+use ommatix_domain::incremental::{BgraFrame, FullRefreshReason, PlanParams};
 
 use super::*;
 use crate::contract::{
     ActionKind, ErrorCode, ExpectedEffect, LabelSource, NextStep, ObservedEffect, ScrollDirection,
-    ValidatedAction, Zone,
+    ValidatedAction, WorkKind, Zone,
 };
 use crate::ports::{
-    AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame, DeliveryReceipt,
+    AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame, Clock, DeliveryReceipt,
     LocalPolicy, TopLevelWindow,
 };
 use crate::{ManualClock, PortError};
@@ -1871,8 +1871,161 @@ fn metrics_report_counters_without_inventing_timings() {
     let m = r.engine.engine_metrics();
     assert_eq!(m.timings_source, TimingsSource::RuntimeMonotonic);
     assert_eq!(m.observations, 1);
-    assert_eq!(r.engine.last_timings(), Some(StageTimings::default()));
+    assert_eq!(
+        r.engine.last_timings(),
+        Some(StageTimings {
+            response_build: Some(Duration::ZERO),
+            ..StageTimings::default()
+        })
+    );
     assert_eq!(r.engine.session_id(), SESSION);
+}
+
+/// A clock that moves one millisecond on every reading, so that a span counts the readings it
+/// covers: the commit is timed when it reads the clock after publishing.
+#[derive(Debug, Default)]
+struct Ticking(Mutex<Duration>);
+
+impl Clock for Ticking {
+    fn now(&self) -> Duration {
+        let mut now = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let at = *now;
+        *now += Duration::from_millis(1);
+        at
+    }
+
+    fn sleep(&self, _: Duration) {}
+}
+
+#[test]
+fn the_commit_is_timed_and_total_runs_to_the_published_snapshot() {
+    // ADR-0024: `total` ends at the publication, so it contains the commit, and the commit is
+    // a span of its own. The page is built after it and is reported by every page of it.
+    let mut r = rig(form());
+    r.engine.ports.clock = Arc::new(Ticking::default());
+    let first = r.observe();
+    let t = r.engine.last_timings().unwrap();
+    assert!(t.commit > Duration::ZERO, "{t:?}");
+    assert!(t.total >= t.track + t.commit, "{t:?}");
+    assert!(
+        t.response_build.is_some_and(|d| d > Duration::ZERO),
+        "{t:?}"
+    );
+    assert_eq!(
+        first.timings, t,
+        "the page names the observation that published it"
+    );
+
+    let paged = r
+        .observe_with(&ObserveRequest {
+            limit: 1,
+            ..ObserveRequest::default()
+        })
+        .unwrap();
+    let next = r
+        .observe_with(&ObserveRequest {
+            limit: 1,
+            cursor: paged.next_cursor.clone(),
+            ..ObserveRequest::default()
+        })
+        .unwrap();
+    assert_eq!(
+        next.timings, paged.timings,
+        "a cursor page names the same observation"
+    );
+    assert_eq!(next.plan, paged.plan);
+}
+
+#[test]
+fn the_plan_says_what_each_observation_processed() {
+    let mut r = rig(form());
+    let whole = bx(0.0, 0.0, f64::from(W), f64::from(H));
+
+    // The first observation: the whole frame, for want of a committed base.
+    r.observe();
+    let plan = r.engine.last_plan().unwrap();
+    assert_eq!(plan.work, WorkKind::Full);
+    assert_eq!(
+        plan.full_refresh_reason,
+        Some(FullRefreshReason::NoCommittedBase)
+    );
+    assert_eq!((plan.region_count, plan.region_area_px), (1, whole.area()));
+    // The doubles do not count their inferences: not measured, never zero.
+    assert_eq!(
+        (plan.inference_count, plan.input_shapes.clone()),
+        (None, None)
+    );
+    assert!(!plan.accessibility_truncated);
+    assert_eq!((plan.controls_n, plan.words_n), (3, 4));
+    assert_eq!(plan.supports_n, plan.controls_n + plan.words_n);
+
+    // Nothing changed: no region, and no detector call at all. An idle observation ran no
+    // inference, which is a measurement: zero, not "not measured".
+    r.observe();
+    let plan = r.engine.last_plan().unwrap();
+    assert_eq!(plan.work, WorkKind::Idle);
+    assert_eq!((plan.full_refresh_reason, plan.region_count), (None, 0));
+    assert_eq!(plan.region_area_px, 0.0);
+    assert_eq!(
+        (plan.inference_count, plan.input_shapes),
+        (Some(0), Some(Vec::new()))
+    );
+
+    // One control moved: one region, the one the planner closed around it.
+    {
+        let mut w = r.world();
+        w.controls[2].bbox = bx(502.0, 250.0, 582.0, 280.0);
+        w.words[3].bbox = bx(517.0, 258.0, 567.0, 272.0);
+    }
+    r.observe();
+    let plan = r.engine.last_plan().unwrap();
+    assert_eq!(plan.work, WorkKind::Regions);
+    assert_eq!(plan.full_refresh_reason, None);
+    assert_eq!(plan.region_count, 1);
+    assert_eq!(plan.region_area_px, bx(400.0, 160.0, 640.0, 320.0).area());
+    assert_eq!(plan.inference_count, None);
+}
+
+#[test]
+fn the_experimental_baseline_processes_the_whole_frame_on_every_observation() {
+    // B0 (ADR-0024): the same planner forced to the whole frame. Without the switch, the same
+    // screens plan one region, or nothing (the test above).
+    let whole = bx(0.0, 0.0, f64::from(W), f64::from(H));
+    let config = EngineConfig {
+        plan: PlanParams {
+            experimental_full_frame: true,
+            ..PlanParams::default()
+        },
+        ..EngineConfig::new(SESSION)
+    };
+    let mut r = rig_with(form(), config);
+    r.observe();
+    r.observe();
+    let plan = r.engine.last_plan().unwrap();
+    assert_eq!(plan.work, WorkKind::Full);
+    assert_eq!(
+        plan.full_refresh_reason,
+        Some(FullRefreshReason::ExperimentalBaseline)
+    );
+    assert_eq!(r.world().detect_calls.last(), Some(&vec![whole]));
+
+    {
+        let mut w = r.world();
+        w.controls[2].bbox = bx(502.0, 250.0, 582.0, 280.0);
+        w.words[3].bbox = bx(517.0, 258.0, 567.0, 272.0);
+    }
+    r.observe();
+    let plan = r.engine.last_plan().unwrap();
+    assert_eq!(
+        plan.full_refresh_reason,
+        Some(FullRefreshReason::ExperimentalBaseline)
+    );
+    assert_eq!(r.world().detect_calls.last(), Some(&vec![whole]));
+    assert_eq!(
+        r.world().detect_calls.len(),
+        3,
+        "one inference pass per observation"
+    );
 }
 
 #[test]
@@ -1909,6 +2062,7 @@ fn sec_07_purge_deletes_the_snapshot_and_refuses_actions_and_cursors() {
     let cursor = page.next_cursor.clone().expect("truncated");
     let label = page.elements[0].label.clone();
     assert!(r.engine.last_timings().is_some());
+    assert!(r.engine.last_plan().is_some());
 
     r.engine.purge();
 
@@ -1927,6 +2081,7 @@ fn sec_07_purge_deletes_the_snapshot_and_refuses_actions_and_cursors() {
         ErrorCode::StaleSnapshot
     );
     assert!(r.engine.last_timings().is_none());
+    assert!(r.engine.last_plan().is_none());
     assert!(r.engine.accessibility_complete().is_none());
     assert_eq!(r.engine.engine_metrics().pending_regions, 0);
 }

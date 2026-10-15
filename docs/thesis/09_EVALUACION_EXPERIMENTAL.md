@@ -10,6 +10,8 @@ El experimento evalúa incrementalidad y grounding, no una competición de marca
 
 Para atribuir mejoras se modifica un componente a la vez. Las versiones defectuosas de FNV/dHash sirven como contraejemplos de corrección, no como baseline competitivo artificialmente debilitado. Un modo sin gates puede medirse sólo offline, sin inyectar entrada peligrosa.
 
+B0 se implementa desde 1.0.54 como interruptor experimental, `[engine] experimental_full_frame`, apagado por defecto: el planificador de Algoritmo 1 calcula su diferencia de teselas como siempre y luego fuerza el refresco completo en cada observación, con el mismo detector, OCR, accesibilidad, pesos, precisión, concurrencia, política y estado inicial que B1. Es una línea de base experimental y nunca un modo de producción (ADR-0024). El protocolo de comparación está en el §9.9.
+
 ## 9.3 Diseño del corpus
 
 Estratos: cambios pequeños, menú, scroll, animación extensa, notificación, sustitución de contenido, iconos repetidos/desconocidos, formularios densos, targets pequeños, escalas DPI y temas. Etiquetar área sucia antes/después del halo, identidad de objeto y accionabilidad. Separar familias de pantallas entre calibración y test y evitar frames vecinos en ambos conjuntos.
@@ -21,6 +23,8 @@ El corpus está **por construir**. Desde el 15 de octubre de 2026 pasa al próxi
 Guardar por muestra: run_id, sequence_id, frame_id, semilla, commit, hash de configuración/modelos/corpus, versión de SO/driver/EP, temperatura o condiciones térmicas cuando sea posible, dimensiones/DPI y modo cold/warm. Tiempos con reloj monotónico, unidades explícitas y sincronización del fin de inferencia.
 
 Spans: capture_wait, capture_copy, dirty_plan, preprocess, detector, OCR, icon_match, fusion, tracking, commit, serialization, action_validate, input_delivery y effect_wait. Si detector/OCR se solapan, no sumar sus duraciones y llamarlo wall-clock. Medir el total directamente. La suma de p95 de etapas tampoco es p95 del pipeline.
+
+Desde 1.0.54 los tramos de una observación son los de `_meta` (ADR-0024): `capture` (espera y copia de la captura), `plan`, `detect`, `recognize` y `accessibility` (concurrentes, sin sumar), `fuse`, `track`, `commit` (publicación), `response_build` (construcción de la primera página, después de publicar) y `total`, que va de la captura al snapshot publicado. La serialización y el transporte no caben en el mensaje que los contiene: se miden en el cliente como ida y vuelta. Las medidas anteriores a 1.0.54 tienen `total` hasta el fin del *tracking* y no se comparan con las nuevas.
 
 Medir RSS total y VRAM asignada/reservada, no excluir pesos para parecer ligero. Registrar CPU/GPU utilization con método y frecuencia definidos. El coste de serialización y el tamaño final en bytes se miden sobre mensajes realmente emitidos; los tokens se computan con el tokenizador del cliente y su representación efectiva.
 
@@ -49,3 +53,50 @@ Una hipótesis se considera no sustentada si su intervalo o cobertura no cumple 
 ## 9.8 Tablas de resultados previstas
 
 Las plantillas CSV contienen encabezados para resultados por ejecución, métricas de calidad y resumen por estrato. No contienen mediciones ficticias. La tabla productiva deberá mostrar baseline, modo, N, p50/p95/p99, precisión, cobertura, éxito, RSS y VRAM. El informe del oráculo se mantiene fuera de esas tablas para que sus milisegundos de unittest no se confundan con percepción real.
+
+## 9.9 Protocolo B0/B1: incrementalidad aislada (INC-02)
+
+**Pregunta.** Con la misma secuencia, el mismo binario, los mismos pesos, la misma precisión, la misma concurrencia, la misma política y el mismo estado inicial, ¿cuánto reduce B1 (incremental) el costo de observación frente a B0 (refresco completo)? Y ¿en qué medida coinciden las detecciones de ambas? Esa coincidencia es un acuerdo entre dos variantes, no precisión frente a anotaciones (§9.5).
+
+**Variables fijas.** Un solo ejecutable (`ommatix.exe`) para B0 y B1; pesos y manifiestos de modelo; una configuración por variante que sólo difiere en `[engine] experimental_full_frame` (`true` en B0, `false` en B1); la aplicación de prueba `tools/s4/testapp` con sus banderas ocultas `--animate`, `--animate-labels` y `--animate-flash`, sin entrada de ningún tipo; política y allowlist iguales. La herramienta rechaza cualquier otra diferencia entre variantes: la única declaración permitida es `--allow-difference engine.experimental_full_frame`.
+
+**Congelación.** Antes de medir, el commit y el árbol limpio (`tools/repro/environment.py`), el SHA-256 del ejecutable, de cada configuración y de la aplicación de prueba. El manifiesto del informe los registra. Cualquier cambio posterior exige otro `--experiment-id`.
+
+**Orden y apareamiento.** Por caso (`full`, `incr1`, `incr2`) y por índice de proceso, B0 y B1 se ejecutan intercalados contra la misma instancia de la aplicación de prueba, con orden rotatorio. La unidad de apareamiento es el proceso (`run_id`, `sequence_id`): los dos procesos de un mismo índice comparten `sequence_id`. Los fotogramas de dos procesos apareados no son idénticos, porque es captura en vivo; el apareamiento es por secuencia y por instante de ejecución, y así se declara.
+
+**Comando exacto** (desde la raíz del repositorio, con `CONFIG_B0.toml` y `CONFIG_B1.toml` del operador):
+
+```text
+python tools/perf/measure_latency.py --experiment-id EXPERIMENT ^
+    --variant B0=target\release\ommatix.exe,CONFIG_B0.toml ^
+    --variant B1=target\release\ommatix.exe,CONFIG_B1.toml ^
+    --allow-difference engine.experimental_full_frame --paired B0:B1 --out chunk-N.json
+```
+
+Para unir los trozos: `python tools/perf/measure_latency.py --combine chunk-1.json chunk-2.json --paired B0:B1 --out all.json`. Cada trozo dura unos minutos, porque la aplicación de prueba necesita el primer plano durante toda la corrida. Ni el comando ni la herramienta envían entrada: la aplicación de prueba se anima sola, y `ommatix demo` sólo observa y ejecuta una acción en seco.
+
+**Registro mínimo por observación.** Cada observación se escribe como una línea `ommatix-observation` con un objeto JSON de esquema `ommatix.observation/1`: los tiempos de cada tramo en microsegundos enteros, el plan (`work`, `full_refresh_reason`, `region_count`, `region_area_px`, `inference_count`, `input_shapes`, `accessibility_truncated` y los recuentos de evidencia) y una firma de 16 dígitos hexadecimales por elemento (FNV-1a de rol, etiqueta y accionabilidad; ninguna etiqueta se escribe). La herramienta añade a cada muestra `experiment_id`, `run_id`, `process_id`, `sequence_id`, `observation_id`, `variant` y `case`, sin aplanar. El registro mínimo del plan del paper se cubre así:
+
+| Campo del registro mínimo | En esta versión |
+|---|---|
+| `schema_version` | `schema` del registro (`ommatix.observation/1`) y del informe (`ommatix.perf/2`) |
+| `experiment_id`, `run_id`, `process_id`, `sequence_id`, `observation_id`, `variant` | Sí, en cada muestra |
+| `seed` | No hay semilla aleatoria: el orden de variantes y el índice de proceso son el orden de la corrida; la semilla del bootstrap es 20261015 |
+| `code_sha` | `code_commit` del manifiesto |
+| `build_hash`, `model_hash`, `config_hash`, `corpus_hash` | `exe_sha256` y `config_sha256` por variante; `test_app_sha256` hace de corpus. El hash del manifiesto del modelo no se registra: va dentro del hash de la configuración |
+| `work_kind`, `full_refresh_reason`, `region_count`, `region_area_px` | `plan.work`, `plan.full_refresh_reason`, `plan.region_count`, `plan.region_area_px` |
+| `input_shapes`, `inference_count` | `plan.input_shapes`, `plan.inference_count`; `null` cuando el detector no cuenta sus inferencias (no medido, nunca cero) |
+| `geometry_epoch`, `controls_n`, `words_n`, `supports_n`, `relations_n` | Sí |
+| `uia_truncated` | `plan.accessibility_truncated` |
+| `index_build_ns`, `index_query_ns`, `exact_filter_ns`, `order_ns`, `candidates_n`, `exact_predicates_n`, `closure_rounds` | No existen en este corte (no hay índice ni A1): `null` |
+| `observe_wall_ns`, `commit_ns`, `response_build_ns` | `timings_us.total`, `timings_us.commit`, `timings_us.response_build`, en microsegundos enteros (la unidad de `_meta`; el paper pide nanosegundos y esta diferencia se declara aquí) |
+| `outcome`, `exclusion_reason` | `outcome`, y `error_code` para las observaciones con error, que se conservan |
+| `paired_key` | (`run_id`, `sequence_id`, `observation_id`) |
+
+**Análisis.** Cada observación cae en una clase decidida por su registro, nunca por un tiempo redondeado: `first` (la observación 1), `second` (la 2, que no entra en las estadísticas de latencia), `warm_full` y `warm_regions` (las observaciones 3 y siguientes que sí analizaron), `idle` (las que no tenían nada que analizar: se cuentan, no se miden) y `error` (se conservan con su código y no entran en los tiempos). Las medianas y los p95 se dan en milisegundos por clase, con su n. Ninguna etapa concurrente se suma a otra ni se suman p95.
+
+La diferencia apareada se calcula por proceso: la mediana de `total` de las observaciones cálidas de B1 menos la de B0 (Δ = B1 − B0; un Δ negativo significa que B1 es más rápida), y su razón. Los intervalos del 95 % son intervalos percentiles de bootstrap sobre procesos, con 10 000 remuestreos y semilla 20261015; nunca se remuestrean fotogramas. Un proceso sin observaciones cálidas en una de las dos variantes se excluye y se cuenta.
+
+El acuerdo se calcula por observación apareada (mismo proceso y mismo número): el coeficiente de Dice de los multiconjuntos de firmas de elementos, que vale 1 cuando las dos detecciones coinciden y 0 cuando no comparten ningún elemento. Si los dos conjuntos están vacíos, la observación no se mide. Se informan la media por proceso con su intervalo bootstrap y la proporción de observaciones con multiconjuntos idénticos. Se llama acuerdo (`agreement_dice`), no precisión.
+
+**Límites.** (1) Es un experimento en vivo: la animación avanza con el tiempo, así que dos procesos apareados ven pantallas parecidas, no idénticas, y el acuerdo depende de ese ritmo. (2) Que B0 y B1 coincidan no prueba que ninguna sea correcta (§9.5). (3) La UIA de cada proceso es viva, no un replay. (4) Las observaciones inactivas de B1 no entran en la comparación de latencia; se reportan aparte. (5) Esta sección describe el protocolo; no contiene resultados. La medición la programa el coordinador, con el protocolo congelado y el cupo del responsable.

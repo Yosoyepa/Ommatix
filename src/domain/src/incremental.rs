@@ -243,6 +243,24 @@ pub enum FullRefreshReason {
     TooManyRegions,
     /// The regions cover more of the frame than the plan allows.
     AreaBudget,
+    /// The experimental full-frame baseline (B0, `[engine] experimental_full_frame`) asks for
+    /// the whole frame on every observation. Never a production reason (dossier chapter 09
+    /// §9.2): it exists to measure what incrementality saves.
+    ExperimentalBaseline,
+}
+
+impl FullRefreshReason {
+    /// The reason's name on the research record and in `_meta` (`io.ommatix/plan`).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoCommittedBase => "no_committed_base",
+            Self::GeometryChanged => "geometry_changed",
+            Self::ClosureBudget => "closure_budget",
+            Self::TooManyRegions => "too_many_regions",
+            Self::AreaBudget => "area_budget",
+            Self::ExperimentalBaseline => "experimental_baseline",
+        }
+    }
 }
 
 /// Tiles of `current` that differ from `base`.
@@ -407,6 +425,10 @@ pub struct PlanParams {
     pub max_regions: usize,
     /// Regions covering more than this fraction of the frame fall back to a full refresh.
     pub max_area_fraction: f64,
+    /// The experimental full-frame baseline (B0): every observation processes the whole
+    /// frame, whatever changed. Off by default and never a production mode; the planner
+    /// still computes the tile diff, so both variants pay the same planning cost.
+    pub experimental_full_frame: bool,
 }
 
 impl Default for PlanParams {
@@ -417,6 +439,7 @@ impl Default for PlanParams {
             max_closure_rounds: 1000,
             max_regions: 4,
             max_area_fraction: 0.4,
+            experimental_full_frame: false,
         }
     }
 }
@@ -463,6 +486,14 @@ pub fn plan_regions(
         return Ok(RegionPlan {
             dirty: diff.tiles,
             work: Work::FullRefresh(reason),
+        });
+    }
+    if params.experimental_full_frame {
+        // B0: the same planner, forced to the whole frame. Every tile is processed, so every
+        // tile is dirty if the observation fails.
+        return Ok(RegionPlan {
+            dirty: grid.all_tiles(),
+            work: Work::FullRefresh(FullRefreshReason::ExperimentalBaseline),
         });
     }
     let mut dirty = diff.tiles;
@@ -1145,5 +1176,100 @@ mod tests {
             }
         }
         assert!(checked > 3_000, "only {checked} generated cases");
+    }
+
+    #[test]
+    fn experimental_full_frame_processes_the_whole_frame_even_with_nothing_changed() {
+        // B0 (dossier chapter 09 §9.2): the same planner, forced to the whole frame. Without
+        // the switch the same frames plan no work at all.
+        let base = blank(640, 320, 0, 1);
+        let params = PlanParams {
+            experimental_full_frame: true,
+            ..PlanParams::default()
+        };
+        let plan = plan_regions(
+            Some(&base),
+            &base,
+            &BTreeSet::new(),
+            Evidence::default(),
+            &params,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.work,
+            Work::FullRefresh(FullRefreshReason::ExperimentalBaseline)
+        );
+        assert_eq!(
+            plan.dirty,
+            TileGrid::for_frame(&base, 64).unwrap().all_tiles()
+        );
+    }
+
+    #[test]
+    fn experimental_full_frame_does_not_hide_a_missing_base() {
+        // The reason stays the true one: nothing was committed, so the first observation is
+        // a full refresh for the reason every planner gives, B0 or not.
+        let current = blank(640, 320, 0, 1);
+        let params = PlanParams {
+            experimental_full_frame: true,
+            ..PlanParams::default()
+        };
+        let plan = plan_regions(
+            None,
+            &current,
+            &BTreeSet::new(),
+            Evidence::default(),
+            &params,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.work,
+            Work::FullRefresh(FullRefreshReason::NoCommittedBase)
+        );
+    }
+
+    #[test]
+    fn a_changed_pixel_is_not_planned_as_a_region_under_the_baseline() {
+        let base = blank(640, 320, 0, 1);
+        let current = changed(&base, 100, 100, 0);
+        let params = PlanParams {
+            experimental_full_frame: true,
+            ..PlanParams::default()
+        };
+        let plan = plan_regions(
+            Some(&base),
+            &current,
+            &BTreeSet::new(),
+            Evidence::default(),
+            &params,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.work,
+            Work::FullRefresh(FullRefreshReason::ExperimentalBaseline)
+        );
+        // The same change under the incremental planner is one region.
+        let incremental = plan_regions(
+            Some(&base),
+            &current,
+            &BTreeSet::new(),
+            Evidence::default(),
+            &PlanParams::default(),
+        )
+        .unwrap();
+        assert!(matches!(incremental.work, Work::Regions(ref rs) if rs.len() == 1));
+    }
+
+    #[test]
+    fn full_refresh_reasons_have_the_names_of_the_research_record() {
+        assert_eq!(
+            FullRefreshReason::ExperimentalBaseline.as_str(),
+            "experimental_baseline"
+        );
+        assert_eq!(FullRefreshReason::AreaBudget.as_str(), "area_budget");
+        assert_eq!(
+            FullRefreshReason::NoCommittedBase.as_str(),
+            "no_committed_base"
+        );
     }
 }

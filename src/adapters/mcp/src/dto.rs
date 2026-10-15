@@ -18,12 +18,13 @@ use std::fmt;
 
 use ommatix_application::contract::{
     ActionKind, ActionRequest, ActionResult, ActionTimings, EngineMetrics, EngineMode, ErrorCode,
-    ExpectedEffect, LabelSource, NextStep, ObservePage, ObserveRequest, ObservedEffect,
-    ScrollDirection, StageTimings, TimingsSource, ToolError, Zone, limits,
+    ExpectedEffect, LabelSource, NextStep, ObservationPlan, ObservePage, ObserveRequest,
+    ObservedEffect, ScrollDirection, StageTimings, TimingsSource, ToolError, Zone, limits,
 };
 use ommatix_application::contract::{ElementView, SCHEMA_VERSION};
 use ommatix_domain::fusion::{Actionability, Role, TextKind};
 use ommatix_domain::identity::{ActionStatus, TargetId};
+use ommatix_domain::incremental::FullRefreshReason;
 use serde::de::{self, DeserializeOwned, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -680,7 +681,10 @@ impl TryFrom<ObserveScreenOutput> for ObservePage {
             total_elements: usize::try_from(o.total_elements)
                 .map_err(|_| bad("`total_elements` is out of range"))?,
             next_cursor: o.next_cursor,
+            // The wire carries neither the timings nor the plan of an observation (both are
+            // `_meta`), so a page parsed back from `structuredContent` has the defaults.
             timings: StageTimings::default(),
+            plan: ObservationPlan::default(),
         })
     }
 }
@@ -818,7 +822,8 @@ pub fn parse_output<T: DeserializeOwned>(value: &Value) -> Result<T, InvalidPayl
     T::deserialize(value).map_err(|e| bad(e.to_string()))
 }
 
-/// Run-dependent stage timings, in whole microseconds, for result `_meta`.
+/// Run-dependent stage timings, in whole microseconds, for result `_meta` (ADR-0024). `total`
+/// ends at the published snapshot; `response_build_us` is `null` until the page is built.
 pub fn timings_meta(t: &StageTimings) -> Value {
     let us = |d: std::time::Duration| u64::try_from(d.as_micros()).unwrap_or(u64::MAX);
     serde_json::json!({
@@ -829,7 +834,28 @@ pub fn timings_meta(t: &StageTimings) -> Value {
         "accessibility_us": us(t.accessibility),
         "fuse_us": us(t.fuse),
         "track_us": us(t.track),
+        "commit_us": us(t.commit),
         "total_us": us(t.total),
+        "response_build_us": t.response_build.map(us),
+    })
+}
+
+/// What the planner decided for the observation behind a result, for result `_meta` under
+/// `io.ommatix/plan` (ADR-0024): the work kind, the regions, the inferences and the evidence
+/// counts. Numbers, booleans, `null` and the closed names of the plan; never screen content.
+pub fn plan_meta(p: &ObservationPlan) -> Value {
+    serde_json::json!({
+        "work": p.work.as_str(),
+        "full_refresh_reason": p.full_refresh_reason.map(FullRefreshReason::as_str),
+        "region_count": p.region_count,
+        "region_area_px": p.region_area_px,
+        "inference_count": p.inference_count,
+        "input_shapes": p.input_shapes,
+        "accessibility_truncated": p.accessibility_truncated,
+        "controls_n": p.controls_n,
+        "words_n": p.words_n,
+        "supports_n": p.supports_n,
+        "relations_n": p.relations_n,
     })
 }
 

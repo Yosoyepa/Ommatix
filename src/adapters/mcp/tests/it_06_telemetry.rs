@@ -12,7 +12,8 @@ use common::{
     error_code, send_raw, server_with,
 };
 use ommatix_adapter_mcp::{
-    ACCESSIBILITY_META_KEY, ACTION_TIMINGS_META_KEY, McpConfig, McpServer, TIMINGS_META_KEY,
+    ACCESSIBILITY_META_KEY, ACTION_TIMINGS_META_KEY, McpConfig, McpServer, PLAN_META_KEY,
+    TIMINGS_META_KEY,
 };
 use ommatix_application::LocalPolicy;
 use ommatix_domain::fusion::{Actionability, Role, Word};
@@ -87,7 +88,8 @@ fn action(page: &Value, target: &Value, request_id: &str, extra: &Value) -> Valu
 
 /// IT-06 (time breakdown): `_meta` of an observation holds one entry per stage, in whole
 /// microseconds, each the stage's own duration, plus the total measured directly. Here
-/// the stages run in sequence on a virtual clock, so the numbers are exact.
+/// the stages run in sequence on a virtual clock, so the numbers are exact. `total` ends at
+/// the published snapshot: the commit is inside it, the response build after it (ADR-0024).
 #[test]
 fn it_06_an_observation_reports_the_time_of_every_stage_in_meta() {
     let costs = Costs {
@@ -108,10 +110,28 @@ fn it_06_an_observation_reports_the_time_of_every_stage_in_meta() {
             "accessibility_us": 0,
             "fuse_us": 0,
             "track_us": 0,
-            "total_us": 17_000
+            "commit_us": 0,
+            "total_us": 17_000,
+            "response_build_us": 0
         })
     );
     assert_eq!(result["_meta"][ACCESSIBILITY_META_KEY]["complete"], true);
+
+    // The first observation of a session is a full refresh for the reason every planner
+    // gives; nothing was inferred by the doubles, so the counts of inference are not measured.
+    let plan = &result["_meta"][PLAN_META_KEY];
+    assert_eq!(plan["work"], "full", "{plan}");
+    assert_eq!(plan["full_refresh_reason"], "no_committed_base", "{plan}");
+    assert_eq!(plan["region_count"], 1);
+    assert_eq!(plan["region_area_px"], 320.0 * 200.0);
+    assert!(
+        plan["inference_count"].is_null() && plan["input_shapes"].is_null(),
+        "{plan}"
+    );
+    assert_eq!(plan["accessibility_truncated"], false);
+    assert_eq!(plan["controls_n"], 3);
+    assert_eq!(plan["words_n"], 3);
+    assert_eq!(plan["supports_n"], 6);
 
     // A page of the same snapshot, fetched by cursor, names the observation it came from.
     let paged = call_ok(&mut conn, 2, "observe_screen", json!({ "limit": 1 }));
@@ -268,9 +288,24 @@ fn session_responses() -> Vec<Value> {
     responses
 }
 
-/// IT-06 (redaction): in every result `_meta` there are the three engine keys and the
-/// server's name and version; the engine's are numbers and one boolean; nothing from the
-/// screen or the agent is in any of them, and the typed text is in no response at all.
+/// The names the plan may carry (ADR-0024): the closed vocabulary of the planner, never
+/// screen content.
+const PLAN_WORDS: [&str; 9] = [
+    "full",
+    "regions",
+    "idle",
+    "no_committed_base",
+    "geometry_changed",
+    "closure_budget",
+    "too_many_regions",
+    "area_budget",
+    "experimental_baseline",
+];
+
+/// IT-06 (redaction): in every result `_meta` there are the engine keys and the server's name
+/// and version; the engine's are whole numbers, booleans, `null` for a value not measured and,
+/// in the plan, the closed names of the planner; nothing from the screen or the agent is in
+/// any of them, and the typed text is in no response at all.
 #[test]
 fn it_06_telemetry_carries_numbers_only_and_nothing_from_the_screen() {
     let responses = session_responses();
@@ -290,6 +325,17 @@ fn it_06_telemetry_carries_numbers_only_and_nothing_from_the_screen() {
             if path.starts_with(&format!("/{SERVER_INFO_KEY}")) {
                 continue;
             }
+            if path.starts_with(&format!("/{PLAN_META_KEY}/")) {
+                assert!(
+                    leaf.is_null()
+                        || leaf.is_u64()
+                        || leaf.is_f64()
+                        || leaf.is_boolean()
+                        || leaf.as_str().is_some_and(|word| PLAN_WORDS.contains(&word)),
+                    "{path}: the plan is numbers, booleans, null and closed names, not {leaf}"
+                );
+                continue;
+            }
             assert!(
                 leaf.is_u64() || leaf.is_boolean(),
                 "{path}: engine telemetry is whole numbers and booleans, not {leaf}"
@@ -299,6 +345,7 @@ fn it_06_telemetry_carries_numbers_only_and_nothing_from_the_screen() {
             assert!(
                 [
                     TIMINGS_META_KEY,
+                    PLAN_META_KEY,
                     ACTION_TIMINGS_META_KEY,
                     ACCESSIBILITY_META_KEY,
                     SERVER_INFO_KEY

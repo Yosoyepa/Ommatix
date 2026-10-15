@@ -72,6 +72,10 @@ pub struct EngineSection {
     /// concurrently (SDD §2.7, ADR-0019). The evidence is the same either way; `false`
     /// runs them one after the other, for diagnosis and for before/after measurements.
     pub concurrent_stages: bool,
+    /// The experimental full-frame baseline B0 (dossier chapter 09 §9.2, ADR-0024): every
+    /// observation processes the whole frame. An experiment switch, never a production mode;
+    /// `notes()` says so on stderr when it is on.
+    pub experimental_full_frame: bool,
 }
 
 impl Default for EngineSection {
@@ -88,6 +92,7 @@ impl Default for EngineSection {
             verify_timeout_ms: 500,
             verify_poll_ms: 50,
             concurrent_stages: true,
+            experimental_full_frame: false,
         }
     }
 }
@@ -577,6 +582,20 @@ impl Config {
         out
     }
 
+    /// Notes on settings that change the run and are not production behaviour, reported on
+    /// stderr at start: the experimental full-frame baseline (ADR-0024).
+    pub fn notes(&self) -> Vec<String> {
+        let mut notes = Vec::new();
+        if self.engine.experimental_full_frame {
+            notes.push(
+                "[engine] experimental_full_frame = true: EXPERIMENTAL baseline B0, every \
+                 observation processes the whole frame; not a production mode"
+                    .to_owned(),
+            );
+        }
+        notes
+    }
+
     /// A path from this file: a relative one resolves against the file's directory (the
     /// working directory for the built-in defaults).
     pub fn resolve_path(&self, path: &str) -> PathBuf {
@@ -634,6 +653,7 @@ impl Config {
             halo_px: f64::from(self.engine.halo_px),
             max_regions: self.engine.max_regions,
             max_area_fraction: self.engine.full_refresh_area_ratio,
+            experimental_full_frame: self.engine.experimental_full_frame,
             ..PlanParams::default()
         }
     }
@@ -893,6 +913,26 @@ concurrent_stages = false
         )
         .unwrap();
         assert!(!config.engine.concurrent_stages);
+    }
+
+    #[test]
+    fn the_full_frame_baseline_is_off_by_default_and_is_announced_when_on() {
+        // B0 (ADR-0024): an experiment switch. Off, it adds no note and plans as the product
+        // does; on, the note says it is not a production mode and the planner is forced.
+        let default = Config::default();
+        assert!(!default.engine.experimental_full_frame);
+        assert!(!default.plan_params().experimental_full_frame);
+        assert!(default.notes().iter().all(|n| !n.contains("EXPERIMENTAL")));
+
+        let baseline = Config::parse("[engine]\nexperimental_full_frame = true\n").unwrap();
+        assert!(baseline.plan_params().experimental_full_frame);
+        assert!(
+            baseline
+                .notes()
+                .iter()
+                .any(|n| n.contains("experimental_full_frame = true")
+                    && n.contains("not a production mode"))
+        );
     }
 
     #[test]

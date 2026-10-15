@@ -225,6 +225,8 @@ Metas iniciales de RNF-05: refresco completo en caliente p95 ≤ 700 ms e increm
 
 ## 10. RNF-05: etapas concurrentes, red en float16 y entradas más pequeñas (1.0.22)
 
+> **Nota (1.0.54, ADR-0024).** El `total` de estas medidas termina al acabar el *tracking*, antes del *commit*. Desde 1.0.54 `total` termina en la publicación del snapshot, como define el capítulo 03 §3.4; los valores de aquí no son comparables con los nuevos y conservan su commit de origen (§11.5).
+
 **Fecha:** 14 de octubre de 2026, misma máquina (§1), rama `perf/rnf05-latency` sobre `adfb1ea`. Dentro del spike y de la aprobación del responsable del proyecto del 14 de octubre de 2026 («rendimiento de RNF-05 primero»). No se envió ninguna tecla ni ningún clic, y no se guardó ningún frame: de las corridas con DXGI sólo se conservaron los tiempos de stderr y el número de elementos de cada observación.
 
 Punto de partida: una observación incremental con DirectML costaba la suma de sus etapas (§9.4 y `S4_ACEPTACION_REDUCIDA.md`): detección unos 115 ms por región (una inferencia de 1280×1280), lectura de accesibilidad unos 60 ms y OCR de 3 a 8 ms. Con una región, 184 ms; con dos, 298 ms.
@@ -389,6 +391,36 @@ La primera corrida, con el código de `main` (commit `a5cd1f9`, 300 muestras por
 ### 11.4 Reproducir
 
 `cargo run --release -p ommatix-acceptance --example core_latency -- --out perf01.json` (unos dos minutos de un solo hilo; con `--samples N`, `--engine-samples N` y `--warmup N`). Se niega a correr sin optimizar. Las pruebas de la propia herramienta (`perf_01_*`) corren con `cargo test`. El informe nombra la compilación, el commit y si el árbol estaba limpio; `S4_REPRODUCIBILIDAD.md` §4 da el resto de comandos.
+
+### 11.5 Medición de 1.0.54: antes y después de los tramos nuevos (ADR-0024)
+
+**Qué se midió.** El mismo ejemplo `core_latency` en `--release`, con los valores por defecto (10 000 muestras por situación en el núcleo, 2 000 en `observe_screen` entero, calentamiento de 200). **Antes**: `origin/main` en `f749108`, que incluye INC-03 (vigencia) e INC-04 (identidad nativa). **Después**: la rama `feat/inc01-measurement` con esta PR. La escena es sintética: no se lee la pantalla ni se envía entrada. Rondas anteriores, contra `ecd8986` y contra `114a020`, no son la base de esta PR: `114a020` no mostró el desplazamiento descrito abajo (diez pares, diferencias de p95 entre −0,02 y +0,04 ms).
+
+**Seis pares equilibrados** (tres con la base primero, tres con la rama primero). Tabla de medianas de cada binario; la última columna es la diferencia de medianas, rama menos base:
+
+| Capa | Situación | p50 base | p50 rama | p95 base | p95 rama | Δ p50 | Δ p95 |
+|---|---|---|---|---|---|---|---|
+| núcleo (`core_total`) | primera observación | 1,49 | 1,49 | 2,62 | 2,62 | −0,007 | −0,004 |
+| núcleo (`core_total`) | en caliente, sin cambios | 2,87 | 2,72 | 4,91 | 5,24 | −0,154 | +0,333 |
+| núcleo (`core_total`) | en caliente, una región | 3,16 | 3,01 | 5,31 | 5,51 | −0,155 | +0,205 |
+| `observe_screen` entero | primera observación | 1,76 | 1,76 | 3,03 | 3,03 | −0,004 | +0,003 |
+| `observe_screen` entero | en caliente, sin cambios | 3,12 | 2,97 | 5,29 | 5,63 | −0,143 | +0,346 |
+| `observe_screen` entero | en caliente, una región | 3,41 | 3,24 | 5,67 | 5,92 | −0,167 | +0,244 |
+
+Milisegundos. El peor p95 del núcleo, por corrida, fue de 5,27 a 5,40 ms en la base y de 5,50 a 5,54 ms en la rama: los dos rangos no se solapan.
+
+**Comprobación de la causa.** Una variante de prueba, compilada aparte y no incluida en la PR, con la comprobación de la línea de base B0 del planificador desactivada, se midió contra la base y contra la rama en cuatro rondas, en una ventana tranquila (carga del procesador en torno al 10 %), rotando el orden. Mediana de p95 en caliente, sin cambios: base 4,82, rama 5,26, variante 5,33 ms. En una región: base 5,22, rama 5,55, variante 5,36 ms. La variante muestra el mismo desplazamiento que la rama, así que la comprobación del planificador no es la causa. Las diferencias de una ronda a otra van de −1,8 a +2,0 ms; esta ventana también es ruidosa, y el tamaño exacto del efecto no queda establecido.
+
+**Lectura.**
+
+1. **Hay un aumento de p95 en las rutas en caliente, y aparece en todas las corridas de la comparación de seis pares.** La mediana de p95 sube entre 0,2 y 0,35 ms en las situaciones en caliente, mientras que la de p50 baja unos 0,15 ms. Los rangos por corrida no se solapan.
+2. **La causa no está atribuida.** La misma rama no mostró el desplazamiento frente a `114a020`, y la variante sin la comprobación del planificador lo muestra igual. Que el efecto dependa de la base apunta a la disposición del binario (alineación y colocación de las funciones calientes), no a la lógica de los cambios. Es una hipótesis: no está verificada. Lo que la confirmaría o la descartaría es un perfil del ejemplo con un perfilador de muestreo, o un ensayo de alineación.
+3. **RNF-04 se cumple con holgura.** En todas las corridas de la rama el p95 del núcleo quedó entre 3,4 y 6,3 ms, frente al objetivo de 10 ms (RNF-04, capítulo 03).
+4. **Coste por observación.** No medido de forma aislada. La rama añade cuatro lecturas del reloj (fin de la publicación y de la construcción de la página), una copia del registro del plan y unas sumas. Es una estimación del camino de código, de cientos de nanosegundos, y no se presenta como medida.
+
+**Pendiente.** Confirmar o descartar la causa del desplazamiento antes de declarar que no hay regresión de latencia; RNF-04 sobre el equipo de referencia en condiciones controladas (capítulo 06 §6.6); y la medición en vivo de B0 y B1, que programa el coordinador.
+
+**Límites.** Seis pares y cuatro rondas no resuelven diferencias de décimas de milisegundo, y la carga del equipo, que es compartido, varía entre corridas. Estas cifras no sustituyen la medición de referencia.
 
 ## 12. PERF-03 / RNF-06: recursos y soak de 2 h (1.0.55)
 

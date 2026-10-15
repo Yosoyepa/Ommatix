@@ -41,6 +41,9 @@ pub trait FrameCapturer: Send {
     fn capture(&mut self) -> Result<CapturedFrame, PortError>;
 }
 
+/// The input of one model inference: `[batch, channels, height, width]`.
+pub type InputShape = [u32; 4];
+
 /// Detects controls inside `regions` of `frame`. Deterministic: same pixels and regions,
 /// same controls. A detector that cannot tell roles apart reports `Role::Unknown`, and one
 /// without affordance evidence reports `Actionability::Unknown`.
@@ -51,6 +54,13 @@ pub trait VisionDetector: Send {
     fn models_loaded(&self) -> bool;
 
     fn detect(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Vec<Control>, PortError>;
+
+    /// The inferences the last [`detect`](Self::detect) call ran, one input shape each, for the
+    /// research record (dossier chapter 09 §9.4). `None` when this detector does not count its
+    /// inferences: the value is then not measured, never zero.
+    fn inference_shapes(&self) -> Option<Vec<InputShape>> {
+        None
+    }
 }
 
 /// Recognises words inside `regions` of `frame` (OCR). Deterministic like the detector.

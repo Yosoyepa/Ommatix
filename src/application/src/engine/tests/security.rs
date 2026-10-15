@@ -855,8 +855,15 @@ mod stage_times {
         assert_eq!(t.total, ms(26));
 
         // Nothing changed: no stage ran, and the report says so instead of repeating the
-        // last numbers.
+        // last numbers. The commit and the page are timed all the same (zero here: the
+        // doubles do not move the clock while publishing or building the page).
         r.observe();
-        assert_eq!(r.engine.last_timings().unwrap(), StageTimings::default());
+        assert_eq!(
+            r.engine.last_timings().unwrap(),
+            StageTimings {
+                response_build: Some(Duration::ZERO),
+                ..StageTimings::default()
+            }
+        );
     }
 }
