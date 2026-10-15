@@ -170,6 +170,11 @@ pub struct SafetySection {
     /// a missing, empty or malformed file allows no live input. Relative to the
     /// configuration file. Empty (the default): no pin.
     pub window_pin_file: String,
+    /// The operator's purge file (SEC-07, chapter 08 §8.4): while the operator creates it, the
+    /// engine deletes its state and cache at its next request, once per instance of the file,
+    /// and never deletes the file. Relative to the configuration file. Empty (the default): no
+    /// purge file.
+    pub purge_file: String,
 }
 
 /// The OCR engine (`[models] ocr`).
@@ -593,6 +598,10 @@ impl Config {
             "[safety] window_pin_file must be a path, or empty for none",
         );
         check(
+            s.purge_file.is_empty() || !s.purge_file.trim().is_empty(),
+            "[safety] purge_file must be a path, or empty for none",
+        );
+        check(
             !s.allow_destructive,
             "[safety] allow_destructive = true cannot be honoured: this build does not \
              classify destructive actions",
@@ -644,6 +653,13 @@ impl Config {
     /// `[safety] window_pin_file` is empty.
     pub fn window_pin_file(&self) -> Option<PathBuf> {
         let path = &self.safety.window_pin_file;
+        (!path.is_empty()).then(|| self.resolve_path(path))
+    }
+
+    /// The purge file (SEC-07), resolved like every path in this file; `None` when
+    /// `[safety] purge_file` is empty.
+    pub fn purge_file(&self) -> Option<PathBuf> {
+        let path = &self.safety.purge_file;
         (!path.is_empty()).then(|| self.resolve_path(path))
     }
 
@@ -849,6 +865,7 @@ mod tests {
             ("[mcp]\nmax_message_bytes = 10\n", "max_message_bytes"),
             ("[safety]\nallow_destructive = true\n", "allow_destructive"),
             ("[safety]\nstop_file = \"  \"\n", "stop_file"),
+            ("[safety]\npurge_file = \"  \"\n", "purge_file"),
             (
                 "[safety]\nallow_screenshots_to_client = true\n",
                 "screenshots",
@@ -997,6 +1014,20 @@ concurrent_stages = false
         assert_eq!(config.stop_file(), Some(Path::new("operator").join("STOP")));
         // It never shows in the policy itself: the stop is read when the engine acts.
         assert!(!config.local_policy().stopped);
+    }
+
+    #[test]
+    fn the_purge_file_is_optional_and_relative_to_the_configuration() {
+        assert_eq!(Config::default().purge_file(), None);
+        let mut config = Config::parse("[safety]\npurge_file = \"PURGE\"\n").unwrap();
+        assert_eq!(config.purge_file(), Some(PathBuf::from("PURGE")));
+        config.base_dir = Some(PathBuf::from("operator"));
+        assert_eq!(
+            config.purge_file(),
+            Some(Path::new("operator").join("PURGE"))
+        );
+        // A purge request is not a stop: the policy the engine reads does not change.
+        assert_eq!(config.local_policy(), Config::default().local_policy());
     }
 
     const EXPLORER_SCOPE: &str = "[safety]
