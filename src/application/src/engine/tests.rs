@@ -2133,5 +2133,6 @@ mod icons {
 
 mod accessibility;
 mod concurrency;
+mod security;
 mod typing;
 mod window_scope;

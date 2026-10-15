@@ -50,7 +50,7 @@ fn click(r: &mut Rig, id: &str) -> ActionResult {
 const SCOPE_CLASS: &str = "a window is not of a class the local policy allows for this application";
 
 #[test]
-fn the_allowed_window_receives_the_click() {
+fn ut_45_the_allowed_window_receives_the_click() {
     let cabinet = window(CABINET, OPENED);
     let mut r = rig_with_windows(scoped_policy(), Some(cabinet.clone()), Some(cabinet));
     let result = click(&mut r, "r1");
@@ -59,7 +59,7 @@ fn the_allowed_window_receives_the_click() {
 }
 
 #[test]
-fn the_desktop_and_the_taskbar_get_nothing_even_though_their_process_is_allowed() {
+fn ut_45_the_desktop_and_the_taskbar_get_nothing_even_though_their_process_is_allowed() {
     let cabinet = window(CABINET, OPENED);
     for (case, foreground, at_point) in [
         (
@@ -97,7 +97,7 @@ fn the_desktop_and_the_taskbar_get_nothing_even_though_their_process_is_allowed(
 }
 
 #[test]
-fn another_window_of_the_listed_class_under_the_point_gets_nothing() {
+fn ut_45_another_window_of_the_listed_class_under_the_point_gets_nothing() {
     let mut r = rig_with_windows(
         scoped_policy(),
         Some(window(CABINET, OPENED)),
@@ -109,7 +109,7 @@ fn another_window_of_the_listed_class_under_the_point_gets_nothing() {
 }
 
 #[test]
-fn windows_the_actuator_cannot_attest_get_nothing() {
+fn ut_45_windows_the_actuator_cannot_attest_get_nothing() {
     let cabinet = window(CABINET, OPENED);
     for (foreground, at_point) in [
         (None, Some(cabinet.clone())),
@@ -130,7 +130,7 @@ fn windows_the_actuator_cannot_attest_get_nothing() {
 /// between the gate and the events sends nothing (the same race as the foreground
 /// application, SEC-05).
 #[test]
-fn a_window_change_right_before_delivery_sends_nothing() {
+fn ut_45_a_window_change_right_before_delivery_sends_nothing() {
     let cabinet = window(CABINET, OPENED);
     let mut r = rig_with_windows(
         scoped_policy(),
@@ -183,7 +183,7 @@ fn a_scope_on_another_application_does_not_restrict_this_one() {
 }
 
 #[test]
-fn the_pin_lets_only_the_recorded_window_receive_input() {
+fn ut_45_the_pin_lets_only_the_recorded_window_receive_input() {
     let pinned = LocalPolicy {
         window_pin: Some(WindowPin::Window(OPENED)),
         ..scoped_policy()
