@@ -352,3 +352,50 @@ fn a_refusal_before_reading_stdin_is_reported_as_the_binarys_exit() {
     assert!(!refused.status.success());
     assert_eq!(lines(&refused.stdout).len(), 0);
 }
+
+/// SEC-02 across a restart (chapter 08 §8.4): with live input, a fixed `--session-id` is refused
+/// at start, so a restarted run cannot accept an earlier run's request. The refusal is the
+/// binary's exit, before it reads stdin or replies. A dry run keeps the same identifier.
+#[test]
+fn sec_02_a_fixed_session_id_with_live_input_is_refused_before_serving() {
+    let sandbox = Sandbox::new("fixed-session");
+    let config = sandbox.cwd().join("ommatix.toml");
+    std::fs::write(&config, "[safety]\nactuation_enabled = true\n").unwrap();
+    let config = config.to_str().unwrap();
+
+    let refused = sandbox.run(
+        &[
+            "serve",
+            "--session-id",
+            "fixed",
+            "--source",
+            "sim",
+            "--input",
+            "sendinput",
+            "--config",
+            config,
+        ],
+        "",
+    );
+    assert!(!refused.status.success());
+    assert_eq!(lines(&refused.stdout).len(), 0, "nothing is served");
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("--session-id must not be set with live input"),
+        "{stderr}"
+    );
+
+    let dry_run = sandbox.run(
+        &[
+            "serve",
+            "--session-id",
+            "fixed",
+            "--input",
+            "dry-run",
+            "--config",
+            config,
+        ],
+        "",
+    );
+    assert!(dry_run.status.success(), "{:?}", dry_run.stderr);
+}

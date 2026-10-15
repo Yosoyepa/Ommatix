@@ -123,6 +123,21 @@ pub fn check_input(source: SourceKind, input: InputKind, config: &Config) -> Res
     }
 }
 
+/// A fixed `--session-id` repeats across runs, and a restarted run with the same identifier
+/// accepts an earlier run's request built on the same identifiers (chapter 08 §8.4). With live
+/// input it is refused here, before any adapter is built. Dry runs and simulations keep it, for
+/// reproducible output; the default identifier is unique per run.
+fn check_session_id(fixed: bool, input: InputKind, config: &Config) -> Result<()> {
+    if fixed && input != InputKind::DryRun && config.safety.actuation_enabled {
+        bail!(
+            "--session-id must not be set with live input: a restarted run with the same \
+             identifier would accept an earlier request (chapter 08 §8.4); omit it, so that \
+             the identifier is unique per run"
+        );
+    }
+    Ok(())
+}
+
 /// Refuses accessibility evidence on a source it would not describe: the desktop's tree
 /// matches live frames only (`dxgi`, `screen`). The simulated desktop ignores it, with a
 /// note.
@@ -201,6 +216,7 @@ fn check_consent(input: &str, config: &Config) -> Result<()> {
 pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
     let session_id = session_id(args.session_id.as_deref())?;
     let input = input_kind(args, config);
+    check_session_id(args.session_id.is_some(), input, config)?;
     check_input(args.source, input, config)?;
     check_accessibility(args.source, config)?;
     let icons = config.icon_resolver()?;
@@ -718,6 +734,33 @@ mod tests {
         assert!(error("serve", &native_mode).contains("requires --source screen"));
         // And `--input dry-run` always wins over it.
         assert!(build(&args("serve --input dry-run"), &native_mode).is_ok());
+    }
+
+    /// A fixed `--session-id` repeats across runs: a restarted run with the same identifier
+    /// accepts an earlier run's request built on the same identifiers (chapter 08 §8.4). With
+    /// live input the composition root refuses it at start, before any adapter is built.
+    /// Dry runs and simulations keep it, for reproducible output.
+    #[test]
+    fn a_fixed_session_id_is_refused_at_start_with_live_input() {
+        let live = error(
+            "serve --session-id demo --source sim --input sendinput",
+            &actuation_enabled(),
+        );
+        assert!(
+            live.contains("--session-id must not be set with live input"),
+            "{live}"
+        );
+        assert!(build(&args("serve --session-id demo"), &Config::default()).is_ok());
+        assert!(
+            build(
+                &args("serve --session-id demo --input dry-run"),
+                &actuation_enabled()
+            )
+            .is_ok()
+        );
+        // The default identifier is unique per run, so live input may take it.
+        assert!(check_session_id(false, InputKind::Sendinput, &actuation_enabled()).is_ok());
+        assert!(check_session_id(true, InputKind::Native, &Config::default()).is_ok());
     }
 
     fn allowlisted(apps: &str) -> Config {
