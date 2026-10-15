@@ -1,5 +1,16 @@
 # Historial documental
 
+## 1.0.34 — 2026-10-14: S4, novena ronda (continuación): ninguna solicitud nueva; S4R-02, E2E-02 y E2E-03 no pasaron de la comprobación previa (rama `docs/s4-ninth-round-continuation`)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código: ni el cliente (`tools/s4/e2e_driver.py`, SHA-256 `cbe6905c…4821265`; `tools/s4/e2e_dossier.py`, SHA-256 `c1ba4a37…1020e`), ni el editor (`541fc0a8…2793`), ni el motor (`3a451211…cbb1a`). La continuación no envió **ninguna** solicitud real: el cuaderno sigue en 429 (2 de 200 de la ronda). Ninguna corrida puntuada.
+
+- **S4R-02 (Calculadora).** No se ejecutó. La comprobación de modo, de sólo lectura, dio `other` en dos lecturas. Se evitó `--calc-standard --max-live 0`: con un modo distinto de Estándar crea `stop.flag` antes de abortar (verificado en el código, no en vivo).
+- **E2E-02 (editor).** Dos sondeos y un piloto, sin entrada. Ninguno tuvo evidencia de accesibilidad: el foco de teclado lo tiene el escritorio. El piloto no pasó y bloquea la serie.
+- **E2E-03 (Explorador).** Sondeo sin entrada: los objetivos de la navegación no se encuentran como los define el flujo (zona `unknown` en el motor; «carpeta-a» es `ListItem`, no `TreeItem`). No se ejecutó en vivo.
+- **Hallazgos 8 a 13** en la [revisión](../reviews/2026-10-14-s4-ninth-round.md), sección «Continuation»; registro en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), «Novena ronda (continuación)».
+- **Pruebas:** sin cambio de código; se repitieron antes de la parte en vivo: 383 de Rust (1 ignorada), 16 del editor, 230 de `tools/s4`, 48 del oráculo y 218 comprobaciones del paquete, todas correctas.
+- **Matrices:** sin cambio. **Pendiente del responsable:** el diagnóstico del encabezado de la Calculadora (hallazgo 8), el foco de teclado del editor (hallazgo 10), el contrato de la navegación del Explorador (hallazgo 11) y si la ronda continúa.
+
 ## 1.0.33 — 2026-10-14: S4, novena ronda: parada de seguridad en el segundo clic de «Estándar» (rama `docs/s4-ninth-round`)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust, ni ninguno de los clientes de S4 (`tools/s4/e2e_driver.py`, SHA-256 `cbe6905c…4821265`; `tools/s4/e2e_dossier.py`, SHA-256 `c1ba4a37…1020e`). La novena ronda se ejecutó en vivo con el cupo autorizado (200 solicitudes; cuaderno 427 → 429): **dos** solicitudes reales, las dos de `--calc-standard`. El segundo clic (sobre «Estándar») se entregó con `effect_observed`, pero su anclaje posterior no halló el elemento, y por la regla de seguridad del responsable se detuvo todo el trabajo en vivo. **Sin corridas puntuadas**: no hubo piloto de S4R-02, y E2E-02 y E2E-03 no se ejecutaron ni en sondeo.
