@@ -45,7 +45,7 @@ use uiautomation::types::{TreeScope, UIProperty};
 use uiautomation::variants::Variant;
 use uiautomation::{UIAutomation, UIElement, UITreeWalker};
 
-use crate::{ADAPTER, Budget, HOSTED_WINDOW_CLASS, Spent, is_frame_host_window, role_of};
+use crate::{ADAPTER, Budget, HOSTED_WINDOW_CLASS, Spent, is_frame_host_window, role_of, walk};
 
 /// The live mapping from frame pixels to desktop coordinates (the capturer's).
 type MappingSource = Box<dyn Fn() -> Result<DisplayMapping, PortError> + Send + Sync>;
@@ -66,6 +66,22 @@ enum Answer {
 }
 
 type Reply = Result<Answer, String>;
+
+/// What one read of the tree has gathered so far.
+struct Read {
+    found: Vec<AccessibleElement>,
+    spent: Spent,
+    truncated: bool,
+}
+
+impl Read {
+    fn into_read(self) -> AccessibleRead {
+        AccessibleRead {
+            elements: self.found,
+            truncated: self.truncated,
+        }
+    }
+}
 
 /// Reads the foreground application's UI Automation tree for the
 /// [`AccessibilityProvider`] port. Never sends input and never reads a value.
@@ -291,16 +307,17 @@ impl Reader {
     }
 
     /// The process the foreground window belongs to, resolved through an
-    /// `ApplicationFrameHost` frame; `None` when nothing has focus or the frame hosts no
-    /// application.
-    fn foreground_process(&self) -> Option<i32> {
+    /// `ApplicationFrameHost` frame, and that window; `None` when nothing has focus or the
+    /// frame hosts no application.
+    fn foreground(&self) -> Option<(i32, UIElement)> {
         let focused = self.automation.get_focused_element().ok()?;
         self.process_of_window_holding(focused)
     }
 
     /// The application whose top-level window contains `focused` (see
-    /// [`Self::foreground_process`]).
-    fn process_of_window_holding(&self, focused: UIElement) -> Option<i32> {
+    /// [`Self::foreground`]), and that application's window: the top-level window itself,
+    /// or the hosted `CoreWindow` of an `ApplicationFrameHost` frame.
+    fn process_of_window_holding(&self, focused: UIElement) -> Option<(i32, UIElement)> {
         let top = self
             .top_level(focused)?
             .build_updated_cache(&self.light)
@@ -308,14 +325,14 @@ impl Reader {
         let pid = top.get_cached_process_id().ok()?;
         let class = top.get_cached_classname().unwrap_or_default();
         if !is_frame_host_window(&class) {
-            return Some(pid);
+            return Some((pid, top));
         }
         self.children(&top, &self.light)
             .into_iter()
             .find_map(|child| {
                 let child_pid = child.get_cached_process_id().ok()?;
                 let hosted = child.get_cached_classname().ok()? == HOSTED_WINDOW_CLASS;
-                (hosted && child_pid != pid).then_some(child_pid)
+                (hosted && child_pid != pid).then_some((child_pid, child))
             })
     }
 
@@ -342,8 +359,8 @@ impl Reader {
     }
 
     fn snapshot(&self, mapping: &DisplayMapping, regions: &[BBox]) -> AccessibleRead {
-        self.foreground_process()
-            .map(|pid| self.snapshot_of(pid, mapping, regions))
+        self.foreground()
+            .map(|(pid, front)| self.snapshot_of(pid, Some(front), mapping, regions))
             .unwrap_or_default()
     }
 
@@ -357,7 +374,7 @@ impl Reader {
             .ok()?
             .build_updated_cache(&self.full)
             .ok()?;
-        let pid = self.process_of_window_holding(focused.clone())?;
+        let (pid, _) = self.process_of_window_holding(focused.clone())?;
         if focused.get_cached_process_id().ok() != Some(pid)
             || focused.is_cached_offscreen().unwrap_or(true)
         {
@@ -369,55 +386,100 @@ impl Reader {
 
     /// The elements of process `pid`'s visible windows inside `regions`, within the budget.
     /// The read is `truncated` when a bound ended the walk or a window could not be read.
-    fn snapshot_of(&self, pid: i32, mapping: &DisplayMapping, regions: &[BBox]) -> AccessibleRead {
+    ///
+    /// `front` is the window the application has the keyboard focus in, when known: it is
+    /// walked first, before the desktop's windows are enumerated (that costs about 4 ms per
+    /// top-level window of the session, 50 ms with 13, and the budget is one for the whole
+    /// read), so the window the agent sees is read before whatever else the process owns.
+    fn snapshot_of(
+        &self,
+        pid: i32,
+        front: Option<UIElement>,
+        mapping: &DisplayMapping,
+        regions: &[BBox],
+    ) -> AccessibleRead {
         let start = Instant::now();
-        let mut found = Vec::new();
-        let mut spent = Spent::default();
-        let mut truncated = false;
+        let mut read = Read {
+            found: Vec::new(),
+            spent: Spent::default(),
+            truncated: false,
+        };
+        let mut windows = Vec::new();
+        if let Some(front) = front {
+            if self.walk_window(&front, pid, mapping, regions, start, &mut read) {
+                return read.into_read();
+            }
+            windows.push(front);
+        }
+        // The rest of the process's windows (menus and pop-ups are windows of their own).
+        read.spent.elapsed = start.elapsed();
+        if !read.spent.allows_more(&self.budget) {
+            // Not even listing them fits: what they hold is unknown, not absent.
+            read.truncated = true;
+            return read.into_read();
+        }
         for window in self.windows_of(pid) {
-            let Ok(window) = window.build_updated_cache(&self.full) else {
-                truncated = true;
+            if windows.iter().any(|seen| {
+                self.automation
+                    .compare_elements(seen, &window)
+                    .unwrap_or(false)
+            }) {
                 continue;
-            };
-            let mut stack = vec![(window, 0usize)];
-            while let Some((element, depth)) = stack.pop() {
-                spent.elapsed = start.elapsed();
-                if !spent.allows_more(&self.budget) {
-                    return AccessibleRead {
-                        elements: found,
-                        truncated: true,
-                    };
-                }
-                spent.visited += 1;
+            }
+            if self.walk_window(&window, pid, mapping, regions, start, &mut read) {
+                break;
+            }
+        }
+        read.into_read()
+    }
+
+    /// Walks one window breadth first into `read`; `true` when the budget ended the walk
+    /// (no further window is read).
+    fn walk_window(
+        &self,
+        window: &UIElement,
+        pid: i32,
+        mapping: &DisplayMapping,
+        regions: &[BBox],
+        start: Instant,
+        read: &mut Read,
+    ) -> bool {
+        let Ok(window) = window.build_updated_cache(&self.full) else {
+            read.truncated = true;
+            return false;
+        };
+        let Read {
+            found,
+            spent,
+            truncated,
+        } = read;
+        let walked = walk(
+            window,
+            &self.budget,
+            spent,
+            || start.elapsed(),
+            |element| {
                 if element.get_cached_process_id().ok() != Some(pid)
                     || element.is_cached_offscreen().unwrap_or(true)
                 {
-                    continue;
+                    return false;
                 }
-                let bbox = match frame_box(&element, mapping) {
-                    Err(()) => continue,
-                    Ok(Some(b)) if !regions.iter().any(|r| r.overlaps(&b)) => continue,
+                let bbox = match frame_box(element, mapping) {
+                    Err(()) => return false,
+                    Ok(Some(b)) if !regions.iter().any(|r| r.overlaps(&b)) => return false,
                     Ok(b) => b,
                 };
                 if let Some(bbox) = bbox
-                    && let Some(e) = Self::element(&element, bbox)
+                    && let Some(e) = Self::element(element, bbox)
                 {
                     found.push(e);
                 }
-                let mut children = self.children(&element, &self.full);
-                if depth < self.budget.max_depth {
-                    children.reverse();
-                    stack.extend(children.into_iter().map(|c| (c, depth + 1)));
-                } else {
-                    // The depth bound cuts the walk only where something lies below it.
-                    truncated |= !children.is_empty();
-                }
-            }
-        }
-        AccessibleRead {
-            elements: found,
-            truncated,
-        }
+                true
+            },
+            |element| self.children(element, &self.full),
+        );
+        *truncated |= walked.out_of_budget || walked.depth_cut;
+        walked.out_of_budget
     }
 
     /// The element as evidence, when its control type is one the contract can use.
@@ -569,7 +631,7 @@ mod tests {
         let mut elements = Vec::new();
         for _ in 0..40 {
             thread::sleep(Duration::from_millis(250));
-            elements = reader.snapshot_of(pid, &mapping, &[all]).elements;
+            elements = reader.snapshot_of(pid, None, &mapping, &[all]).elements;
             if elements.len() > 3 {
                 break;
             }
@@ -583,5 +645,52 @@ mod tests {
             "no confirmed button: {counts:?}"
         );
         assert!(elements.iter().all(|e| !e.password));
+    }
+
+    /// Manual (E2E-03, tenth round): reads a File Explorer window the tester opened on a
+    /// folder of their own, as the foreground application, and checks that the address bar's
+    /// breadcrumbs come out as confirmed buttons within the default budget. Read-only: it
+    /// sends no input and brings nothing to the front.
+    ///
+    /// `OMMATIX_EXPLORER_TITLE` is the window's title (the folder's name, which the window
+    /// shows with the application's name appended) and `OMMATIX_EXPLORER_CRUMBS` the exact
+    /// names of the breadcrumbs, comma separated. Prints counts, the time and whether the
+    /// read was cut short, never another name.
+    #[test]
+    #[ignore = "reads a File Explorer window the tester opened; run by hand"]
+    fn reads_the_breadcrumbs_of_a_file_explorer_window() {
+        let title = std::env::var("OMMATIX_EXPLORER_TITLE").expect("OMMATIX_EXPLORER_TITLE");
+        let crumbs = std::env::var("OMMATIX_EXPLORER_CRUMBS").expect("OMMATIX_EXPLORER_CRUMBS");
+        let (mapping, all) = everything();
+        let reader = Reader::new(Budget::default()).unwrap();
+        let window = reader
+            .children(&reader.root, &reader.light)
+            .into_iter()
+            .find(|top| {
+                top.get_cached_classname().unwrap_or_default() == "CabinetWClass"
+                    && top.get_name().unwrap_or_default().contains(&title)
+            })
+            .expect("no File Explorer window with that title");
+        let pid = window.get_cached_process_id().expect("a process id");
+        for run in 1..=3 {
+            let t = Instant::now();
+            let read = reader.snapshot_of(pid, Some(window.clone()), &mapping, &[all]);
+            eprintln!(
+                "run {run}: {} elements in {:?} (truncated: {}): {:?}",
+                read.elements.len(),
+                t.elapsed(),
+                read.truncated,
+                counts(&read.elements)
+            );
+            for crumb in crumbs.split(',') {
+                assert!(
+                    read.elements.iter().any(|e| e.name == crumb
+                        && e.role == ommatix_domain::fusion::Role::Button
+                        && e.enabled
+                        && e.patterns.clickable()),
+                    "no confirmed button for a breadcrumb (run {run})"
+                );
+            }
+        }
     }
 }
