@@ -569,6 +569,58 @@ fn rel_01_every_dependency_has_a_licence_and_none_is_copyleft() {
     );
 }
 
+/// REL-01: the repository declares its own licences where a reader and the build look for them.
+/// Every manifest of the product inherits or names `MIT OR Apache-2.0`, the two test
+/// applications name it too, the licence texts sit at the root, both READMEs state the terms,
+/// and the reproducibility report lists the third-party components that are never committed.
+#[test]
+fn rel_01_the_repository_declares_its_licences() {
+    for (name, _) in files("src", &["toml"], &[]) {
+        if name.ends_with("Cargo.toml") {
+            let text = read(&name);
+            assert!(
+                text.contains("license.workspace = true")
+                    || text.contains("license = \"MIT OR Apache-2.0\""),
+                "{name} neither inherits nor declares the licence"
+            );
+        }
+    }
+    for manifest in [
+        "Cargo.toml",
+        "tools/s4/testapp/Cargo.toml",
+        "tools/s4/testeditor/Cargo.toml",
+    ] {
+        let text = read(manifest);
+        assert!(
+            text.contains("license = \"MIT OR Apache-2.0\""),
+            "{manifest} does not declare MIT OR Apache-2.0"
+        );
+        assert!(
+            !text.contains("UNLICENSED"),
+            "{manifest} still says UNLICENSED"
+        );
+    }
+    for file in ["LICENSE-MIT", "LICENSE-APACHE", "LICENSE-DOCS"] {
+        assert!(root().join(file).is_file(), "{file} is missing at the root");
+    }
+    assert!(read("LICENSE-MIT").contains("Copyright (c) 2026 Juan Carlos Andrade Unigarro"));
+    assert!(read("LICENSE-DOCS").contains("Creative Commons Attribution 4.0 International"));
+    for readme in ["README.md", "README.es.md"] {
+        let text = read(readme);
+        assert!(
+            text.contains("LICENSE-MIT") && text.contains("LICENSE-DOCS"),
+            "{readme} does not state the licences"
+        );
+    }
+    let report = read("docs/thesis/S4_REPRODUCIBILIDAD.md");
+    for component in ["icon_detect_v3", "ONNX Runtime", "DirectML.dll"] {
+        assert!(
+            report.contains(component),
+            "{component} is not listed in S4_REPRODUCIBILIDAD.md"
+        );
+    }
+}
+
 /// Asserts that every repository path a document names in code spans exists, and returns how
 /// many it checked. A span is a path if it has a `/`, no space, `<` or `%`, and a file
 /// extension the repository uses.

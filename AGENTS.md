@@ -108,7 +108,9 @@ compiler-enforced boundary.
 | Cross-crate / end-to-end tests | `src/<crate>/tests/` (the MCP contract tests CT-xx live in `src/adapters/mcp/tests/`, with the telemetry, injection and exfiltration tests IT-06, SEC-03 and SEC-04; the process-level ones in `src/app/tests/`; invariants of the repository itself, REL-01 and DOC-01, in `src/acceptance/tests/repository.rs`) |
 | A measurement of the core (PERF-01) | `src/acceptance/examples/core_latency.rs`; its numbers go to `docs/thesis/S0_RESULTADOS.md` with the machine and the commit |
 
-Nothing MVP-related goes in the repository root except workspace configuration.
+Nothing MVP-related goes in the repository root except workspace configuration. The licence
+files (`LICENSE-MIT`, `LICENSE-APACHE`, `LICENSE-DOCS`) are repository metadata, not MVP
+content, and are allowed there.
 
 ## 5. Non-negotiable engineering rules
 

@@ -258,4 +258,4 @@ Esperado tras una retirada completa: ningún proceso, `False`, sólo el árbol d
 1. **Commit de entrega congelado** y su etiqueta (RNF-08).
 2. **Corpus de aceptación** (≥ 300 capturas etiquetadas y las 450 corridas E2E, capítulo 03 §3.5): no existe.
 3. **Ejecutar esta guía en una máquina limpia** y archivar el `environment.json` resultante.
-4. **Licencias:** la del código del repositorio (`UNLICENSED` hoy) y la de `DirectML.dll`.
+4. **Licencias:** la del código y la de los documentos quedaron decididas el 15 de octubre de 2026 (`MIT OR Apache-2.0` y CC BY 4.0; [`S4_REPRODUCIBILIDAD.md`](S4_REPRODUCIBILIDAD.md) §3). Queda la de `DirectML.dll`, que el repositorio no contiene ni redistribuye.
