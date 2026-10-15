@@ -2135,6 +2135,72 @@ fn the_experimental_baseline_processes_the_whole_frame_on_every_observation() {
     );
 }
 
+/// INC-07 (ADR-0030): two moved controls plan two regions, which would cost two detector
+/// inferences; under the adaptive rule the engine takes the full refresh (one inference of the
+/// whole frame) and says why. Without the rule the same screens stay regional.
+#[test]
+fn inc_07_two_regions_cost_one_whole_frame_inference_under_the_adaptive_rule() {
+    let whole = bx(0.0, 0.0, f64::from(W), f64::from(H));
+    let move_two = |r: &mut Rig| {
+        let mut w = r.world();
+        w.controls[0].bbox = bx(102.0, 40.0, 302.0, 70.0);
+        w.controls[2].bbox = bx(502.0, 250.0, 582.0, 280.0);
+    };
+
+    // The 640x320 fixture is small: widen the area budget so two regions stay regional.
+    let regional = EngineConfig {
+        plan: PlanParams {
+            max_area_fraction: 0.9,
+            ..PlanParams::default()
+        },
+        ..EngineConfig::new(SESSION)
+    };
+    let mut r = rig_with(form(), regional);
+    r.observe();
+    move_two(&mut r);
+    r.observe();
+    let plan = r.engine.last_plan().unwrap();
+    assert_eq!(
+        (plan.work, plan.region_count, plan.full_refresh_reason),
+        (WorkKind::Regions, 2, None)
+    );
+    assert_eq!(r.world().detect_calls.last().map(Vec::len), Some(2));
+
+    let adaptive = EngineConfig {
+        plan: PlanParams {
+            adaptive_min_regions: 2,
+            max_area_fraction: 0.9,
+            ..PlanParams::default()
+        },
+        ..EngineConfig::new(SESSION)
+    };
+    let mut r = rig_with(form(), adaptive);
+    r.observe();
+    move_two(&mut r);
+    r.observe();
+    let plan = r.engine.last_plan().unwrap();
+    assert_eq!(plan.work, WorkKind::Full);
+    assert_eq!(
+        plan.full_refresh_reason,
+        Some(FullRefreshReason::AdaptiveCost)
+    );
+    assert_eq!(r.world().detect_calls.last(), Some(&vec![whole]));
+    assert_eq!(
+        (plan.controls_n, plan.words_n),
+        (3, 4),
+        "the whole frame loses no element"
+    );
+
+    // One moved control is still one region: the rule only fires from two.
+    {
+        let mut w = r.world();
+        w.controls[2].bbox = bx(504.0, 250.0, 584.0, 280.0);
+    }
+    r.observe();
+    let plan = r.engine.last_plan().unwrap();
+    assert_eq!((plan.work, plan.region_count), (WorkKind::Regions, 1));
+}
+
 #[test]
 fn identical_runs_produce_identical_pages() {
     let run = || {

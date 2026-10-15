@@ -247,6 +247,10 @@ pub enum FullRefreshReason {
     /// the whole frame on every observation. Never a production reason (dossier chapter 09
     /// §9.2): it exists to measure what incrementality saves.
     ExperimentalBaseline,
+    /// The adaptive cost rule (INC-07, ADR-0030): the regional plan has at least
+    /// `adaptive_min_regions` regions, so it would cost more inferences than the one full-frame
+    /// inference. Algorithm 1's full refresh, taken earlier than the budgets would take it.
+    AdaptiveCost,
 }
 
 impl FullRefreshReason {
@@ -259,6 +263,7 @@ impl FullRefreshReason {
             Self::TooManyRegions => "too_many_regions",
             Self::AreaBudget => "area_budget",
             Self::ExperimentalBaseline => "experimental_baseline",
+            Self::AdaptiveCost => "adaptive_cost",
         }
     }
 }
@@ -429,6 +434,12 @@ pub struct PlanParams {
     /// frame, whatever changed. Off by default and never a production mode; the planner
     /// still computes the tile diff, so both variants pay the same planning cost.
     pub experimental_full_frame: bool,
+    /// The adaptive cost rule (INC-07, ADR-0030): a regional plan with this many regions or
+    /// more becomes the full refresh, reason `AdaptiveCost`, because every region is a whole
+    /// detector inference and the full frame is one. `0` switches the rule off. The hard
+    /// budgets (`max_regions`, `max_area_fraction`, the closure) are checked first and keep
+    /// their own reasons; the rule never plans less work than they do, only earlier.
+    pub adaptive_min_regions: usize,
 }
 
 impl Default for PlanParams {
@@ -440,6 +451,7 @@ impl Default for PlanParams {
             max_regions: 4,
             max_area_fraction: 0.4,
             experimental_full_frame: false,
+            adaptive_min_regions: 0,
         }
     }
 }
@@ -563,6 +575,9 @@ pub fn plan_regions(
     let covered: f64 = regions.iter().map(BBox::area).sum();
     if covered > params.max_area_fraction * bounds.area() {
         return full(dirty, FullRefreshReason::AreaBudget);
+    }
+    if params.adaptive_min_regions > 0 && regions.len() >= params.adaptive_min_regions {
+        return full(dirty, FullRefreshReason::AdaptiveCost);
     }
     Ok(RegionPlan {
         dirty,
@@ -1260,6 +1275,160 @@ mod tests {
         assert!(matches!(incremental.work, Work::Regions(ref rs) if rs.len() == 1));
     }
 
+    /// A base and a current frame with `n` changed pixels far enough apart to plan `n`
+    /// separate regions on a 1920x1080 frame.
+    fn frames_with_regions(n: usize) -> (BgraFrame, BgraFrame) {
+        let base = blank(1920, 1080, 0, 1);
+        let mut current = base.clone();
+        for i in 0..n {
+            current = changed(&current, 400 * i as u32, 500, 0);
+        }
+        (base, current)
+    }
+
+    fn adaptive(min_regions: usize) -> PlanParams {
+        PlanParams {
+            adaptive_min_regions: min_regions,
+            ..PlanParams::default()
+        }
+    }
+
+    fn plan_of(base: &BgraFrame, current: &BgraFrame, params: &PlanParams) -> RegionPlan {
+        plan_regions(
+            Some(base),
+            current,
+            &BTreeSet::new(),
+            Evidence::default(),
+            params,
+        )
+        .unwrap()
+    }
+
+    /// INC-07 (Algorithm 1, adaptive cost rule): from `adaptive_min_regions` regions on, the
+    /// plan is the full refresh, with its own reason. The regional plan costs one inference
+    /// per region and the full frame costs one (dossier S0 section 13), so it never wins with two.
+    #[test]
+    fn inc_07_two_regions_take_the_full_refresh_under_the_adaptive_rule() {
+        let (base, current) = frames_with_regions(2);
+        let plan = plan_of(&base, &current, &adaptive(2));
+        assert_eq!(
+            plan.work,
+            Work::FullRefresh(FullRefreshReason::AdaptiveCost)
+        );
+        // The rule only chooses earlier: what a failed observation keeps pending is the same
+        // set of changed tiles as the regional plan's.
+        let regional = plan_of(&base, &current, &adaptive(0));
+        assert_eq!(plan.dirty, regional.dirty);
+        assert!(matches!(regional.work, Work::Regions(ref rs) if rs.len() == 2));
+    }
+
+    #[test]
+    fn inc_07_one_region_stays_regional_under_the_adaptive_rule() {
+        let (base, current) = frames_with_regions(1);
+        let plan = plan_of(&base, &current, &adaptive(2));
+        assert!(matches!(plan.work, Work::Regions(ref rs) if rs.len() == 1));
+    }
+
+    #[test]
+    fn inc_07_the_rule_is_off_when_its_threshold_is_zero() {
+        // Regression guard: a plan built without the rule (the default of `PlanParams`) keeps
+        // every regional plan it made before the rule existed.
+        assert_eq!(PlanParams::default().adaptive_min_regions, 0);
+        let (base, current) = frames_with_regions(3);
+        let plan = plan_of(&base, &current, &PlanParams::default());
+        assert!(matches!(plan.work, Work::Regions(ref rs) if rs.len() == 3));
+    }
+
+    #[test]
+    fn inc_07_the_threshold_is_the_number_of_regions_that_triggers_the_full_refresh() {
+        let (base, two) = frames_with_regions(2);
+        let (_, three) = frames_with_regions(3);
+        assert!(matches!(
+            plan_of(&base, &two, &adaptive(3)).work,
+            Work::Regions(ref rs) if rs.len() == 2
+        ));
+        assert_eq!(
+            plan_of(&base, &three, &adaptive(3)).work,
+            Work::FullRefresh(FullRefreshReason::AdaptiveCost)
+        );
+    }
+
+    #[test]
+    fn inc_07_the_hard_budgets_keep_their_own_reasons() {
+        // The rule only triggers the fallback earlier: a plan the budgets already send to
+        // the full refresh keeps the budget's reason, so the record says which guard fired.
+        let (base, current) = frames_with_regions(5);
+        let plan = plan_of(&base, &current, &adaptive(2));
+        assert_eq!(
+            plan.work,
+            Work::FullRefresh(FullRefreshReason::TooManyRegions)
+        );
+        let small = blank(128, 128, 0, 1);
+        let big_change = changed(&small, 100, 100, 0);
+        assert_eq!(
+            plan_of(&small, &big_change, &adaptive(1)).work,
+            Work::FullRefresh(FullRefreshReason::AreaBudget)
+        );
+    }
+
+    #[test]
+    fn inc_07_the_baseline_and_a_missing_base_keep_their_reasons() {
+        let (base, current) = frames_with_regions(2);
+        let b0 = PlanParams {
+            adaptive_min_regions: 2,
+            experimental_full_frame: true,
+            ..PlanParams::default()
+        };
+        assert_eq!(
+            plan_of(&base, &current, &b0).work,
+            Work::FullRefresh(FullRefreshReason::ExperimentalBaseline)
+        );
+        let first = plan_regions(
+            None,
+            &current,
+            &BTreeSet::new(),
+            Evidence::default(),
+            &adaptive(2),
+        )
+        .unwrap();
+        assert_eq!(
+            first.work,
+            Work::FullRefresh(FullRefreshReason::NoCommittedBase)
+        );
+    }
+
+    #[test]
+    fn inc_07_nothing_to_do_stays_nothing_under_the_adaptive_rule() {
+        let base = blank(640, 320, 0, 1);
+        let plan = plan_of(&base, &base, &adaptive(1));
+        assert_eq!(plan.work, Work::Nothing);
+    }
+
+    #[test]
+    fn inc_07_the_decision_does_not_depend_on_the_order_of_the_pending_tiles() {
+        let (base, current) = frames_with_regions(1);
+        let a: BTreeSet<TileCoord> = [TileCoord::new(20, 2), TileCoord::new(2, 12)]
+            .into_iter()
+            .collect();
+        let b: BTreeSet<TileCoord> = a.iter().rev().copied().collect();
+        let go = |pending: &BTreeSet<TileCoord>| {
+            plan_regions(
+                Some(&base),
+                &current,
+                pending,
+                Evidence::default(),
+                &adaptive(2),
+            )
+            .unwrap()
+        };
+        assert_eq!(go(&a), go(&b));
+        // The pending tiles plus the changed one make three regions: the rule fires.
+        assert_eq!(
+            go(&a).work,
+            Work::FullRefresh(FullRefreshReason::AdaptiveCost)
+        );
+    }
+
     #[test]
     fn full_refresh_reasons_have_the_names_of_the_research_record() {
         assert_eq!(
@@ -1267,6 +1436,7 @@ mod tests {
             "experimental_baseline"
         );
         assert_eq!(FullRefreshReason::AreaBudget.as_str(), "area_budget");
+        assert_eq!(FullRefreshReason::AdaptiveCost.as_str(), "adaptive_cost");
         assert_eq!(
             FullRefreshReason::NoCommittedBase.as_str(),
             "no_committed_base"

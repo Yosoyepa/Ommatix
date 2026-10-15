@@ -98,7 +98,8 @@ STAGES = ("capture", "plan", "detect", "recognize", "accessibility", "fuse", "tr
           "commit", "response_build", "total")
 WORK_KINDS = ("full", "regions", "idle")
 REFRESH_REASONS = ("no_committed_base", "geometry_changed", "closure_budget",
-                   "too_many_regions", "area_budget", "experimental_baseline")
+                   "too_many_regions", "area_budget", "experimental_baseline",
+                   "adaptive_cost")
 PROCESS_STATUSES = ("ok", "discarded", "failed")
 WARM = ("warm_full", "warm_regions")
 CASES = {
