@@ -50,3 +50,15 @@ Característica: Actuación y verificación honestas
     Dado un campo de texto accesible de una ventana permitida
     Cuando el agente escribe y el foco del teclado no llega al campo antes del plazo
     Entonces no se envía ninguna tecla y se informa indeterminate con el clic entregado
+
+  @BDD-36 @RF-11 @UT-45
+  Escenario: BDD-36 Ventana fuera del alcance
+    Dado una aplicación permitida cuya política local sólo admite ventanas de una clase
+    Cuando el escritorio o la barra de tareas de esa aplicación recibe el clic del agente
+    Entonces se rechaza la entrada con POLICY_DENIED y no se entrega ningún evento
+
+  @BDD-37 @RF-11 @UT-45
+  Escenario: BDD-37 Ventana no registrada
+    Dado una aplicación permitida con una ventana registrada por el operador
+    Cuando el agente solicita un clic en otra ventana de la misma clase
+    Entonces se rechaza la entrada y sólo la ventana registrada recibe clics

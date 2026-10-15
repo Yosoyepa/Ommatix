@@ -20,7 +20,7 @@ Los mocks sólo verifican intención y contratos de llamada. Un mock de SendInpu
 
 ## 5.4 Núcleo de regresiones
 
-UT-01 a UT-15 cubren incrementalidad y commit; UT-16 a UT-26, fusión y affordance; UT-27 a UT-31, hashing/caché; UT-32 a UT-37, identidad; UT-38 a UT-43, referencias y simulación; UT-44, evidencia de accesibilidad (ADR-0017). La matriz contiene expectativa y correspondencia OR cuando existe.
+UT-01 a UT-15 cubren incrementalidad y commit; UT-16 a UT-26, fusión y affordance; UT-27 a UT-31, hashing/caché; UT-32 a UT-37, identidad; UT-38 a UT-43, referencias y simulación; UT-44, evidencia de accesibilidad (ADR-0017); UT-45, alcance de ventana de la política local (ADR-0020). La matriz contiene expectativa y correspondencia OR cuando existe.
 
 Las lagunas explícitas incluyen: value frente a placeholder, matching perceptivo uno-a-uno, virtualización de filas, reglas contextuales del caché, concurrencia real y transformaciones de detector/OCR. Estos casos no se marcan verdes por semejanza con una prueba más simple.
 
