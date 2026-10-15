@@ -121,7 +121,7 @@ PC de referencia, monitor principal 1920×1080 con origen (0, 0), motor con las 
 | 100 % | `6278b6f` | 96 | 1920×1080, paso 7680, epoch 1, identidad | 5/5 | sí | `met_all` |
 | 125 % | `6278b6f` | 120 | 1920×1080, paso 7680, epoch 1, identidad | 5/5 | sí | `met_all` |
 | 150 % | `69d8aeb` (`main` más el ajuste de la aplicación de prueba, PR #63) | 144 | 1920×1080, paso 7680, epoch 1, identidad | 5/5 | sí | `met_all` |
-| Cambio en vivo 100 → 125 % (`--watch-minutes 6`) | `6278b6f` | 96 → 120 | (sin prueba de captura) | serie de 178 entradas | no se evalúa | `epoch_follows_scaling` cumple |
+| Cambio en vivo 100 → 125 % (`--watch-minutes 6`) | `6278b6f` | 96 → 120 | (sin prueba de captura) | 5/5, más una serie de 178 entradas | sí | sí (`epoch_follows_scaling` cumple) |
 | 175 % personalizada (fuera de perfil) | `6278b6f` | 168 | prueba de captura correcta | 0/5: las 5 rechazadas con `UNSUPPORTED_GEOMETRY` | no aplica | `out_of_profile`: `flagged` |
 
 **Resumen combinado.** Las escalas del perfil 100, 125 y 150 % tienen una sesión completa, no falta ninguna, la transición de epoch se comprobó, y el resultado fuera de perfil es `flagged`.
