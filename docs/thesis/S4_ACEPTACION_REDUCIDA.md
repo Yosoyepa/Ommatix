@@ -1381,3 +1381,99 @@ La regla de `--calc-standard` queda así: el sondeo (3 s, pasos de 0,15 s, sólo
 ### Estado
 
 Hallazgos 1, 2 y 3: corregidos en los clientes y el editor y probados con dobles; la causa del 1 está verificada, la del 2 en parte (bloqueo reproducido y ayudante maximizado verificado; el Explorador y el vínculo con el único éxito, no) y la del 3 no (se descartó el árbol del editor y el adaptador). Cuaderno: 427, sin cambio. Las matrices no cambian.
+
+## Novena ronda: S4R-02 se detuvo en el segundo clic de «Estándar» por la regla de seguridad; E2E-02 y E2E-03 no se ejecutaron; ninguna corrida puntuada
+
+**Fecha:** 14 de octubre de 2026. Rama `docs/s4-ninth-round`, desde `main` en `9ef66ef` (fusión de #21). No cambia ningún código: ni los dos clientes ni las crates de Rust. Se usaron el cliente comprometido `tools/s4/e2e_driver.py` (SHA-256 `cbe6905c…4821265`) y `tools/s4/e2e_dossier.py` (SHA-256 `c1ba4a37…1020e`), comprobados antes de cada invocación en vivo; el motor de `main` (`target/release/ommatix.exe`, SHA-256 `3a451211…cbb1a`, el mismo de la octava ronda, porque cargo lo dio por actualizado); el editor compilado desde `main` (`tools/s4/testeditor/target/release/ommatix-testeditor.exe`, SHA-256 `541fc0a8…2793`, distinto del de la octava ronda, `0dcfb86b…4e78`, porque la fusión #21 cambió el editor); y las configuraciones `s4r9-live.toml` (SHA-256 `0428daf8…5ec1e2`) y `s4r9-explorer.toml` (SHA-256 `ab6c33b5…233d7`), copias sin cambios de las de la octava ronda. Autorización del responsable del 14 de octubre de 2026: `calculatorapp.exe` (S4R-02), `ommatix-testeditor.exe` (E2E-02) y `explorer.exe` sólo en la ventana `CabinetWClass` que abre el cliente (E2E-03, ADR-0020); cupo de 200 solicitudes con `--round-start 427`; `--operator-activation` apagado; el responsable no usó el equipo. Regla de seguridad de esa autorización: un clic anclado en un control incorrecto, un falso éxito del motor o una entrada fuera del flujo o de la ventana permitida detienen **todo** el trabajo en vivo.
+
+**Resultado:** ninguna corrida puntuada. En `--calc-standard`, el primer clic (navegación) se entregó y quedó anclado. El segundo clic (sobre «Estándar») se entregó con `effect_observed`, pero su anclaje posterior no halló el elemento: según la definición del cliente en `steps()` es un `grounding_wrong` y un `engine_false_success` (el resumen de `--calc-standard` no imprime esos contadores, hallazgo 2). Por la regla de seguridad, el trabajo en vivo se detuvo ahí: no hubo piloto ni serie de S4R-02, y E2E-02 y E2E-03 no se ejecutaron, ni siquiera sus sondeos. Se enviaron **dos** solicitudes reales (cuaderno 427 → 429, de 200). No se creó `stop.flag`: el paso se detuvo con su propia excepción de aborto, y ni el cliente ni el agente lo crearon.
+
+### 1. Verificación previa a la entrada en vivo
+
+- `cargo build --release -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia`: ya al día; el binario no cambió (SHA-256 `3a451211…cbb1a`). `cargo build --release` en `tools/s4/testeditor`: recompilado desde `main`, SHA-256 `541fc0a8…2793`.
+- `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo clippy -p ommatix --features dxgi,sendinput,directml,winrt-ocr,uia --all-targets -- -D warnings` y `cargo clippy -- -D warnings` en `tools/s4/testeditor`: correctos, sin avisos.
+- `cargo test --workspace`: 383 pasadas, 0 fallidas, 1 ignorada. `cargo test` en `tools/s4/testeditor`: 16 pasadas.
+- `python -m unittest discover -s tools/s4 -p "test_*.py"`: 230 pruebas correctas.
+- Desde `docs/thesis`: `referencia_ejecutable/run_tests.py`, 48 de 48; `validar_paquete.py`, 218 comprobaciones y 0 fallidas. Cuatro archivos de `referencia_ejecutable/resultados/` cambiaron sólo en la marca de tiempo, las cadenas de Python y de plataforma, una duración y el fin de línea; se restauraron con `git restore`.
+- Antes de cada invocación en vivo, un preflight (fuera del repositorio, sólo lectura) comprobó por SHA-256 los dos clientes, el motor, el editor, las dos configuraciones, el manifiesto float16 (`f8b04be9…fe47`) y las bibliotecas de ONNX Runtime y DirectML de la configuración; que no existieran `stop.flag` ni `window.pin`; el cuaderno; y que no hubiera procesos de prueba.
+- Escritorio antes de empezar: ningún proceso de prueba; los dos procesos `notepad.exe` del propietario (PID 8960 y 23164) con sus dos ventanas minimizadas; ninguna ventana `CabinetWClass`.
+
+### 2. Ejecución en vivo
+
+| Paso | Invocación (resumen) | Solicitudes | Resultado |
+|---|---|---|---|
+| S4R-02, sondeo | `e2e_driver.py --app calculator --mode probe --runs 1` con `s4r9-live.toml` | 0 | Los cinco elementos del flujo confirmados por accesibilidad, un candidato cada uno (`Siete`, `Más`, `Ocho`, `Es igual a` y `Borrar`). Primer plano en 0,92 s (`already_foreground`). Sin entrada. |
+| S4R-02, `--calc-standard` | `--app calculator --mode run --calc-standard --max-live 4 --round-start 427` | 2 | Clic 1 «Abrir navegación» entregado, `effect_observed` y anclado. Clic 2 «Estándar» entregado, `effect_observed`, **no anclado**: paso detenido por la regla de seguridad. La Calculadora que lanzó se cerró. |
+| S4R-02, piloto y serie | no se ejecutaron | 0 | Detenidos por la regla de seguridad (§3.2). |
+| E2E-02, sondeo, piloto y serie | no se ejecutaron | 0 | Detenidos por la regla de seguridad. |
+| E2E-03, sondeo, piloto y serie | no se ejecutaron | 0 | Detenidos por la regla de seguridad. |
+
+Cuaderno: 427 → 429, es decir, 2 solicitudes reales de 200 (198 disponibles). Las dos son las del `--calc-standard`.
+
+### 3. Resultados
+
+#### 3.1 S4R-02, Calculadora: el elemento «Estándar» se halló, y el segundo clic no quedó anclado
+
+- **Sondeo.** Los cinco elementos del flujo tienen un candidato cada uno, confirmado por accesibilidad. Sobre 130 elementos del motor: 49 con origen `accessibility`, 4 con `ocr` y 77 sin origen.
+- **Modo al empezar:** `other`.
+- **Clic 1, «Abrir navegación».** Un candidato (`TogglePaneButton`, `Button`), identidad `ok` antes del clic. Entregado, `effect_observed` y anclado tras el clic. `_meta`: `action_total` 73,1 ms, `action_verification` 57,1 ms, `action_freshness` 14,1 ms, `action_delivery` 1,5 ms, `action_gate` 0,35 ms; rtt 73,4 ms.
+- **Paso 2, «Estándar».** La primera lectura de UI Automation (391 ms de la ventana de 3 s) halló un único candidato: `AutomationId` `Standard`, tipo `ListItem`, en pantalla. Su nombre no se registró. La identidad fue `ok` antes del clic (el `RuntimeId` del elemento y el del motor coinciden). El motor le asigna rol `unknown` con origen `accessibility`.
+- **Clic 2, «Estándar».** Entregado (`input_delivered`), con `effect_observed` del motor. Después del clic, el control bajo el cursor no es el elemento hallado antes: `grounded: false`. `_meta`: `action_total` 99,7 ms, `action_verification` 70,4 ms, `action_freshness` 26,9 ms, `action_delivery` 2,1 ms, `action_gate` 0,25 ms; rtt 99,9 ms. El paso se detuvo sin más clics.
+- **Modo al terminar:** `other`, pero se leyó **una sola vez**, justo después del clic 2 y sin esperar: el camino de parada no repite la lectura, sólo el de éxito (ocho lecturas separadas 0,5 s). Por eso `other` no demuestra que el clic no cambiara el modo.
+- **Activación:** `already_foreground`, `foreground_wait_s` 0,87, `activation_requests` 1, `window_placements` 2.
+- **Qué confirma y qué no.** Confirma, como la octava ronda, que el elemento existe con `AutomationId` `Standard`, tipo `ListItem` y único en pantalla. **No** establece si el clic 2 alcanzó ese elemento: el anclaje posterior no lo halló. Quedan sin distinguir, causa no verificada: que el clic cayera en otro control; que el panel cambiara antes de la lectura; o que el modo cambiara después de ella. El registro sólo muestra dos entregas, ambas dentro del flujo; por diseño, el motor entrega una acción sólo tras su puerta, que comprueba la aplicación en primer plano (ADR-0007, ADR-0020).
+- **Piloto y serie.** No se ejecutaron: el modo Estándar no quedó confirmado y el paso se detuvo.
+
+#### 3.2 Por qué se detuvo
+
+El responsable autorizó detener todo el trabajo en vivo ante «un clic anclado en un control incorrecto» o «un falso éxito del motor». El clic 2 entra en esa definición según los criterios del cliente (`grounding_wrong` y `engine_false_success`): se entregó, el motor informó `effect_observed` y el anclaje posterior no lo confirmó. El agente no decidió si el clic fue correcto; aplicó la regla. Por la misma regla no se ejecutaron los sondeos sin entrada de E2E-02 y E2E-03, que también abren ventanas a través de sus clientes. Reanudar exige decisión del responsable (§9).
+
+#### 3.3 E2E-02 y E2E-03: no ejecutados
+
+Ni el sondeo, ni el piloto, ni la serie. No hay datos de `accessibility_elements`, `uia_focus` ni de la navegación del Explorador (`targets` ni `tree_unchanged`).
+
+### 4. Totales y seguridad
+
+- Solicitudes reales: 2 (cuaderno 427 → 429). Entregadas: 2, ambas `effect_observed`. Verificadas por identidad: 1 de 2. Rechazadas: 0. `indeterminate`: 0. `POLICY_DENIED`: 0. Reintentos por `STALE_SNAPSHOT`: 0.
+- Falsos éxitos según la definición del cliente: 1 (clic 2, no puntuado). `grounding_wrong`: 1 (no puntuado). Parada de seguridad: sí (§3.2).
+- Corridas puntuadas: 0. Pilotos aprobados: 0.
+- Capturas y texto de pantalla: ninguno guardado. Los registros contienen estados, códigos, contadores, tiempos, tipos de control, `AutomationId`, identificadores de elemento y las etiquetas fijas del protocolo (`Abrir navegación`). El nombre del elemento «Estándar» no aparece en ningún registro de la ronda (comprobado).
+
+### 5. Latencias (`_meta`)
+
+Dos acciones sueltas de la misma invocación, sin serie: no hay mediana ni p95, y no miden RNF-05 (S0 §10). Valores en §3.1.
+
+### 6. Hallazgos
+
+| # | Severidad | Hallazgo | Estado y siguiente paso |
+|---|---|---|---|
+| 1 | Mayor, seguridad (Calculadora) | El clic 2 se entregó con `effect_observed` y su anclaje posterior falló; el modo no se volvió a leer tras esperar. Por la regla de seguridad se detuvo todo el trabajo en vivo. | Abierto, decisión del responsable (§9). Causa no verificada: otro control, panel que cambió antes de la lectura o modo que cambió después. |
+| 2 | Menor, registro | El resumen de `--calc-standard` no imprime los contadores `grounding_wrong` ni `engine_false_success`; el caso sólo aparece en `clicks[].grounded`. | Abierto. Corrección propuesta: imprimirlos. Requiere prueba que falle sin el cambio y un hash nuevo, en una ronda aparte. |
+| 3 | Menor, registro | Al detenerse, `mode_after` se lee una vez, justo tras el clic, y el paso no espera. `other` no es concluyente. | Abierto. Corrección propuesta: leer el modo con espera acotada también al detenerse. Misma condición que el hallazgo 2. |
+| 4 | Observación | El elemento «Estándar» tiene rol `unknown` en el motor (origen `accessibility`); el clic de navegación tiene rol `button`. | Sin cambio. Se desconoce si influye en el anclaje. |
+| 5 | Observación | La Calculadora ya estaba en primer plano (`already_foreground`); no hizo falta la escalera de activación. El bloqueo de primer plano del editor y del Explorador (octava ronda, hallazgo 2) no se volvió a probar. | Abierto. Se probaría en la siguiente ronda, con sus sondeos. |
+| 6 | Interpretación (decisión del responsable) | La regla de seguridad se aplicó también a los sondeos sin entrada de E2E-02 y E2E-03. | Pendiente de confirmación del responsable. |
+
+### 7. Estado en la matriz
+
+Sin cambio. `matrices/plan_pruebas.csv` mantiene S4R-02, E2E-02 y E2E-03 en `NO_EJECUTADO` y `PENDIENTE_PRODUCTO`: no hay corridas puntuadas ni piloto aprobado que lo justifique. RF-18, RNF-03, RNF-05 y las casillas de la Definition of Done no cambian.
+
+### 8. Estado final del escritorio, del cuaderno y de `stop.flag`
+
+- **Procesos de prueba:** ninguno (`ommatix.exe`, `CalculatorApp.exe`, `ommatix-testeditor.exe` y `ommatix-testapp.exe`). La Calculadora que lanzó el paso se cerró.
+- **Bloc de notas del propietario:** procesos 8960 y 23164, los mismos que al empezar. Sus dos ventanas siguen minimizadas; ningún cliente de esta ronda las tocó.
+- **Explorador:** ninguna ventana `CabinetWClass` antes ni después; el Explorador no se ejecutó. No existe `window.pin`.
+- **`stop.flag`:** ausente. Ni el cliente ni el agente lo crearon.
+- **Cuaderno:** 429 (2 de 200 solicitudes de la ronda; 198 disponibles).
+
+### 9. Qué queda y cómo reanudar
+
+1. **Responsable:** decidir si la ronda continúa tras la parada de seguridad, y en qué condiciones (hallazgo 6). Sin esa decisión no se ejecuta nada en vivo, ni siquiera un sondeo.
+2. **Responsable:** decidir cómo investigar el clic 2 (hallazgo 1): una lectura de sólo lectura del panel con el responsable presente, o aceptar el riesgo y reanudar. El cupo se decide en el punto 4.
+3. **Cliente (ronda aparte, con prueba y hash nuevo):** hallazgos 2 y 3, para que el resumen y el modo al detenerse digan lo que pasó.
+4. **Si la ronda continúa:** el cupo lo decide el responsable. O se sigue con `--round-start 427`, que deja 198 solicitudes de las 200 autorizadas, o se abre una ronda nueva con su propio `--round-start` (el cuaderno está en 429). En cualquier caso, el mismo preflight antes de cada invocación; después, los sondeos de E2E-02 y E2E-03, que la octava ronda no completó.
+5. **Cuaderno:** 429. La siguiente ronda usa su propio `--round-start`.
+
+### 10. Ejecución
+
+Dos invocaciones en vivo: el sondeo de la Calculadora (sin solicitudes) y `--calc-standard` (dos solicitudes). Las únicas entradas fueron dos clics de la Calculadora: «Abrir navegación» (`Button`, `AutomationId` `TogglePaneButton`) y «Estándar» (`ListItem`, `AutomationId` `Standard`). No se escribió nada, no se usó ninguna otra aplicación y no se tocó ninguna ventana del propietario. Las lecturas de UI Automation son de sólo lectura. El preflight y la instantánea de ventanas (ambos fuera del repositorio) no envían entrada ni cambian ventanas.

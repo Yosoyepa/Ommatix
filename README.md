@@ -130,6 +130,8 @@ The dossier's own E2E-02 (an editor that types and saves a temporary file) and E
 An eighth round ([CHANGELOG 1.0.31](docs/thesis/CHANGELOG.md)) ran live with one real request and scored no runs. The Calculator's `--calc-standard` found the Standard item by its AutomationId, but its name is not one the client accepts, so it stopped without a second click. The editor and the File Explorer never reached the foreground maximized in their pilot and probes, so no input was sent to them. The owner decides the next steps (the item's exact name, the foreground diagnosis, the editor's accessibility label and the pilot rule); the matrix is unchanged.
 
 The three blockers of that round were then fixed without a live run or any input ([CHANGELOG 1.0.32](docs/thesis/CHANGELOG.md)): the Calculator's Standard item is found by its AutomationId alone (its name stays in memory, never in a record); a window is asked for the foreground by its handle with three methods that send no input, with a read-only diagnostic and an off-by-default `--operator-activation` for the Windows foreground lock; the editor maximizes itself, and the client stops before any input when the engine reads no accessibility evidence from it. The cause of that last one is not verified; nothing is confirmed live yet.
+
+A ninth round ([CHANGELOG 1.0.33](docs/thesis/CHANGELOG.md)) ran two live requests, both in `--calc-standard`. The Calculator's probe confirmed its five flow elements, and the Standard item was found by its AutomationId; but the second click, on that item, was delivered and reported as an effect without being grounded afterwards. Under the owner's safety rule all live work stopped there: no run was scored, and the Calculator flow, the editor and the File Explorer did not run. The cause is not verified, and the owner decides whether the round continues.
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML;
@@ -169,7 +171,7 @@ From [thesis chapter 06](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md):
   and the acceptance report. A reduced, click-only protocol ran (20 scored runs in two
   applications; E2E-01 and PERF-02 in part; with UI Automation and two-phase `type`, the test
   application passed 10 of 10 typing runs in two rounds, and the Calculator and Notepad flows did not
-  complete; in the seventh round and its continuation, the ten scored Notepad runs passed, and the Calculator flow, S4R-02, did not run because the Calculator did not reach Standard mode; in the eighth round no run was scored, because the Standard item's name was not accepted and the editor and explorer flows did not reach the foreground)
+  complete; in the seventh round and its continuation, the ten scored Notepad runs passed, and the Calculator flow, S4R-02, did not run because the Calculator did not reach Standard mode; in the eighth round no run was scored, because the Standard item's name was not accepted and the editor and explorer flows did not reach the foreground; in the ninth round the run stopped after two live requests, when the Standard item's second click was not grounded and the owner's safety rule stopped all live work)
 
 ## Quick start
 
