@@ -163,7 +163,7 @@ La continuación de esa ronda ([CHANGELOG 1.0.34](docs/thesis/CHANGELOG.md)) no 
 - Primera plataforma: **Windows 11 x64**, un monitor, DPI de 100/125/150 %
   ([ADR-0008](docs/adr/0008-one-real-platform-first.md), aprobada el 14-oct-2026).
 
-Los bloqueos de esa ronda se corrigen sin conexión ([CHANGELOG 1.0.36](docs/thesis/CHANGELOG.md); sin solicitudes reales ni entrada): el modo Estándar de la Calculadora se lee de un encabezado que contenga «estándar» o «standard» (su nombre real aún no se conoce), un `--check-mode` de sólo lectura lee el modo sin crear nunca el archivo de parada, el editor de prueba obtiene ahora el foco de teclado de Win32 (verificado en lectura: UI Automation informa al editor, no al escritorio) y el flujo del Explorador empieza en `carpeta-b` y va miga de pan arriba, miga de pan arriba y «Atrás». Nada de esto está confirmado con el motor ni en una ejecución en vivo.
+Los bloqueos de esa ronda se corrigen sin conexión ([CHANGELOG 1.0.36](docs/thesis/CHANGELOG.md); sin solicitudes reales ni entrada): el modo Estándar de la Calculadora se lee de un encabezado que contenga «estándar» o «standard» (su nombre real aún no se conoce), un `--check-mode` de sólo lectura lee el modo sin crear nunca el archivo de parada, el editor de prueba obtiene ahora el foco de teclado de Win32 (verificado en lectura: UI Automation informa al editor, no al escritorio) y ninguna aplicación de prueba pide ya el primer plano al toolkit, porque esa petición enviaba una tecla Alt sintética (hallazgo de seguridad, corregido) y el flujo del Explorador empieza en `carpeta-b` y va miga de pan arriba, miga de pan arriba y «Atrás». Nada de esto está confirmado con el motor ni en una ejecución en vivo.
 
 ## Hoja de ruta
 

@@ -45,19 +45,9 @@ const TEXT_LIMIT_CHARS: usize = 1024;
 /// The largest file the editor writes (a character is at most 4 bytes of UTF-8).
 const MAX_NOTE_BYTES: usize = 4 * TEXT_LIMIT_CHARS;
 
-/// How long after start the editor keeps asking for the keyboard focus.
-const FRONT_REQUEST_WINDOW: Duration = Duration::from_secs(2);
-/// How often it repaints while it is asking, so that the request is sent at all.
+/// How often the window repaints while it looks for the keyboard focus, so that the sequence
+/// moves along without events.
 const FRONT_REQUEST_PERIOD: Duration = Duration::from_millis(100);
-
-/// Whether the editor still asks the OS for the foreground. A window started by a background
-/// process is not brought to the front by the OS (its taskbar button flashes instead), and UI
-/// Automation, like the engine, reads the foreground application. The request is sent early and
-/// for a short time only: the OS grants it when the user has not touched the machine for a
-/// while, and never takes it from someone who is working. It sends no input.
-fn asks_for_front(since_start: Duration) -> bool {
-    since_start < FRONT_REQUEST_WINDOW
-}
 
 /// How long after start the editor waits for the OS to give its window the keyboard focus before
 /// it shows itself again.
@@ -335,15 +325,11 @@ struct EditorApp {
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let before = self.editor.title();
-        if asks_for_front(self.started.elapsed()) {
-            let ctx = ui.ctx().clone();
-            if !self.maximized {
-                // Once: the window maximizes itself like the test application does.
-                self.maximized = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
-            }
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            ctx.request_repaint_after(FRONT_REQUEST_PERIOD);
+        if !self.maximized {
+            // Once: the window maximizes itself like the test application does.
+            self.maximized = true;
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Maximized(true));
         }
         let since_start = self.started.elapsed();
         let focused = ui.ctx().input(|i| i.viewport().focused.unwrap_or(false));
@@ -435,13 +421,25 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
+    /// The foreground and the keyboard focus are never requested through the toolkit: its window
+    /// focus command sends a synthetic Alt key through `SendInput` when the window is not in
+    /// front, and so does creating a window in the toolkit's exclusive-screen mode. That is input
+    /// outside the engine's gate (AGENTS.md rule 6). The forbidden names are built from pieces so
+    /// that this test does not contain them.
     #[test]
-    fn the_editor_asks_for_the_front_early_and_only_for_a_short_time() {
-        assert!(asks_for_front(Duration::ZERO));
-        assert!(asks_for_front(Duration::from_millis(1999)));
-        assert!(!asks_for_front(FRONT_REQUEST_WINDOW));
-        assert!(!asks_for_front(Duration::from_secs(60)));
-        assert!(FRONT_REQUEST_PERIOD < FRONT_REQUEST_WINDOW);
+    fn the_source_never_asks_the_toolkit_for_the_foreground() {
+        let source = include_str!("main.rs");
+        for forbidden in [
+            ["ViewportCommand", "::Focus"].concat(),
+            ["focus", "_window"].concat(),
+            ["Full", "screen"].concat(),
+            ["full", "screen"].concat(),
+        ] {
+            assert!(
+                !source.contains(&forbidden),
+                "the source contains {forbidden}"
+            );
+        }
     }
 
     fn ms(n: u64) -> Duration {
