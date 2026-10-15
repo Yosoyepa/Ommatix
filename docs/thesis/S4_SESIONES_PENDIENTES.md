@@ -1,12 +1,12 @@
 # S4: sesiones supervisadas pendientes de la Definition of Done
 
-**Fecha:** 15 de octubre de 2026 (`CHANGELOG.md`, 1.0.47). **Alcance:** lo que el responsable debe poner (tiempo, ajustes, órdenes) para producir, cada una en una sola sesión, la evidencia que falta de REL-01, PERF-03 (RNF-06) e IT-07 (RNF-07). Este documento y las herramientas que describe son **preparación**: no se ejecutó ninguna sesión, ninguna fila de las matrices cambia de estado (`PENDIENTE_PRODUCTO` y `NO_EJECUTADO` siguen como están) y no hay cifra nueva.
+**Fecha:** 15 de octubre de 2026 (`CHANGELOG.md`, 1.0.47). **Alcance:** lo que el responsable debe poner (tiempo, ajustes, órdenes) para producir, cada una en una sola sesión, la evidencia que falta de REL-01, PERF-03 (RNF-06) e IT-07 (RNF-07). Este documento y las herramientas que describe fueron **preparación** (1.0.47): entonces no se ejecutó ninguna sesión. La sesión B se ejecutó (1.0.55 y 1.0.66) y la sesión C se ejecutó el 15 de octubre de 2026 (1.0.73, §C.1). La sesión A sigue sin ejecutar.
 
-**Alcance del MVP (15 de octubre de 2026):** la sesión A (REL-01, instalación y reversión) y la sesión B (PERF-03, soak de 2 h) siguen en el MVP; la sesión C (IT-07, DPI) pasa al próximo corte, como EV-01, EV-02 y el corpus de REL-01 (capítulo 06 §6.7, [ADR-0023](../adr/0023-licence-and-reduced-mvp-scope.md)).
+**Alcance del MVP (15 de octubre de 2026):** la sesión A (REL-01, instalación y reversión) y la sesión B (PERF-03, soak de 2 h) siguen en el MVP; la sesión C (IT-07, DPI) pasó al próximo corte, como EV-01, EV-02 y el corpus de REL-01 (capítulo 06 §6.7, [ADR-0023](../adr/0023-licence-and-reduced-mvp-scope.md)), y el responsable la adelantó y la ejecutó el 15 de octubre de 2026 (§C.1).
 
 Ninguna de las tres sesiones envía entrada (ni de teclado, ni de ratón) ni usa `execute_action`. Las herramientas de `tools/perf/` observan, y están escritas para negarse a empezar si la configuración del operador pudiera entregar entrada ([`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) §5.1).
 
-**Estado (1.0.66):** la sesión B se ejecutó dos veces, supervisada y sin entrada. La primera, sobre `fe35d80` y sin accesibilidad, fue completa (§12; veredicto del umbral en 1.0.62). La segunda, sobre `745caff` con `uia` y la pantalla encendida, también fue completa (§15): con los criterios del [capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md), el conjunto de trabajo cumple (+1,25 MiB/h) y los manejadores **no cumplen** (pendiente positiva: un manejador más en el minuto 69). La cola no tiene veredicto porque no tiene cota (decisión 9 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)). Un intento anterior de repetirla con `uia` quedó bloqueado antes de la corrida (§14). Siguen sin ejecutar las sesiones A (REL-01) y C (IT-07).
+**Estado (1.0.66):** la sesión B se ejecutó dos veces, supervisada y sin entrada. La primera, sobre `fe35d80` y sin accesibilidad, fue completa (§12; veredicto del umbral en 1.0.62). La segunda, sobre `745caff` con `uia` y la pantalla encendida, también fue completa (§15): con los criterios del [capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md), el conjunto de trabajo cumple (+1,25 MiB/h) y los manejadores **no cumplen** (pendiente positiva: un manejador más en el minuto 69). La cola no tiene veredicto porque no tiene cota (decisión 9 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)). Un intento anterior de repetirla con `uia` quedó bloqueado antes de la corrida (§14). Seguía sin ejecutar la sesión A (REL-01). **Estado (1.0.73):** la sesión C (IT-07) se ejecutó el 15 de octubre de 2026 a 100, 125 y 150 %, con el cambio de escala en vivo y una escala fuera de perfil (§C.1); la sesión A sigue sin ejecutar.
 
 ## 0. Condiciones comunes
 
@@ -111,6 +111,30 @@ Mientras corre, el responsable cambia la escala a 125 % a mano y vuelve a poner 
 Al terminar: `python tools/perf/dpi_probe.py --combine dpi-probe-100.json dpi-probe-125.json dpi-probe-150.json dpi-probe-cambio.json --out dpi-probe-resumen.json` indica qué escalas del perfil tienen una sesión completa y si se comprobó una transición de epoch. Devuelva la escala a la que tenía.
 
 **Se registra** (por sesión): la escala y el DPI, el tamaño y el origen del monitor principal, la forma del fotograma (ancho, alto, paso, epoch y `DisplayMapping`), por observación el epoch, el recuento de elementos y **cuántos elementos llevan cada una de las 7 etiquetas fijas de la aplicación de prueba** (ninguna otra etiqueta), y los criterios. No hay fotogramas ni coordenadas.
+
+### C.1 Resultado de la sesión del 2026-10-15
+
+PC de referencia, monitor principal 1920×1080 con origen (0, 0), motor con las características `dxgi,directml,winrt-ocr` y la configuración del operador (sin entrada: la herramienta sólo observa; el responsable cambió la escala a mano). Las salidas JSON quedan fuera del repositorio (ADR-0012). Los cinco informes se resumieron con `--combine`.
+
+| Sesión | Commit | DPI | Fotograma y `DisplayMapping` | Observaciones | 6 botones | Resultado |
+|---|---|---|---|---|---|---|
+| 100 % | `6278b6f` | 96 | 1920×1080, paso 7680, epoch 1, identidad | 5/5 | sí | `met_all` |
+| 125 % | `6278b6f` | 120 | 1920×1080, paso 7680, epoch 1, identidad | 5/5 | sí | `met_all` |
+| 150 % | `69d8aeb` (`main` más el ajuste de la aplicación de prueba, PR #63) | 144 | 1920×1080, paso 7680, epoch 1, identidad | 5/5 | sí | `met_all` |
+| Cambio en vivo 100 → 125 % (`--watch-minutes 6`) | `6278b6f` | 96 → 120 | (sin prueba de captura) | serie de 178 entradas | no se evalúa | `epoch_follows_scaling` cumple |
+| 175 % personalizada (fuera de perfil) | `6278b6f` | 168 | prueba de captura correcta | 0/5: las 5 rechazadas con `UNSUPPORTED_GEOMETRY` | no aplica | `out_of_profile`: `flagged` |
+
+**Resumen combinado.** Las escalas del perfil 100, 125 y 150 % tienen una sesión completa, no falta ninguna, la transición de epoch se comprobó, y el resultado fuera de perfil es `flagged`.
+
+**Cambio en vivo.** El epoch es 1 a 100 % y pasa a 2 en la primera observación tras el cambio a 125 %, con 76 elementos antes y después. Hubo 3 muestras omitidas mientras la aplicación de prueba no estaba al frente. `epoch_follows_scaling`: 1 cambio respondido, 0 sin respuesta, 0 bajadas, 0 subidas sin explicar.
+
+**Fuera de perfil.** A 175 % (168 dpi) las cinco observaciones se rechazaron con `UNSUPPORTED_GEOMETRY` y la herramienta lo registró como `flagged`: el comportamiento de [ADR-0031](../adr/0031-refuse-scaling-outside-the-dpi-profile.md) queda confirmado en vivo. `served_unflagged`, que habría sido un hallazgo contra RNF-07, no ocurrió.
+
+**Hallazgo y corrección (aplicación de prueba, [PR #63](https://github.com/Yosoyepa/Ommatix/pull/63)).** La primera sesión a 150 % con la aplicación de prueba anterior falló `buttons_found` en 10 de 10 observaciones: «Reiniciar» quedaba cortado al pie de la ventana (el responsable lo confirmó a la vista). No es un fallo del motor: la aplicación de prueba ahora encoge sus separaciones en una ventana corta y no cambia la disposición a 100 y 125 %. Las lecturas hechas con la aplicación anterior (100 y 125 %, también `met_all`) no cuentan para esta tabla.
+
+**Procedimiento.** Dos intentos a 125 % terminaron `refused` porque la aplicación de prueba se abrió detrás de otras ventanas y la herramienta nunca usa entrada para traerla al frente. El tercero, con `--foreground-wait 180` y la aplicación traída al frente por el responsable, se completó.
+
+**Qué no cubre.** Un solo monitor, la aplicación de prueba propia, ninguna acción en vivo a 125 o 150 % y un solo tema. La fila IT-07 de `plan_pruebas.csv` y el estado de RNF-07 no cambian: los decide el responsable.
 
 ## Lo que no entra en estas tres sesiones
 

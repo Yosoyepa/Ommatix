@@ -163,7 +163,7 @@ The third continuation of the eleventh round ([CHANGELOG 1.0.46](docs/thesis/CHA
   (p95 98 ms) and a one-region update (p95 102 ms) but not, by 3 ms, for two regions
   (p95 153 ms), so RNF-05 was not met before INC-07; see the status above), so by default the detector is the bootstrap's flat-colour region finder (roles
   `unknown`) and there is no OCR unless the operator configures it (the reduced protocol runs with the ONNX detector and Windows OCR); no third-party MCP client has been tested; IT-02 ran only
-  in part (S0); IT-07 has not been run and moves to the next cut; and IT-06, SEC-03, SEC-04 and SEC-06 are tested in Rust
+  in part (S0); IT-07 moved to the next cut and was then run on 15 October 2026 (DPI 100/125/150 %, a live epoch change and a refusal at 175 %; one monitor, no live action off 100 %; [S4_SESIONES_PENDIENTES.md §C.1](docs/thesis/S4_SESIONES_PENDIENTES.md)); and IT-06, SEC-03, SEC-04 and SEC-06 are tested in Rust
   over test doubles and the simulated desktop ([CHANGELOG 1.0.35](docs/thesis/CHANGELOG.md)), not
   yet under supervision with the real stages. Live input stays **off** unless the
   operator enables it (below). The [overview](docs/architecture/overview.md#where-the-code-is-today) lists what
@@ -411,7 +411,7 @@ tools/                     measurement and acceptance tools outside the workspac
 │                          dossier's E2E-02 and E2E-03
 └── perf/                  `measure_latency.py`: per-stage latency against the test application;
                            `soak.py` (PERF-03: resources and 2 h soak) and `dpi_probe.py` (IT-07: DPI
-                           100/125/150 %), read only, no input, written and not yet run
+                           100/125/150 %), read only, no input; IT-07 ran on 15 October 2026, REL-01 not yet
 ```
 
 How the dossier's SDD components ([chapter 02 §2.3](docs/thesis/02_SDD_ARQUITECTURA_MVP.md))
