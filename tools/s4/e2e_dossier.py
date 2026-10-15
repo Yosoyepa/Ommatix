@@ -37,7 +37,9 @@ unchanged.
 ``--app decoy``     BDD-35 on the real actuator: ``ommatix-testeditor.exe`` started with
                     ``--decoy-focus``, whose ``Campo auxiliar`` hands the keyboard focus to ``Campo de
                     destino`` when clicked. One ``type`` of the synthetic text into ``Campo auxiliar``
-                    goes through the gate. The engine must report ``indeterminate`` (the focusing click
+                    goes through the gate. A ``STALE_SNAPSHOT`` refusal (nothing delivered) is
+                    observed again and sent as a new request, at most three attempts. The engine
+                    must report ``indeterminate`` (the focusing click
                     delivered, ``verified`` false, ``INDETERMINATE_EFFECT``) with no key sent; the same
                     request_id repeated must return that stored result with no new delivery; and UI
                     Automation must place the keyboard focus on ``Campo de destino`` (compared by
@@ -115,6 +117,10 @@ EDITOR_TEXT = driver.TYPED_TEXT  # synthetic: "prueba 123"
 DECOY_FLAG = "--decoy-focus"
 DECOY_FIELD = "Campo auxiliar"
 DECOY_TARGET = "Campo de destino"
+# A STALE_SNAPSHOT refusal (nothing delivered) is observed again and sent as a new request, at most
+# DECOY_ATTEMPTS times; the repetition of the final request is one live request more.
+DECOY_ATTEMPTS = 3
+DECOY_LIVE_REQUESTS = DECOY_ATTEMPTS + 1
 
 EXPLORER_EXE = "explorer.exe"
 EXPLORER_CLASS = "CabinetWClass"
@@ -425,6 +431,15 @@ def decoy_problems(facts: dict) -> list[str]:
     if not facts["folder_empty"]:
         problems.append("the run folder is not empty")
     return problems
+
+
+def decoy_budget_problem(app: str, live: bool, max_live: int) -> str | None:
+    """The live budget a decoy run needs: its attempts and the repetition. Below it the run would
+    run out of live requests in the middle of the case."""
+    if app == "decoy" and live and max_live < DECOY_LIVE_REQUESTS:
+        return (f"--app decoy needs --max-live of at least {DECOY_LIVE_REQUESTS} (up to "
+                f"{DECOY_ATTEMPTS} attempts and their repetition)")
+    return None
 
 
 def decoy_flow() -> dict:
@@ -857,7 +872,9 @@ class DossierProtocol(driver.Protocol):
     def run_decoy(self, res: dict, n: int) -> None:
         """BDD-35 on the real actuator. The editor starts with --decoy-focus: a click on Campo
         auxiliar hands the keyboard focus to Campo de destino. One `type` of the synthetic text on
-        Campo auxiliar goes through the engine's gate. The engine must report indeterminate, with
+        Campo auxiliar goes through the engine's gate (a STALE_SNAPSHOT refusal, which delivers
+        nothing, is observed again and sent as a new request, at most three attempts). The engine
+        must report indeterminate, with
         its focusing click delivered, verified false, and no key sent; a repeat of the same
         request_id must return that stored result with no new delivery; and UI Automation must
         place the keyboard focus on Campo de destino, so the case is not passed by a focus that was
@@ -920,9 +937,12 @@ class DossierProtocol(driver.Protocol):
         return focus
 
     def decoy_step(self, res: dict, snap: dict, elements: list[dict], hwnd, pid: int) -> None:
-        """The one request of the case and its checks (see decoy_problems). Nothing is sent before
-        the decoy's point is grounded to the decoy by identity (ADR-0022, rule 1), and nothing is
-        retried: the repetition is the stored-result check, not a second delivery."""
+        """The request of the case and its checks (see decoy_problems). Nothing is sent before the
+        decoy's point is grounded to the decoy by identity (ADR-0022, rule 1). A request is retried
+        only after STALE_SNAPSHOT, which the engine answers before any delivery: the case observes
+        again, grounds again and sends a new request (a new request_id), at most DECOY_ATTEMPTS
+        times, and after the last refusal nothing more is sent. The repetition is the stored-result
+        check of the final request, not a second delivery."""
         field = self.target(elements, DECOY_FIELD)
         redirect = self.target(elements, DECOY_TARGET)
         if field is None or redirect is None:
@@ -938,50 +958,73 @@ class DossierProtocol(driver.Protocol):
             res["failure"] = ("no request: UI Automation reports the keyboard focus outside the editor "
                               "(the window has no operating system focus); nothing was sent")
             return
-        # A long wait (the operator's) ages the observation past [engine] max_snapshot_age_ms: observe
-        # again, so that the request names a fresh snapshot and its targets are the current ones.
-        snap, elements, obs = self.observe()
-        res["observations"].append(obs)
-        field = self.target(elements, DECOY_FIELD)
-        redirect = self.target(elements, DECOY_TARGET)
-        if field is None or redirect is None:
-            res["failure"] = "after the focus wait the decoy fields are not both confirmed exactly once"
-            return
-        fg = self.require_foreground()
-        ident = self.identify_before(res, fg, DECOY_FIELD, field)
-        if ident is None:
-            return
-        pre = self.pre_click_grounding(1, fg, DECOY_FIELD, field, ident)
-        res.setdefault("pre_grounded", []).append({"attempt": 1, **pre})
-        if not pre["grounded"]:
-            res["failure"] = f"no request, the decoy point is not grounded ({pre['status']})"
-            return
-        redirect_record, redirect_ident = self.identity_lookup(fg["hwnd"], DECOY_TARGET, redirect)
-        res["redirect_identity"] = redirect_record["status"]
-        if redirect_ident is None:
-            res["failure"] = f"no request, the redirect target's identity is {redirect_record['status']}"
-            return
-        before = self.metrics()
-        args = {"request_id": f"s4-bdd35-r{res['run']}-1", "session_id": snap["session_id"],
-                "snapshot_id": snap["snapshot_id"], "geometry_epoch": snap["geometry_epoch"],
-                "target_id": field["target_id"], "expected_revision": field["revision"],
-                "action": "type", "dry_run": False, "expected_effect": "visual_change",
-                "text": EDITOR_TEXT}
-        self.spend_live()
-        res["actions_requested"] += 1
-        out, _, meta, ms = self.srv.call("execute_action", args)
-        error = out.get("error") or {}
-        err = error.get("code")
-        act = {"step": 1, "action": "type", "expected_effect": "visual_change",
-               "status": out.get("status"), "input_delivered": out.get("input_delivered"),
-               "verified": out.get("verified"), "observed_effect": out.get("observed_effect"),
-               "error": err, "rtt_ms": round(ms, 1), "stages_ms": driver.stage_ms(meta),
-               "target_role": field["role"], "label_source": field["label_source"]}
-        refusal = driver.engine_error(out)
-        if refusal:  # a refusal or an uncertainty: the engine's own sentence
-            act["message"] = refusal["message"]
-        res["actions"].append(act)
-        driver.log("action", run=res["run"], **act)
+        for attempt in range(1, DECOY_ATTEMPTS + 1):
+            # A fresh observation for every attempt: a long wait (the operator's) ages the observation
+            # past [engine] max_snapshot_age_ms, and a STALE_SNAPSHOT means the screen moved since it.
+            snap, elements, obs = self.observe()
+            observed_at = time.monotonic()
+            res["observations"].append(obs)
+            field = self.target(elements, DECOY_FIELD)
+            redirect = self.target(elements, DECOY_TARGET)
+            if field is None or redirect is None:
+                res["failure"] = ("after the focus wait the decoy fields are not both confirmed "
+                                  "exactly once")
+                return
+            fg = self.require_foreground()
+            ident = self.identify_before(res, fg, DECOY_FIELD, field)
+            if ident is None:
+                return
+            pre = self.pre_click_grounding(1, fg, DECOY_FIELD, field, ident)
+            res.setdefault("pre_grounded", []).append({"attempt": attempt, **pre})
+            if not pre["grounded"]:
+                res["failure"] = f"no request, the decoy point is not grounded ({pre['status']})"
+                return
+            redirect_record, redirect_ident = self.identity_lookup(fg["hwnd"], DECOY_TARGET, redirect)
+            res["redirect_identity"] = redirect_record["status"]
+            if redirect_ident is None:
+                res["failure"] = ("no request, the redirect target's identity is "
+                                  f"{redirect_record['status']}")
+                return
+            before = self.metrics()
+            args = {"request_id": f"s4-bdd35-r{res['run']}-{attempt}",
+                    "session_id": snap["session_id"], "snapshot_id": snap["snapshot_id"],
+                    "geometry_epoch": snap["geometry_epoch"], "target_id": field["target_id"],
+                    "expected_revision": field["revision"], "action": "type", "dry_run": False,
+                    "expected_effect": "visual_change", "text": EDITOR_TEXT}
+            self.spend_live()
+            res["actions_requested"] += 1
+            sent_at = time.monotonic()
+            out, _, meta, ms = self.srv.call("execute_action", args)
+            error = out.get("error") or {}
+            err = error.get("code")
+            act = {"step": 1, "attempt": attempt, "action": "type",
+                   "expected_effect": "visual_change", "status": out.get("status"),
+                   "input_delivered": out.get("input_delivered"), "verified": out.get("verified"),
+                   "observed_effect": out.get("observed_effect"), "error": err,
+                   "rtt_ms": round(ms, 1), "stages_ms": driver.stage_ms(meta),
+                   "observe_to_action_ms": round((sent_at - observed_at) * 1000, 1),
+                   "target_role": field["role"], "label_source": field["label_source"]}
+            refusal = driver.engine_error(out)
+            if refusal:  # a refusal or an uncertainty: the engine's own sentence
+                act["message"] = refusal["message"]
+            res["actions"].append(act)
+            driver.log("action", run=res["run"], **act)
+            if out.get("status") == "effect_observed":
+                res["effect_observed"] += 1
+            elif out.get("status") == "indeterminate":
+                res["indeterminate"] += 1
+            elif out.get("status") == "rejected":
+                res["rejected"] += 1
+            if err == "STALE_SNAPSHOT" and not out.get("input_delivered"):
+                if attempt < DECOY_ATTEMPTS:
+                    res["stale_retries"] += 1
+                    continue
+                res["decoy"] = {"attempts": attempt, "status": out.get("status"), "error": err,
+                                "input_delivered": False}
+                res["failure"] = (f"the screen changed before each of the {DECOY_ATTEMPTS} attempts "
+                                  "(STALE_SNAPSHOT): nothing was delivered and nothing was repeated")
+                return
+            break
         grounding_ok = False
         if out.get("input_delivered"):
             res["delivered"] += 1
@@ -992,7 +1035,7 @@ class DossierProtocol(driver.Protocol):
             res.setdefault("grounding", []).append(grounding_ok)
             if not grounding_ok:
                 res["grounding_wrong"] = 1
-        # The repetition, exactly: the stored result, and no second delivery.
+        # The repetition of the final request, exactly: the stored result, and no second delivery.
         self.spend_live()
         res["actions_requested"] += 1
         again, _, _, _ = self.srv.call("execute_action", args)
@@ -1003,6 +1046,7 @@ class DossierProtocol(driver.Protocol):
         placement = focus_placement(focus_after, pid, ident.get("runtime_id"),
                                     redirect_ident.get("runtime_id"))
         facts = {
+            "attempts": attempt,
             "status": out.get("status"), "error": err,
             "input_delivered": out.get("input_delivered"), "verified": out.get("verified"),
             "retryable": error.get("retryable"), "next_step": error.get("next_step"),
@@ -1220,6 +1264,10 @@ def main() -> int:
                        problems=problems)
             return 2
     ledger_now = driver.read_ledger(args.ledger)
+    budget = decoy_budget_problem(args.app, live, args.max_live)
+    if budget:
+        driver.log("abort", reason=budget)
+        return 2
     problem = driver.round_problem(live, args.round_start, ledger_now)
     if problem:
         driver.log("abort", reason=problem)
