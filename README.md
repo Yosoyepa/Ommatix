@@ -152,6 +152,8 @@ The continuation of the eleventh round ([CHANGELOG 1.0.44](docs/thesis/CHANGELOG
 
 The second continuation of the eleventh round ([CHANGELOG 1.0.45](docs/thesis/CHANGELOG.md)) ran E2E-03 live for the first time. Its probe met the gate without input, and its pilot passed: three of three OS-side folder checks, no false success and no wrong control. Three of the ten scored runs then passed (ledger 515 to 530; 99 of the round's 200 requests are left). Before the fourth scored invocation (run 5), the owner's input rule stopped the series: the idle counter showed keyboard or mouse input the round did not cause, between one run and the next. E2E-03's matrix status is unchanged (`PENDIENTE_PRODUCTO`; it needs ten of ten). The owner has to say whether that input was theirs before the series resumes.
 
+The third continuation of the eleventh round ([CHANGELOG 1.0.46](docs/thesis/CHANGELOG.md)) completed E2E-03's scored series. Runs 5 to 11 all passed, each with three OS-side folder checks, no false success and no wrong control, so ten of ten scored runs have passed. E2E-03's matrix status is now `EJECUTADO_SUPERVISADO_PARCIAL`. Two runs were held back before any request by the input rule: once on a read taken before the owner's input, and once on input that the coordinator then attributed to the owner, after which the series resumed from a fresh read. The record shows the time of that input, not its source.
+
 - What is **not** done yet: no detector is accepted for the product (the S0 spike selected
   OmniParser `icon_detect_v3` to integrate and measure: one class and unmeasured precision;
   one inference costs about 7.5 s on one CPU thread, 2.6 s on eight and 0.12 s on DirectML;
