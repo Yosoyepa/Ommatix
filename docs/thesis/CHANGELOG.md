@@ -1,5 +1,16 @@
 # Historial documental
 
+## 1.0.33 — 2026-10-14: S4, novena ronda: parada de seguridad en el segundo clic de «Estándar» (rama `docs/s4-ninth-round`)
+
+No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust, ni ninguno de los clientes de S4 (`tools/s4/e2e_driver.py`, SHA-256 `cbe6905c…4821265`; `tools/s4/e2e_dossier.py`, SHA-256 `c1ba4a37…1020e`). La novena ronda se ejecutó en vivo con el cupo autorizado (200 solicitudes; cuaderno 427 → 429): **dos** solicitudes reales, las dos de `--calc-standard`. El segundo clic (sobre «Estándar») se entregó con `effect_observed`, pero su anclaje posterior no halló el elemento, y por la regla de seguridad del responsable se detuvo todo el trabajo en vivo. **Sin corridas puntuadas**: no hubo piloto de S4R-02, y E2E-02 y E2E-03 no se ejecutaron ni en sondeo.
+
+- **S4R-02 (Calculadora).** El sondeo confirmó los cinco elementos del flujo. `--calc-standard` halló «Estándar» por `AutomationId` `Standard` (tipo `ListItem`, único y en pantalla) y el primer clic quedó anclado, pero el segundo no (`grounded: false`); no se sabe si cayó en otro control. Modo al terminar: `other`, leído una vez y sin espera.
+- **E2E-02 (editor) y E2E-03 (Explorador).** No ejecutados. Sin piloto aprobado no hay serie.
+- **Binarios.** Motor sin cambio (`3a451211…cbb1a`). Editor recompilado desde `main` (`541fc0a8…2793`); el de la octava ronda (`0dcfb86b…4e78`) es anterior a la fusión #21.
+- **Pruebas:** 383 de Rust, 16 del editor, 230 de `tools/s4`, 48 del oráculo y 218 comprobaciones del paquete, todas correctas. Cuatro archivos de `referencia_ejecutable/resultados/` se restauraron: sólo cambiaban en marcas de tiempo, cadenas de plataforma y fin de línea.
+- **Hallazgos abiertos:** el resumen de `--calc-standard` no imprime `grounding_wrong` ni `engine_false_success`, y el modo al detenerse se lee una vez sin esperar. Son correcciones del cliente para una ronda aparte, con prueba y hash nuevo. Registro en [`S4_ACEPTACION_REDUCIDA.md`](S4_ACEPTACION_REDUCIDA.md), «Novena ronda», y en la [revisión](../reviews/2026-10-14-s4-ninth-round.md).
+- **Matrices:** sin cambio. **Pendiente del responsable:** decidir si la ronda continúa tras la parada de seguridad y cómo se investiga el segundo clic.
+
 ## 1.0.32 — 2026-10-14: S4, los tres bloqueos de la octava ronda: nombre de «Estándar», activación de la ventana y etiqueta del editor (rama `fix/s4-round8-blockers`)
 
 No cambia ningún requisito, algoritmo, contrato, escenario ni código de Rust. **No se envió entrada de ningún tipo.** Cambian los dos clientes de S4 (`tools/s4/e2e_driver.py`, SHA-256 `cbe6905c2f582955ddd626a167716e2062d39b294b3033ff706c09c5e4821265`, antes `a16c53af…ae22d`; `tools/s4/e2e_dossier.py`, SHA-256 `c1ba4a376a5df88bb696c07945a1b0fcd6da1ac0365d81f19348304d9061020e`, antes `cd959f59…f306`), el editor (`tools/s4/testeditor`, SHA-256 `0dcfb86b7bee3e5530ffab46c26f37e21c3d454321d93c7eb391f0e4c33d4e78`, antes `a6765dca…119d`) y sus pruebas. El PR #20 (octava ronda, 1.0.31) está fusionado en `main`.
