@@ -33,7 +33,7 @@ Para tomar decisiones, leer primero la auditoría (00), el SDD (02) y los requis
 | [S3_CORRIDAS_SUPERVISADAS.md](S3_CORRIDAS_SUPERVISADAS.md) | Corridas supervisadas de S3 con captura y entrada reales sobre `notepad.exe`: acciones enviadas, estados, códigos, métricas y hallazgos |
 | [S4_REPRODUCIBILIDAD.md](S4_REPRODUCIBILIDAD.md) | REL-01 (RNF-08): qué se congela (código, lockfiles, toolchain, modelos y runtimes con hash y licencia, hardware, corpus), licencias de las dependencias, cómo repetir las comprobaciones y qué falta |
 | [S4_INSTALACION_Y_REVERSION.md](S4_INSTALACION_Y_REVERSION.md) | REL-01: instalar, compilar cada conjunto de rasgos, colocar los modelos con su digest, configurar al operador, verificar, conectar un cliente MCP, revertir y límites de compatibilidad; escrita, sin ejecutar en una máquina limpia |
-| [S4_SESIONES_PENDIENTES.md](S4_SESIONES_PENDIENTES.md) | Qué necesita cada sesión supervisada que falta (REL-01, PERF-03 soak de 2 h, IT-07 DPI) del responsable y qué registra; herramientas `tools/perf/soak.py` y `tools/perf/dpi_probe.py` |
+| [S4_SESIONES_PENDIENTES.md](S4_SESIONES_PENDIENTES.md) | Qué necesita cada sesión supervisada que falta (REL-01 e IT-07 DPI; la sesión B, PERF-03, se ejecutó en 1.0.55) del responsable y qué registra; herramientas `tools/perf/soak.py` y `tools/perf/dpi_probe.py` |
 | [S4_ACEPTACION_REDUCIDA.md](S4_ACEPTACION_REDUCIDA.md) | Protocolo S4 reducido: 20 corridas E2E puntuadas sólo con clics (aplicación de prueba propia y Bloc de notas), Calculadora no puntuada, falsos éxitos, latencias, hallazgos y lo que falta para las 450 corridas |
 
 ## Artefactos de implementación y aceptación

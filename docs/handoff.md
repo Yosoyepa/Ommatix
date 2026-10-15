@@ -1,6 +1,6 @@
 # Estado del proyecto y relevo / Project status and handoff
 
-Fecha: 2026-10-15 (versión 1.0.53). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
+Fecha: 2026-10-15 (versión 1.0.55). Este documento resume dónde quedó el trabajo y qué sigue, para que otra
 persona o agente continúe sin rehacer nada. La especificación es el dossier de
 [`docs/thesis/`](thesis/README.md); las reglas del repositorio están en
 [`AGENTS.md`](../AGENTS.md).
@@ -54,8 +54,9 @@ persona o agente continúe sin rehacer nada. La especificación es el dossier de
 | — | Alcance del MVP y licencia (rama `docs/mvp-scope-and-licence`, CHANGELOG 1.0.52, [ADR-0023](adr/0023-licence-and-reduced-mvp-scope.md), decisiones del responsable del 15 de octubre de 2026): código `MIT OR Apache-2.0` y documentos CC BY 4.0 (`LICENSE-MIT`, `LICENSE-APACHE`, `LICENSE-DOCS`); propietario de los 28 requisitos; RNF-05 aceptado como incumplimiento documentado; el protocolo reducido de S4 sustituye las 450 corridas de EV-02 para este MVP; EV-01, EV-02, IT-07 y el corpus de REL-01 pasan al próximo corte; reevaluación de la Definition of Done con 2 de 10 casillas marcadas y su evidencia (capítulo 06 §6.7). Prueba `rel_01_the_repository_declares_its_licences`. Ninguna matriz cambia. | PR abierto |
 | — | INC-03, vigencia del snapshot y de la evidencia de accesibilidad (rama `feat/inc03-ttl`, CHANGELOG 1.0.49, [ADR-0025](adr/0025-bound-authorisations-by-snapshot-and-evidence-age.md), aprobada el 15 de octubre de 2026 con la aprobación previa del responsable para el siguiente corte): `max_snapshot_age_ms` se aplica en la puerta, también en simulación, y antes de cada entrada real (antes del clic y, en `type`, antes de las teclas), con 10 000 ms por defecto; vencido el plazo, `STALE_SNAPSHOT` y observar de nuevo. Una publicación nueva no renueva una lectura de accesibilidad antigua; la siguiente observación relee las regiones caducadas. UT-46 a UT-54 y BDD-38; cada comprobación, quitada, hace fallar sus pruebas. **Sin ejecución en vivo ni entrada**; la medición de la relectura y la calibración del valor quedan para el responsable. | Abierto (medición pendiente) |
 | — | Borrado de estado y prueba diferencial (rama `feat/dod-deletion-and-differential`, CHANGELOG 1.0.53): al terminar la sesión MCP el motor borra su snapshot, evidencia, cuadro base, regiones pendientes y diario de `request_id`, sin reutilizar identificadores (SEC-07, BDD-39; capítulo 08 §8.4). La prueba diferencial `ut_08_differential_tile_diff_matches_scalar_reference_on_generated_frames` compara `tile_changed` con una referencia escalar y no encuentra defectos (capítulo 05 §5.5). §6.7: se marca la casilla 5; la 7 sigue abierta (SEC-02 en parte y borrado bajo demanda). |
+| — | Sesión B, PERF-03 / RNF-06 (rama `docs/perf03-soak`, CHANGELOG 1.0.55): soak de 120 minutos completo con `tools/perf/soak.py` sobre la aplicación de prueba, sin entrada y sin umbral: 1440 de 1440 observaciones, cero pérdidas de primer plano, memoria privada del motor +1,6 MiB/h, cola de regiones pendientes en cero. Matriz: PERF-03 `EJECUTADO_SUPERVISADO_PARCIAL`; RNF-06 sin veredicto hasta que el responsable fije el umbral. Informe en [`thesis/S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md) §12. | Pendiente la aprobación del PR y el umbral del responsable |
 
-Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.53)
+Las matrices de la tesis (`docs/thesis/matrices/`) y su `CHANGELOG.md` (1.0.1–1.0.55)
 registran qué pruebas planificadas existen en Rust. Los requisitos RF/RNF siguen pendientes de
 aceptación: eso exige capturas, modelos y actuador reales en corridas supervisadas (S3–S4).
 S0 ejecutó en parte IT-01 e IT-02; las corridas supervisadas de S3 (1.0.9 y 1.0.12) ejecutan SEC-01 y,
@@ -267,11 +268,11 @@ La tercera continuación de la undécima ronda (1.0.46, rama `docs/s4-eleventh-r
 
 ## Qué sigue
 
-**Estado al 15 de octubre de 2026 (1.0.53, alcance reducido del MVP).** Para cerrar el MVP con el alcance reducido queda:
+**Estado al 15 de octubre de 2026 (1.0.55, alcance reducido del MVP).** Para cerrar el MVP con el alcance reducido queda:
 
 1. **E2E-03 (Explorador)**, serie de diez corridas puntuadas: en `main` tiene 3 de 10. Hace falta una autorización nueva del responsable para reanudar desde el cuaderno 530 (corridas 5 a 11), con la compuerta de la undécima ronda, y la pregunta de si la entrada entre las 00:56 y las 00:58 fue suya. No cuenta hasta su 10 de 10 en `main`; RF-18 y las casillas que dependen de ella no se marcan antes.
 2. **Sesión A**: instalar, verificar y revertir siguiendo [`S4_INSTALACION_Y_REVERSION.md`](thesis/S4_INSTALACION_Y_REVERSION.md) en una máquina limpia, y archivar el `environment.json`. Es la evidencia de REL-01; la casilla de documentación ya está marcada.
-3. **Sesión B**: el soak de 2 h (PERF-03, RNF-06). Antes, el responsable fija el umbral de RNF-06, que el repositorio no tiene.
+3. **Sesión B**: ejecutada en 1.0.55 (§12 de [`S0_RESULTADOS.md`](thesis/S0_RESULTADOS.md)). Falta que el responsable fije el umbral de RNF-06 y lea con él la pendiente de memoria; sin umbral, RNF-06 no tiene veredicto.
 4. **Pendientes que no están en el alcance cedido**: el borrado bajo demanda del operador, sin terminar la sesión (capítulo 08 §8.4; el borrado al terminar la sesión existe desde 1.0.53, SEC-07); la parte de percepción de PERF-02 (p99 y variantes de caché); y SEC-02, SEC-05 e IT-01 a IT-05 en parte. La prueba diferencial del diferenciador (capítulo 05 §5.5) está hecha desde 1.0.53.
 5. **Próximo corte** (fuera de este MVP): EV-01, EV-02, IT-07 y el corpus de REL-01, con el plan del paquete Paper (INC-00 a INC-09; no se copia aquí). RNF-05 sigue como incumplimiento documentado.
 
