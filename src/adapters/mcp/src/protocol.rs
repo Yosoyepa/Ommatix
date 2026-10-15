@@ -371,9 +371,13 @@ impl Connection {
         let arguments = params.get("arguments").unwrap_or(&empty);
         match tools::call(&self.engine, name, arguments) {
             Ok(output) => Ok(Reply::Tool(output)),
+            // The name is the agent's text, which may carry what it read on the screen: it
+            // is not echoed (IT-06, SEC-04). The error lists the tools that exist instead.
             Err(CallError::UnknownTool) => Err(ErrorData::invalid_params(
                 "Unknown tool",
-                Some(json!({ "tool": name })),
+                Some(json!({
+                    "tools": self.tools.iter().map(|t| t.name.as_ref()).collect::<Vec<_>>()
+                })),
             )),
             Err(CallError::InvalidArguments(e)) => Err(ErrorData::invalid_params(
                 format!("Invalid arguments for tool {name}: {e}"),
@@ -587,11 +591,22 @@ fn initialize_unavailable(params: &Map<String, Value>) -> ErrorData {
     unsupported_version(params.get("protocolVersion").unwrap_or(&Value::Null))
 }
 
+/// `method` when it is 1 to 64 characters of the kind method names are made of.
+fn tame_method(method: &str) -> Option<&str> {
+    let tame = (1..=64).contains(&method.len())
+        && method
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'/'));
+    tame.then_some(method)
+}
+
 fn method_not_found(method: &str) -> ErrorData {
     ErrorData::new(
         ErrorCode::METHOD_NOT_FOUND,
         "Method not found",
-        Some(json!({ "method": method })),
+        // A method is a protocol name (`resources/list`); anything that is not shaped like
+        // one is the sender's free text and is not echoed (IT-06, SEC-04).
+        tame_method(method).map(|method| json!({ "method": method })),
     )
 }
 
