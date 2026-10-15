@@ -321,7 +321,7 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
 
 - **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
   rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
-  `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` booleano (por defecto `true`), `max_message_bytes`
+  `full_refresh_area_ratio` en (0, 1], `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` booleano (por defecto `true`), `candidate_search` `scan` (por defecto, la referencia) o `rstar` (R*-tree experimental, [ADR-0027](docs/adr/0027-candidate-enumeration-with-an-rstar-index.md); los mismos resultados), `max_message_bytes`
   4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`
   o `window_pin_file` en blanco, una entrada de `allowed_window_classes` que nunca podría
   aplicarse o que nombra el escritorio, la barra de tareas o `applicationframehost.exe`); y valores que este binario no puede cumplir: un `platform` distinto de

@@ -52,7 +52,7 @@ use crate::cli::{InputKind, RunArgs, SourceKind, ThemeKind};
 use crate::clock::SystemClock;
 use ommatix::policy::ConfigPolicy;
 
-use crate::config::{AccessibilityKind, Config, EngineMode, OcrKind};
+use crate::config::{AccessibilityKind, CandidateSearchKind, Config, EngineMode, OcrKind};
 
 /// The driven adapters chosen for a source.
 type Adapters = (
@@ -268,6 +268,7 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
     engine_config.verify = config.verify_params();
     engine_config.concurrent_stages = config.engine.concurrent_stages;
     engine_config.max_snapshot_age = config.max_snapshot_age();
+    engine_config.fusion.candidate_search = config.engine.candidate_search.search();
     engine_config.icons = icons;
     let engine = Engine::new(
         engine_config,
@@ -301,6 +302,13 @@ fn startup_notes(
     let access = config.models.accessibility;
     let mut notes = vec![icon_note(icons)];
     notes.extend(config.notes());
+    if config.engine.candidate_search == CandidateSearchKind::Rstar {
+        notes.push(
+            "[engine] candidate_search = \"rstar\" is experimental (ADR-0027): owners and \
+             corridor obstacles are found by an R*-tree; the result is the scan's"
+                .to_owned(),
+        );
+    }
     if source != SourceKind::Sim && config.models.has_detector() {
         let m = &config.models;
         notes.push(format!(

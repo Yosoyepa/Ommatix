@@ -26,6 +26,7 @@ use ommatix_adapter_mcp::{DEFAULT_MAX_MESSAGE_BYTES, MODERN_PROTOCOL_VERSION, Mc
 use ommatix_adapter_vision::model::integrity::Sha256Digest;
 use ommatix_application::{IconResolverConfig, LocalPolicy, VerifyParams};
 use ommatix_domain::appearance::CachePolicy;
+use ommatix_domain::candidates::CandidateSearch;
 use ommatix_domain::incremental::PlanParams;
 use serde::Deserialize;
 
@@ -46,6 +47,28 @@ pub enum EngineMode {
     /// Native input; still needs `[safety] actuation_enabled = true`, the `native-input`
     /// build and the screen source.
     Native,
+}
+
+/// How Algorithm 2 finds the candidate controls of an observation (`[engine] candidate_search`,
+/// ADR-0027). Both give the same result; `scan` is the reference and the default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CandidateSearchKind {
+    /// Every control is inspected, in source order.
+    #[default]
+    Scan,
+    /// An R*-tree built once per observation over the reconciled controls. Experimental:
+    /// its adoption as the default is not decided (ADR-0027).
+    Rstar,
+}
+
+impl CandidateSearchKind {
+    pub const fn search(self) -> CandidateSearch {
+        match self {
+            Self::Scan => CandidateSearch::Scan,
+            Self::Rstar => CandidateSearch::RStar,
+        }
+    }
 }
 
 /// `[engine]`: Algorithm 1's parameters and the engine's mode.
@@ -76,6 +99,9 @@ pub struct EngineSection {
     /// observation processes the whole frame. An experiment switch, never a production mode;
     /// `notes()` says so on stderr when it is on.
     pub experimental_full_frame: bool,
+    /// How Algorithm 2 enumerates the candidate controls (ADR-0027). `scan`, the reference,
+    /// by default; `rstar` is the experimental index and gives the same results.
+    pub candidate_search: CandidateSearchKind,
 }
 
 impl Default for EngineSection {
@@ -93,6 +119,7 @@ impl Default for EngineSection {
             verify_poll_ms: 50,
             concurrent_stages: true,
             experimental_full_frame: false,
+            candidate_search: CandidateSearchKind::Scan,
         }
     }
 }
@@ -901,6 +928,32 @@ mod tests {
         );
         let config = Config::parse("[engine]\nmax_snapshot_age_ms = 2500\n").unwrap();
         assert_eq!(config.max_snapshot_age(), Duration::from_millis(2500));
+    }
+
+    #[test]
+    fn the_candidate_search_is_the_scan_unless_the_operator_asks_for_the_index() {
+        assert_eq!(
+            Config::default().engine.candidate_search,
+            CandidateSearchKind::Scan
+        );
+        let config = Config::parse(
+            "[engine]
+candidate_search = \"rstar\"
+",
+        )
+        .unwrap();
+        assert_eq!(
+            config.engine.candidate_search.search(),
+            CandidateSearch::RStar
+        );
+        assert!(
+            Config::parse(
+                "[engine]
+candidate_search = \"tree\"
+"
+            )
+            .is_err()
+        );
     }
 
     #[test]

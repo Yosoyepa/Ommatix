@@ -2392,6 +2392,7 @@ mod icons {
 // ---- accessibility evidence (ADR-0017) ----
 
 mod accessibility;
+mod candidates;
 mod concurrency;
 mod identity;
 mod security;
