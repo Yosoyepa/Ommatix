@@ -65,6 +65,8 @@ mod tests {
 
     fn window(class: &str, handle: u64) -> TopLevelWindow {
         TopLevelWindow {
+            rectangle: None,
+            z_order: 0,
             class: class.to_owned(),
             handle,
         }

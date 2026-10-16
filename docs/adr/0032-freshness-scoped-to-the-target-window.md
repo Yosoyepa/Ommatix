@@ -111,11 +111,11 @@ The limits are stated plainly. D does not fix the leading candidate, the caret i
 - **Watch.** A group that covers most of the screen behaves like A: no gain, no harm. A window partly outside output 0 is clipped, and the target must lie inside the frame. The margin is an unmeasured parameter. Rectangles must be read in the capture's DPI awareness, so that they share the frame's coordinate space (SDD §2.8). Whether the visible frame bounds or the full window rectangle is the right attestation (they differ by the invisible resize border) is decided by measurement on the reference PC.
 - **Proof.** The claim must be shown by tests that change a pixel inside the group, outside it and at its boundary. It cannot be argued in prose alone.
 
-## Test plan (accepted; enters `plan_pruebas.csv` with the implementation)
+## Test plan (accepted; registered in `plan_pruebas.csv`)
 
-The identifiers below enter `plan_pruebas.csv` with the target-window implementation PR, after the separate D0 PR. No oracle test (OR-xx) covers freshness today, so the expected results are those of the whole-frame check (`screen`) on the same frames. Where an oracle test exists, it sets the expected output (AGENTS.md §5.11).
+The identifiers below are registered in `plan_pruebas.csv` by the target-window implementation PR, after the separate D0 PR. UT-55..UT-64 and BDD-55..BDD-58 run on synthetic frames and port doubles; IT-08 remains planned and unexecuted. No oracle test (OR-xx) covers freshness today, so the expected results are those of the whole-frame check (`screen`) on the same frames. Where an oracle test exists, it sets the expected output (AGENTS.md §5.11).
 
-| ID | Name (proposed) | What it protects | Expected result |
+| ID | Name | What it protects | Expected result |
 |---|---|---|---|
 | UT-55 | `a_change_outside_the_target_group_is_accepted_in_target_window_mode` | Changes outside the group do not refuse | Accepted; `screen` refuses on the same frames |
 | UT-56 | `a_one_pixel_change_inside_the_target_window_refuses_far_from_the_target` | Same-window changes still refuse; no tolerance, no mask | Refused; nothing sent |
@@ -129,7 +129,7 @@ The identifiers below enter `plan_pruebas.csv` with the target-window implementa
 | UT-64 | `the_default_freshness_scope_is_the_whole_frame_and_unknown_values_are_refused` | Default off; configuration validated | Default `screen`; an unknown value fails at start |
 | IT-08 | Live check of the target-window scope (M2 below) | The behaviour on the reference PC | Pre-registered criteria, set by the owner |
 
-BDD sketch, in Spanish, as it would enter `docs/thesis/features/06_accion_segura.feature` (the feature file's own style; the IDs are proposed):
+BDD scenarios, in Spanish, registered in `docs/thesis/features/06_accion_segura.feature` (the feature file's own style):
 
 ```gherkin
   @BDD-55 @RF-11 @UT-55
@@ -182,6 +182,14 @@ Also required before the decision is trusted:
 - D0, then M1, with the owner's criterion, which the owner records before the run;
 - M2, with the owner's consent for each session, and the criteria recorded before it runs;
 - `cargo test --workspace` and the thesis checks, as for any change to the engine.
+
+## Implementation choices and validation limits
+
+The Windows adapter attests `DWMWA_EXTENDED_FRAME_BOUNDS` (visible frame bounds), read under the same per-monitor-v2 DPI awareness and `DisplayMapping` as capture/input. It does not silently substitute `GetWindowRect` and its invisible resize border. The DWM/GetWindowRect measurement on the reference PC remains open; no live measurement is claimed. Invisible, minimized and DWM-cloaked windows are excluded from the visible list; every other intersecting top-level window is included, including desktop/background windows, with no application exemption. A background rectangle covering the output can therefore conservatively expand the group to the entire screen. The z-order walk rejects cycles or more than 4096 visited handles and any failed rectangle read. The group is ordered by z-order then handle, with no titles.
+
+Observation brackets capture with complete window reads, then binds each track to the OS window under its point and confirms the same window evidence again. The immutable snapshot stores that attestation. The action brackets its freshness capture with group reads and, after the existing last look, reads identity once more. It revalidates consent, stop, application/window scope and age after that extra OS work; missing final attestation requires a whole-frame comparison of the captured frame. A known moved or disappeared seed still refuses if the old target box no longer fits or the point query becomes unavailable; containment fallback never erases positive identity evidence. Scoped successes compare only intersecting tiles; D0 counts the whole frame only on refusal. Geometry/epoch refusals omit a group count because old rectangles do not attest the new geometry. Group-only refusals can report zero differing tiles.
+
+No screen capture, OS input, M1, M2 or IT-08 was executed by this implementation. The switch remains `screen` by default. The requirement states and chapter 06 §6.7 boxes are unchanged.
 
 ## Reversibility
 

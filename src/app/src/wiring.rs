@@ -283,6 +283,8 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
     engine_config.plan = config.plan_params();
     engine_config.verify = config.verify_params();
     engine_config.concurrent_stages = config.engine.concurrent_stages;
+    engine_config.action_freshness = config.engine.action_freshness.scope();
+    engine_config.action_freshness_margin_px = config.engine.action_freshness_margin_px;
     engine_config.max_snapshot_age = config.max_snapshot_age();
     engine_config.fusion.candidate_search = config.engine.candidate_search.search();
     engine_config.icons = icons;

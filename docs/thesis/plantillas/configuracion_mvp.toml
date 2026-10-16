@@ -3,6 +3,12 @@
 mode = "dry_run"
 platform = "windows"
 snapshot_policy = "strict"
+# ADR-0032, opcional y apagado por defecto: screen compara la pantalla entera.
+# target_window compara los tiles del grupo atestiguado por el SO; sin atestación vuelve a screen.
+# Activarlo en una sesión en vivo requiere consentimiento del responsable y validación M1/M2.
+action_freshness = "screen"
+# Extiende los rectángulos del grupo; un margen mayor sólo puede rechazar más.
+action_freshness_margin_px = 0
 tile_size = 64
 halo_px = 32
 max_regions = 4

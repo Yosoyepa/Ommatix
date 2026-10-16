@@ -99,6 +99,8 @@ struct World {
     /// The foreground top-level window the actuator attests (ADR-0020), and the window at
     /// the action's point. `None`: the actuator cannot attest it.
     foreground_window: Option<TopLevelWindow>,
+    top_windows: Option<Vec<TopLevelWindow>>,
+    top_windows_script: VecDeque<Option<Vec<TopLevelWindow>>>,
     window_at_point: Option<TopLevelWindow>,
     /// Answers to the next foreground-window reads, before `foreground_window` takes
     /// over: a window that changes while the engine works.
@@ -155,6 +157,8 @@ impl Default for World {
             clicks: Vec::new(),
             keys: Vec::new(),
             foreground_window: None,
+            top_windows: None,
+            top_windows_script: VecDeque::new(),
             window_at_point: None,
             foreground_window_script: VecDeque::new(),
             access_delay: Duration::ZERO,
@@ -397,6 +401,14 @@ impl OsActuator for Actuator {
             Some(answer) => answer,
             None => w.foreground_window.clone(),
         }
+    }
+
+    fn top_level_windows(&self) -> Option<Vec<TopLevelWindow>> {
+        let mut w = lock(&self.0);
+        w.note("windows");
+        w.top_windows_script
+            .pop_front()
+            .unwrap_or_else(|| w.top_windows.clone())
     }
 
     fn window_at(&self, _point: (f64, f64)) -> Option<TopLevelWindow> {

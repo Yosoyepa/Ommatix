@@ -34,8 +34,8 @@ use ommatix_adapter_mcp::{
 use ommatix_adapter_sim::{FixtureDesktop, FixtureScene, confirmed};
 use ommatix_application::contract::{ActionKind, ValidatedAction};
 use ommatix_application::{
-    AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, Clock,
-    DeliveryReceipt, Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock,
+    AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, ActionFreshness,
+    Clock, DeliveryReceipt, Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock,
     NoAccessibility, OsActuator, PolicyStore, PortError, Ports, TopLevelWindow, VerifyParams,
 };
 use ommatix_domain::appearance::{
@@ -67,6 +67,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
     "BDD-37", "BDD-38", "BDD-39", "BDD-40", "BDD-41", "BDD-42", "BDD-43", "BDD-44", "BDD-45",
     "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52", "BDD-53", "BDD-54",
+    "BDD-55", "BDD-56", "BDD-57", "BDD-58",
 ];
 
 #[derive(Debug, Default, World)]
@@ -942,6 +943,7 @@ struct Foreground {
     /// attests them for the operator's window scope (ADR-0020). `None`: it cannot.
     window: Option<TopLevelWindow>,
     window_at_point: Option<TopLevelWindow>,
+    windows: Option<Vec<TopLevelWindow>>,
 }
 
 impl Default for Foreground {
@@ -952,6 +954,7 @@ impl Default for Foreground {
             queries: 0,
             window: None,
             window_at_point: None,
+            windows: None,
         }
     }
 }
@@ -1010,6 +1013,14 @@ impl OsActuator for LiveDouble {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .window
+            .clone()
+    }
+
+    fn top_level_windows(&self) -> Option<Vec<TopLevelWindow>> {
+        self.1
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .windows
             .clone()
     }
 
@@ -1153,6 +1164,17 @@ impl Agent {
         live: bool,
         tree: Option<Vec<AccessibleElement>>,
     ) -> Self {
+        Self::build_scoped(scene, policy, config, live, tree, ActionFreshness::Screen)
+    }
+
+    fn build_scoped(
+        scene: FixtureScene,
+        policy: Arc<dyn PolicyStore>,
+        config: McpConfig,
+        live: bool,
+        tree: Option<Vec<AccessibleElement>>,
+        scope: ActionFreshness,
+    ) -> Self {
         let clock = Arc::new(ManualClock::new());
         let desktop = FixtureDesktop::new(scene, clock.clone());
         let recorder: Box<dyn OsActuator> = Box::new(desktop.actuator());
@@ -1162,8 +1184,10 @@ impl Agent {
             Some(elements) => Box::new(TreeDouble(elements, typing.clone())),
             None => Box::new(NoAccessibility),
         };
+        let mut engine_config = EngineConfig::new(SESSION);
+        engine_config.action_freshness = scope;
         let engine = ThesisEngine::new(
-            EngineConfig::new(SESSION),
+            engine_config,
             Ports {
                 capturer: Box::new(desktop.capturer()),
                 detector: Box::new(desktop.detector()),
@@ -2245,6 +2269,8 @@ const OPENED_WINDOW: u64 = 265_482;
 
 fn window(class: &str, handle: u64) -> TopLevelWindow {
     TopLevelWindow {
+        rectangle: None,
+        z_order: 0,
         class: class.to_owned(),
         handle,
     }
@@ -3192,4 +3218,94 @@ fn main() {
                 .any(|tag| IMPLEMENTED.contains(&tag.as_str()))
         },
     ));
+}
+
+// ---- ADR-0032: optional target-window freshness, over deterministic port doubles ----
+
+#[given("un snapshot observado con el alcance de frescura «ventana objetivo»")]
+fn bdd_55_an_observation_with_target_window_freshness(e: &mut Engine) {
+    let mut agent = Agent::build_scoped(
+        form_with_title(),
+        Arc::new(FixedPolicy(live_policy())),
+        McpConfig::default(),
+        true,
+        None,
+        ActionFreshness::TargetWindow,
+    );
+    let window = TopLevelWindow {
+        class: "SyntheticWindow".into(),
+        handle: 1,
+        z_order: 0,
+        rectangle: Some(bx(0.0, 0.0, 256.0, 200.0)),
+    };
+    {
+        let mut foreground = agent
+            .foreground
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        foreground.window = Some(window.clone());
+        foreground.window_at_point = Some(window.clone());
+        foreground.windows = Some(vec![window]);
+    }
+    agent.observe(json!({}));
+    agent.target = Some(agent.element("Guardar"));
+    e.agent = Some(agent);
+}
+
+#[given("una ventana sin relación con el objetivo que cambia su contenido antes de la entrega")]
+fn an_unrelated_window_changes(e: &mut Engine) {
+    e.agent().desktop.update(|scene| {
+        scene.add_word("Synthetic change", bx(300.0, 10.0, 350.0, 30.0));
+    });
+}
+
+#[given("un cursor de texto que parpadea dentro de la ventana objetivo, lejos del objetivo")]
+fn bdd_56_a_caret_changes_inside_the_target_window(e: &mut Engine) {
+    e.agent().desktop.update(|scene| {
+        scene.add_word("|", bx(200.0, 70.0, 201.0, 80.0));
+    });
+}
+
+#[given("una ventana emergente que se solapa con la ventana objetivo aparece antes de la entrega")]
+fn bdd_57_an_overlapping_popup_appears(e: &mut Engine) {
+    e.agent()
+        .foreground
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .windows
+        .as_mut()
+        .unwrap()
+        .push(TopLevelWindow {
+            class: "SyntheticPopup".into(),
+            handle: 2,
+            z_order: 1,
+            rectangle: Some(bx(200.0, 0.0, 400.0, 100.0)),
+        });
+}
+
+#[given("el monitor cambia de escala antes de la entrega")]
+fn bdd_58_the_monitor_changes_scale_before_delivery(e: &mut Engine) {
+    e.agent().desktop.set_dpi(120);
+}
+
+#[when("el agente solicita un clic real sobre el objetivo")]
+fn the_agent_requests_a_click_on_the_observed_target(e: &mut Engine) {
+    let agent = e.agent();
+    let args = agent.live_click_args(agent.target(), "window-freshness", "none");
+    agent.tool_result("execute_action", args);
+}
+
+#[then("la acción se entrega y el snapshot queda gastado")]
+fn the_action_is_delivered_and_the_snapshot_is_spent(e: &mut Engine) {
+    let agent = e.agent();
+    let result = agent.last_response()["result"].clone();
+    assert_eq!(result["structuredContent"]["status"], "input_delivered");
+    assert_eq!(agent.desktop.handed_actions().len(), 1);
+    let retry = agent.live_click_args(agent.target(), "spent-window", "none");
+    let result = agent.tool_result("execute_action", retry);
+    assert_eq!(
+        result["structuredContent"]["error"]["code"],
+        "STALE_SNAPSHOT"
+    );
+    assert_eq!(agent.desktop.handed_actions().len(), 1);
 }

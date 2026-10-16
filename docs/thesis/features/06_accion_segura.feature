@@ -69,3 +69,31 @@ Característica: Actuación y verificación honestas
     Cuando pasa la vigencia configurada y el agente solicita un clic de prueba sobre ella
     Entonces se devuelve STALE_SNAPSHOT con observe_again y no se envía ningún evento
     Y una nueva observación vuelve a permitir el clic de prueba
+
+  @BDD-55 @RF-11 @UT-55
+  Escenario: BDD-55 Un cambio fuera de la ventana objetivo no rechaza la acción
+    Dado un snapshot observado con el alcance de frescura «ventana objetivo»
+    Y una ventana sin relación con el objetivo que cambia su contenido antes de la entrega
+    Cuando el agente solicita un clic real sobre el objetivo
+    Entonces la acción se entrega y el snapshot queda gastado
+
+  @BDD-56 @RF-11 @UT-56
+  Escenario: BDD-56 Un cambio dentro de la ventana objetivo sí rechaza la acción
+    Dado un snapshot observado con el alcance de frescura «ventana objetivo»
+    Y un cursor de texto que parpadea dentro de la ventana objetivo, lejos del objetivo
+    Cuando el agente solicita un clic real sobre el objetivo
+    Entonces se devuelve STALE_SNAPSHOT con observe_again y no se envía ningún evento
+
+  @BDD-57 @RF-11 @UT-57
+  Escenario: BDD-57 Una ventana emergente sobre el objetivo rechaza la acción
+    Dado un snapshot observado con el alcance de frescura «ventana objetivo»
+    Y una ventana emergente que se solapa con la ventana objetivo aparece antes de la entrega
+    Cuando el agente solicita un clic real sobre el objetivo
+    Entonces se devuelve STALE_SNAPSHOT con observe_again y no se envía ningún evento
+
+  @BDD-58 @RF-11 @UT-60
+  Escenario: BDD-58 Un cambio de geometría rechaza la acción con cualquier alcance
+    Dado un snapshot observado con el alcance de frescura «ventana objetivo»
+    Y el monitor cambia de escala antes de la entrega
+    Cuando el agente solicita un clic real sobre el objetivo
+    Entonces se devuelve STALE_SNAPSHOT con observe_again y no se envía ningún evento

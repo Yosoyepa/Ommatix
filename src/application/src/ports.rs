@@ -236,8 +236,14 @@ pub struct DeliveryReceipt {
 
 /// A top-level window as the actuator can attest it (ADR-0020): the class its owner
 /// registered and its handle. Never its title or any text it shows.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TopLevelWindow {
+    /// Visible frame in the selected output's physical pixels, clipped to that output.
+    /// None: this query omits the rectangle. ADR-0032 requires it in the complete
+    /// top-level list; without that attestation it falls back to the whole frame.
+    pub rectangle: Option<BBox>,
+    /// Front-to-back OS order; ties are resolved by handle, never by hash iteration.
+    pub z_order: u32,
     /// The window class name (`CabinetWClass` for a File Explorer window).
     pub class: String,
     /// The window handle, as a number the operator can write in the pin file.
@@ -271,6 +277,14 @@ pub trait OsActuator: Send {
     /// action's point), as the actuator can attest it. `None` when it cannot or there is
     /// none (ADR-0020).
     fn window_at(&self, _point: (f64, f64)) -> Option<TopLevelWindow> {
+        None
+    }
+
+    /// Complete list of visible top-level windows intersecting the captured output,
+    /// ordered by z-order then handle (ADR-0032). None means unattested, never an empty
+    /// desktop. An incomplete/bounded walk must return None, including on any failed
+    /// rectangle read. No titles or screen text are read.
+    fn top_level_windows(&self) -> Option<Vec<TopLevelWindow>> {
         None
     }
 
