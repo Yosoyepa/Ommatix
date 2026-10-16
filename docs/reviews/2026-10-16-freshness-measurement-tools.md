@@ -55,7 +55,7 @@ verbatim config `\\?\C:\operator\live.toml`, copying `..\STOP` retained that com
 Rust's verbatim join normalises it. The copied path could fail with Win32 error 123 (P2).
 Both clients share the helper, so both were affected.
 
-**Resolution (architect's closed rule).** Classify raw strings before any path join.
+**Second resolution (`5ef4fb1`; replaced by the stricter text-only rule below).** Classify raw strings before any path join.
 Accept only standard absolute Windows paths (letter plus root, or UNC) and plain relative
 paths without a drive or initial separator; neither may contain a `..` component.
 Absolute operator values stay byte-for-byte identical. Plain relatives join the supplied
@@ -83,6 +83,52 @@ configs in both clients, and rewriting `C:/operator/STOP` separators. After corr
   the clear operator reason, exit code and absence of process startup on refusal.
 
 These are filesystem/path doubles only: no live engine, screen capture or OS input.
+
+## Third review of `5ef4fb1`: a trailing separator can weaken the pin (P1)
+
+**Finding.** The accepted relative `window_pin_file = 'pin\'` was passed through
+`pathlib`, which discarded its final separator. Rust preserves it: the original
+`C:\operator\pin\` cannot open the regular pin file, so `WindowPin::Unset` denies
+input, while the copied `C:\operator\pin` may be readable and authorise input. Both
+clients shared this normalisation. The CLI also converted `--config` into a `Path`
+before the helper saw it, concealing malformed separators before validation.
+
+**Resolution (architect's raw-string whitelist).** No path library validates, joins or
+resolves copied operator values. Accept a drive prefix `^[A-Za-z]:\\` or UNC prefix
+`^\\\\[^\\/?.]` for absolute paths, otherwise only plain relative components. Every
+component in either form must match `[A-Za-z0-9_\-][A-Za-z0-9_\-. ]*`, cannot end in a
+dot or space and cannot be empty, `.` or `..`. This excludes trailing/doubled separators,
+colons outside the drive and all specified special characters. UNC needs server and
+share components. The config argument must itself be a raw absolute string, with a
+directory that passes the absolute whitelist; a drive-root file has no admitted named
+directory and is refused. Absolute values are returned byte-for-byte; relatives use
+only `directory + "\\" + value`, leaving both strings unchanged. Both CLIs keep the
+config argument as a string until this check. Path objects are used only for actual
+config-file/output I/O after validation; symlink and outside-repository guards remain.
+
+**Fail-first regressions.** The new cases produced 30 failures on `5ef4fb1`, including
+acceptance of `pin\`, `pin//x`, `pin.`, `pin `, `.\pin`, `a\.\b`, colon/special-character
+components in both clients, and the rewriting of supplied-directory/relative separators.
+The CLI regression also showed that a malformed config argument had already created a
+run folder. All pass after the correction:
+
+- `test_pin_component_spellings_refuse_before_copying_in_both_clients` protects all
+  specified pin spellings and confirms no folder or copy is created.
+- `test_plain_relative_copy_keeps_raw_config_directory_and_relative_separators` checks
+  the exact expected copied string, including mixed separators, in both clients.
+- `test_both_clis_validate_raw_config_before_path_objects_can_remove_separators`
+  exercises both real argument parsers with doubles and prevents early normalisation.
+- `test_operator_path_rebasing_is_pure_text_without_path_library_calls` makes any `Path`
+  constructor call in the rebasing helper fail, and checks exact expected stop/pin strings.
+- `test_a_normalized_config_path_object_is_refused_before_copying` blocks callers from
+  hiding already-normalised input behind a path object.
+- `test_component_whitelist_applies_to_drive_unc_and_relative_forms` covers permitted
+  drive, UNC and relative names and prohibited components in each absolute form.
+
+The earlier absolute-value, stop/pin identity, unknown-path and no-server-on-refusal
+tests remain; the former filesystem-resolution regression is replaced by the explicit
+no-path-library test because filesystem resolution is no longer part of this helper.
+These tests read only private fixture files and start no engine, capture or input.
 
 ## CI finding: the guide validator misattributes Python flags
 
@@ -126,8 +172,11 @@ La revisión P1 detectó que canonicalizar una configuración enlazada podía mo
 ahora se rechaza el enlace y todas las rutas conservan el directorio suministrado; las
 regresiones fallaron antes del arreglo y cubren ambos clientes. La segunda revisión
 detectó las diferencias de `C:STOP` y de rutas verbatim: por decisión del arquitecto,
-sólo se aceptan absolutas estándar o relativas simples sin `..`; las demás se rechazan
-antes de escribir y se informa el motivo sin mostrar la ruta. El validador de guías
+sólo se aceptan absolutas estándar o relativas simples sin `..`. La tercera revisión
+detectó que `pin\` perdía su separador final y podía debilitar el anclaje: ahora una
+lista blanca valida el texto crudo, sin bibliotecas de rutas, y sólo se concatenan
+cadenas ya admitidas. Las regresiones fallaron primero en ambos clientes; todo rechazo
+se informa antes de escribir, sin mostrar la ruta. El validador de guías
 reconoce las herramientas Python y sus continuaciones PowerShell. M1 queda descriptiva,
 con 30 + 30 pares y sin umbral, por decisión del responsable.
 M1 reutiliza la agrupación del motor con un lector incapaz de entregar entrada; las pruebas

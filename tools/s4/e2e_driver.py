@@ -129,7 +129,7 @@ import tomllib
 import unicodedata
 from collections import Counter
 from ctypes import wintypes
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from types import MappingProxyType
 
 HERE = Path(__file__).resolve().parent
@@ -1721,36 +1721,42 @@ def freshness_fields(out: dict, meta: dict) -> dict:
 
 
 def m2_path_is_absolute(value: str) -> bool:
-    """Accept only standard absolute Windows paths or plain relatives (architect's rule).
-
-    Classify before joining or normalising: pathlib and Rust disagree on drive-relative
-    and verbatim joins. Reject those forms instead of trying to reproduce either join.
-    """
-    if not isinstance(value, str) or not value.strip():
+    """Validate raw Windows spelling, without a path library or filesystem lookup."""
+    if not isinstance(value, str) or not value:
         raise Abort("M2 paths must be non-empty strings; omit unused optional path keys")
-    separators = value.replace("/", "\\")
-    if separators.startswith(("\\\\?\\", "\\\\.\\")):
-        raise Abort("M2 refuses verbatim/device prefixes; use standard Windows paths")
-    if ".." in separators.split("\\"):
-        raise Abort("M2 refuses '..' path components; provide a path without parent traversal")
-    if "\x00" in value:
-        raise Abort("M2 refuses paths containing a null character")
-    parsed = PureWindowsPath(value)
-    if parsed.drive or parsed.root:
-        drive_letter = (len(parsed.drive) == 2 and parsed.drive[1] == ":"
-                        and parsed.drive[0] in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-        unc = parsed.drive.startswith("\\\\")
-        if parsed.is_absolute() and (drive_letter or unc):
-            return True
+    if re.match(r"^[A-Za-z]:\\", value):
+        body, absolute, minimum = value[3:], True, 1
+    elif re.match(r"^\\\\[^\\/?.]", value):
+        body, absolute, minimum = value[2:], True, 2  # UNC server and share
+    else:
+        body, absolute, minimum = value, False, 1
+    if not absolute and (re.match(r"^[A-Za-z]:", value) or value.startswith(("\\", "/"))):
         raise Abort("M2 refuses drive-relative or root-relative paths; "
-                    "use a full absolute or plain relative path")
-    return False
+                    "use a standard drive-rooted or UNC configuration path")
+    components = re.split(r"[\\/]", body)
+    if len(components) < minimum or any(
+            not re.fullmatch(r"[A-Za-z0-9_\-][A-Za-z0-9_\-. ]*", part)
+            or part.endswith((".", " ")) for part in components):
+        raise Abort("M2 path components must be non-empty ASCII names starting with a letter, "
+                    "digit, underscore or hyphen; no dot components, trailing dots/spaces "
+                    "or special characters are allowed")
+    return absolute
 
 
-def rebase_operator_paths(config: dict, source: Path) -> None:
-    """Keep absolute paths byte-for-byte; join only plain relatives to the supplied base."""
-    if not m2_path_is_absolute(str(source)):
-        raise Abort("M2 needs an absolute configuration base before copying operator paths")
+def m2_config_directory(source: str) -> str:
+    """Extract the supplied absolute directory as text, before creating any Path object."""
+    if not m2_path_is_absolute(source):
+        raise Abort("M2 requires the configuration path as supplied in absolute Windows form")
+    last_separator = max(source.rfind("\\"), source.rfind("/"))
+    directory = source[:last_separator]
+    if not m2_path_is_absolute(directory):
+        raise Abort("M2 requires an absolute configuration directory with named components")
+    return directory
+
+
+def rebase_operator_paths(config: dict, source: str) -> None:
+    """Keep absolute text unchanged; prepend the raw supplied directory to relatives."""
+    directory = m2_config_directory(source)
     paths = {"safety": ("stop_file", "purge_file", "window_pin_file"),
              "models": ("detector_manifest", "onnxruntime_path", "directml_path",
                         "detector_path", "ocr_path"), "cache": ("prototypes",)}
@@ -1771,24 +1777,16 @@ def rebase_operator_paths(config: dict, source: Path) -> None:
                 continue
             value = values[key]
             absolute = m2_path_is_absolute(value)
-            expected = Path(value) if absolute else source.parent / value
-            try:
-                resolved = expected.resolve()
-                copied = value if absolute else str(expected)
-                if Path(copied).resolve() != resolved:
-                    raise ValueError("operator path differs in the configuration copy")
-            except (OSError, RuntimeError, ValueError):
-                raise Abort("an operator path cannot be preserved in the configuration copy") from None
-            config[section][key] = copied
+            config[section][key] = value if absolute else directory + "\\" + value
 
 
 def freshness_config(args) -> None:
     """Write an opt-in M2 copy outside the checkout, preserving relative path meanings."""
     if not getattr(args, "target_window_freshness", False):
         return
-    supplied = os.fspath(args.config)
-    source = Path(supplied) if m2_path_is_absolute(supplied) else Path.cwd() / supplied
-    m2_path_is_absolute(str(source))
+    supplied = args.config
+    m2_config_directory(supplied)
+    source = Path(supplied)  # File I/O only: never used to build copied operator paths.
     if source.is_symlink():
         raise Abort("M2 refuses a symlinked configuration file")
     if not source.is_file():
@@ -1801,7 +1799,7 @@ def freshness_config(args) -> None:
     if source.is_symlink():
         raise Abort("M2 refuses a symlinked configuration file")
     config.setdefault("engine", {})["action_freshness"] = "target_window"
-    rebase_operator_paths(config, source)
+    rebase_operator_paths(config, supplied)
 
     def value_text(value):
         if isinstance(value, str):
@@ -3393,7 +3391,7 @@ def run_check_mode(args, stop_file: Path, ledger: Path) -> int:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exe", required=True)
-    p.add_argument("--config", required=True, type=Path)
+    p.add_argument("--config", required=True)  # Keep raw spelling until M2 validation.
     p.add_argument("--target-window-freshness", action="store_true",
                    help="M2: use a target_window config copy beside --results, outside the repo")
     p.add_argument("--app", choices=sorted(FLOWS), required=True)
@@ -3465,6 +3463,7 @@ def main() -> int:
     except (OSError, RuntimeError, ValueError):
         log("abort", reason="cannot prepare the M2 configuration copy")
         return 2
+    args.config = Path(args.config)
     raw = args.config.read_bytes()
     config = tomllib.loads(raw.decode("utf-8"))
     stop = config.get("safety", {}).get("stop_file") or None

@@ -233,18 +233,32 @@ repositorio. Sólo cambia `[engine] action_freshness = "target_window"`; conserv
 permisos y conserva el significado de las rutas de modelos, caché, stop, purga y anclaje.
 Por decisión del arquitecto, la copia admite únicamente estas formas de ruta Windows:
 
-- **Absolutas estándar**, con letra y raíz (`C:\x\STOP`) o UNC
-  (`\\servidor\recurso\x\STOP`), sin componente `..`. Se conservan **carácter por carácter**.
-- **Relativas simples**, sin unidad, sin separador inicial y sin componente `..`
-  (`STOP`, `anclaje\ventana.pin`). Se unen al directorio de la configuración **tal como
-  se suministró**, igual que `Config::load` en estas formas admitidas.
+- **Absolutas estándar**, que empiezan por letra, dos puntos y barra inversa
+  (`C:\x\STOP`) o por un UNC con servidor y recurso (`\\servidor\recurso\x\STOP`). Se
+  conservan **carácter por carácter**; `C:/x/STOP` no pertenece a esta lista cerrada.
+- **Relativas simples**, con uno o más componentes separados por `\` o `/`, sin unidad
+  ni separador inicial (`STOP`, `anclaje/ventana.pin`). La copia se construye sólo como
+  texto: `directorio_suministrado + "\\" + ruta_relativa`. Ni el directorio **tal como se
+  suministró** ni el valor relativo se reescriben con una biblioteca de rutas.
+
+**Cada componente de ambas formas**, incluidos servidor y recurso UNC, debe cumplir
+`[A-Za-z0-9_\-][A-Za-z0-9_\-. ]*`: empieza por letra ASCII, dígito, guion bajo o guion;
+después admite esos caracteres, punto y espacio. Ningún componente puede terminar en
+punto o espacio, ser `.` o `..`, ni quedar vacío: se rechazan separadores dobles y un
+separador final, también en un valor de anclaje como `pin\`. No se admite `:` salvo el
+de la unidad, ni `?`, `*`, `<`, `>`, `|` o `"`.
 
 Se rechazan **antes de crear la carpeta o copia** las rutas relativas a una unidad
 (`C:STOP`), relativas a la raíz (`\STOP`), con prefijos verbatim/dispositivo (`\\?\`,
 `\\.\`), con componentes `..` (por ejemplo `..\STOP`) o vacías. La misma restricción de
-formas se aplica a la ruta de configuración suministrada; ésta además debe ser un archivo
-regular y no un enlace simbólico. No se intenta emular las reglas especiales de unión de
-rutas de Rust o Win32. El cliente muestra el motivo fijo del rechazo, sin volcar la ruta.
+componentes se aplica al argumento de configuración antes de convertirlo en un objeto de
+ruta. `--config` debe suministrarse en forma absoluta con un directorio también absoluto
+y con componentes nombrados; una configuración relativa o directamente en la raíz de la
+unidad se rechaza. Además debe ser un archivo regular y no un enlace simbólico. La
+validación y construcción de los valores copiados usan exclusivamente texto, sin
+normalización ni resolución mediante `pathlib`; los objetos de ruta sólo sirven para
+leer el TOML y escribir la copia. No se intenta emular las reglas especiales de Rust o
+Win32. El cliente muestra el motivo fijo del rechazo, sin volcar la ruta.
 
 Si una ruta opcional no se usa, **se omite su clave**; una clave de ruta presente con `""`
 no se acepta en la copia M2. Una ruta cuyo significado no pueda verificarse o cuyo campo

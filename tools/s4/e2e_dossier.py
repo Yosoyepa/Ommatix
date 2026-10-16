@@ -1357,7 +1357,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exe", required=True)
-    p.add_argument("--config", required=True, type=Path)
+    p.add_argument("--config", required=True)  # Keep raw spelling until M2 validation.
     p.add_argument("--target-window-freshness", action="store_true",
                    help="M2: use a target_window config copy beside --results, outside the repo")
     p.add_argument("--app", choices=sorted(E2E_ID), required=True)
@@ -1415,6 +1415,7 @@ def main() -> int:
     except (OSError, RuntimeError, ValueError):
         driver.log("abort", reason="cannot prepare the M2 configuration copy")
         return 2
+    args.config = Path(args.config)
     raw = args.config.read_bytes()
     config = tomllib.loads(raw.decode("utf-8"))
     stop = config.get("safety", {}).get("stop_file") or None
