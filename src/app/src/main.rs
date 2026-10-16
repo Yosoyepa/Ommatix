@@ -8,6 +8,7 @@ mod cli;
 mod clock;
 mod config;
 mod demo;
+mod freshness_probe;
 mod prototypes;
 mod wiring;
 
@@ -22,6 +23,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Serve(args) => serve(&args),
         Command::Demo(args) => run_demo(&args),
+        Command::FreshnessProbe(args) => freshness_probe::run(&args),
     }
 }
 

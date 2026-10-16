@@ -122,6 +122,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tomllib
@@ -1705,6 +1706,73 @@ def log(event: str, **fields) -> None:
 ACTION_TIMINGS_KEY = "io.ommatix/action_timings"
 
 
+def freshness_fields(out: dict, meta: dict) -> dict:
+    """Copy only D0's numeric/boolean allowlist, only for refusals; never screen data."""
+    if out.get("status") != "rejected":
+        return {}
+    diff = meta.get(ACTION_TIMINGS_KEY, {}).get("freshness_diff")
+    if not isinstance(diff, dict):
+        return {}
+    clean = {k: diff[k] for k in ("total_tiles", "group_tiles")
+             if type(diff.get(k)) is int and diff[k] >= 0}
+    if type(diff.get("touches_target")) is bool:
+        clean["touches_target"] = diff["touches_target"]
+    return {"freshness_diff": clean} if clean else {}
+
+
+def freshness_config(args) -> None:
+    """Write an opt-in M2 copy outside the checkout, preserving relative path meanings."""
+    if not getattr(args, "target_window_freshness", False):
+        return
+    source = Path(args.config).resolve()
+    folder = Path(args.results).resolve().parent
+    repo = HERE.parent.parent.resolve()
+    if folder.is_relative_to(repo) or any((p / ".git").exists() for p in (folder, *folder.parents)):
+        raise Abort("the M2 run folder must be outside the repository")
+    config = tomllib.loads(source.read_text(encoding="utf-8"))
+    config.setdefault("engine", {})["action_freshness"] = "target_window"
+    paths = {"safety": ("stop_file", "purge_file", "window_pin_file"),
+             "models": ("detector_manifest", "onnxruntime_path", "directml_path",
+                        "detector_path", "ocr_path"), "cache": ("prototypes",)}
+    for section, keys in paths.items():
+        for key in keys:
+            value = config.get(section, {}).get(key)
+            if value:
+                config[section][key] = str((source.parent / value).resolve())
+
+    def value_text(value):
+        if isinstance(value, str):
+            return json.dumps(value, ensure_ascii=False)
+        if type(value) is bool:
+            return "true" if value else "false"
+        if type(value) in (int, float):
+            return repr(value)
+        if isinstance(value, list):
+            return "[" + ", ".join(value_text(v) for v in value) + "]"
+        raise Abort("unsupported configuration value in M2 copy")
+
+    lines = []
+
+    def table(values, prefix=()):
+        if prefix:
+            lines.append("[" + ".".join(json.dumps(k) for k in prefix) + "]")
+        for key, value in values.items():
+            if not isinstance(value, dict):
+                lines.append(json.dumps(key) + " = " + value_text(value))
+        for key, value in values.items():
+            if isinstance(value, dict):
+                table(value, (*prefix, key))
+
+    table(config)
+    text = "\n".join(lines) + "\n"
+    if tomllib.loads(text) != config:
+        raise Abort("the M2 configuration copy did not round-trip")
+    folder.mkdir(parents=True, exist_ok=True)
+    copied = Path(tempfile.mkdtemp(prefix="m2-", dir=folder)) / "target-window.toml"
+    copied.write_text(text, encoding="utf-8")
+    args.config = copied
+
+
 def stage_ms(meta: dict) -> dict:
     """The per-stage timings of a response's `_meta`, in milliseconds. `observe_screen`'s
     (io.ommatix/timings, including `accessibility` when the stage ran, ADR-0017) keep their
@@ -1713,7 +1781,8 @@ def stage_ms(meta: dict) -> dict:
     stages = {k.removesuffix("_us"): round(v / 1000, 3)
               for k, v in meta.get(s3.TIMINGS_KEY, {}).items()}
     for key, value in meta.get(ACTION_TIMINGS_KEY, {}).items():
-        stages["action_" + key.removesuffix("_us")] = round(value / 1000, 3)
+        if key.endswith("_us") and type(value) in (int, float):
+            stages["action_" + key.removesuffix("_us")] = round(value / 1000, 3)
     return stages
 
 
@@ -2132,6 +2201,7 @@ class Protocol:
     # -- one run
     def run_once(self, n: int) -> dict:
         res = new_result(E2E_ID[self.args.app], n, FLOW_ID[self.args.app])
+        res["action_freshness"] = "target_window" if getattr(self.args, "target_window_freshness", False) else "operator_config"
         start = time.perf_counter()
         res["user_idle_s_at_start"] = idle_seconds()
         reuse = self.args.restart == "never" and self.current is not None
@@ -2631,7 +2701,9 @@ class Protocol:
         log("menu_restore_action", run=res["run"], status=out.get("status"),
             input_delivered=out.get("input_delivered"),
             error=(out.get("error") or {}).get("code"), rtt_ms=round(ms, 1),
-            stages_ms=stage_ms(meta))
+            stages_ms=stage_ms(meta), **freshness_fields(out, meta))
+        res.setdefault("menu_restore_actions", []).append({**answer_record(out),
+            "stages_ms": stage_ms(meta), **freshness_fields(out, meta)})
         return out
 
     def restore_menu(self, res: dict, hwnd) -> bool:
@@ -2810,6 +2882,7 @@ class Protocol:
                        "input_delivered": out.get("input_delivered"), "verified": out.get("verified"),
                        "observed_effect": out.get("observed_effect"), "error": err,
                        "rtt_ms": round(ms, 1), "stages_ms": stage_ms(meta),
+                       **freshness_fields(out, meta),
                        "target_role": target["role"], "label_source": target["label_source"]}
                 refusal = engine_error(out)
                 if refusal:  # a refusal or an uncertainty: the engine's own sentence
@@ -3053,7 +3126,7 @@ class Protocol:
         killer = KillAfter(old.proc, self.args.crash_after_ms / 1000).start()
         answered = False
         try:
-            out, _, _, _ = old.call("execute_action", request)
+            out, _, old_meta, _ = old.call("execute_action", request)
             answered = True
         except Abort:  # the server closed its stdout: the kill came first
             pass
@@ -3061,7 +3134,7 @@ class Protocol:
             killer.cancel()
         res["kill_window"] = kill_window(answered, killer.fired)
         if answered:
-            res["answer"] = answer_record(out)
+            res["answer"] = {**answer_record(out), **freshness_fields(out, old_meta)}
         if res["kill_window"] != "crashed_mid_request":
             res["failure"] = f"the case was not exercised (kill window: {res['kill_window']})"
             return
@@ -3081,8 +3154,8 @@ class Protocol:
         stable = all(value == after_crash for value in samples)
         self.spend_live()  # the repetition, exactly: it must find no stored result
         res["actions_requested"] += 1
-        replay, _, _, _ = new.call("execute_action", request)
-        res["replay"] = answer_record(replay)
+        replay, _, replay_meta, _ = new.call("execute_action", request)
+        res["replay"] = {**answer_record(replay), **freshness_fields(replay, replay_meta)}
         replay_code = res["replay"]["error"]
         after_replay = self.counter(hwnd)
         snap3, elements3, _ = self.observe()
@@ -3098,9 +3171,9 @@ class Protocol:
                 if pre3["grounded"]:
                     self.spend_live()
                     res["actions_requested"] += 1
-                    out3, _, _, _ = new.call(
+                    out3, _, new_meta, _ = new.call(
                         "execute_action", self.click_request(snap3, target3, f"s4-it05-r{res['run']}-2"))
-                    res["new_click"] = answer_record(out3)
+                    res["new_click"] = {**answer_record(out3), **freshness_fields(out3, new_meta)}
                     time.sleep(0.5)
                     final = self.counter(hwnd)
                     new_click_ok = (out3.get("status") == "effect_observed"
@@ -3148,7 +3221,7 @@ class Protocol:
         stages = stage_ms(meta)
         window = measurement_window(stages, rtt)
         delivered = out.get("input_delivered") is True
-        res["answer"] = answer_record(out)
+        res["answer"] = {**answer_record(out), **freshness_fields(out, meta)}
         # The timing of a click that left. A refused click has no delivery to time: null.
         res["measurement"] = {**window, "stages_ms": stages} if delivered else None
         time.sleep(0.5)  # the title may lag the repaint of the click
@@ -3258,6 +3331,8 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exe", required=True)
     p.add_argument("--config", required=True, type=Path)
+    p.add_argument("--target-window-freshness", action="store_true",
+                   help="M2: use a target_window config copy beside --results, outside the repo")
     p.add_argument("--app", choices=sorted(FLOWS), required=True)
     p.add_argument("--mode", choices=["probe", "run"], default="run",
                    help="probe: observe the initial state only, no input (dry server)")
@@ -3319,6 +3394,11 @@ def main() -> int:
     args = p.parse_args()
     use_utf8_stdout()
 
+    try:
+        freshness_config(args)
+    except (Abort, OSError, ValueError):
+        log("abort", reason="cannot prepare the M2 configuration copy")
+        return 2
     raw = args.config.read_bytes()
     config = tomllib.loads(raw.decode("utf-8"))
     stop = config.get("safety", {}).get("stop_file") or None

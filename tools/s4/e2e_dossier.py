@@ -845,6 +845,7 @@ class DossierProtocol(driver.Protocol):
     # -- one run
     def run_once(self, n: int) -> dict:
         res = driver.new_result(E2E_ID[self.args.app], n)
+        res["action_freshness"] = "target_window" if getattr(self.args, "target_window_freshness", False) else "operator_config"
         res.update(suite="dossier")
         started = time.perf_counter()
         res["user_idle_s_at_start"] = driver.idle_seconds()
@@ -1149,6 +1150,7 @@ class DossierProtocol(driver.Protocol):
                    "input_delivered": out.get("input_delivered"), "verified": out.get("verified"),
                    "observed_effect": out.get("observed_effect"), "error": err,
                    "rtt_ms": round(ms, 1), "stages_ms": driver.stage_ms(meta),
+                   **driver.freshness_fields(out, meta),
                    "observe_to_action_ms": round((sent_at - observed_at) * 1000, 1),
                    "since_focus_ms": round((sent_at - focus_read_at) * 1000, 1),
                    "target_role": field["role"], "label_source": field["label_source"]}
@@ -1356,6 +1358,8 @@ def main() -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--exe", required=True)
     p.add_argument("--config", required=True, type=Path)
+    p.add_argument("--target-window-freshness", action="store_true",
+                   help="M2: use a target_window config copy beside --results, outside the repo")
     p.add_argument("--app", choices=sorted(E2E_ID), required=True)
     p.add_argument("--mode", choices=["probe", "run"], default="run",
                    help="probe: open the application and observe, no input (dry server)")
@@ -1403,6 +1407,11 @@ def main() -> int:
     args = p.parse_args()
     args.restart = "each"
 
+    try:
+        driver.freshness_config(args)
+    except (Abort, OSError, ValueError):
+        driver.log("abort", reason="cannot prepare the M2 configuration copy")
+        return 2
     raw = args.config.read_bytes()
     config = tomllib.loads(raw.decode("utf-8"))
     stop = config.get("safety", {}).get("stop_file") or None

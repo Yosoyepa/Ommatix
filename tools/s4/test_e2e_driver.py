@@ -769,6 +769,26 @@ class PreClickGroundingTest(QuietTest):
         desk.steps(res, snap, elements, 77, 4242)
         return res
 
+    def test_each_freshness_refusal_keeps_d0_counts_in_the_action_record(self):
+        desk = FakeCalculator(self.tmp)
+        original = desk.call
+        counts = {"total_tiles": 3, "group_tiles": 0, "touches_target": False}
+        calls = []
+
+        def call(tool, args):
+            if not calls:
+                calls.append(1)
+                return ({"status": "rejected", "input_delivered": False,
+                         "error": {"code": "STALE_SNAPSHOT"}}, False,
+                        {driver.ACTION_TIMINGS_KEY: {"total_us": 100, "freshness_diff": counts}}, 5.0)
+            return original(tool, args)
+
+        desk.call = call
+        res = self.run_steps(desk)
+        self.assertEqual(res["actions"][0]["freshness_diff"], counts)
+        self.assertNotIn("freshness_diff", res["actions"][1])
+        self.assertEqual(res["actions"][0]["stages_ms"], {"action_total": 0.1})
+
     def test_the_point_is_read_and_recorded_before_the_request(self):
         desk = FakeCalculator(self.tmp)
         res = self.run_steps(desk)

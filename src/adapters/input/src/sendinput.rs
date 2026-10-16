@@ -24,7 +24,7 @@ use ommatix_application::contract::{ActionKind, ScrollDirection};
 mod win;
 
 #[cfg(windows)]
-pub use win::SendInputActuator;
+pub use win::{SendInputActuator, WindowReader};
 
 pub(crate) const ADAPTER: &str = "sendinput";
 

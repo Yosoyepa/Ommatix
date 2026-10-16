@@ -117,6 +117,108 @@ impl WindowGroup {
     }
 }
 
+/// Opaque, read-only attestation for the operator's M1 measurement (ADR-0032).
+/// It shares the engine's complete window read and one-hop group selection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FreshnessProbeGroup {
+    group: WindowGroup,
+    target: BBox,
+}
+
+/// Counts only; no window identities, rectangles or screen content leave the probe.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FreshnessProbeCounts {
+    pub total_tiles: usize,
+    pub group_tiles: usize,
+    pub touches_target: bool,
+    pub group_window_count: usize,
+    pub group_frame_fraction: f64,
+    pub group_covers_whole_frame: bool,
+}
+
+impl FreshnessProbeGroup {
+    /// Require a non-live reader and a complete, stable read containing the target box.
+    /// The caller brackets each capture with equal attestations; no delivery is called.
+    pub fn read(reader: &dyn OsActuator, target: BBox) -> Option<Self> {
+        if reader.is_live() {
+            return None;
+        }
+        let first = WindowRead::read(reader)?;
+        let group = first.group(&reader.window_at(target.center())?)?;
+        if !group.contains_target(&target) || WindowRead::read(reader)? != first {
+            return None;
+        }
+        Some(Self { group, target })
+    }
+
+    /// Compare one pair at the thesis's 64-pixel tile size. Changed geometry/epoch or
+    /// a target outside the frame has no valid measurement, never an invented zero.
+    pub fn measure(
+        &self,
+        base: &BgraFrame,
+        current: &BgraFrame,
+        margin: u32,
+    ) -> Option<FreshnessProbeCounts> {
+        let bounds = current.bounds();
+        if !bounds.contains(&self.target) {
+            return None;
+        }
+        let total = dirty_tiles(Some(base), current, 64).ok()?;
+        if total.full_refresh.is_some() {
+            return None;
+        }
+        let regions: Vec<_> = self
+            .group
+            .windows
+            .iter()
+            .filter_map(|w| w.rectangle)
+            .filter_map(|r| r.pad(f64::from(margin)).clip(&bounds))
+            .collect();
+        let scoped = dirty_tiles_in_regions(Some(base), current, 64, &regions).ok()?;
+        if scoped.full_refresh.is_some() {
+            return None;
+        }
+        let grid = TileGrid::for_frame(current, 64).ok()?;
+        let area = rectangle_union_area(&regions);
+        Some(FreshnessProbeCounts {
+            total_tiles: total.tiles.len(),
+            group_tiles: scoped.tiles.len(),
+            touches_target: total
+                .tiles
+                .iter()
+                .any(|t| grid.tile_box(*t).overlaps(&self.target)),
+            group_window_count: self.group.windows.len(),
+            group_frame_fraction: area / bounds.area(),
+            group_covers_whole_frame: area >= bounds.area(),
+        })
+    }
+}
+
+/// Exact union area of clipped rectangles: overlapping/background windows count once.
+fn rectangle_union_area(rectangles: &[BBox]) -> f64 {
+    let mut edges: Vec<_> = rectangles.iter().flat_map(|r| [r.x0(), r.x1()]).collect();
+    edges.sort_by(f64::total_cmp);
+    edges.dedup();
+    edges
+        .windows(2)
+        .map(|span| {
+            let mut intervals: Vec<_> = rectangles
+                .iter()
+                .filter(|r| r.x0() < span[1] && r.x1() > span[0])
+                .map(|r| (r.y0(), r.y1()))
+                .collect();
+            intervals.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+            let mut end = f64::NEG_INFINITY;
+            let mut height = 0.0;
+            for (start, next) in intervals {
+                height += (next - start.max(end)).max(0.0);
+                end = end.max(next);
+            }
+            (span[1] - span[0]) * height
+        })
+        .sum()
+}
+
 pub(super) struct FreshFrame {
     pub frame: BgraFrame,
     diff: TileDiff,
@@ -346,5 +448,144 @@ impl Engine {
             });
         }
         changed_screen()
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use crate::contract::ValidatedAction;
+    use crate::{DeliveryReceipt, PortError};
+
+    struct Reader {
+        windows: Vec<TopLevelWindow>,
+        live: bool,
+    }
+    impl OsActuator for Reader {
+        fn name(&self) -> &'static str {
+            "synthetic-reader"
+        }
+        fn is_live(&self) -> bool {
+            self.live
+        }
+        fn foreground_window(&self) -> Option<TopLevelWindow> {
+            self.windows.first().cloned()
+        }
+        fn window_at(&self, _: (f64, f64)) -> Option<TopLevelWindow> {
+            self.foreground_window()
+        }
+        fn top_level_windows(&self) -> Option<Vec<TopLevelWindow>> {
+            Some(self.windows.clone())
+        }
+        fn deliver(&mut self, _: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
+            panic!("a measurement must never request delivery")
+        }
+    }
+    fn box_at(x: f64, y: f64, right: f64, bottom: f64) -> BBox {
+        BBox::new(x, y, right, bottom).unwrap()
+    }
+    fn window(handle: u64, rectangle: BBox) -> TopLevelWindow {
+        TopLevelWindow {
+            handle,
+            rectangle: Some(rectangle),
+            z_order: 0,
+            class: "Test".into(),
+        }
+    }
+    fn frame(epoch: u64, pixel: Option<(usize, usize)>) -> BgraFrame {
+        let mut pixels = vec![0; 256 * 128 * 4];
+        if let Some((x, y)) = pixel {
+            pixels[(y * 256 + x) * 4] = 1;
+        }
+        BgraFrame::new(256, 128, 256 * 4, epoch, pixels).unwrap()
+    }
+    fn group(windows: Vec<TopLevelWindow>) -> FreshnessProbeGroup {
+        FreshnessProbeGroup::read(
+            &Reader {
+                windows,
+                live: false,
+            },
+            box_at(8.0, 8.0, 16.0, 16.0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn probe_counts_exact_tiles_inside_outside_and_at_the_group_boundary() {
+        let group = group(vec![window(1, box_at(0.0, 0.0, 64.0, 64.0))]);
+        let base = frame(1, None);
+        for (pixel, group_tiles, touches) in [
+            ((8, 8), 1, true),
+            ((63, 63), 1, true),
+            ((64, 0), 0, false),
+            ((255, 127), 0, false),
+        ] {
+            let counts = group.measure(&base, &frame(1, Some(pixel)), 0).unwrap();
+            assert_eq!(
+                (
+                    counts.total_tiles,
+                    counts.group_tiles,
+                    counts.touches_target
+                ),
+                (1, group_tiles, touches)
+            );
+            assert_eq!(counts.group_window_count, 1);
+            assert!((counts.group_frame_fraction - 0.125).abs() < f64::EPSILON);
+            assert!(!counts.group_covers_whole_frame);
+        }
+        let counts = group.measure(&base, &frame(1, Some((64, 0))), 1).unwrap();
+        assert_eq!(
+            counts.group_tiles, 1,
+            "the same margin as the engine includes this tile"
+        );
+    }
+
+    #[test]
+    fn probe_uses_the_engines_one_hop_group_and_counts_overlapping_areas_once() {
+        let group = group(vec![
+            window(1, box_at(0.0, 0.0, 64.0, 64.0)),
+            window(2, box_at(32.0, 0.0, 96.0, 64.0)),
+            window(3, box_at(80.0, 0.0, 160.0, 64.0)),
+        ]);
+        let counts = group
+            .measure(&frame(1, None), &frame(1, Some((128, 0))), 0)
+            .unwrap();
+        assert_eq!(
+            counts.group_window_count, 2,
+            "the third window overlaps only the second"
+        );
+        assert_eq!(counts.group_tiles, 0);
+        assert!((counts.group_frame_fraction - 0.1875).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn probe_reports_whole_frame_coverage_from_background_windows() {
+        let group = group(vec![
+            window(1, box_at(0.0, 0.0, 64.0, 64.0)),
+            window(2, box_at(-20.0, -10.0, 300.0, 150.0)),
+        ]);
+        let counts = group
+            .measure(&frame(1, None), &frame(1, Some((255, 127))), 0)
+            .unwrap();
+        assert!(counts.group_covers_whole_frame);
+        assert!((counts.group_frame_fraction - 1.0).abs() < f64::EPSILON);
+        assert_eq!(counts.group_tiles, counts.total_tiles);
+    }
+
+    #[test]
+    fn probe_refuses_live_readers_missing_rectangles_and_geometry_changes() {
+        let mut reader = Reader {
+            windows: vec![window(1, box_at(0.0, 0.0, 64.0, 64.0))],
+            live: true,
+        };
+        let target = box_at(8.0, 8.0, 16.0, 16.0);
+        assert!(FreshnessProbeGroup::read(&reader, target).is_none());
+        reader.live = false;
+        let group = FreshnessProbeGroup::read(&reader, target).unwrap();
+        assert!(group.measure(&frame(1, None), &frame(2, None), 0).is_none());
+        reader.windows[0].rectangle = None;
+        assert!(FreshnessProbeGroup::read(&reader, target).is_none());
+        reader.windows.clear();
+        assert!(FreshnessProbeGroup::read(&reader, target).is_none());
     }
 }

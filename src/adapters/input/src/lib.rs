@@ -25,4 +25,4 @@ pub use dry_run::{ActionLog, DryRunInput, RecordedAction};
 #[cfg(feature = "native")]
 pub use native::NativeInput;
 #[cfg(all(windows, feature = "sendinput"))]
-pub use sendinput::SendInputActuator;
+pub use sendinput::{SendInputActuator, WindowReader};

@@ -136,6 +136,122 @@ PC de referencia, monitor principal 1920×1080 con origen (0, 0), motor con las 
 
 **Qué no cubre.** Un solo monitor, la aplicación de prueba propia, ninguna acción en vivo a 125 o 150 % y un solo tema. La fila IT-07 de `plan_pruebas.csv` y el estado de RNF-07 no cambian: los decide el responsable.
 
+## D. Mediciones de frescura M1 y M2 / IT-08 (ADR-0032), pendientes
+
+**Preparación de herramientas, sin evidencia viva nueva.** M1, M2 e IT-08 no se han ejecutado.
+El responsable registra antes de cada sesión el commit, configuración, N, aplicaciones,
+estado del menú y criterio de aceptación, fuera del repositorio. IT-08 sigue planificado;
+ningún estado de requisito ni casilla de §6.7 cambia. El valor por defecto sigue siendo
+`action_freshness = "screen"`.
+
+### D.1 M1, sólo lectura y sin motor ni entrada
+
+Compilar `cargo build --release -p ommatix --features sendinput`. Esa característica permite
+reutilizar las consultas Win32 del adaptador; el subcomando construye **únicamente**
+`WindowReader`, que declara `is_live = false`, rechaza toda entrega y no construye el
+actuador vivo. No inicia MCP, detector, OCR ni accesibilidad. La configuración de M1 debe
+tener `[engine] mode = "dry_run"`, `[safety] actuation_enabled = false`, la aplicación en
+`allowed_applications` y su clase exacta en `allowed_window_classes`. Se respetan el stop
+y el anclaje existentes; la herramienta no crea, borra ni modifica ninguno de ellos.
+
+El responsable pone al frente la ventana **a mano** y selecciona una caja objetivo que esté
+completamente dentro de ella. Las cuatro magnitudes de la caja son píxeles físicos locales
+del monitor seleccionado (`--output`, cero por defecto): sólo son argumentos de una
+herramienta del operador, nunca campos MCP ni datos de salida. No se leen títulos ni texto.
+Para Bloc de notas se usa exclusivamente la caja de «Editar», sin pulsarlo mediante la
+herramienta. El responsable repite la medición con el menú cerrado y abierto, cambiándolo
+a mano entre invocaciones; también selecciona por separado las otras ventanas de prueba.
+
+```powershell
+# Asignar previamente N, minOutsidePairs, x, y, width y height en el cuaderno de sesión.
+# La carpeta de salida ya debe existir fuera de cualquier repositorio.
+python tools/perf/freshness_probe.py --exe target\release\ommatix.exe `
+  --config "$env:LOCALAPPDATA\Ommatix\m1.toml" --pairs $N --interval-ms 150 `
+  --min-outside-pairs $minOutsidePairs --window-class Notepad `
+  --target-x $x --target-y $y --target-width $width --target-height $height `
+  --out "$env:LOCALAPPDATA\Ommatix\runs\m1-menu-cerrado.json"
+```
+
+No hay valor por defecto para N ni para `--min-outside-pairs`: este último es el mínimo
+pre-registrado de pares con `total_tiles > group_tiles` (entre cero y N). Es un criterio
+descriptivo de M1, **no** una tolerancia del motor ni una autorización de entrada. Un
+`criterion_met = true` no decide activar el alcance ni acredita IT-08. Si el responsable
+elige además criterios sobre localización/cobertura, los evalúa en su cuaderno.
+
+La salida contiene sólo números y booleanos. Por par: `total_tiles`, `group_tiles`,
+`touches_target`, `group_window_count`, `group_frame_fraction`,
+`group_covers_whole_frame` y `capture_gap_ms` (intervalo real entre sellos de captura;
+`interval_ms` es la pausa solicitada). `touches_target` indica intersección del **tile**
+distinto con la caja, no demuestra que el píxel distinto esté dentro de ella. El tamaño de
+tile es siempre 64×64, incluidos los bordes parciales; la comparación reutiliza
+`dirty_tiles` y `dirty_tiles_in_regions`. Cada par tiene base propia, no una observación
+publicada. Se descarta además un fotograma inicial para establecer `DisplayMapping`.
+
+El grupo usa `WindowRead` y la misma selección de ADR-0032 que el motor: ventana bajo el
+centro de la caja, primer plano y las ventanas que solapan cualquiera de esas dos semillas,
+sin cierre transitivo. La cobertura es el área de la **unión** de los rectángulos, recortados
+al fotograma y ampliados por `action_freshness_margin_px` de la configuración; las
+intersecciones no se suman dos veces. Ventanas de fondo pueden producir cobertura 1 y
+`group_covers_whole_frame = true`: en ese caso no se presume ninguna ganancia. No se oculta
+el cursor de texto ni ninguna animación.
+
+Lecturas iguales rodean cada captura y ambos miembros del par deben conservar el grupo.
+Cambio de grupo, geometría/época, caja fuera del fotograma, ventana fuera de la política,
+stop o evidencia incompleta abortan la invocación; no se fabrica un cero ni se publica
+un informe parcial como si fueran N pares válidos. El binario emite s?lo el JSON num?rico por stderr, sin escribir archivos (SEC-04).
+El controlador `tools/perf/freshness_probe.py` exige salida exitosa, stdout vac?o y un
+informe completo con claves y tipos permitidos antes de guardarlo. Nunca guarda el stderr
+bruto de un fallo. El archivo no se sobrescribe. No se
+guardan fotogramas, clases, handles, coordenadas, etiquetas, títulos ni texto de pantalla.
+La comparación DWM/GetWindowRect de ADR-0032 permanece pendiente: M1 usa los límites DWM
+que atestigua actualmente el motor y no afirma resolver aquella medición.
+
+### D.2 M2 supervisada, IT-08: copia de configuración y diagnóstico D0
+
+**Sólo en una sesión con consentimiento explícito del responsable**, con criterios y
+presupuesto escritos antes de ejecutarla. Se mantienen las aplicaciones, las puertas,
+el ledger, el stop exterior y el anclaje que requiere cada protocolo. Primero se lee M1;
+la herramienta no decide activar la opción a partir de su resultado.
+
+`--target-window-freshness` está disponible en `tools/s4/e2e_driver.py` y
+`tools/s4/e2e_dossier.py`. Con el archivo del operador pasado por `--config`, escribe una
+copia única en una subcarpeta `m2-*` junto a `--results`, obligatoriamente fuera del
+repositorio. Sólo cambia `[engine] action_freshness = "target_window"`; conserva los
+permisos y convierte las rutas de modelos, caché, stop, purga y anclaje a absolutas para
+que sigan señalando los mismos archivos. El original nunca se modifica. La copia y el
+hash del inicio permiten auditar la variante; sin la opción se usa la configuración
+entregada, que también podría declarar un alcance explícito.
+
+```powershell
+# IT-03: misma sesión de menú de S3, apertura y cierre por «Editar»; sin escribir.
+python tools/s4/e2e_driver.py --exe target\release\ommatix.exe `
+  --config "$env:LOCALAPPDATA\Ommatix\live-notepad.toml" --app notepad --mode run `
+  --runs $N --max-live $budget --round-start $roundStart `
+  --ledger "$env:LOCALAPPDATA\Ommatix\runs\ledger.txt" `
+  --results "$env:LOCALAPPDATA\Ommatix\runs\m2-it03.jsonl" --target-window-freshness
+
+# D1 / BDD-35: mismo caso señuelo y guarda de foco; sólo el editor de pruebas permitido.
+python tools/s4/e2e_dossier.py --exe target\release\ommatix.exe `
+  --config "$env:LOCALAPPDATA\Ommatix\live-decoy.toml" --app decoy --mode run `
+  --runs $N --max-live $budget --round-start $roundStart --operator-focus `
+  --ledger "$env:LOCALAPPDATA\Ommatix\runs\ledger.txt" `
+  --results "$env:LOCALAPPDATA\Ommatix\runs\m2-d1.jsonl" --target-window-freshness
+```
+
+El ejecutable de M2 se compila con las características de la configuración de la sesión
+(por ejemplo `dxgi,sendinput,onnx,winrt-ocr,uia`, o `directml` si procede), no con la
+compilación mínima de M1. Las variables de los ejemplos son valores del plan del
+responsable, no criterios ni presupuestos propuestos por esta herramienta.
+
+Cada rechazo que trae `_meta["io.ommatix/action_timings"].freshness_diff` conserva
+`total_tiles`, `group_tiles` cuando está atestiguado, y `touches_target` en el registro de
+la acción; también el intento de cierre de menú tras un fallo. Un campo de grupo ausente
+permanece ausente, nunca se sustituye por cero. Los tiempos `*_us` siguen en `stages_ms`;
+el objeto D0 no se divide entre mil. Ausencia de D0 en una respuesta no permite inferir
+cero cambios. No se amplían las operaciones de los clientes ni se introduce una repetición
+del mismo snapshot tras un rechazo. Las lecturas y cambios de ventanas los supervisa el
+responsable; toda decisión sobre IT-08 exige la evidencia y criterios de esa sesión.
+
 ## Lo que no entra en estas tres sesiones
 
 - **E2E-03 y las demás series con entrada real** (la serie de la undécima ronda sigue su propio protocolo y su cuaderno).

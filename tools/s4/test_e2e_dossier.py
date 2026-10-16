@@ -1690,6 +1690,24 @@ class DecoyRunTest(QuietTest):
     def desk(self, **kwargs):
         return FakeDecoyDesk(self.tmp, self.temp_root, **kwargs)
 
+    def test_decoy_freshness_refusals_record_d0_without_screen_data(self):
+        desk = self.desk(max_live=4)
+        desk.stale_answers = 1
+        original = desk.call
+        counts = {"total_tiles": 4, "group_tiles": 1, "touches_target": True}
+
+        def call(tool, args):
+            out, error, meta, ms = original(tool, args)
+            if out["status"] == "rejected":
+                meta = {driver.ACTION_TIMINGS_KEY: {"total_us": 123, "freshness_diff": counts}}
+            return out, error, meta, ms
+
+        desk.call = call
+        res = desk.run_once(1)
+        self.assertEqual(res["actions"][0]["freshness_diff"], counts)
+        self.assertNotIn("freshness_diff", res["actions"][1])
+        self.assertEqual(res["actions"][0]["stages_ms"], {"action_total": 0.123})
+
     def test_startup_grants_only_the_started_editor_pid(self):
         desk = self.desk()
         desk.started.add(5151)

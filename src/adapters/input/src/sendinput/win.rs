@@ -47,6 +47,67 @@ use crate::aim::frame_pixel;
 
 type MappingSource = Box<dyn Fn() -> Result<DisplayMapping, PortError> + Send + Sync>;
 
+/// Read-only Windows evidence for M1. This type never constructs a live actuator and
+/// every delivery method refuses; the OS queries are shared with the engine adapter.
+pub struct WindowReader {
+    mapping: MappingSource,
+}
+
+impl std::fmt::Debug for WindowReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WindowReader").finish_non_exhaustive()
+    }
+}
+
+impl WindowReader {
+    pub fn with_mapping_source(
+        mapping: impl Fn() -> Result<DisplayMapping, PortError> + Send + Sync + 'static,
+    ) -> Result<Self, PortError> {
+        ensure_dpi_awareness()?;
+        Ok(Self {
+            mapping: Box::new(mapping),
+        })
+    }
+}
+
+fn read_foreground_window() -> Option<TopLevelWindow> {
+    // SAFETY: no arguments; returns a handle value, null when none is active.
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.is_invalid() {
+        return None;
+    }
+    attest_window(root_window(foreground))
+}
+
+fn read_window_at(mapping: DisplayMapping, point: (f64, f64)) -> Option<TopLevelWindow> {
+    let desktop = mapping.to_os(frame_pixel(point)?);
+    attest_window(root_window(window_at(desktop)?))
+}
+
+impl OsActuator for WindowReader {
+    fn name(&self) -> &'static str {
+        "window-reader"
+    }
+    fn is_live(&self) -> bool {
+        false
+    }
+    fn foreground_application(&self) -> Option<String> {
+        process_exe_name(&open_process(foreground_process()?)?)
+    }
+    fn foreground_window(&self) -> Option<TopLevelWindow> {
+        read_foreground_window()
+    }
+    fn top_level_windows(&self) -> Option<Vec<TopLevelWindow>> {
+        visible_windows((self.mapping)().ok()?)
+    }
+    fn window_at(&self, point: (f64, f64)) -> Option<TopLevelWindow> {
+        read_window_at((self.mapping)().ok()?, point)
+    }
+    fn deliver(&mut self, _action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
+        Err(refuse("the measurement reader never delivers input"))
+    }
+}
+
 /// Longest process image path read, in UTF-16 units (the extended-length path limit).
 const MAX_PATH_UNITS: usize = 32_768;
 
@@ -685,12 +746,7 @@ impl OsActuator for SendInputActuator {
     }
 
     fn foreground_window(&self) -> Option<TopLevelWindow> {
-        // SAFETY: no arguments; returns a window handle value (null when none is active).
-        let foreground = unsafe { GetForegroundWindow() };
-        if foreground.is_invalid() {
-            return None;
-        }
-        attest_window(root_window(foreground))
+        read_foreground_window()
     }
 
     fn top_level_windows(&self) -> Option<Vec<TopLevelWindow>> {
@@ -698,8 +754,7 @@ impl OsActuator for SendInputActuator {
     }
 
     fn window_at(&self, point: (f64, f64)) -> Option<TopLevelWindow> {
-        let desktop = self.desktop_point(point).ok()?;
-        attest_window(root_window(window_at(desktop)?))
+        read_window_at((self.mapping)().ok()?, point)
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
