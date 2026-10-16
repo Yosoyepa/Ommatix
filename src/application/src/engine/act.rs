@@ -44,7 +44,7 @@ use ommatix_domain::incremental::{BgraFrame, dirty_tiles};
 
 use super::accessibility::focus_is_on;
 use super::journal::{Lookup, arguments_hash};
-use super::{Engine, aged_out};
+use super::{ActionFreshness, Engine, aged_out};
 use crate::contract::{
     ActionKind, ActionRequest, ActionResult, ActionTimings, ErrorCode, ExpectedEffect,
     ObservedEffect, ToolError, ValidatedAction, limits,
@@ -371,7 +371,9 @@ impl Engine {
         let checked = self.fresh_frame(target_id, &target_box).and_then(|fresh| {
             self.last_look(foreground.as_deref(), point, target_id)?;
             self.check_freshness_group(&fresh, &target_box, foreground.as_deref(), target_id)?;
-            self.check_age(target_id)?;
+            if self.config.action_freshness == ActionFreshness::TargetWindow {
+                self.check_age(target_id)?;
+            }
             Ok(fresh.frame)
         });
         self.spend(since, Stage::Freshness);

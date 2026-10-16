@@ -440,6 +440,20 @@ fn a_policy_change_keeps_its_refusal_before_group_identity_is_checked() {
         .execute_action(&live_click(&page, "r", ExpectedEffect::None));
     assert_eq!(error_code(&result), Some(ErrorCode::PolicyDenied));
     assert!(r.world().delivered.is_empty(), "nothing sent");
+    // Policy keeps its refusal code, but the already-known mismatch still spends the
+    // observation. Restoring both the policy and group cannot revive that snapshot.
+    r.world().top_windows.as_mut().unwrap()[0].z_order = 0;
+    r.world().foreground_script.clear();
+    let retry = r.engine.execute_action(&live_click(
+        &page,
+        "spent-after-policy",
+        ExpectedEffect::None,
+    ));
+    assert_eq!(error_code(&retry), Some(ErrorCode::StaleSnapshot));
+    assert!(
+        r.world().delivered.is_empty(),
+        "known mismatch remains spent after policy refusal"
+    );
 }
 
 #[test]
@@ -578,4 +592,177 @@ fn a_known_resize_cannot_hide_behind_an_unavailable_point_attestation() {
         .engine
         .execute_action(&live_click(&page, "resize", ExpectedEffect::None));
     assert_stale_and_nothing_sent(&r, &result);
+}
+
+/// A successful later read or missing evidence cannot erase a mismatch already attested.
+#[test]
+fn a_known_group_change_refuses_even_when_the_final_read_is_unavailable() {
+    for sequence in [
+        [1, 1, 2],
+        [1, 2, 2],
+        [0, 1, 2],
+        [1, 0, 2],
+        [1, 1, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+    ] {
+        let mut r = scoped_rig();
+        let page = r.observe();
+        let observed = r.world().top_windows.clone();
+        let mut changed = observed.clone();
+        changed.as_mut().unwrap()[0].z_order += 1;
+        r.world()
+            .top_windows_script
+            .extend(sequence.map(|read| match read {
+                0 => observed.clone(),
+                1 => changed.clone(),
+                _ => None,
+            }));
+        r.world().events.clear();
+        let result =
+            r.engine
+                .execute_action(&live_click(&page, "known-change", ExpectedEffect::None));
+        assert_stale_and_nothing_sent(&r, &result);
+        let diagnostic = r
+            .engine
+            .last_action_timings()
+            .unwrap()
+            .freshness_diff
+            .unwrap();
+        assert_eq!(
+            diagnostic.total_tiles, 0,
+            "identical frame bytes for {sequence:?}"
+        );
+        r.world().top_windows_script.clear();
+        let retry =
+            r.engine
+                .execute_action(&live_click(&page, "spent-change", ExpectedEffect::None));
+        assert_eq!(
+            error_code(&retry),
+            Some(ErrorCode::StaleSnapshot),
+            "snapshot spent for {sequence:?}"
+        );
+        assert!(
+            r.world().delivered.is_empty(),
+            "no delivery after {sequence:?}"
+        );
+    }
+}
+
+/// The foreground query in the existing last look crosses the age bound after its
+/// age check. Screen must retain that order; only target_window adds another check.
+fn click_expiring_during_the_last_foreground_read(scope: ActionFreshness) -> (Rig, ActionResult) {
+    struct ForegroundAgingClock {
+        world: Shared,
+        base: Arc<ManualClock>,
+    }
+    impl Clock for ForegroundAgingClock {
+        fn now(&self) -> Duration {
+            let late = lock(&self.world)
+                .events
+                .iter()
+                .filter(|e| **e == "foreground")
+                .count()
+                >= 2;
+            self.base.now()
+                + if late {
+                    Duration::from_millis(2)
+                } else {
+                    Duration::ZERO
+                }
+        }
+        fn sleep(&self, duration: Duration) {
+            self.base.sleep(duration);
+        }
+    }
+    let mut r = rig(form());
+    r.engine.config.action_freshness = scope;
+    r.engine.config.max_snapshot_age = Duration::from_millis(100);
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    r.clock.advance(Duration::from_millis(99));
+    r.world().events.clear();
+    r.engine.ports.clock = Arc::new(ForegroundAgingClock {
+        world: r.world.clone(),
+        base: r.clock.clone(),
+    });
+    let result =
+        r.engine
+            .execute_action(&live_click(&page, "late-foreground", ExpectedEffect::None));
+    (r, result)
+}
+
+#[test]
+fn screen_preserves_the_original_age_check_sequence_through_the_last_look() {
+    let (r, result) = click_expiring_during_the_last_foreground_read(ActionFreshness::Screen);
+    assert_eq!(result.status, ActionStatus::InputDelivered, "{result:?}");
+    assert_eq!(
+        r.world().events,
+        ["foreground", "capture", "foreground", "deliver"]
+    );
+    assert_eq!(r.world().delivered.len(), 1);
+}
+
+#[test]
+fn target_window_rechecks_age_after_the_last_foreground_read() {
+    let (r, result) = click_expiring_during_the_last_foreground_read(ActionFreshness::TargetWindow);
+    assert_eq!(error_code(&result), Some(ErrorCode::StaleSnapshot));
+    assert_eq!(r.world().events, ["foreground", "capture", "foreground"]);
+    assert!(
+        r.world().delivered.is_empty(),
+        "nothing delivered after expiry"
+    );
+}
+
+#[test]
+fn unavailable_group_reads_without_a_known_change_keep_the_whole_frame_fallback() {
+    for sequence in [[0, 0, 1], [0, 1, 1], [1, 0, 1], [1, 1, 1]] {
+        let mut r = scoped_rig();
+        let page = r.observe();
+        let observed = r.world().top_windows.clone();
+        r.world()
+            .top_windows_script
+            .extend(sequence.map(|read| if read == 0 { observed.clone() } else { None }));
+        let result =
+            r.engine
+                .execute_action(&live_click(&page, "unknown-only", ExpectedEffect::None));
+        assert_eq!(
+            result.status,
+            ActionStatus::InputDelivered,
+            "{sequence:?}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn a_known_group_change_spends_the_snapshot_even_when_the_capture_fails() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    let mut changed = r.world().top_windows.clone();
+    changed.as_mut().unwrap()[0].z_order += 1;
+    r.world().top_windows_script.push_back(changed);
+    r.world().fail_capture = true;
+    let result =
+        r.engine
+            .execute_action(&live_click(&page, "failed-capture", ExpectedEffect::None));
+    assert_eq!(error_code(&result), Some(ErrorCode::StaleSnapshot));
+    assert!(r.world().delivered.is_empty(), "nothing sent");
+    assert_eq!(
+        r.engine.last_action_timings().unwrap().freshness_diff,
+        None,
+        "no frame to count"
+    );
+    r.world().fail_capture = false;
+    r.world().top_windows_script.clear();
+    let retry = r.engine.execute_action(&live_click(
+        &page,
+        "spent-after-capture",
+        ExpectedEffect::None,
+    ));
+    assert_eq!(error_code(&retry), Some(ErrorCode::StaleSnapshot));
+    assert!(
+        r.world().delivered.is_empty(),
+        "the known change spent the snapshot"
+    );
 }

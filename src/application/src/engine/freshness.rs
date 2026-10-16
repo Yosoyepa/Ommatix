@@ -121,7 +121,7 @@ pub(super) struct FreshFrame {
     pub frame: BgraFrame,
     diff: TileDiff,
     expected: Option<WindowGroup>,
-    captured_group: Option<WindowGroup>,
+    known_group_change: bool,
 }
 
 fn changed_screen() -> ToolError {
@@ -183,9 +183,24 @@ impl Engine {
         windows.read.group(window)
     }
 
-    fn current_group(&self, bbox: &BBox) -> Option<WindowGroup> {
-        let read = WindowRead::read(self.ports.actuator.as_ref())?;
-        read.group(&self.ports.actuator.window_at(bbox.center())?)
+    /// Preserve positive identity evidence separately from scope availability. A later
+    /// failed read, or a target box that no longer fits, cannot erase a known change.
+    fn current_group(&self, bbox: &BBox, expected: &WindowGroup) -> (Option<WindowGroup>, bool) {
+        let read = WindowRead::read(self.ports.actuator.as_ref());
+        let current = read
+            .as_ref()
+            .and_then(|r| r.group(&self.ports.actuator.window_at(bbox.center())?));
+        let known_change = current.as_ref().is_some_and(|group| group != expected)
+            || (current.is_none()
+                && read.as_ref().is_some_and(|r| {
+                    let observed_now = r
+                        .windows
+                        .iter()
+                        .find(|w| w.handle == expected.target)
+                        .and_then(|window| r.group(window));
+                    observed_now.as_ref() != Some(expected)
+                }));
+        (current, known_change)
     }
 
     /// Compare only intersecting tiles when the window group is attested. D0 counts
@@ -196,22 +211,29 @@ impl Engine {
         bbox: &BBox,
     ) -> Result<FreshFrame, ToolError> {
         let expected = self.observed_group(target);
-        let first = expected
+        let (first, first_changed) = expected
             .as_ref()
-            .and_then(|_| self.current_group(bbox))
-            .filter(|g| g.contains_target(bbox));
+            .map_or((None, false), |group| self.current_group(bbox, group));
+        // Spend immediately: a later capture/policy error cannot revive known stale evidence.
+        self.snapshot_spent |= first_changed;
         let captured = self.ports.capturer.capture().map_err(|_| {
+            if first_changed {
+                return changed_screen();
+            }
             ToolError::new(
                 ErrorCode::CaptureUnavailable,
                 "the screen could not be captured to confirm the snapshot; nothing was delivered",
             )
         })?;
-        let second = expected
+        let (second, second_changed) = expected
             .as_ref()
-            .and_then(|_| self.current_group(bbox))
-            .filter(|g| g.contains_target(bbox));
+            .map_or((None, false), |group| self.current_group(bbox, group));
+        let known_group_change = first_changed || second_changed;
+        self.snapshot_spent |= known_group_change;
         // Different reads around capture or missing attestation require the whole frame.
-        let captured_group = first.filter(|g| Some(g) == second.as_ref());
+        // Keep their known identity changes even when the scope cannot be used.
+        let captured_group =
+            first.filter(|g| Some(g) == second.as_ref() && g.contains_target(bbox));
         let scope = expected.as_ref().filter(|_| captured_group.is_some());
         let regions: Vec<BBox> = scope
             .into_iter()
@@ -249,7 +271,7 @@ impl Engine {
             frame: captured.frame,
             diff,
             expected,
-            captured_group,
+            known_group_change,
         })
     }
 
@@ -264,31 +286,14 @@ impl Engine {
         let Some(expected) = fresh.expected.as_ref() else {
             return Ok(());
         };
-        let read = WindowRead::read(self.ports.actuator.as_ref());
-        let current = read
-            .as_ref()
-            .and_then(|r| r.group(&self.ports.actuator.window_at(bbox.center())?));
-        // Identity is independent of whether the old box still fits or a point read
-        // succeeds. Complete evidence of a moved/disappeared seed must still refuse.
-        let known_change = current.is_none()
-            && read.as_ref().is_some_and(|r| {
-                let observed_now = r
-                    .windows
-                    .iter()
-                    .find(|w| w.handle == expected.target)
-                    .and_then(|window| r.group(window));
-                observed_now.as_ref() != Some(expected)
-            });
+        let (current, known_change) = self.current_group(bbox, expected);
+        self.snapshot_spent |= known_change;
         // The new OS walk can take time. Re-read consent, stop, application/window scope
         // and age after it, before comparing identity or handing anything to the actuator.
         self.last_look(foreground, bbox.center(), target)?;
-        let identity_changed = current.as_ref().is_some_and(|g| {
-            g != expected
-                || fresh
-                    .captured_group
-                    .as_ref()
-                    .is_some_and(|captured| captured != g)
-        });
+        if fresh.known_group_change || known_change {
+            return Err(self.freshness_refusal(&fresh.frame, &fresh.diff, bbox, Some(expected)));
+        }
         // Losing final attestation requires an actual whole-frame comparison: ignored
         // pixels cannot be authorised by a scoped diff, and no second capture is needed.
         if current.is_none() {
@@ -300,9 +305,6 @@ impl Engine {
             if full.full_refresh.is_some() || !full.tiles.is_empty() {
                 return Err(self.freshness_refusal(&fresh.frame, &full, bbox, None));
             }
-        }
-        if known_change || identity_changed {
-            return Err(self.freshness_refusal(&fresh.frame, &fresh.diff, bbox, Some(expected)));
         }
         Ok(())
     }
