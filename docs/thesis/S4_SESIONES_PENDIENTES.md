@@ -230,14 +230,27 @@ la herramienta no decide activar la opción a partir de su resultado.
 `tools/s4/e2e_dossier.py`. Con el archivo del operador pasado por `--config`, escribe una
 copia única en una subcarpeta `m2-*` junto a `--results`, obligatoriamente fuera del
 repositorio. Sólo cambia `[engine] action_freshness = "target_window"`; conserva los
-permisos y convierte las rutas de modelos, caché, stop, purga y anclaje a absolutas para
-que sigan señalando los mismos archivos, usando el directorio de la configuración
-**tal como se suministró**, igual que `Config::load`, sin canonicalizar previamente ese
-archivo ni colapsar sus componentes de ruta. Una configuración suministrada como enlace
-simbólico se rechaza antes de crear la copia; también cualquier ruta del operador cuya
-equivalencia no pueda verificarse o cuyo campo no tenga una correspondencia conocida.
-Un stop o anclaje relativo sigue apuntando al mismo archivo absoluto, aunque su archivo
-aún no exista. El original nunca se modifica. La copia y el
+permisos y conserva el significado de las rutas de modelos, caché, stop, purga y anclaje.
+Por decisión del arquitecto, la copia admite únicamente estas formas de ruta Windows:
+
+- **Absolutas estándar**, con letra y raíz (`C:\x\STOP`) o UNC
+  (`\\servidor\recurso\x\STOP`), sin componente `..`. Se conservan **carácter por carácter**.
+- **Relativas simples**, sin unidad, sin separador inicial y sin componente `..`
+  (`STOP`, `anclaje\ventana.pin`). Se unen al directorio de la configuración **tal como
+  se suministró**, igual que `Config::load` en estas formas admitidas.
+
+Se rechazan **antes de crear la carpeta o copia** las rutas relativas a una unidad
+(`C:STOP`), relativas a la raíz (`\STOP`), con prefijos verbatim/dispositivo (`\\?\`,
+`\\.\`), con componentes `..` (por ejemplo `..\STOP`) o vacías. La misma restricción de
+formas se aplica a la ruta de configuración suministrada; ésta además debe ser un archivo
+regular y no un enlace simbólico. No se intenta emular las reglas especiales de unión de
+rutas de Rust o Win32. El cliente muestra el motivo fijo del rechazo, sin volcar la ruta.
+
+Si una ruta opcional no se usa, **se omite su clave**; una clave de ruta presente con `""`
+no se acepta en la copia M2. Una ruta cuyo significado no pueda verificarse o cuyo campo
+no tenga correspondencia conocida también se rechaza. Un stop o anclaje relativo admitido
+sigue apuntando al mismo archivo absoluto, aunque el archivo aún no exista. El original
+nunca se modifica. La copia y el
 hash del inicio permiten auditar la variante; sin la opción se usa la configuración
 entregada, que también podría declarar un alcance explícito.
 

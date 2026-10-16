@@ -1,5 +1,11 @@
 # Historial documental
 
+## 1.0.85 — 2026-10-16: formas Windows cerradas para las rutas de la copia M2 (segunda revisión del PR #79)
+
+La revisión independiente de `09b3fad` detectó dos diferencias de unión: `C:STOP` podía cambiar el stop efectivo y una configuración verbatim con `..\STOP` podía producir una ruta que Win32 rechazaba. Por decisión del arquitecto, el cliente sólo acepta rutas Windows absolutas estándar (unidad y raíz o UNC), conservadas carácter por carácter, o relativas simples sin unidad ni separador inicial, unidas al directorio suministrado. Ambas formas excluyen `..`; rutas relativas a unidad/raíz, prefijos verbatim/dispositivo, cadenas vacías y configuraciones enlazadas se rechazan antes de cualquier escritura. Las rutas opcionales no usadas deben omitirse; el motivo fijo llega al operador sin imprimir el valor.
+
+Las regresiones de ambas importaciones del cliente fallaron antes de la corrección para `C:STOP`, `\STOP`, configuración verbatim, `..\STOP` y vacías; también exigieron conservar las absolutas carácter por carácter. Las pruebas usan dobles, sin consultar un servidor UNC, iniciar el motor, capturar pantalla ni enviar entrada. Procedimiento en `S4_SESIONES_PENDIENTES.md` §D.2 y hallazgo → resolución → pruebas en `docs/reviews/2026-10-16-freshness-measurement-tools.md`. No se ha ejecutado M1, M2 ni IT-08; ningún estado de requisito ni casilla de §6.7 cambia.
+
 ## 1.0.84 — 2026-10-16: correcciones de revisión de las herramientas de frescura (PR #79)
 
 La copia M2 rechaza configuraciones suministradas como enlaces simbólicos y conserva el directorio tal como se suministró, igual que `Config::load`. Stop, anclaje, purga, modelos y prototipos se convierten a rutas absolutas sin colapsar sus componentes; una ruta no verificable o no reconocida aborta antes de escribir la copia. Las regresiones de enlace y resolución fallaron antes del arreglo y cubren ambos clientes; hallazgo → resolución → pruebas en `docs/reviews/2026-10-16-freshness-measurement-tools.md`.

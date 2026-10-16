@@ -1409,7 +1409,10 @@ def main() -> int:
 
     try:
         driver.freshness_config(args)
-    except (Abort, OSError, ValueError):
+    except Abort as error:
+        driver.log("abort", reason=str(error))
+        return 2
+    except (OSError, RuntimeError, ValueError):
         driver.log("abort", reason="cannot prepare the M2 configuration copy")
         return 2
     raw = args.config.read_bytes()

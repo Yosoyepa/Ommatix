@@ -18,6 +18,80 @@ spec.loader.exec_module(dossier)
 
 
 class FreshnessMeasurementTest(unittest.TestCase):
+    def test_ambiguous_windows_operator_paths_refuse_before_writes_in_both_clients(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "operator" / "live.toml"
+            source.parent.mkdir()
+            bad = [source.drive + "STOP", r"\STOP", r"..\STOP", "",
+                   r"\\?\C:\STOP", r"\\.\C:\STOP"]
+            resolve = Path.resolve
+
+            def no_stop_lookup(path, *args, **kwargs):
+                return path if path.name == "STOP" else resolve(path, *args, **kwargs)
+
+            for index, value in enumerate(bad):
+                source.write_text("[safety]\nstop_file = '" + value + "'\n", encoding="utf-8")
+                for client in (driver, dossier.driver):
+                    with self.subTest(client=client.__name__, value=value):
+                        folder = root / f"run-{index}-{client.__name__}"
+                        args = SimpleNamespace(config=source, results=folder / "results.jsonl",
+                                               target_window_freshness=True)
+                        with mock.patch.object(Path, "resolve", no_stop_lookup):
+                            with self.assertRaises(client.Abort):
+                                client.freshness_config(args)
+                        self.assertFalse(folder.exists())
+                        self.assertEqual(args.config, source)
+
+    def test_ambiguous_config_paths_are_refused_before_reading_or_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "operator" / "live.toml"
+            bad = [r"\\?" + "\\" + str(source), r"\\." + "\\" + str(source),
+                   source.drive + "live.toml", r"\live.toml", "",
+                   str(source.parent / "nested" / ".." / source.name)]
+            for index, value in enumerate(bad):
+                for client in (driver, dossier.driver):
+                    with self.subTest(client=client.__name__, value=value):
+                        folder = root / f"run-{index}-{client.__name__}"
+                        args = SimpleNamespace(config=value, results=folder / "results.jsonl",
+                                               target_window_freshness=True)
+                        with mock.patch.object(Path, "is_symlink", return_value=False), \
+                             mock.patch.object(Path, "read_text", return_value="[engine]\n") as read:
+                            with self.assertRaises(client.Abort):
+                                client.freshness_config(args)
+                            read.assert_not_called()
+                        self.assertFalse(folder.exists())
+
+    def test_absolute_operator_paths_are_preserved_byte_for_byte_in_both_clients(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "operator" / "live.toml"
+            # Mock resolution to avoid contacting the UNC host; these are pure path tests.
+            accepted = [source.drive + "/operator/STOP", r"\\server\share\folder\STOP"]
+            for client in (driver, dossier.driver):
+                for value in accepted:
+                    config = {"safety": {"stop_file": value}}
+                    with mock.patch.object(Path, "resolve", lambda path: path):
+                        client.rebase_operator_paths(config, source)
+                    self.assertEqual(config["safety"]["stop_file"], value)
+
+    def test_rejected_path_explanation_reaches_both_clients_without_starting_a_server(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "live.toml"
+            source.write_text("[safety]\nstop_file = '" + source.drive + "STOP'\n", encoding="utf-8")
+            for program, client in ((driver, driver), (dossier, dossier.driver)):
+                args = SimpleNamespace(config=source, results=root / "run" / "results.jsonl",
+                                       target_window_freshness=True)
+                with mock.patch.object(program.argparse.ArgumentParser, "parse_args", return_value=args), \
+                     mock.patch.object(client, "log") as log, \
+                     mock.patch.object(client, "use_utf8_stdout"), \
+                     mock.patch.object(client.s3, "Server") as server:
+                    self.assertEqual(program.main(), 2)
+                    self.assertIn("drive-relative", log.call_args.kwargs["reason"])
+                    server.assert_not_called()
+                self.assertFalse(args.results.parent.exists())
+
     def test_symlinked_configuration_is_refused_before_copying_in_both_clients(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -74,11 +148,11 @@ class FreshnessMeasurementTest(unittest.TestCase):
                         client.freshness_config(args)
                 self.assertFalse(args.results.parent.exists())
 
-    def test_rebasing_keeps_lexical_parent_components_and_all_current_path_keys(self):
+    def test_all_current_path_keys_rebase_plain_relatives_against_the_supplied_base(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "operator").mkdir()
-            source = root / "operator" / ".." / "live.toml"
+            source = root / "operator" / "live.toml"
             original = {
                 "safety": {"stop_file": "STOP", "window_pin_file": "pin", "purge_file": "purge"},
                 "models": {"detector_manifest": "manifest.json", "onnxruntime_path": "ort.dll",
@@ -134,7 +208,7 @@ class FreshnessMeasurementTest(unittest.TestCase):
                    'window_pin_file = "pin"\npurge_file = "purge"\n'
                    'allowed_applications = ["explorer.exe"]\n'
                    '[safety.allowed_window_classes]\n"explorer.exe" = ["CabinetWClass"]\n'
-                   '[models]\ndetector_manifest = "../model/manifest.json"\n'
+                   '[models]\ndetector_manifest = "model/manifest.json"\n'
                    'onnxruntime_path = "runtime.dll"\n[cache]\nprototypes = "icons.json"\n')
             source.write_text(raw, encoding="utf-8")
             args = SimpleNamespace(config=source, results=root / "run" / "results.jsonl",
@@ -152,7 +226,7 @@ class FreshnessMeasurementTest(unittest.TestCase):
                 expected = {"stop_file": "STOP", "window_pin_file": "pin", "purge_file": "purge"}[key]
                 self.assertEqual(Path(variant["safety"][key]), source.parent / expected)
             self.assertEqual(Path(variant["models"]["detector_manifest"]),
-                             source.parent / "../model/manifest.json")
+                             source.parent / "model/manifest.json")
             first = args.config
             args.config = source
             driver.freshness_config(args)

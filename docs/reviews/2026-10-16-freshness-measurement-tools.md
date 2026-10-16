@@ -28,7 +28,7 @@ configuration before rebasing its paths. For `C:\operator\live.toml` linked to
 so M2 could ignore an already-engaged operator stop. The same bug affected pin, purge,
 model and prototype paths. Both clients use the helper.
 
-**Resolution (architect's decision).** Reject a supplied config-file symlink before
+**First resolution (`09b3fad`; path acceptance narrowed by the next review below).** Reject a supplied config-file symlink before
 creating a run folder or copy. Base every relative operator path on the absolute form of
 the supplied config directory, retaining lexical parent components and parent links.
 Resolve only to verify equivalence; write the lexical absolute path to preserve the
@@ -42,9 +42,47 @@ failed with `Abort not raised` for each client before the correction;
 uncaught resolution failure. Both pass after the correction. Deterministic path doubles
 avoid requiring Windows symlink privileges. The companion tests
 `test_relative_stop_and_pin_keep_the_supplied_config_directory_in_both_clients`,
-`test_rebasing_keeps_lexical_parent_components_and_all_current_path_keys` and
+`test_all_current_path_keys_rebase_plain_relatives_against_the_supplied_base` and
 `test_unmapped_or_invalid_operator_paths_are_refused_before_copying` protect an engaged
-stop, the original pin, every current path field, lexical parents and refusal before writes.
+stop, the original pin, every current path field and refusal before writes.
+
+## Second review of `09b3fad`: Windows drive-relative and verbatim joins (P1/P2)
+
+**Findings.** For config `C:\operator\live.toml`, Python joined `C:STOP` to
+`C:\operator\STOP`, whereas Rust retains the drive-relative path, whose base is the
+C-drive working directory. This could ignore the original engaged stop (P1). For a
+verbatim config `\\?\C:\operator\live.toml`, copying `..\STOP` retained that component;
+Rust's verbatim join normalises it. The copied path could fail with Win32 error 123 (P2).
+Both clients share the helper, so both were affected.
+
+**Resolution (architect's closed rule).** Classify raw strings before any path join.
+Accept only standard absolute Windows paths (letter plus root, or UNC) and plain relative
+paths without a drive or initial separator; neither may contain a `..` component.
+Absolute operator values stay byte-for-byte identical. Plain relatives join the supplied
+config directory. Refuse drive-relative, root-relative, verbatim/device-prefixed, parent
+traversal and empty paths before creating anything. Apply those restrictions to the
+supplied config path as well, retaining the symlink refusal. Omit unused optional path
+keys rather than accepting explicit empty strings. Keep resolution-equivalence checks
+for the permitted forms, and pass the fixed refusal reason through each client's main
+function without printing the path or starting a server. This supersedes the previous
+correction's acceptance of lexical `..` components, rather than emulating special joins.
+
+**Fail-first regressions.** Before this correction, the new cases produced 25 assertion
+failures, including acceptance of `C:STOP`, `\STOP`, `..\STOP`, empty strings and verbatim
+configs in both clients, and rewriting `C:/operator/STOP` separators. After correction:
+
+- `test_ambiguous_windows_operator_paths_refuse_before_writes_in_both_clients` covers the
+  rejected operator forms, with path-resolution doubles and no copy/run folder created.
+- `test_ambiguous_config_paths_are_refused_before_reading_or_writing` covers verbatim and
+  device config prefixes, drive/root relatives, parent components and empty strings.
+- `test_absolute_operator_paths_are_preserved_byte_for_byte_in_both_clients` protects
+  drive-rooted and UNC values, without contacting a network host.
+- The existing stop/pin identity and all-current-path tests protect plain relatives and
+  their absolute destinations; the fixture with `../model` now uses an admitted path.
+- `test_rejected_path_explanation_reaches_both_clients_without_starting_a_server` protects
+  the clear operator reason, exit code and absence of process startup on refusal.
+
+These are filesystem/path doubles only: no live engine, screen capture or OS input.
 
 ## CI finding: the guide validator misattributes Python flags
 
@@ -86,7 +124,10 @@ La conversión de tiempos fallaba ante el objeto D0 y podía impedir guardar el 
 La regresión falla con la conversión anterior y pasa al separar tiempos y recuentos.
 La revisión P1 detectó que canonicalizar una configuración enlazada podía mover el stop:
 ahora se rechaza el enlace y todas las rutas conservan el directorio suministrado; las
-regresiones fallaron antes del arreglo y cubren ambos clientes. El validador de guías
+regresiones fallaron antes del arreglo y cubren ambos clientes. La segunda revisión
+detectó las diferencias de `C:STOP` y de rutas verbatim: por decisión del arquitecto,
+sólo se aceptan absolutas estándar o relativas simples sin `..`; las demás se rechazan
+antes de escribir y se informa el motivo sin mostrar la ruta. El validador de guías
 reconoce las herramientas Python y sus continuaciones PowerShell. M1 queda descriptiva,
 con 30 + 30 pares y sin umbral, por decisión del responsable.
 M1 reutiliza la agrupación del motor con un lector incapaz de entregar entrada; las pruebas
