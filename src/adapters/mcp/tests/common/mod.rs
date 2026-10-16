@@ -113,6 +113,7 @@ struct Screen {
     seq: u64,
     clock: Arc<ManualClock>,
     cost: Duration,
+    change_after_first: bool,
 }
 
 impl FrameCapturer for Screen {
@@ -123,8 +124,23 @@ impl FrameCapturer for Screen {
     fn capture(&mut self) -> Result<CapturedFrame, PortError> {
         self.seq += 1;
         self.clock.advance(self.cost);
+        let frame = if self.change_after_first && self.seq > 1 {
+            let mut pixels =
+                vec![0x80; self.frame.width() as usize * self.frame.height() as usize * 4];
+            pixels[0] = 0xff;
+            BgraFrame::new(
+                self.frame.width(),
+                self.frame.height(),
+                self.frame.width() as usize * 4,
+                1,
+                pixels,
+            )
+            .expect("synthetic frame")
+        } else {
+            self.frame.clone()
+        };
         Ok(CapturedFrame {
-            frame: self.frame.clone(),
+            frame,
             frame_seq: self.seq,
             captured_at: self.clock.now(),
             scaling: Scaling::Dpi(96),
@@ -178,6 +194,7 @@ impl TextRecognizer for Recognizer {
 #[derive(Default)]
 struct NullActuator {
     delivered: Arc<Mutex<u32>>,
+    live: bool,
 }
 
 impl OsActuator for NullActuator {
@@ -186,7 +203,11 @@ impl OsActuator for NullActuator {
     }
 
     fn is_live(&self) -> bool {
-        false
+        self.live
+    }
+
+    fn foreground_application(&self) -> Option<String> {
+        Some("test-app".into())
     }
 
     fn deliver(&mut self, _: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
@@ -218,21 +239,37 @@ pub struct Costs {
 }
 
 pub fn engine_with(scene: Scene, policy: LocalPolicy) -> Engine {
-    build_engine(scene, Arc::new(FixedPolicy(policy)), None)
+    build_engine(scene, Arc::new(FixedPolicy(policy)), None, false)
 }
 
 /// Like [`engine_with`], with the operator's policy store given: the tests that need the
 /// operator's purge file (SEC-07) supply their own.
 pub fn engine_with_store(scene: Scene, policy: Arc<dyn PolicyStore>) -> Engine {
-    build_engine(scene, policy, None)
+    build_engine(scene, policy, None, false)
 }
 
 /// Like [`engine_with`], with doubles that take `costs` and stages that run in sequence.
 pub fn engine_with_costs(scene: Scene, policy: LocalPolicy, costs: Costs) -> Engine {
-    build_engine(scene, Arc::new(FixedPolicy(policy)), Some(costs))
+    build_engine(scene, Arc::new(FixedPolicy(policy)), Some(costs), false)
 }
 
-fn build_engine(scene: Scene, policy: Arc<dyn PolicyStore>, costs: Option<Costs>) -> Engine {
+/// A synthetic screen changes one pixel in the target's tile after observation.
+/// The actuator double can attest policy but never sends OS input.
+pub fn freshness_engine() -> Engine {
+    let policy = LocalPolicy {
+        actuation_enabled: true,
+        allowed_applications: vec!["test-app".into()],
+        ..LocalPolicy::default()
+    };
+    build_engine(basic_scene(), Arc::new(FixedPolicy(policy)), None, true)
+}
+
+fn build_engine(
+    scene: Scene,
+    policy: Arc<dyn PolicyStore>,
+    costs: Option<Costs>,
+    freshness_probe: bool,
+) -> Engine {
     let clock = Arc::new(ManualClock::new());
     let costs_in_use = costs.unwrap_or_default();
     let pixels = vec![0x80_u8; scene.width as usize * scene.height as usize * 4];
@@ -251,11 +288,15 @@ fn build_engine(scene: Scene, policy: Arc<dyn PolicyStore>, costs: Option<Costs>
             seq: 0,
             clock: clock.clone(),
             cost: costs_in_use.capture,
+            change_after_first: freshness_probe,
         }),
         detector: Box::new(Detector(scene.clone(), clock.clone(), costs_in_use.detect)),
         recognizer: Box::new(Recognizer(scene, clock.clone(), costs_in_use.recognize)),
         accessibility: Box::new(ommatix_application::NoAccessibility),
-        actuator: Box::new(NullActuator::default()),
+        actuator: Box::new(NullActuator {
+            live: freshness_probe,
+            ..NullActuator::default()
+        }),
         policy,
         clock,
     };

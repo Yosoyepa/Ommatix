@@ -862,14 +862,25 @@ pub fn plan_meta(p: &ObservationPlan) -> Value {
 /// Run-dependent stage timings of one action, in whole microseconds, for result `_meta`.
 pub fn action_timings_meta(t: &ActionTimings) -> Value {
     let us = |d: std::time::Duration| u64::try_from(d.as_micros()).unwrap_or(u64::MAX);
-    serde_json::json!({
+    let mut meta = serde_json::json!({
         "gate_us": us(t.gate),
         "freshness_us": us(t.freshness),
         "delivery_us": us(t.delivery),
         "focus_us": us(t.focus),
         "verification_us": us(t.verification),
         "total_us": us(t.total),
-    })
+    });
+    if let Some(diff) = t.freshness_diff {
+        let mut diagnostic = serde_json::json!({
+            "total_tiles": diff.total_tiles,
+            "touches_target": diff.touches_target,
+        });
+        if let Some(group_tiles) = diff.group_tiles {
+            diagnostic["group_tiles"] = group_tiles.into();
+        }
+        meta["freshness_diff"] = diagnostic;
+    }
+    meta
 }
 
 /// Whether the accessibility evidence behind an observation is complete, for result

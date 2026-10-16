@@ -90,3 +90,26 @@ fn a_single_pixel_change_under_the_target_is_stale_and_sends_nothing() {
     let (r, _page, result) = live_click_after_one_pixel(TARGET_PIXEL);
     assert_stale_and_nothing_sent(&r, &result);
 }
+
+#[test]
+fn a_dry_run_never_captures_or_predicts_pixel_freshness() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let page = r.observe();
+    r.world()
+        .pixels
+        .push((FAR_PIXEL.0, FAR_PIXEL.1, [255, 255, 255]));
+    r.world().fail_capture = true;
+    r.world().events.clear();
+    let mut request = live_click(&page, "dry", ExpectedEffect::None);
+    request.dry_run = true;
+    let result = r.engine.execute_action(&request);
+    assert_eq!(result.status, ActionStatus::Simulated);
+    assert!(!r.world().events.contains(&"capture"));
+    assert!(r.world().delivered.is_empty(), "no synthetic delivery");
+    assert_eq!(
+        r.engine.last_action_timings().expect("timings").freshness,
+        Duration::ZERO
+    );
+}
