@@ -1720,25 +1720,63 @@ def freshness_fields(out: dict, meta: dict) -> dict:
     return {"freshness_diff": clean} if clean else {}
 
 
+def rebase_operator_paths(config: dict, source: Path) -> None:
+    """Keep Config::load's supplied base directory, including parent links and `..`.
+
+    Missing stop/pin files are legitimate. Resolve only to verify equivalence; write the
+    absolute lexical path, so a linked parent or operator file keeps its original meaning.
+    """
+    paths = {"safety": ("stop_file", "purge_file", "window_pin_file"),
+             "models": ("detector_manifest", "onnxruntime_path", "directml_path",
+                        "detector_path", "ocr_path"), "cache": ("prototypes",)}
+
+    def inspect(values, prefix=()):
+        for key, value in values.items():
+            if isinstance(value, dict):
+                inspect(value, (*prefix, key))
+            elif key.endswith(("_path", "_file", "_dir", "_directory")):
+                if len(prefix) != 1 or key not in paths.get(prefix[0], ()):
+                    raise Abort("an operator path has no verified configuration mapping")
+
+    inspect(config)
+    for section, keys in paths.items():
+        for key in keys:
+            value = config.get(section, {}).get(key, "")
+            if not isinstance(value, str):
+                raise Abort("an operator path is not a string")
+            if not value:
+                continue
+            expected = source.parent / value
+            try:
+                if not expected.is_absolute() or "\x00" in value:
+                    raise ValueError("not an absolute operator path")
+                resolved = expected.resolve()
+                copied = str(expected)
+                if Path(copied).resolve() != resolved:
+                    raise ValueError("operator path differs in the configuration copy")
+            except (OSError, RuntimeError, ValueError):
+                raise Abort("an operator path cannot be preserved in the configuration copy") from None
+            config[section][key] = copied
+
+
 def freshness_config(args) -> None:
     """Write an opt-in M2 copy outside the checkout, preserving relative path meanings."""
     if not getattr(args, "target_window_freshness", False):
         return
-    source = Path(args.config).resolve()
+    source = Path(args.config)
+    if not source.is_absolute():
+        source = Path.cwd() / source
+    if source.is_symlink():
+        raise Abort("M2 refuses a symlinked configuration file")
     folder = Path(args.results).resolve().parent
     repo = HERE.parent.parent.resolve()
     if folder.is_relative_to(repo) or any((p / ".git").exists() for p in (folder, *folder.parents)):
         raise Abort("the M2 run folder must be outside the repository")
     config = tomllib.loads(source.read_text(encoding="utf-8"))
+    if source.is_symlink():
+        raise Abort("M2 refuses a symlinked configuration file")
     config.setdefault("engine", {})["action_freshness"] = "target_window"
-    paths = {"safety": ("stop_file", "purge_file", "window_pin_file"),
-             "models": ("detector_manifest", "onnxruntime_path", "directml_path",
-                        "detector_path", "ocr_path"), "cache": ("prototypes",)}
-    for section, keys in paths.items():
-        for key in keys:
-            value = config.get(section, {}).get(key)
-            if value:
-                config[section][key] = str((source.parent / value).resolve())
+    rebase_operator_paths(config, source)
 
     def value_text(value):
         if isinstance(value, str):

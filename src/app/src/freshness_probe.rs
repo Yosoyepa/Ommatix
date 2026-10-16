@@ -83,9 +83,13 @@ pub fn run(args: &FreshnessProbeArgs) -> Result<()> {
             "group_frame_fraction": counts.group_frame_fraction,
             "group_covers_whole_frame": counts.group_covers_whole_frame}));
     }
-    let report = json!({"pairs": records, "interval_ms": args.interval_ms,
+    let mut report = json!({"pairs": records, "interval_ms": args.interval_ms,
         "margin_px": config.engine.action_freshness_margin_px, "outside_pairs": outside,
-        "min_outside_pairs": args.min_outside_pairs, "criterion_met": outside >= args.min_outside_pairs});
+        "descriptive": args.descriptive});
+    if let Some(minimum) = args.min_outside_pairs {
+        report["min_outside_pairs"] = json!(minimum);
+        report["criterion_met"] = json!(outside >= minimum);
+    }
     // The product writes no files (SEC-04). The operator-side Python driver validates
     // these counts and persists them outside the checkout; stdout remains untouched.
     serde_json::to_writer(std::io::stderr().lock(), &report)
@@ -146,7 +150,10 @@ fn target_box(
         "M1 requires actuation_enabled = false and mode = dry_run"
     );
     ensure!(
-        args.pairs > 0 && args.min_outside_pairs <= args.pairs,
+        args.pairs > 0
+            && args
+                .min_outside_pairs
+                .is_none_or(|minimum| minimum <= args.pairs),
         "the criterion exceeds the number of pairs or there are no pairs"
     );
     Ok(ommatix_domain::bbox::BBox::new(
@@ -194,11 +201,24 @@ mod tests {
         args
     }
     #[test]
-    fn the_owner_must_set_the_measurement_criterion_and_the_target_box() {
+    fn the_owner_must_choose_descriptive_or_a_measurement_criterion() {
         let mut missing = argv();
         missing.drain(6..8);
         assert!(Cli::try_parse_from(missing).is_err());
         assert_eq!(args().interval_ms, 150);
+    }
+    #[test]
+    fn descriptive_measurement_has_no_default_pass_threshold() {
+        let mut descriptive = argv();
+        descriptive.drain(6..8);
+        descriptive.push("--descriptive");
+        let Command::FreshnessProbe(args) = Cli::parse_from(descriptive.clone()).command else {
+            panic!("probe args")
+        };
+        assert!(args.descriptive);
+        assert_eq!(args.min_outside_pairs, None);
+        descriptive.extend(["--min-outside-pairs", "0"]);
+        assert!(Cli::try_parse_from(descriptive).is_err());
     }
     #[test]
     fn an_enabled_or_native_configuration_is_refused_before_any_capture() {

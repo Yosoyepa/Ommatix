@@ -22,14 +22,19 @@ def parse_args(argv=None):
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--pairs", type=int, required=True)
     p.add_argument("--interval-ms", type=int, default=150)
-    p.add_argument("--min-outside-pairs", type=int, required=True)
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--descriptive", action="store_true", help="M1: counts only, no pass criterion")
+    mode.add_argument("--min-outside-pairs", type=int, help="optional owner-set pass criterion; no default")
     p.add_argument("--window-class", required=True)
     p.add_argument("--output", type=int, default=0)
-    for key in ("x", "y", "width", "height"):
-        p.add_argument("--target-" + key, type=int, required=True)
+    p.add_argument("--target-x", type=int, required=True)
+    p.add_argument("--target-y", type=int, required=True)
+    p.add_argument("--target-width", type=int, required=True)
+    p.add_argument("--target-height", type=int, required=True)
     args = p.parse_args(argv)
     if not (1 <= args.pairs <= 100_000 and 1 <= args.interval_ms <= 60_000
-            and 0 <= args.min_outside_pairs <= args.pairs and args.output >= 0
+            and (args.min_outside_pairs is None or 0 <= args.min_outside_pairs <= args.pairs)
+            and args.output >= 0
             and 0 <= args.target_x <= 2**32 - 1 and 0 <= args.target_y <= 2**32 - 1
             and 1 <= args.target_width <= 2**32 - 1 and 1 <= args.target_height <= 2**32 - 1):
         p.error("invalid pair count, interval, criterion, output or target box")
@@ -39,17 +44,25 @@ def parse_args(argv=None):
 def probe_argv(args):
     """A single fixed read-only subcommand; there is no live-server/input alternative."""
     command = [str(args.exe), "freshness-probe", "--config", str(args.config)]
-    for key in ("pairs", "interval_ms", "min_outside_pairs", "window_class", "output",
+    for key in ("pairs", "interval_ms", "window_class", "output",
                 "target_x", "target_y", "target_width", "target_height"):
         command.extend(["--" + key.replace("_", "-"), str(getattr(args, key))])
+    if args.descriptive:
+        command.append("--descriptive")
+    else:
+        command.extend(["--min-outside-pairs", str(args.min_outside_pairs)])
     return command
 
 
 def validate_report(report, args):
     """Reject unexpected keys/types rather than persisting raw child stderr."""
-    if not isinstance(report, dict) or set(report) != {
-            "pairs", "interval_ms", "margin_px", "outside_pairs", "min_outside_pairs", "criterion_met"}:
+    keys = {"pairs", "interval_ms", "margin_px", "outside_pairs", "descriptive"}
+    if not args.descriptive:
+        keys |= {"min_outside_pairs", "criterion_met"}
+    if not isinstance(report, dict) or set(report) != keys:
         raise ValueError("invalid measurement report")
+    if type(report["descriptive"]) is not bool or report["descriptive"] != args.descriptive:
+        raise ValueError("invalid measurement mode")
     counts = ("total_tiles", "group_tiles", "group_window_count")
     fields = {*counts, "touches_target", "group_frame_fraction", "group_covers_whole_frame", "capture_gap_ms"}
     if not isinstance(report["pairs"], list) or len(report["pairs"]) != args.pairs:
@@ -72,13 +85,17 @@ def validate_report(report, args):
         if pair["group_covers_whole_frame"] != (pair["group_frame_fraction"] == 1):
             raise ValueError("inconsistent coverage")
     outside = sum(p["total_tiles"] > p["group_tiles"] for p in report["pairs"])
-    for key in ("interval_ms", "margin_px", "outside_pairs", "min_outside_pairs"):
+    for key in ("interval_ms", "margin_px", "outside_pairs"):
         if type(report[key]) is not int or report[key] < 0:
             raise ValueError("invalid summary count")
-    if (report["interval_ms"] != args.interval_ms or report["min_outside_pairs"] != args.min_outside_pairs
-            or report["outside_pairs"] != outside or type(report["criterion_met"]) is not bool
-            or report["criterion_met"] != (outside >= args.min_outside_pairs)):
+    if report["interval_ms"] != args.interval_ms or report["outside_pairs"] != outside:
         raise ValueError("inconsistent summary")
+    if not args.descriptive:
+        if (type(report["min_outside_pairs"]) is not int
+                or report["min_outside_pairs"] != args.min_outside_pairs
+                or type(report["criterion_met"]) is not bool
+                or report["criterion_met"] != (outside >= args.min_outside_pairs)):
+            raise ValueError("inconsistent criterion")
     return report
 
 

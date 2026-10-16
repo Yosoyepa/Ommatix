@@ -140,7 +140,8 @@ PC de referencia, monitor principal 1920×1080 con origen (0, 0), motor con las 
 
 **Preparación de herramientas, sin evidencia viva nueva.** M1, M2 e IT-08 no se han ejecutado.
 El responsable registra antes de cada sesión el commit, configuración, N, aplicaciones,
-estado del menú y criterio de aceptación, fuera del repositorio. IT-08 sigue planificado;
+estado del menú y protocolo descriptivo (M1) o criterio de aceptación (M2), fuera del
+repositorio. IT-08 sigue planificado;
 ningún estado de requisito ni casilla de §6.7 cambia. El valor por defecto sigue siendo
 `action_freshness = "screen"`.
 
@@ -159,24 +160,35 @@ completamente dentro de ella. Las cuatro magnitudes de la caja son píxeles fís
 del monitor seleccionado (`--output`, cero por defecto): sólo son argumentos de una
 herramienta del operador, nunca campos MCP ni datos de salida. No se leen títulos ni texto.
 Para Bloc de notas se usa exclusivamente la caja de «Editar», sin pulsarlo mediante la
-herramienta. El responsable repite la medición con el menú cerrado y abierto, cambiándolo
-a mano entre invocaciones; también selecciona por separado las otras ventanas de prueba.
+herramienta. **Decisión del responsable: M1 es descriptiva, con N = 60 pares en total,
+30 con el menú cerrado y 30 con el menú abierto, sin umbral de aprobación.** Cambia el
+menú a mano entre las dos invocaciones; cualquier otra ventana se registra por separado.
 
 ```powershell
-# Asignar previamente N, minOutsidePairs, x, y, width y height en el cuaderno de sesión.
+# Asignar previamente x, y, width y height en el cuaderno de sesión.
 # La carpeta de salida ya debe existir fuera de cualquier repositorio.
 python tools/perf/freshness_probe.py --exe target\release\ommatix.exe `
-  --config "$env:LOCALAPPDATA\Ommatix\m1.toml" --pairs $N --interval-ms 150 `
-  --min-outside-pairs $minOutsidePairs --window-class Notepad `
+  --config "$env:LOCALAPPDATA\Ommatix\m1.toml" --pairs 30 --interval-ms 150 `
+  --descriptive --window-class Notepad `
   --target-x $x --target-y $y --target-width $width --target-height $height `
   --out "$env:LOCALAPPDATA\Ommatix\runs\m1-menu-cerrado.json"
+
+# El responsable abre el menú a mano y verifica de nuevo la caja antes de continuar.
+python tools/perf/freshness_probe.py --exe target\release\ommatix.exe `
+  --config "$env:LOCALAPPDATA\Ommatix\m1.toml" --pairs 30 --interval-ms 150 `
+  --descriptive --window-class Notepad `
+  --target-x $x --target-y $y --target-width $width --target-height $height `
+  --out "$env:LOCALAPPDATA\Ommatix\runs\m1-menu-abierto.json"
 ```
 
-No hay valor por defecto para N ni para `--min-outside-pairs`: este último es el mínimo
-pre-registrado de pares con `total_tiles > group_tiles` (entre cero y N). Es un criterio
-descriptivo de M1, **no** una tolerancia del motor ni una autorización de entrada. Un
-`criterion_met = true` no decide activar el alcance ni acredita IT-08. Si el responsable
-elige además criterios sobre localización/cobertura, los evalúa en su cuaderno.
+`--descriptive` registra los recuentos y `outside_pairs` (pares con
+`total_tiles > group_tiles`), **sin** `min_outside_pairs` ni `criterion_met` en la salida.
+No convierte la medición en aprobada o rechazada, ni decide activar el alcance o acreditar
+IT-08. Para otro protocolo futuro puede elegirse `--min-outside-pairs`, mínimo de pares
+con cambios fuera del grupo entre cero y N: no tiene valor por defecto y es incompatible
+con `--descriptive`. El responsable no eligió ese criterio de aprobación para esta M1.
+N tampoco tiene valor por defecto en la herramienta: se pasa 30 en cada invocación del
+plan de 60. Ningún recuento es una tolerancia del motor o autorización de entrada.
 
 La salida contiene sólo números y booleanos. Por par: `total_tiles`, `group_tiles`,
 `touches_target`, `group_window_count`, `group_frame_fraction`,
@@ -198,8 +210,9 @@ el cursor de texto ni ninguna animación.
 Lecturas iguales rodean cada captura y ambos miembros del par deben conservar el grupo.
 Cambio de grupo, geometría/época, caja fuera del fotograma, ventana fuera de la política,
 stop o evidencia incompleta abortan la invocación; no se fabrica un cero ni se publica
-un informe parcial como si fueran N pares válidos. El binario emite s?lo el JSON num?rico por stderr, sin escribir archivos (SEC-04).
-El controlador `tools/perf/freshness_probe.py` exige salida exitosa, stdout vac?o y un
+un informe parcial como si fueran N pares válidos. El binario emite sólo el JSON numérico
+por stderr, sin escribir archivos (SEC-04).
+El controlador `tools/perf/freshness_probe.py` exige salida exitosa, stdout vacío y un
 informe completo con claves y tipos permitidos antes de guardarlo. Nunca guarda el stderr
 bruto de un fallo. El archivo no se sobrescribe. No se
 guardan fotogramas, clases, handles, coordenadas, etiquetas, títulos ni texto de pantalla.
@@ -218,7 +231,13 @@ la herramienta no decide activar la opción a partir de su resultado.
 copia única en una subcarpeta `m2-*` junto a `--results`, obligatoriamente fuera del
 repositorio. Sólo cambia `[engine] action_freshness = "target_window"`; conserva los
 permisos y convierte las rutas de modelos, caché, stop, purga y anclaje a absolutas para
-que sigan señalando los mismos archivos. El original nunca se modifica. La copia y el
+que sigan señalando los mismos archivos, usando el directorio de la configuración
+**tal como se suministró**, igual que `Config::load`, sin canonicalizar previamente ese
+archivo ni colapsar sus componentes de ruta. Una configuración suministrada como enlace
+simbólico se rechaza antes de crear la copia; también cualquier ruta del operador cuya
+equivalencia no pueda verificarse o cuyo campo no tenga una correspondencia conocida.
+Un stop o anclaje relativo sigue apuntando al mismo archivo absoluto, aunque su archivo
+aún no exista. El original nunca se modifica. La copia y el
 hash del inicio permiten auditar la variante; sin la opción se usa la configuración
 entregada, que también podría declarar un alcance explícito.
 

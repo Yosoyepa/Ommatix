@@ -37,8 +37,19 @@ pub struct FreshnessProbeArgs {
     pub interval_ms: u64,
     /// Owner's pre-registered criterion: minimum pairs with changes outside the group.
     /// No default; this assesses a measurement, never authorises input.
-    #[arg(long)]
-    pub min_outside_pairs: u32,
+    #[arg(
+        long,
+        conflicts_with = "descriptive",
+        required_unless_present = "descriptive"
+    )]
+    pub min_outside_pairs: Option<u32>,
+    /// Record the owner's descriptive M1 protocol, with no pass/fail threshold.
+    #[arg(
+        long,
+        conflicts_with = "min_outside_pairs",
+        required_unless_present = "min_outside_pairs"
+    )]
+    pub descriptive: bool,
     #[arg(long, default_value_t = 0)]
     pub output: u32,
     /// Exact policy-allowed class of the foreground window the operator selected.

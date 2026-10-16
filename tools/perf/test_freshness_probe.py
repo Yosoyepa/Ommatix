@@ -15,17 +15,36 @@ spec.loader.exec_module(probe)
 
 
 class FreshnessProbeTest(unittest.TestCase):
-    def args(self, root):
+    def args(self, root, descriptive=False):
         return probe.parse_args(["--exe", "ommatix.exe", "--config", "operator.toml",
-            "--out", str(root / "m1.json"), "--pairs", "1", "--min-outside-pairs", "1",
+            "--out", str(root / "m1.json"), "--pairs", "1",
             "--window-class", "TestClass", "--target-x", "10", "--target-y", "10",
-            "--target-width", "4", "--target-height", "4"])
+            "--target-width", "4", "--target-height", "4"] +
+            (["--descriptive"] if descriptive else ["--min-outside-pairs", "1"]))
+
+    def test_descriptive_mode_neither_supplies_nor_accepts_a_pass_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.args(Path(tmp), descriptive=True)
+            self.assertIsNone(args.min_outside_pairs)
+            self.assertIn("--descriptive", probe.probe_argv(args))
+            self.assertNotIn("--min-outside-pairs", probe.probe_argv(args))
+            report = self.report()
+            report.pop("min_outside_pairs")
+            report.pop("criterion_met")
+            report["descriptive"] = True
+            child = SimpleNamespace(returncode=0, stdout="", stderr=json.dumps(report))
+            self.assertEqual(probe.run(args, lambda *a, **kw: child), 0)
+            self.assertNotIn("criterion_met", json.loads(args.out.read_text()))
+            report["min_outside_pairs"] = 0
+            report["criterion_met"] = True
+            with self.assertRaises(ValueError):
+                probe.validate_report(report, args)
 
     def report(self):
         return {"pairs": [{"capture_gap_ms": 152.2, "total_tiles": 3, "group_tiles": 0,
                 "touches_target": False, "group_window_count": 2, "group_frame_fraction": 0.4,
                 "group_covers_whole_frame": False}], "interval_ms": 150, "margin_px": 0,
-                "outside_pairs": 1, "min_outside_pairs": 1, "criterion_met": True}
+                "outside_pairs": 1, "min_outside_pairs": 1, "criterion_met": True, "descriptive": False}
 
     def test_numeric_report_is_saved_and_the_command_can_only_select_the_read_only_probe(self):
         with tempfile.TemporaryDirectory() as tmp:

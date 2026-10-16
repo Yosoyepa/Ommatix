@@ -1,5 +1,11 @@
 # Historial documental
 
+## 1.0.84 — 2026-10-16: correcciones de revisión de las herramientas de frescura (PR #79)
+
+La copia M2 rechaza configuraciones suministradas como enlaces simbólicos y conserva el directorio tal como se suministró, igual que `Config::load`. Stop, anclaje, purga, modelos y prototipos se convierten a rutas absolutas sin colapsar sus componentes; una ruta no verificable o no reconocida aborta antes de escribir la copia. Las regresiones de enlace y resolución fallaron antes del arreglo y cubren ambos clientes; hallazgo → resolución → pruebas en `docs/reviews/2026-10-16-freshness-measurement-tools.md`.
+
+El validador de las guías reconoce los tres programas Python nuevos y sus continuaciones PowerShell, por lo que comprueba `--exe` y el resto de opciones contra el programa que las define. M1 dispone de `--descriptive`, incompatible con el criterio opcional `--min-outside-pairs`, que sigue sin valor por defecto. **Decisión del responsable: N = 60 pares, 30 con el menú cerrado y 30 abierto, descriptiva y sin umbral de aprobación.** Esa modalidad no publica `criterion_met`. No se ha ejecutado M1, M2 ni IT-08; ningún estado de requisito ni casilla de §6.7 cambia.
+
 ## 1.0.83 — 2026-10-16: herramientas M1 sin entrada y variante supervisada M2 / IT-08 (ADR-0032)
 
 `ommatix freshness-probe` prepara la medición del responsable: pares DXGI separados por un intervalo configurable, grupo de ventanas mediante la misma lectura y selección del motor, diferencias exactas de tiles de 64×64 y cobertura de la unión, sin registrar píxeles, geometría ni texto. Un lector Windows separado rechaza cualquier entrega y no construye `SendInputActuator`; M1 exige configuración sin actuación y una clase de ventana permitida explícitamente. N, caja local, salida exterior al repositorio y criterio los fija el responsable; no hay criterio por defecto. Un grupo que cubre la pantalla completa se declara expresamente.
