@@ -23,6 +23,47 @@ pub enum Command {
     /// Run a few observations over the source and print them, plus one dry-run click,
     /// for a human.
     Demo(DemoArgs),
+    /// M1: read-only DXGI frame pairs and window-group counts; no engine or live input.
+    FreshnessProbe(FreshnessProbeArgs),
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct FreshnessProbeArgs {
+    #[arg(long)]
+    pub config: PathBuf,
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=100_000))]
+    pub pairs: u32,
+    #[arg(long, default_value_t = 150, value_parser = clap::value_parser!(u64).range(1..=60_000))]
+    pub interval_ms: u64,
+    /// Owner's pre-registered criterion: minimum pairs with changes outside the group.
+    /// No default; this assesses a measurement, never authorises input.
+    #[arg(
+        long,
+        conflicts_with = "descriptive",
+        required_unless_present = "descriptive"
+    )]
+    pub min_outside_pairs: Option<u32>,
+    /// Record the owner's descriptive M1 protocol, with no pass/fail threshold.
+    #[arg(
+        long,
+        conflicts_with = "min_outside_pairs",
+        required_unless_present = "min_outside_pairs"
+    )]
+    pub descriptive: bool,
+    #[arg(long, default_value_t = 0)]
+    pub output: u32,
+    /// Exact policy-allowed class of the foreground window the operator selected.
+    #[arg(long)]
+    pub window_class: String,
+    /// Local operator coordinates in the captured output's physical pixels; never emitted.
+    #[arg(long)]
+    pub target_x: u32,
+    #[arg(long)]
+    pub target_y: u32,
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    pub target_width: u32,
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    pub target_height: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

@@ -20,6 +20,9 @@ PYTHON_TOOLS = {
     "tools/perf/soak.py": REPO / "tools" / "perf" / "soak.py",
     "tools/perf/dpi_probe.py": REPO / "tools" / "perf" / "dpi_probe.py",
     "tools/perf/measure_latency.py": REPO / "tools" / "perf" / "measure_latency.py",
+    "tools/perf/freshness_probe.py": REPO / "tools" / "perf" / "freshness_probe.py",
+    "tools/s4/e2e_driver.py": REPO / "tools" / "s4" / "e2e_driver.py",
+    "tools/s4/e2e_dossier.py": REPO / "tools" / "s4" / "e2e_dossier.py",
     "tools/repro/environment.py": REPO / "tools" / "repro" / "environment.py",
     "tools/s0/export_omniparser_v3.py": REPO / "tools" / "s0" / "export_omniparser_v3.py",
 }
@@ -54,10 +57,11 @@ def build_features() -> set[str]:
 
 
 def commands(text: str) -> list[str]:
-    """Logical command lines: fenced lines (with `^` continuations joined) and inline spans."""
+    """Logical command lines: join cmd/PowerShell continuations; keep inline spans outside fences."""
     found = []
     in_fence = False
     pending = ""
+    prose = []
     for line in text.splitlines():
         if line.strip().startswith("```"):
             in_fence = not in_fence
@@ -65,17 +69,26 @@ def commands(text: str) -> list[str]:
             continue
         if in_fence:
             joined = pending + line.strip()
-            if joined.endswith("^"):
-                pending = joined[:-1] + " "
+            if joined.endswith(("^", "`")):
+                pending = joined[:-1].rstrip() + " "
             else:
                 pending = ""
                 found.append(joined)
-    for span in re.findall(r"`([^`\n]+)`", text):
+        else:
+            prose.append(line)
+    for span in re.findall(r"`([^`\n]+)`", "\n".join(prose)):
         found.append(span)
     return found
 
 
 class Guides(unittest.TestCase):
+    def test_powershell_continuations_keep_python_flags_with_their_own_program(self):
+        text = ('```powershell\npython tools/perf/freshness_probe.py --exe ommatix.exe `\n'
+                '  --pairs 30 `\n  --target-x 1\n```\nUse `--config` here.\n')
+        self.assertEqual(commands(text), [
+            'python tools/perf/freshness_probe.py --exe ommatix.exe --pairs 30 --target-x 1',
+            '--config'])
+
     def test_both_documents_exist_and_are_not_empty(self):
         for doc in DOCS:
             self.assertGreater(len(read(doc)), 2000, doc.name)

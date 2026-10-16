@@ -697,6 +697,7 @@ mod tests {
         match Cli::parse_from(argv).command {
             Command::Serve(a) => a,
             Command::Demo(d) => d.run,
+            Command::FreshnessProbe(_) => panic!("this helper accepts engine commands only"),
         }
     }
 
