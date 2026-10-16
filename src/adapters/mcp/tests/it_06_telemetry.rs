@@ -428,3 +428,39 @@ fn it_06_rejection_reasons_are_codes_and_fixed_sentences() {
     }
     assert_eq!(SESSION_ID, page["session_id"]);
 }
+
+/// ADR-0032 D0: refusal diagnostics are counts/booleans in transport metadata only.
+#[test]
+fn freshness_refusal_reports_counts_only_in_meta_and_replay_has_none() {
+    let mut conn = McpServer::new(common::freshness_engine(), McpConfig::default()).connect();
+    let page = call_ok(&mut conn, 1, "observe_screen", json!({}))["structuredContent"].clone();
+    let button = element(&page, "Save");
+    let args = action(
+        &page,
+        &button,
+        "d0",
+        &json!({"action": "click", "dry_run": false}),
+    );
+    let result = call_ok(&mut conn, 2, "execute_action", args.clone());
+    assert_eq!(
+        result["structuredContent"]["error"]["code"],
+        "STALE_SNAPSHOT"
+    );
+    assert_eq!(
+        result["_meta"][ACTION_TIMINGS_META_KEY]["freshness_diff"],
+        json!({"total_tiles": 1, "touches_target": true})
+    );
+    let structured = result["structuredContent"].to_string();
+    for key in [
+        "freshness_diff",
+        "total_tiles",
+        "group_tiles",
+        "touches_target",
+    ] {
+        assert!(!structured.contains(key), "{structured}");
+        assert!(!result["content"].to_string().contains(key));
+    }
+    let replay = call_ok(&mut conn, 3, "execute_action", args);
+    assert_eq!(replay["structuredContent"], result["structuredContent"]);
+    assert!(replay["_meta"].get(ACTION_TIMINGS_META_KEY).is_none());
+}

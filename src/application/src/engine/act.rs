@@ -40,14 +40,14 @@ use ommatix_domain::fusion::Role;
 use ommatix_domain::identity::{
     ActionRef, ActionRejection, ActionStatus, Clearance, Delivery, TargetId,
 };
-use ommatix_domain::incremental::{BgraFrame, dirty_tiles};
+use ommatix_domain::incremental::{BgraFrame, TileGrid, dirty_tiles};
 
 use super::accessibility::focus_is_on;
 use super::journal::{Lookup, arguments_hash};
 use super::{Engine, aged_out};
 use crate::contract::{
     ActionKind, ActionRequest, ActionResult, ActionTimings, ErrorCode, ExpectedEffect,
-    ObservedEffect, ToolError, ValidatedAction, limits,
+    FreshnessDiff, ObservedEffect, ToolError, ValidatedAction, limits,
 };
 use crate::ports::LocalPolicy;
 use crate::window_scope::{window_scope_applies, window_scope_problem};
@@ -368,7 +368,7 @@ impl Engine {
         // the scope narrows it to the windows of that process that may be acted on.
         self.check_window_scope(&policy, foreground.as_deref(), point)?;
         let since = self.ports.clock.now();
-        let checked = self.fresh_frame().and_then(|before| {
+        let checked = self.fresh_frame(&target_box).and_then(|before| {
             self.last_look(foreground.as_deref(), point, target_id)
                 .map(|()| before)
         });
@@ -393,22 +393,38 @@ impl Engine {
     /// Freshness (SDD §2.9): a frame captured right before delivery must still be the
     /// committed base, or the snapshot no longer shows the screen and nothing is
     /// delivered. Returns that frame, the reference for the action's visual effect.
-    fn fresh_frame(&mut self) -> Result<BgraFrame, ToolError> {
+    fn fresh_frame(&mut self, target: &BBox) -> Result<BgraFrame, ToolError> {
         let Ok(captured) = self.ports.capturer.capture() else {
             return Err(ToolError::new(
                 ErrorCode::CaptureUnavailable,
                 "the screen could not be captured to confirm the snapshot; nothing was delivered",
             ));
         };
-        let unchanged = dirty_tiles(
+        let diff = dirty_tiles(
             self.store.base(),
             &captured.frame,
             self.config.plan.tile_size,
-        )
-        .is_ok_and(|diff| diff.full_refresh.is_none() && diff.tiles.is_empty());
-        if unchanged {
+        );
+        if diff
+            .as_ref()
+            .is_ok_and(|d| d.full_refresh.is_none() && d.tiles.is_empty())
+        {
             Ok(captured.frame)
         } else {
+            if let (Ok(diff), Ok(grid), Some(timings)) = (
+                diff,
+                TileGrid::for_frame(&captured.frame, self.config.plan.tile_size),
+                self.action_timings.as_mut(),
+            ) {
+                timings.freshness_diff = Some(FreshnessDiff {
+                    total_tiles: diff.tiles.len(),
+                    group_tiles: None,
+                    touches_target: diff
+                        .tiles
+                        .iter()
+                        .any(|&tile| grid.tile_box(tile).overlaps(target)),
+                });
+            }
             self.snapshot_spent = true;
             Err(ToolError::new(
                 ErrorCode::StaleSnapshot,

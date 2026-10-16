@@ -1,8 +1,8 @@
 # 0032. Scope the freshness check to the target window, behind a switch that stays off
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-15
-- **Approval:** Pending. The project owner decides. This is a proposal: it changes no requirement, no contract default, no test status and no checkbox of chapter 06 §6.7.
+- **Approval:** The project owner, 2026-10-15. Option D is accepted behind a switch whose default remains `screen`. Acceptance changes no test status or checkbox of chapter 06 §6.7.
 
 ## Context
 
@@ -30,7 +30,7 @@ The engine behaves as specified: nothing was sent, so this is not a safety failu
 
 ## Decision
 
-Proposed: if the owner accepts this ADR, the freshness check of a live action gets a second scope, chosen by configuration.
+Accepted: the freshness check of a live action gets a second scope, chosen by configuration.
 
 1. **Switch.** `[engine] action_freshness = "screen"` is the default and is exactly today's whole-frame check. `"target_window"` selects this ADR. The value is validated at start, like the other `[engine]` keys.
 2. **Window group.** With `"target_window"`, the pixel comparison runs on the tiles that intersect the **window group** of the target. The group is:
@@ -46,6 +46,10 @@ Proposed: if the owner accepts this ADR, the freshness check of a live action ge
 7. **Nothing else loosens.** The gate and the last look keep every check they have: stop, consent, policy, foreground application, window scope (ADR-0020) and the age bound (ADR-0025). The visual-effect measurement keeps comparing against the whole frame. For `type`, the scope applies to the check before the focusing click; the keys still wait for element-level focus (ADR-0018), unchanged.
 8. **Off by default.** The switch is turned on only by configuration, and only after the validation in *Required validation* passes and the owner accepts this ADR.
 
+**Dry runs (owner decision, 2026-10-15).** A dry run returns before the freshness capture. It validates the existing gate and age bound but does not predict `STALE_SNAPSHOT` from changed pixels, does not capture again and does not spend the snapshot. A regression test pins this behaviour.
+
+**D0 metadata (owner decision, 2026-10-15).** A pixel/geometry freshness refusal reports `freshness_diff` within result `_meta["io.ommatix/action_timings"]`: `total_tiles` (differing tiles), `touches_target` (whether a differing tile intersects the target box), and `group_tiles` only when the target-window group is attested. Unattested geometry/group yields no group count, never an invented zero. No diagnostic is placed in `structuredContent`, text content or logs; no pixels, labels, coordinates or screen text are exposed. A dry run, capture error, success, replay or refusal before comparison has no `freshness_diff`.
+
 ## Alternatives considered
 
 Four options were compared. They differ in which pixels decide a refusal.
@@ -53,7 +57,7 @@ Four options were compared. They differ in which pixels decide a refusal.
 - **A. Keep the whole frame (today).** Every changed pixel refuses. No gap in safety; the cost is the availability described in the Context. Verdict: remains the default.
 - **B. The target window's rectangle plus a margin; everything outside ignored.** It covers the click's pixels, because the target lies inside its window, and a window that receives the click must overlap the target. As stated it is not enough, for two reasons. It drops the geometry guard: a DPI or resolution change moves every rectangle, and the comparison would run on stale coordinates. And it compares pixels only, so a transparent window that starts to receive clicks, or a change of z-order that leaves the pixels unchanged, passes. Verdict: not sufficient; its fix is D.
 - **C. Dirty tiles that intersect the target element's contextual closure (Algorithm 1, chapter 04 §4.2).** The region comes from perception: the target box, grown to a fixed point by its supports and relations. It could exclude a change in the same window that is far from the target, such as the caret. But safety would depend on the detector finding every support: a missed support is a missed region. A popup elsewhere in the same window (SDD §2.6) would not be covered. The closure often grows to most of the window, so the gain is small. Verdict: not for this ADR. It becomes the candidate if the measurement M1 shows that the changed tiles lie inside the target window but outside the target's closure.
-- **D. B, with the whole-frame geometry and epoch guard and the group identity check (proposed).** It keeps B's gain and closes both gaps above. Verdict: recommended design, switch off.
+- **D. B, with the whole-frame geometry and epoch guard and the group identity check (accepted).** It keeps B's gain and closes both gaps above. Verdict: recommended design, switch off.
 - **E. Complementary, not alternatives.** Shorten the observation-to-action window (S3 §10.7, option b; about 4 s today, mostly client-side UI Automation reads), and a settle observation in the client before a close (S3 §9.6, item 1). Both lower the chance that a change lands inside the window. Neither removes the whole-frame refusal, and neither needs this ADR.
 
 ## Safety analysis: what a change outside the region can still do
@@ -107,9 +111,9 @@ The limits are stated plainly. D does not fix the leading candidate, the caret i
 - **Watch.** A group that covers most of the screen behaves like A: no gain, no harm. A window partly outside output 0 is clipped, and the target must lie inside the frame. The margin is an unmeasured parameter. Rectangles must be read in the capture's DPI awareness, so that they share the frame's coordinate space (SDD §2.8). Whether the visible frame bounds or the full window rectangle is the right attestation (they differ by the invisible resize border) is decided by measurement on the reference PC.
 - **Proof.** The claim must be shown by tests that change a pixel inside the group, outside it and at its boundary. It cannot be argued in prose alone.
 
-## Test plan (proposed; not yet in `plan_pruebas.csv`)
+## Test plan (accepted; enters `plan_pruebas.csv` with the implementation)
 
-The identifiers below are proposed; they enter `plan_pruebas.csv` only with the PR that accepts this ADR. No oracle test (OR-xx) covers freshness today, so the expected results are those of the whole-frame check (`screen`) on the same frames. Where an oracle test exists, it sets the expected output (AGENTS.md §5.11).
+The identifiers below enter `plan_pruebas.csv` with the target-window implementation PR, after the separate D0 PR. No oracle test (OR-xx) covers freshness today, so the expected results are those of the whole-frame check (`screen`) on the same frames. Where an oracle test exists, it sets the expected output (AGENTS.md §5.11).
 
 | ID | Name (proposed) | What it protects | Expected result |
 |---|---|---|---|
@@ -160,7 +164,7 @@ BDD sketch, in Spanish, as it would enter `docs/thesis/features/06_accion_segura
 Measurements, both proposed:
 
 - **M1 (no input; owner present).** The owner brings the windows to the front by hand, as in S3 §10. Then N pairs of observations about 150 ms apart, with the menu closed and then open, using the `observe` scenario. The diagnostic D0 counts, for each heavy observation, the tiles that differ, the tiles inside the group and whether any touches the target's box. Only numbers are recorded: no pixels, no labels, no coordinates (ADR-0012), and the raw output stays outside the repository. The owner sets N and the criterion before the run. This ADR does not set them.
-- **D0 (diagnostic, a separate PR with a test).** On a freshness refusal, the counts above and nothing else, in stderr or `_meta`. It is the measurement that S3 §9.6 item 3 asks for. It lands before M1 is read.
+- **D0 (diagnostic, a separate PR with a test).** On a freshness refusal, the counts above and nothing else, only in result `_meta["io.ommatix/action_timings"].freshness_diff`. It is the measurement that S3 §9.6 item 3 asks for. It lands before M1 is read.
 - **M2 (live, supervised, IT-08).** The IT-03 closing click and the D1 steps with `action_freshness = "target_window"`, under criteria written down before the run, in the form that S3 §9.6 and §10 use. Consent is given for each session, only for the test applications the owner allows for that session, the stop file is outside the repository, and no coordinates or labels are logged. The owner runs the window changes by hand.
 
 ## Required validation
@@ -189,4 +193,4 @@ Written from the S3 round records (§9.6 and §10), from the review `docs/review
 
 ## Resumen (ES)
 
-Propuesta, sin decidir: la comparación de frescura antes de una acción viva sigue siendo exacta por píxel, pero su alcance puede ser el grupo de ventanas del objetivo (la ventana que lo contiene, la de primer plano y las que se solapan con ellas) en lugar de la pantalla entera. La geometría y la época siguen comprobándose sobre la pantalla entera, y el grupo se vuelve a comprobar justo antes de entregar. El motivo es que cuatro corridas de la ronda de box 4 se rechazaron con `STALE_SNAPSHOT` sin que sepamos qué píxeles cambiaron, y que el grupo lo decide el sistema operativo y no la percepción. El conmutador queda apagado hasta medir dónde cambiaron los tiles y hasta que el responsable acepte; no resuelve el cursor de texto dentro de la misma ventana.
+Aceptada por el responsable el 15 de octubre de 2026 (opción D): la comparación de frescura antes de una acción viva sigue siendo exacta por píxel, pero su alcance puede ser el grupo de ventanas del objetivo (la ventana que lo contiene, la de primer plano y las que se solapan con ellas) en lugar de la pantalla entera. La geometría y la época siguen comprobándose sobre la pantalla entera, y el grupo se vuelve a comprobar justo antes de entregar. El motivo es que cuatro corridas de la ronda de box 4 se rechazaron con `STALE_SNAPSHOT` sin que sepamos qué píxeles cambiaron, y que el grupo lo decide el sistema operativo y no la percepción. El conmutador queda apagado hasta medir dónde cambiaron los tiles y su activación exige consentimiento del responsable por sesión; no resuelve el cursor de texto dentro de la misma ventana.

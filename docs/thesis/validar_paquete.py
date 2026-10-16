@@ -66,6 +66,13 @@ def main() -> int:
                 check(f'result_type:{no}',r.get('resultType')=='complete')
                 if 'tools' in r or 'supportedVersions' in r:
                     check(f'cache_metadata:{no}',r.get('ttlMs',-1)>=0 and r.get('cacheScope') in ('public','private'))
+                diagnostic=r.get('_meta',{}).get('io.ommatix/action_timings',{}).get('freshness_diff')
+                if diagnostic is not None:
+                    errors=list(Draft202012Validator(schemas['contratos/esquemas/action_freshness_diff.meta.schema.json']).iter_errors(diagnostic))
+                    check(f'frescura_d0_meta:{no}',not errors)
+                    check(f'frescura_d0_rechazo:{no}',r.get('structuredContent',{}).get('error',{}).get('code')=='STALE_SNAPSHOT')
+                    payload=json.dumps(r.get('structuredContent',{}))+json.dumps(r.get('content',[]))
+                    check(f'frescura_d0_solo_meta:{no}',all(key not in payload for key in ('freshness_diff','total_tiles','group_tiles','touches_target')))
                 if 'structuredContent' in r:
                     check(f'contenido_consistente:{no}',json.loads(r['content'][0]['text'])==r['structuredContent'])
     # Estos dos archivos forman un diálogo ilustrativo completo por IDs.

@@ -310,10 +310,21 @@ impl WorkKind {
     }
 }
 
+/// Counts from a freshness refusal (ADR-0032 D0). No screen content or coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FreshnessDiff {
+    pub total_tiles: usize,
+    /// Omitted unless a target-window group could be attested.
+    pub group_tiles: Option<usize>,
+    pub touches_target: bool,
+}
+
 /// Per-stage durations of one `execute_action`. Run-dependent: MCP `_meta` only.
 /// Stages an action did not reach are zero (a dry run has no delivery).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ActionTimings {
+    /// Present only on a refusal from the frame comparison; transport metadata only.
+    pub freshness_diff: Option<FreshnessDiff>,
     /// The checks before anything is captured or delivered: arguments, snapshot, registry,
     /// policy, allowlist.
     pub gate: Duration,

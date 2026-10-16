@@ -1,5 +1,9 @@
 # Historial documental
 
+## 1.0.80 — 2026-10-15: ADR-0032 aceptada y diagnóstico D0 de frescura sólo en `_meta`
+
+El responsable acepta la opción D, con `screen` por defecto; el alcance por ventana se implementa en el siguiente PR. Los rechazos por comparación de frescura registran el número de tiles distintos y si alguno toca el objetivo dentro de `io.ommatix/action_timings.freshness_diff`, nunca en el contenido de la herramienta. El recuento del grupo se omite mientras no pueda acreditarse. Capítulo 07, contratos, ejemplo MCP, esquema del diagnóstico y validador fijan este transporte. Pruebas sintéticas cubren el rechazo, la ausencia del diagnóstico en el contenido y la repetición; una simulación no captura ni predice la frescura de píxeles. No hay captura real ni entrada real; ningún estado de requisito o casilla de §6.7 cambia.
+
 ## 1.0.79 — 2026-10-15: propuesta del ADR-0032: la frescura de una acción viva podrá limitarse al grupo de ventanas del objetivo, detrás de un conmutador apagado por defecto; el motor no cambia (rama `docs/adr-0032-freshness-target-window`)
 
 Documentación. El motor no cambia. Ningún requisito, contrato, escenario ni prueba cambia de estado en las matrices. **Ninguna casilla se marca.**

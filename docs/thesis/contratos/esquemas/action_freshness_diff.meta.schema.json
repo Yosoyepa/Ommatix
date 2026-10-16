@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Diagnóstico D0 de rechazo de frescura (sólo _meta)",
+  "type": "object",
+  "properties": {
+    "total_tiles": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "group_tiles": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "touches_target": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "total_tiles",
+    "touches_target"
+  ],
+  "additionalProperties": false
+}
