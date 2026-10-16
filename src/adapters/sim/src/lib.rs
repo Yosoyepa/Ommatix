@@ -26,7 +26,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use ommatix_application::contract::ValidatedAction;
 use ommatix_application::{
     CapturedFrame, Clock, DeliveryReceipt, FrameCapturer, ManualClock, OsActuator, PortError,
-    TextRecognizer, VisionDetector,
+    TextRecognizer, TopLevelWindow, VisionDetector,
 };
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{Control, Word};
@@ -252,6 +252,42 @@ impl OsActuator for SimActuator {
 
     fn is_live(&self) -> bool {
         false
+    }
+
+    fn foreground_window(&self) -> Option<TopLevelWindow> {
+        self.top_level_windows()?.into_iter().next()
+    }
+
+    fn top_level_windows(&self) -> Option<Vec<TopLevelWindow>> {
+        let open = self.0.state().dialog_open;
+        let window = |handle, z_order, rect: ommatix_domain::Rect| TopLevelWindow {
+            class: "SimulatedWindow".into(),
+            handle,
+            z_order,
+            rectangle: Some(
+                BBox::new(
+                    f64::from(rect.x),
+                    f64::from(rect.y),
+                    f64::from(rect.right()),
+                    f64::from(rect.bottom()),
+                )
+                .expect("valid synthetic layout"),
+            ),
+        };
+        let mut windows = Vec::new();
+        if open {
+            windows.push(window(2, 0, layout::DIALOG));
+        }
+        windows.push(window(1, u32::from(open), layout::WINDOW));
+        Some(windows)
+    }
+
+    fn window_at(&self, point: (f64, f64)) -> Option<TopLevelWindow> {
+        self.top_level_windows()?.into_iter().find(|w| {
+            w.rectangle.is_some_and(|r| {
+                point.0 >= r.x0() && point.0 < r.x1() && point.1 >= r.y0() && point.1 < r.y1()
+            })
+        })
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {

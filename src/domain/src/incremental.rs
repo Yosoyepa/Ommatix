@@ -283,6 +283,30 @@ pub fn dirty_tiles(
     current: &BgraFrame,
     tile_size: u32,
 ) -> Result<TileDiff, IncrementalError> {
+    dirty_tiles_matching(base, current, tile_size, |_, _| true)
+}
+
+/// Exact comparison restricted to tiles intersecting `regions` (ADR-0032). Geometry
+/// and epoch changes still return every tile of the whole frame. Algorithm 1 continues
+/// to use [`dirty_tiles`], so observation incrementality is unchanged.
+pub fn dirty_tiles_in_regions(
+    base: Option<&BgraFrame>,
+    current: &BgraFrame,
+    tile_size: u32,
+    regions: &[BBox],
+) -> Result<TileDiff, IncrementalError> {
+    dirty_tiles_matching(base, current, tile_size, |grid, tile| {
+        let bbox = grid.tile_box(tile);
+        regions.iter().any(|region| region.overlaps(&bbox))
+    })
+}
+
+fn dirty_tiles_matching(
+    base: Option<&BgraFrame>,
+    current: &BgraFrame,
+    tile_size: u32,
+    includes: impl Fn(&TileGrid, TileCoord) -> bool,
+) -> Result<TileDiff, IncrementalError> {
     let grid = TileGrid::for_frame(current, tile_size)?;
     let reason = match base {
         None => Some(FullRefreshReason::NoCommittedBase),
@@ -303,7 +327,7 @@ pub fn dirty_tiles(
     let tiles = grid
         .all_tiles()
         .into_iter()
-        .filter(|&tile| tile_changed(base, current, &grid, tile))
+        .filter(|&tile| includes(&grid, tile) && tile_changed(base, current, &grid, tile))
         .collect();
     Ok(TileDiff {
         tiles,
@@ -1489,6 +1513,34 @@ mod tests {
         match halo_close(touching, &[], &[(a, b)], bounds, 2).unwrap() {
             Closure::Closed(closed) => assert!(closed.contains(&a) && closed.contains(&b)),
             Closure::BudgetExhausted => panic!("one touched end closes within two rounds"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod freshness_tests {
+    use super::*;
+
+    /// OR-12's global geometry rule is unchanged even when the requested region is tiny.
+    #[test]
+    fn ut_60_dimensions_force_a_whole_frame_diff_under_a_regional_comparison() {
+        let base = BgraFrame::new(130, 129, 520, 1, vec![0; 520 * 129]).unwrap();
+        for (width, height, epoch) in [(131, 129, 1), (130, 130, 1), (130, 129, 2)] {
+            let frame = BgraFrame::new(
+                width,
+                height,
+                width as usize * 4,
+                epoch,
+                vec![0; width as usize * height as usize * 4],
+            )
+            .unwrap();
+            let region = BBox::new(0.0, 0.0, 1.0, 1.0).unwrap();
+            let diff = dirty_tiles_in_regions(Some(&base), &frame, 64, &[region]).unwrap();
+            assert_eq!(diff.full_refresh, Some(FullRefreshReason::GeometryChanged));
+            assert_eq!(
+                diff.tiles,
+                TileGrid::for_frame(&frame, 64).unwrap().all_tiles()
+            );
         }
     }
 }

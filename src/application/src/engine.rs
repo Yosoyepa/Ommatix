@@ -14,6 +14,7 @@
 
 mod accessibility;
 mod act;
+mod freshness;
 mod icons;
 mod journal;
 mod observe;
@@ -39,6 +40,7 @@ use crate::ports::{
     VisionDetector,
 };
 
+pub use freshness::ActionFreshness;
 pub use icons::IconResolverConfig;
 pub use journal::JOURNAL_CAPACITY;
 
@@ -85,6 +87,9 @@ fn aged_out(now: Duration, since: Duration, max: Duration) -> bool {
 /// (`plantillas/configuracion_mvp.toml`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct EngineConfig {
+    /// ADR-0032: whole screen by default; optional OS-attested target-window group.
+    pub action_freshness: ActionFreshness,
+    pub action_freshness_margin_px: u32,
     /// Opaque session identifier chosen by the composition root (1..=64 chars).
     pub session_id: String,
     pub plan: PlanParams,
@@ -114,6 +119,8 @@ impl EngineConfig {
     pub fn new(session_id: impl Into<String>) -> Self {
         Self {
             session_id: session_id.into(),
+            action_freshness: ActionFreshness::Screen,
+            action_freshness_margin_px: 0,
             plan: PlanParams::default(),
             fusion: FusionParams::default(),
             association: AssociationPolicy::default(),

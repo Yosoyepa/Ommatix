@@ -464,3 +464,39 @@ fn freshness_refusal_reports_counts_only_in_meta_and_replay_has_none() {
     assert_eq!(replay["structuredContent"], result["structuredContent"]);
     assert!(replay["_meta"].get(ACTION_TIMINGS_META_KEY).is_none());
 }
+
+#[test]
+fn target_window_freshness_refusal_reports_global_and_group_counts_only_in_meta() {
+    let engine =
+        common::freshness_engine_with_scope(ommatix_application::ActionFreshness::TargetWindow);
+    let mut conn = McpServer::new(engine, McpConfig::default()).connect();
+    let page = call_ok(&mut conn, 1, "observe_screen", json!({}))["structuredContent"].clone();
+    let args = action(
+        &page,
+        &element(&page, "Save"),
+        "group-d0",
+        &json!({"action":"click","dry_run":false}),
+    );
+    let result = call_ok(&mut conn, 2, "execute_action", args);
+    assert_eq!(
+        result["structuredContent"]["error"]["code"],
+        "STALE_SNAPSHOT"
+    );
+    let diagnostic = &result["_meta"][ACTION_TIMINGS_META_KEY]["freshness_diff"];
+    assert_eq!(
+        diagnostic,
+        &json!({"total_tiles":2,"group_tiles":1,"touches_target":true})
+    );
+    let schema = common::schema("action_freshness_diff.meta");
+    let validator = jsonschema::validator_for(&schema).expect("diagnostic schema");
+    assert!(validator.is_valid(diagnostic));
+    for key in [
+        "freshness_diff",
+        "total_tiles",
+        "group_tiles",
+        "touches_target",
+    ] {
+        assert!(!result["structuredContent"].to_string().contains(key));
+        assert!(!result["content"].to_string().contains(key));
+    }
+}

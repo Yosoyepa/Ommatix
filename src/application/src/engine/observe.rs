@@ -215,6 +215,7 @@ pub(super) struct StoredElement {
 /// The payload of a committed snapshot.
 #[derive(Debug, Clone)]
 pub(super) struct Published {
+    pub windows: Option<super::freshness::WindowSnapshot>,
     pub registry: Registry,
     pub evidence: EvidenceSet,
     /// Control ↔ external label pairs, re-processed together by the next plan.
@@ -568,6 +569,7 @@ impl Engine {
         let t0 = clock.now();
         // Any failed observation blocks actions on the evidence it could not refresh
         // (SDD §2.7); with no plan yet, no tile is known to be dirty.
+        let windows_before = self.window_read();
         let Ok(captured) = self.ports.capturer.capture() else {
             self.store.record_failure(&BTreeSet::new());
             return Err(ToolError::new(
@@ -575,6 +577,7 @@ impl Engine {
                 "the screen could not be captured",
             ));
         };
+        let windows = self.windows_unchanged(windows_before);
         let frame = captured.frame;
         let t_capture = clock.now();
 
@@ -658,9 +661,11 @@ impl Engine {
             &evidence,
             tracked.relations.len(),
         );
+        let windows = self.observation_windows(windows, &tracked.registry);
         let staged = self.store.stage(
             frame,
             Published {
+                windows,
                 registry: tracked.registry,
                 evidence,
                 relations: tracked.relations,

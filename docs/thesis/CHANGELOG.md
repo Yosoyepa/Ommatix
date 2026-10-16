@@ -1,5 +1,11 @@
 # Historial documental
 
+## 1.0.81 — 2026-10-15: alcance de frescura por grupo de ventanas, opcional y apagado por defecto (ADR-0032)
+
+El motor implementa la opción D aceptada: `[engine] action_freshness = "screen"` conserva el valor por defecto y `"target_window"` compara tiles del grupo atestiguado por el SO; `action_freshness_margin_px` vale cero por defecto. La identidad del grupo se valida tras la última mirada y se renuevan las comprobaciones de política y edad después del nuevo recorrido. Rectángulos ausentes, caja objetivo fuera de ventana o lecturas inestables exigen la pantalla entera. La geometría/época y la verificación de efecto siguen siendo globales; en `type` sólo se acota el chequeo previo al clic. El adaptador Windows usa `DWMWA_EXTENDED_FRAME_BOUNDS` en el contexto DPI físico de la captura, un recorrido z acotado y ninguna entrada en sus pruebas. D0 puede contar tiles del grupo sin publicar geometría ni texto.
+
+UT-55..UT-64, BDD-55..BDD-58 y el IT-08 planificado entran en las matrices; los escenarios se ejecutan sobre dobles, con sus pasos en Rust. SDD, algoritmos, seguridad, contrato, plantilla y ADR documentan la semántica y sus límites. La comparación DWM/GetWindowRect y las mediciones M1/M2 en el equipo de referencia quedan pendientes; se incluyen todas las ventanas visibles solapadas, incluso las de fondo, lo cual puede ampliar el grupo hasta toda la pantalla. **Sin captura real ni entrada real; ningún estado de requisito ni casilla de §6.7 cambia. IT-08 sigue planificado y no ejecutado.**
+
 ## 1.0.80 — 2026-10-15: ADR-0032 aceptada y diagnóstico D0 de frescura sólo en `_meta`
 
 El responsable acepta la opción D, con `screen` por defecto; el alcance por ventana se implementa en el siguiente PR. Los rechazos por comparación de frescura registran el número de tiles distintos y si alguno toca el objetivo dentro de `io.ommatix/action_timings.freshness_diff`, nunca en el contenido de la herramienta. El recuento del grupo se omite mientras no pueda acreditarse. Capítulo 07, contratos, ejemplo MCP, esquema del diagnóstico y validador fijan este transporte. Pruebas sintéticas cubren el rechazo, la ausencia del diagnóstico en el contenido y la repetición; una simulación no captura ni predice la frescura de píxeles. No hay captura real ni entrada real; ningún estado de requisito o casilla de §6.7 cambia.

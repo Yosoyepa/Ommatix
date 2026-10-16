@@ -1,6 +1,7 @@
 //! The dossier's contract examples (`contratos/validacion_casos.json`): every valid example
-//! is accepted by the DTO layer and every deliberately invalid one is rejected, exactly as
-//! the JSON schemas decide.
+//! tool payload is accepted by the DTO layer and every deliberately invalid one is
+//! rejected, exactly as the JSON schemas decide. Transport metadata is schema-validated
+//! here and its actual engine emission is exercised by IT-06; it is not a tool DTO.
 
 mod common;
 
@@ -53,7 +54,7 @@ fn schema_name(path: &str) -> &str {
 }
 
 #[test]
-fn validation_cases_are_accepted_or_rejected_by_the_dto_layer_as_declared() {
+fn validation_cases_agree_with_schemas_and_tool_payloads_roundtrip_through_dtos() {
     let cases = read_json("contratos/validacion_casos.json");
     let cases = cases.as_array().expect("a list of cases");
     assert!(cases.len() >= 17);
@@ -70,6 +71,11 @@ fn validation_cases_are_accepted_or_rejected_by_the_dto_layer_as_declared() {
             "jsonschema verdict for {example_path}"
         );
 
+        if schema == "action_freshness_diff.meta" {
+            // Result metadata is not parsed as a tool payload. IT-06 validates the
+            // production serializer's counts against this same schema.
+            continue;
+        }
         match through_dto(schema, &example) {
             Ok(produced) => {
                 assert!(valid, "{example_path} must be rejected by the DTO layer");

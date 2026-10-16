@@ -53,3 +53,7 @@ BDD-51,RF-03,IDX-12,features/08_indice_candidatos.feature,Relaciones se activan 
 BDD-52,RF-06,IDX-13,features/08_indice_candidatos.feature,Solapamiento extremo no justifica perder candidatos,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
 BDD-53,RF-16,SEC-07,features/07_retencion.feature,Borrado bajo demanda del operador sin terminar la sesión,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-54,RNF-07,IT-07,features/05_mcp.feature,Escala fuera de perfil,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-55,RF-11,UT-55,features/06_accion_segura.feature,Un cambio fuera de la ventana objetivo no rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-56,RF-11,UT-56,features/06_accion_segura.feature,Un cambio dentro de la ventana objetivo sí rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-57,RF-11,UT-57,features/06_accion_segura.feature,Una ventana emergente sobre el objetivo rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-58,RF-11,UT-60,features/06_accion_segura.feature,Un cambio de geometría rechaza la acción con cualquier alcance,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE

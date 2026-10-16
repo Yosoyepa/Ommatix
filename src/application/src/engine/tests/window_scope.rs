@@ -12,6 +12,8 @@ const OPENED: u64 = 0x0A0B;
 
 fn window(class: &str, handle: u64) -> TopLevelWindow {
     TopLevelWindow {
+        rectangle: None,
+        z_order: 0,
         class: class.to_owned(),
         handle,
     }

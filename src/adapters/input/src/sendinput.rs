@@ -34,6 +34,25 @@ pub(crate) const WHEEL_DELTA: i32 = 120;
 /// Largest normalised absolute coordinate.
 const NORMALISED_MAX: i64 = 65_535;
 
+/// Bound an OS z-order walk; a cycle or incomplete enumeration attests nothing.
+#[derive(Default)]
+pub(crate) struct WindowWalk(std::collections::BTreeSet<u64>);
+
+impl WindowWalk {
+    pub fn visit(&mut self, handle: u64) -> bool {
+        handle != 0 && self.0.len() < 4096 && self.0.insert(handle)
+    }
+}
+
+/// Visible DWM frame bounds in the capture's physical-pixel mapping. A window entirely
+/// outside the selected monitor has no intersection and does not join its window list.
+pub(crate) fn frame_bounds(
+    mapping: ommatix_domain::DisplayMapping,
+    rect: [i32; 4],
+) -> Option<ommatix_domain::bbox::BBox> {
+    mapping.frame_box(rect[0], rect[1], rect[2], rect[3])
+}
+
 /// One input event of a batch, before it becomes a Win32 `INPUT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Event {
@@ -614,5 +633,36 @@ mod tests {
             Some("Ctrl")
         );
         assert_eq!(MUST_BE_UP.len(), 7);
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+    use ommatix_domain::{DisplayMapping, bbox::BBox};
+
+    #[test]
+    fn a_window_walk_rejects_null_cycles_and_an_incomplete_list() {
+        let mut walk = WindowWalk::default();
+        assert!(!walk.visit(0));
+        for handle in 1..=4096 {
+            assert!(walk.visit(handle));
+        }
+        assert!(!walk.visit(4097));
+        assert!(!WindowWalk::default().visit(0));
+        let mut cycle = WindowWalk::default();
+        assert!(cycle.visit(42));
+        assert!(!cycle.visit(42));
+    }
+
+    #[test]
+    fn visible_bounds_clip_on_a_monitor_with_a_negative_origin() {
+        let mapping = DisplayMapping::new((-1920, 0), (1920, 1080), (1920, 1080)).unwrap();
+        assert_eq!(
+            frame_bounds(mapping, [-2000, 10, -1800, 110]),
+            Some(BBox::new(0.0, 10.0, 120.0, 110.0).unwrap())
+        );
+        assert_eq!(frame_bounds(mapping, [0, 0, 100, 100]), None);
+        assert_eq!(frame_bounds(mapping, [-1800, 10, -1800, 110]), None);
     }
 }

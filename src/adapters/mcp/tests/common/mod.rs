@@ -10,8 +10,9 @@ use std::time::Duration;
 use ommatix_adapter_mcp::{Connection, MODERN_PROTOCOL_VERSION, McpConfig, McpServer};
 use ommatix_application::contract::ValidatedAction;
 use ommatix_application::{
-    CapturedFrame, Clock, DeliveryReceipt, Engine, EngineConfig, FrameCapturer, LocalPolicy,
-    ManualClock, OsActuator, PolicyStore, PortError, Ports, TextRecognizer, VisionDetector,
+    ActionFreshness, CapturedFrame, Clock, DeliveryReceipt, Engine, EngineConfig, FrameCapturer,
+    LocalPolicy, ManualClock, OsActuator, PolicyStore, PortError, Ports, TextRecognizer,
+    VisionDetector,
 };
 use ommatix_domain::Scaling;
 use ommatix_domain::bbox::BBox;
@@ -114,6 +115,7 @@ struct Screen {
     clock: Arc<ManualClock>,
     cost: Duration,
     change_after_first: bool,
+    extra_pixel: bool,
 }
 
 impl FrameCapturer for Screen {
@@ -128,6 +130,10 @@ impl FrameCapturer for Screen {
             let mut pixels =
                 vec![0x80; self.frame.width() as usize * self.frame.height() as usize * 4];
             pixels[0] = 0xff;
+            if self.extra_pixel {
+                let last = pixels.len() - 4;
+                pixels[last] = 0xff;
+            }
             BgraFrame::new(
                 self.frame.width(),
                 self.frame.height(),
@@ -210,6 +216,25 @@ impl OsActuator for NullActuator {
         Some("test-app".into())
     }
 
+    fn foreground_window(&self) -> Option<ommatix_application::TopLevelWindow> {
+        self.live.then(|| ommatix_application::TopLevelWindow {
+            class: "SyntheticWindow".into(),
+            handle: 1,
+            z_order: 0,
+            rectangle: None,
+        })
+    }
+
+    fn window_at(&self, _: (f64, f64)) -> Option<ommatix_application::TopLevelWindow> {
+        self.foreground_window()
+    }
+
+    fn top_level_windows(&self) -> Option<Vec<ommatix_application::TopLevelWindow>> {
+        let mut window = self.foreground_window()?;
+        window.rectangle = Some(bx(0.0, 0.0, 256.0, 128.0));
+        Some(vec![window])
+    }
+
     fn deliver(&mut self, _: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
         *self
             .delivered
@@ -239,36 +264,45 @@ pub struct Costs {
 }
 
 pub fn engine_with(scene: Scene, policy: LocalPolicy) -> Engine {
-    build_engine(scene, Arc::new(FixedPolicy(policy)), None, false)
+    build_engine(scene, Arc::new(FixedPolicy(policy)), None, None)
 }
 
 /// Like [`engine_with`], with the operator's policy store given: the tests that need the
 /// operator's purge file (SEC-07) supply their own.
 pub fn engine_with_store(scene: Scene, policy: Arc<dyn PolicyStore>) -> Engine {
-    build_engine(scene, policy, None, false)
+    build_engine(scene, policy, None, None)
 }
 
 /// Like [`engine_with`], with doubles that take `costs` and stages that run in sequence.
 pub fn engine_with_costs(scene: Scene, policy: LocalPolicy, costs: Costs) -> Engine {
-    build_engine(scene, Arc::new(FixedPolicy(policy)), Some(costs), false)
+    build_engine(scene, Arc::new(FixedPolicy(policy)), Some(costs), None)
 }
 
 /// A synthetic screen changes one pixel in the target's tile after observation.
 /// The actuator double can attest policy but never sends OS input.
 pub fn freshness_engine() -> Engine {
+    freshness_engine_with_scope(ActionFreshness::Screen)
+}
+
+pub fn freshness_engine_with_scope(scope: ActionFreshness) -> Engine {
     let policy = LocalPolicy {
         actuation_enabled: true,
         allowed_applications: vec!["test-app".into()],
         ..LocalPolicy::default()
     };
-    build_engine(basic_scene(), Arc::new(FixedPolicy(policy)), None, true)
+    build_engine(
+        basic_scene(),
+        Arc::new(FixedPolicy(policy)),
+        None,
+        Some(scope),
+    )
 }
 
 fn build_engine(
     scene: Scene,
     policy: Arc<dyn PolicyStore>,
     costs: Option<Costs>,
-    freshness_probe: bool,
+    freshness_scope: Option<ActionFreshness>,
 ) -> Engine {
     let clock = Arc::new(ManualClock::new());
     let costs_in_use = costs.unwrap_or_default();
@@ -288,13 +322,14 @@ fn build_engine(
             seq: 0,
             clock: clock.clone(),
             cost: costs_in_use.capture,
-            change_after_first: freshness_probe,
+            change_after_first: freshness_scope.is_some(),
+            extra_pixel: freshness_scope == Some(ActionFreshness::TargetWindow),
         }),
         detector: Box::new(Detector(scene.clone(), clock.clone(), costs_in_use.detect)),
         recognizer: Box::new(Recognizer(scene, clock.clone(), costs_in_use.recognize)),
         accessibility: Box::new(ommatix_application::NoAccessibility),
         actuator: Box::new(NullActuator {
-            live: freshness_probe,
+            live: freshness_scope.is_some(),
             ..NullActuator::default()
         }),
         policy,
@@ -302,6 +337,7 @@ fn build_engine(
     };
     let mut config = EngineConfig::new(SESSION_ID);
     config.concurrent_stages = costs.is_none();
+    config.action_freshness = freshness_scope.unwrap_or_default();
     Engine::new(config, ports)
 }
 

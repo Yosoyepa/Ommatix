@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use ommatix_application::contract::ValidatedAction;
 use ommatix_application::{
     CapturedFrame, Clock, DeliveryReceipt, FrameCapturer, ManualClock, OsActuator, PortError,
-    TextRecognizer, VisionDetector,
+    TextRecognizer, TopLevelWindow, VisionDetector,
 };
 use ommatix_domain::Scaling;
 use ommatix_domain::bbox::BBox;
@@ -403,6 +403,33 @@ impl OsActuator for FixtureActuator {
 
     fn is_live(&self) -> bool {
         false
+    }
+
+    fn foreground_window(&self) -> Option<TopLevelWindow> {
+        let state = self.0.lock();
+        Some(TopLevelWindow {
+            class: "FixtureWindow".into(),
+            handle: 1,
+            z_order: 0,
+            rectangle: BBox::new(
+                0.0,
+                0.0,
+                f64::from(state.scene.width()),
+                f64::from(state.scene.height()),
+            )
+            .ok(),
+        })
+    }
+
+    fn top_level_windows(&self) -> Option<Vec<TopLevelWindow>> {
+        Some(vec![self.foreground_window()?])
+    }
+
+    fn window_at(&self, point: (f64, f64)) -> Option<TopLevelWindow> {
+        let window = self.foreground_window()?;
+        let rect = window.rectangle?;
+        (point.0 >= rect.x0() && point.0 < rect.x1() && point.1 >= rect.y0() && point.1 < rect.y1())
+            .then_some(window)
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {

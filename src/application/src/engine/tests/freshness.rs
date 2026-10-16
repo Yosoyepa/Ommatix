@@ -16,6 +16,7 @@ const TARGET_PIXEL: (u32, u32) = (405, 255);
 /// that expects no effect.
 fn live_click_after_one_pixel(pixel: (u32, u32)) -> (Rig, ObservePage, ActionResult) {
     let mut r = rig(form());
+    r.engine.config.action_freshness = ActionFreshness::Screen;
     r.world().live = true;
     r.set_policy(live_policy());
     let page = r.observe();
@@ -112,4 +113,469 @@ fn a_dry_run_never_captures_or_predicts_pixel_freshness() {
         r.engine.last_action_timings().expect("timings").freshness,
         Duration::ZERO
     );
+}
+
+fn scoped_window(handle: u64, z_order: u32, rectangle: BBox) -> TopLevelWindow {
+    TopLevelWindow {
+        class: "TestWindow".into(),
+        handle,
+        rectangle: Some(rectangle),
+        z_order,
+    }
+}
+
+fn scoped_rig() -> Rig {
+    let mut r = rig(form());
+    r.engine.config.action_freshness = ActionFreshness::TargetWindow;
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let window = scoped_window(1, 0, bx(64.0, 64.0, 576.0, 320.0));
+    r.world().foreground_window = Some(window.clone());
+    r.world().window_at_point = Some(window.clone());
+    r.world().top_windows = Some(vec![window]);
+    r
+}
+
+#[test]
+fn ut_55_a_change_outside_the_target_group_is_accepted_in_target_window_mode() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    r.world()
+        .pixels
+        .push((FAR_PIXEL.0, FAR_PIXEL.1, [255, 255, 255]));
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_eq!(result.status, ActionStatus::InputDelivered, "{result:?}");
+    assert_eq!(r.world().delivered.len(), 1);
+    let (_, _, screen) = live_click_after_one_pixel(FAR_PIXEL);
+    assert_eq!(error_code(&screen), Some(ErrorCode::StaleSnapshot));
+}
+
+#[test]
+fn ut_56_a_one_pixel_change_inside_the_target_window_refuses_far_from_the_target() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    r.world().pixels.push((100, 100, [255, 255, 255]));
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_stale_and_nothing_sent(&r, &result);
+    let diagnostic = r
+        .engine
+        .last_action_timings()
+        .unwrap()
+        .freshness_diff
+        .unwrap();
+    assert_eq!(
+        (
+            diagnostic.total_tiles,
+            diagnostic.group_tiles,
+            diagnostic.touches_target
+        ),
+        (1, Some(1), false)
+    );
+}
+
+#[test]
+fn ut_57_a_window_overlapping_the_target_window_is_in_the_group() {
+    let mut r = scoped_rig();
+    r.world()
+        .top_windows
+        .as_mut()
+        .unwrap()
+        .push(scoped_window(2, 1, bx(500.0, 0.0, 640.0, 100.0)));
+    let page = r.observe();
+    r.world().pixels.push((630, 10, [255, 255, 255]));
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_stale_and_nothing_sent(&r, &result);
+    assert_eq!(
+        r.engine
+            .last_action_timings()
+            .unwrap()
+            .freshness_diff
+            .unwrap()
+            .group_tiles,
+        Some(1)
+    );
+}
+
+#[test]
+fn ut_58_a_moved_target_window_refuses_even_when_the_old_rectangle_is_unchanged() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    let moved = scoped_window(1, 0, bx(65.0, 64.0, 576.0, 320.0));
+    r.world().foreground_window = Some(moved.clone());
+    r.world().window_at_point = Some(moved.clone());
+    r.world().top_windows = Some(vec![moved]);
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_stale_and_nothing_sent(&r, &result);
+}
+
+#[test]
+fn ut_59_a_change_of_group_order_or_foreground_refuses() {
+    for foreground_changes in [false, true] {
+        let mut r = scoped_rig();
+        let second = scoped_window(2, 1, bx(500.0, 0.0, 640.0, 100.0));
+        r.world().top_windows.as_mut().unwrap().push(second.clone());
+        let page = r.observe();
+        if foreground_changes {
+            r.world().foreground_window = Some(second);
+        } else {
+            r.world().top_windows.as_mut().unwrap()[0].z_order = 2;
+        }
+        let result = r
+            .engine
+            .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+        assert_stale_and_nothing_sent(&r, &result);
+    }
+}
+
+#[test]
+fn ut_60_a_geometry_or_epoch_change_refuses_in_target_window_mode() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    r.world().epoch += 1;
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_stale_and_nothing_sent(&r, &result);
+}
+
+#[test]
+fn ut_61_an_actuator_that_cannot_attest_rectangles_checks_the_whole_frame() {
+    for fallback in 0..3 {
+        let mut r = scoped_rig();
+        if fallback == 0 {
+            r.world().top_windows = None;
+        }
+        if fallback == 1 {
+            r.world().top_windows.as_mut().unwrap()[0].rectangle = None;
+        }
+        if fallback == 2 {
+            let small = scoped_window(1, 0, bx(400.0, 250.0, 410.0, 260.0));
+            r.world().top_windows = Some(vec![small.clone()]);
+            r.world().foreground_window = Some(small.clone());
+            r.world().window_at_point = Some(small);
+        }
+        let page = r.observe();
+        r.world()
+            .pixels
+            .push((FAR_PIXEL.0, FAR_PIXEL.1, [255, 255, 255]));
+        let result = r
+            .engine
+            .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+        assert_stale_and_nothing_sent(&r, &result);
+        assert_eq!(
+            r.engine
+                .last_action_timings()
+                .unwrap()
+                .freshness_diff
+                .unwrap()
+                .group_tiles,
+            None
+        );
+    }
+}
+
+#[test]
+fn ut_62_the_visual_effect_is_measured_against_the_whole_frame() {
+    let mut results = Vec::new();
+    for scope in [ActionFreshness::Screen, ActionFreshness::TargetWindow] {
+        let mut r = scoped_rig();
+        r.engine.config.action_freshness = scope;
+        r.world().react_to_input = true;
+        let page = r.observe();
+        results.push(
+            r.engine
+                .execute_action(&live_click(&page, "r", ExpectedEffect::VisualChange))
+                .status,
+        );
+    }
+    assert_eq!(results, vec![ActionStatus::EffectObserved; 2]);
+}
+
+/// Differential scalar expectation over every tile, with boundary and maximum margins.
+#[test]
+fn ut_63_target_window_accepts_exactly_when_no_changed_tile_meets_the_group() {
+    for split in [false, true] {
+        for margin in [0, 1, 64, u32::MAX] {
+            for row in 0..5 {
+                for col in 0..10 {
+                    let x = col * 64 + (col * 17 + row * 7) % 64;
+                    let y = row * 64 + (col * 11 + row * 3) % 64;
+                    let mut r = scoped_rig();
+                    let rectangles = if split {
+                        let target = scoped_window(1, 1, bx(384.0, 192.0, 576.0, 320.0));
+                        let foreground = scoped_window(2, 0, bx(0.0, 0.0, 64.0, 64.0));
+                        r.world().top_windows = Some(vec![target.clone(), foreground.clone()]);
+                        r.world().window_at_point = Some(target);
+                        r.world().foreground_window = Some(foreground);
+                        vec![(384.0, 192.0, 576.0, 320.0), (0.0, 0.0, 64.0, 64.0)]
+                    } else {
+                        vec![(64.0, 64.0, 576.0, 320.0)]
+                    };
+                    r.engine.config.action_freshness_margin_px = margin;
+                    let page = r.observe();
+                    r.world().pixels.push((x, y, [255, 255, 255]));
+                    let left = f64::from(col * 64);
+                    let top = f64::from(row * 64);
+                    let m = f64::from(margin);
+                    // Independent scalar interval intersection, not the production helper.
+                    let intersects = rectangles.iter().any(|&(x0, y0, x1, y1)| {
+                        left < x1 + m && left + 64.0 > x0 - m && top < y1 + m && top + 64.0 > y0 - m
+                    });
+                    let result = r.engine.execute_action(&live_click(
+                        &page,
+                        "generated",
+                        ExpectedEffect::None,
+                    ));
+                    assert_eq!(
+                        error_code(&result),
+                        intersects.then_some(ErrorCode::StaleSnapshot),
+                        "pixel {x},{y}; margin {margin}; split {split}"
+                    );
+                    assert_eq!(r.world().delivered.len(), usize::from(!intersects));
+                    let (_, _, screen) = live_click_after_one_pixel((x, y));
+                    assert_eq!(error_code(&screen), Some(ErrorCode::StaleSnapshot));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn changing_or_losing_group_attestation_around_the_action_capture_checks_the_whole_frame() {
+    for changed in [false, true] {
+        let mut r = scoped_rig();
+        let page = r.observe();
+        let first = r.world().top_windows.clone();
+        let mut second = first.clone();
+        if changed {
+            second.as_mut().unwrap()[0].z_order = 1;
+        } else {
+            second = None;
+        }
+        r.world().top_windows_script.extend([first, second]);
+        r.world()
+            .pixels
+            .push((FAR_PIXEL.0, FAR_PIXEL.1, [255, 255, 255]));
+        let result = r
+            .engine
+            .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+        assert_stale_and_nothing_sent(&r, &result);
+        assert_eq!(
+            r.engine
+                .last_action_timings()
+                .unwrap()
+                .freshness_diff
+                .unwrap()
+                .group_tiles,
+            None
+        );
+    }
+}
+
+#[test]
+fn losing_group_attestation_after_the_last_look_cannot_ignore_changed_pixels() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    let attested = r.world().top_windows.clone();
+    r.world()
+        .top_windows_script
+        .extend([attested.clone(), attested, None]);
+    r.world()
+        .pixels
+        .push((FAR_PIXEL.0, FAR_PIXEL.1, [255, 255, 255]));
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_stale_and_nothing_sent(&r, &result);
+}
+
+#[test]
+fn a_group_change_after_the_last_look_spends_the_snapshot_without_a_pixel_change() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    let original = r.world().top_windows.clone();
+    let mut overlay = original.clone();
+    overlay
+        .as_mut()
+        .unwrap()
+        .push(scoped_window(3, 1, bx(500.0, 0.0, 640.0, 100.0)));
+    r.world()
+        .top_windows_script
+        .extend([original.clone(), original, overlay]);
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_stale_and_nothing_sent(&r, &result);
+    let d = r
+        .engine
+        .last_action_timings()
+        .unwrap()
+        .freshness_diff
+        .unwrap();
+    assert_eq!((d.total_tiles, d.group_tiles), (0, Some(0)));
+    let retry = r
+        .engine
+        .execute_action(&live_click(&page, "retry", ExpectedEffect::None));
+    assert_eq!(error_code(&retry), Some(ErrorCode::StaleSnapshot));
+}
+
+#[test]
+fn a_policy_change_keeps_its_refusal_before_group_identity_is_checked() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    r.world().top_windows.as_mut().unwrap()[0].z_order = 2;
+    r.world()
+        .foreground_script
+        .extend([Some(APP.into()), Some("other-app".into())]);
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_eq!(error_code(&result), Some(ErrorCode::PolicyDenied));
+    assert!(r.world().delivered.is_empty(), "nothing sent");
+}
+
+#[test]
+fn a_dry_run_in_target_window_mode_never_reads_windows_or_captures_again() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    r.world().events.clear();
+    r.world().fail_capture = true;
+    let mut request = live_click(&page, "dry", ExpectedEffect::None);
+    request.dry_run = true;
+    assert_eq!(
+        r.engine.execute_action(&request).status,
+        ActionStatus::Simulated
+    );
+    assert!(
+        !r.world()
+            .events
+            .iter()
+            .any(|e| matches!(*e, "windows" | "capture" | "window_at"))
+    );
+}
+
+#[test]
+fn type_checks_target_window_freshness_only_before_its_focusing_click() {
+    let mut r = typing::typing_rig();
+    r.engine.config.action_freshness = ActionFreshness::TargetWindow;
+    let window = scoped_window(1, 0, bx(64.0, 0.0, 576.0, 320.0));
+    r.world().top_windows = Some(vec![window.clone()]);
+    r.world().foreground_window = Some(window.clone());
+    r.world().window_at_point = Some(window);
+    r.world().focused = Some(typing::name_field());
+    r.world().react_to_click = true;
+    let page = r.observe();
+    r.world().events.clear();
+    let result = r
+        .engine
+        .execute_action(&typing::typing(&page, "type", ExpectedEffect::None));
+    assert_eq!(result.status, ActionStatus::InputDelivered, "{result:?}");
+    let world = r.world();
+    assert_eq!((world.clicks.len(), world.keys.len()), (1, 1));
+    let click = world.events.iter().position(|e| *e == "click").unwrap();
+    assert!(!world.events[click + 1..].contains(&"windows"));
+}
+
+#[test]
+fn the_operators_stop_during_the_final_group_read_sends_nothing() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    r.world().events.clear();
+    r.stop_at("windows", 3);
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "stop", ExpectedEffect::None));
+    assert_eq!(error_code(&result), Some(ErrorCode::PolicyDenied));
+    assert!(
+        r.world().delivered.is_empty(),
+        "the stop owns this boundary"
+    );
+}
+
+#[test]
+fn an_unstable_window_read_during_observation_keeps_whole_frame_freshness() {
+    let mut r = scoped_rig();
+    let first = r.world().top_windows.clone();
+    let mut moved = first.clone();
+    moved.as_mut().unwrap()[0].z_order = 1;
+    r.world().top_windows_script.extend([first, moved]);
+    let page = r.observe();
+    r.world()
+        .pixels
+        .push((FAR_PIXEL.0, FAR_PIXEL.1, [255, 255, 255]));
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_stale_and_nothing_sent(&r, &result);
+}
+
+#[test]
+fn the_window_group_is_one_hop_from_the_two_seeds_not_a_transitive_closure() {
+    let mut r = scoped_rig();
+    let seed = scoped_window(1, 0, bx(384.0, 192.0, 576.0, 320.0));
+    r.world().foreground_window = Some(seed.clone());
+    r.world().window_at_point = Some(seed.clone());
+    r.world().top_windows = Some(vec![
+        seed,
+        scoped_window(2, 1, bx(256.0, 64.0, 448.0, 256.0)),
+        scoped_window(3, 2, bx(128.0, 0.0, 320.0, 128.0)),
+    ]);
+    let page = r.observe();
+    r.world().pixels.push((130, 10, [255, 255, 255]));
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_eq!(result.status, ActionStatus::InputDelivered, "{result:?}");
+}
+
+#[test]
+fn window_read_order_is_normalized_by_z_order_then_handle() {
+    let mut r = scoped_rig();
+    r.world()
+        .top_windows
+        .as_mut()
+        .unwrap()
+        .push(scoped_window(2, 0, bx(500.0, 0.0, 640.0, 100.0)));
+    let page = r.observe();
+    r.world().top_windows.as_mut().unwrap().reverse();
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "r", ExpectedEffect::None));
+    assert_eq!(result.status, ActionStatus::InputDelivered, "{result:?}");
+}
+
+#[test]
+fn a_resized_window_that_no_longer_contains_the_target_still_refuses_by_identity() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    let resized = scoped_window(1, 0, bx(450.0, 192.0, 576.0, 320.0));
+    r.world().top_windows = Some(vec![resized.clone()]);
+    r.world().foreground_window = Some(resized.clone());
+    r.world().window_at_point = Some(resized);
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "resize", ExpectedEffect::None));
+    assert_stale_and_nothing_sent(&r, &result);
+}
+
+#[test]
+fn a_known_resize_cannot_hide_behind_an_unavailable_point_attestation() {
+    let mut r = scoped_rig();
+    let page = r.observe();
+    let resized = scoped_window(1, 0, bx(450.0, 192.0, 576.0, 320.0));
+    r.world().top_windows = Some(vec![resized.clone()]);
+    r.world().foreground_window = Some(resized);
+    r.world().window_at_point = None;
+    let result = r
+        .engine
+        .execute_action(&live_click(&page, "resize", ExpectedEffect::None));
+    assert_stale_and_nothing_sent(&r, &result);
 }

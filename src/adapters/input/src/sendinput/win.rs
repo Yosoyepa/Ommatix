@@ -8,7 +8,10 @@ use std::time::Duration;
 use ommatix_application::contract::{ActionKind, ValidatedAction};
 use ommatix_application::{DeliveryReceipt, OsActuator, PortError, TopLevelWindow};
 use ommatix_domain::DisplayMapping;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, POINT};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, POINT, RECT};
+use windows::Win32::Graphics::Dwm::{
+    DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
+};
 use windows::Win32::Security::{
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL,
     TOKEN_QUERY, TokenIntegrityLevel,
@@ -28,16 +31,17 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GA_ROOT, GUITHREADINFO, GetAncestor, GetClassNameW, GetForegroundWindow,
-    GetGUIThreadInfo, GetSystemMetrics, GetWindowThreadProcessId, IsChild, SM_CXVIRTUALSCREEN,
+    FindWindowExW, GA_ROOT, GUITHREADINFO, GW_HWNDNEXT, GetAncestor, GetClassNameW,
+    GetForegroundWindow, GetGUIThreadInfo, GetSystemMetrics, GetTopWindow, GetWindow,
+    GetWindowThreadProcessId, IsChild, IsIconic, IsWindow, IsWindowVisible, SM_CXVIRTUALSCREEN,
     SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WindowFromPoint,
 };
 use windows::core::{PCWSTR, PWSTR};
 
 use super::{
-    ADAPTER, Event, FocusFacts, HOSTED_CONTENT_CLASS, MUST_BE_UP, TopLevel, VirtualScreen, batch,
-    exe_name_utf16, first_held, focus_problem, integrity_allows, is_frame_host, keys_problem,
-    normalise, point_application, shown_application, split_keys,
+    ADAPTER, Event, FocusFacts, HOSTED_CONTENT_CLASS, MUST_BE_UP, TopLevel, VirtualScreen,
+    WindowWalk, batch, exe_name_utf16, first_held, focus_problem, frame_bounds, integrity_allows,
+    is_frame_host, keys_problem, normalise, point_application, shown_application, split_keys,
 };
 use crate::aim::frame_pixel;
 
@@ -235,9 +239,88 @@ fn root_window(hwnd: HWND) -> HWND {
 /// its handle (ADR-0020). Never its title.
 fn attest_window(hwnd: HWND) -> Option<TopLevelWindow> {
     Some(TopLevelWindow {
+        rectangle: None,
+        z_order: 0,
         class: class_name(hwnd)?,
         handle: top_level_handle(hwnd)?,
     })
+}
+
+/// DWM's visible frame bounds, in physical virtual-desktop pixels. No fallback to the
+/// invisible resize border of GetWindowRect: an unavailable attestation stays None.
+fn visible_bounds(hwnd: HWND) -> Option<[i32; 4]> {
+    let mut rect = RECT::default();
+    // SAFETY: the attribute writes exactly a RECT into our live local; its size is
+    // supplied, the handle is passed by value and no pointer is retained by DWM.
+    unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            (&raw mut rect).cast(),
+            u32::try_from(size_of::<RECT>()).ok()?,
+        )
+    }
+    .ok()?;
+    (rect.right > rect.left && rect.bottom > rect.top).then_some([
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.bottom,
+    ])
+}
+
+/// Visible top-level windows in front-to-back order. The bounded walk never attests a
+/// partial list; every visible, uncloaked window needs a rectangle, even without a label.
+fn visible_windows(mapping: DisplayMapping) -> Option<Vec<TopLevelWindow>> {
+    // SAFETY: null parent requests the first top-level window; handle returned by value.
+    let mut hwnd = unsafe { GetTopWindow(None) }.ok()?;
+    let mut walk = WindowWalk::default();
+    let mut windows = Vec::new();
+    let mut z_order = 0u32;
+    loop {
+        if !walk.visit(top_level_handle(hwnd)?) {
+            return None;
+        }
+        // SAFETY: window handle by value; invalid/stale handles return false.
+        let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
+        // SAFETY: window handle by value; queries state without reading client memory.
+        let minimized = unsafe { IsIconic(hwnd) }.as_bool();
+        if visible && !minimized {
+            let mut cloaked = 0u32;
+            // SAFETY: this attribute writes a DWORD into our live local with its exact
+            // size; DWM keeps neither the out-pointer nor the window handle.
+            unsafe {
+                DwmGetWindowAttribute(
+                    hwnd,
+                    DWMWA_CLOAKED,
+                    (&raw mut cloaked).cast(),
+                    u32::try_from(size_of::<u32>()).ok()?,
+                )
+            }
+            .ok()?;
+            if cloaked == 0 {
+                let rect = visible_bounds(hwnd)?;
+                if let Some(rectangle) = frame_bounds(mapping, rect) {
+                    let mut window = attest_window(hwnd)?;
+                    window.rectangle = Some(rectangle);
+                    window.z_order = z_order;
+                    windows.push(window);
+                    z_order = z_order.checked_add(1)?;
+                }
+            }
+        }
+        // SAFETY: queries the next top-level sibling from a handle value; no pointers.
+        let next = unsafe { GetWindow(hwnd, GW_HWNDNEXT) }.ok();
+        // SAFETY: handle value only. A destroyed cursor cannot terminate an attested walk.
+        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+            return None;
+        }
+        match next {
+            Some(next) => hwnd = next,
+            None => break,
+        }
+    }
+    Some(windows)
 }
 
 /// The handle as the number the operator writes in the pin file.
@@ -608,6 +691,10 @@ impl OsActuator for SendInputActuator {
             return None;
         }
         attest_window(root_window(foreground))
+    }
+
+    fn top_level_windows(&self) -> Option<Vec<TopLevelWindow>> {
+        visible_windows((self.mapping)().ok()?)
     }
 
     fn window_at(&self, point: (f64, f64)) -> Option<TopLevelWindow> {

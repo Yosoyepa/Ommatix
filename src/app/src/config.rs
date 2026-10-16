@@ -24,7 +24,7 @@ use anyhow::{Context, Result, bail};
 use ommatix_adapter_mcp::config::MIN_MAX_MESSAGE_BYTES;
 use ommatix_adapter_mcp::{DEFAULT_MAX_MESSAGE_BYTES, MODERN_PROTOCOL_VERSION, McpConfig};
 use ommatix_adapter_vision::model::integrity::Sha256Digest;
-use ommatix_application::{IconResolverConfig, LocalPolicy, VerifyParams};
+use ommatix_application::{ActionFreshness, IconResolverConfig, LocalPolicy, VerifyParams};
 use ommatix_domain::appearance::CachePolicy;
 use ommatix_domain::candidates::CandidateSearch;
 use ommatix_domain::incremental::PlanParams;
@@ -71,10 +71,30 @@ impl CandidateSearchKind {
     }
 }
 
+/// ADR-0032: only the operator's configuration can opt into window-scoped freshness.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionFreshnessKind {
+    #[default]
+    Screen,
+    TargetWindow,
+}
+
+impl ActionFreshnessKind {
+    pub const fn scope(self) -> ActionFreshness {
+        match self {
+            Self::Screen => ActionFreshness::Screen,
+            Self::TargetWindow => ActionFreshness::TargetWindow,
+        }
+    }
+}
+
 /// `[engine]`: Algorithm 1's parameters and the engine's mode.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct EngineSection {
+    pub action_freshness: ActionFreshnessKind,
+    pub action_freshness_margin_px: u32,
     pub mode: EngineMode,
     pub platform: String,
     pub snapshot_policy: String,
@@ -111,6 +131,8 @@ pub struct EngineSection {
 impl Default for EngineSection {
     fn default() -> Self {
         Self {
+            action_freshness: ActionFreshnessKind::Screen,
+            action_freshness_margin_px: 0,
             mode: EngineMode::DryRun,
             platform: "windows".to_owned(),
             snapshot_policy: "strict".to_owned(),
@@ -1390,5 +1412,35 @@ allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
         let path = Path::new("definitely/not/here.toml");
         let message = format!("{:#}", Config::load(Some(path)).unwrap_err());
         assert!(message.contains("cannot read"), "{message}");
+    }
+    #[test]
+    fn ut_64_the_default_freshness_scope_is_the_whole_frame_and_unknown_values_are_refused() {
+        let default = Config::parse("").unwrap();
+        assert_eq!(
+            default.engine.action_freshness.scope(),
+            ActionFreshness::Screen
+        );
+        assert_eq!(default.engine.action_freshness_margin_px, 0);
+        assert_eq!(
+            ommatix_application::EngineConfig::new("test").action_freshness,
+            ActionFreshness::Screen
+        );
+        let chosen = Config::parse(
+            "[engine]\naction_freshness = \"target_window\"\naction_freshness_margin_px = 64",
+        )
+        .unwrap();
+        assert_eq!(
+            chosen.engine.action_freshness.scope(),
+            ActionFreshness::TargetWindow
+        );
+        assert_eq!(chosen.engine.action_freshness_margin_px, 64);
+        for invalid in [
+            "action_freshness = \"region\"",
+            "action_freshness_margin_px = -1",
+            "action_freshness_margin_px = 4294967296",
+            "action_freshness_margin_px = 0.5",
+        ] {
+            assert!(Config::parse(&format!("[engine]\n{invalid}")).is_err());
+        }
     }
 }

@@ -83,5 +83,15 @@
     "example": "contratos/ejemplos_invalidos/simulacion_con_efecto_real.json",
     "schema": "contratos/esquemas/execute_action.output.schema.json",
     "valid": false
+  },
+  {
+    "schema": "contratos/esquemas/action_freshness_diff.meta.schema.json",
+    "example": "contratos/ejemplos/freshness_diff_meta.json",
+    "valid": true
+  },
+  {
+    "schema": "contratos/esquemas/action_freshness_diff.meta.schema.json",
+    "example": "contratos/ejemplos_invalidos/freshness_diff_con_geometria.json",
+    "valid": false
   }
 ]
