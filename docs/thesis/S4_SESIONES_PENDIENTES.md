@@ -140,7 +140,7 @@ PC de referencia, monitor principal 1920×1080 con origen (0, 0), motor con las 
 
 ## D. Mediciones de frescura M1 y M2 / IT-08 (ADR-0032): M1 ejecutada, M2 e IT-08 pendientes
 
-**Preparación de herramientas, sin evidencia viva nueva.** M1 se ejecutó el 17 de octubre de 2026 (§D.1.1), sin entrada ni actuación. M2 e IT-08 no se han ejecutado.
+**Preparación de herramientas (1.0.47).** M1 se ejecutó el 17 de octubre de 2026 (§D.1.1), sin entrada ni actuación. M2 e IT-08 no se han ejecutado.
 El responsable registra antes de cada sesión el commit, configuración, N, aplicaciones,
 estado del menú y protocolo descriptivo (M1) o criterio de aceptación (M2), fuera del
 repositorio. IT-08 sigue planificado;
