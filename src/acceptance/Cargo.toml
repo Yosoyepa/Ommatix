@@ -44,5 +44,10 @@ test = true
 name = "agent_scenes"
 test = true
 
+[[example]]
+## Offline RNF-06 evidence complementary to PERF-03; never captures or delivers input.
+name = "state_bounds"
+test = true
+
 [lints]
 workspace = true

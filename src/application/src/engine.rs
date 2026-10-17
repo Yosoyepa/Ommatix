@@ -18,6 +18,7 @@ mod freshness;
 mod icons;
 mod journal;
 mod observe;
+mod state_sizes;
 mod view;
 
 #[cfg(test)]

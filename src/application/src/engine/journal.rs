@@ -107,6 +107,27 @@ impl Journal {
         }
     }
 
+    pub fn sizes(&self) -> (usize, usize) {
+        (self.entries.len(), self.order.len())
+    }
+
+    /// Typed payload and string capacities; excludes B-tree/VecDeque allocation overhead.
+    pub fn retained_payload_bytes(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|(key, (_, result))| {
+                std::mem::size_of::<(String, (u64, ActionResult))>()
+                    + key.capacity()
+                    + result.request_id.capacity()
+                    + result.target_id.capacity()
+                    + result.snapshot_id.capacity()
+                    + result.error.as_ref().map_or(0, |e| e.message.capacity())
+            })
+            .sum::<usize>()
+            + self.order.capacity() * std::mem::size_of::<String>()
+            + self.order.iter().map(String::capacity).sum::<usize>()
+    }
+
     pub fn lookup(&self, request_id: &str, hash: u64) -> Lookup {
         match self.entries.get(request_id) {
             None => Lookup::New,
@@ -164,6 +185,69 @@ mod tests {
             error: None,
             observed_effect: None,
             delivered: false,
+        }
+    }
+
+    #[test]
+    fn rnf_06_journal_is_capacity_plus_effect_bearing_results_after_10000_requests() {
+        let mut journal = Journal::new(JOURNAL_CAPACITY);
+        let mut effects = 0;
+        let mut no_input = 0;
+        for i in 0..10_000 {
+            let id = format!("r{i}");
+            let mut receipt = result(&id);
+            // Fabricated receipts exercise retention only; no actuator exists in this test.
+            if i % 4 == 0 {
+                receipt.delivered = true;
+                receipt.status = ActionStatus::InputDelivered;
+                effects += 1;
+            } else if i % 4 == 1 {
+                receipt.status = ActionStatus::Indeterminate;
+                effects += 1;
+            } else {
+                no_input += 1;
+            }
+            journal.record(&id, 0, receipt);
+            assert_eq!(
+                journal.sizes(),
+                (
+                    effects + no_input.min(JOURNAL_CAPACITY),
+                    no_input.min(JOURNAL_CAPACITY)
+                )
+            );
+        }
+        eprintln!(
+            "RNF-06 fabricated journal: entries={}, payload_bytes={}, per_entry={:.3}",
+            journal.sizes().0,
+            journal.retained_payload_bytes(),
+            journal.retained_payload_bytes() as f64 / journal.sizes().0 as f64
+        );
+        for i in (0..10_000).filter(|i| i % 4 < 2) {
+            assert!(matches!(
+                journal.lookup(&format!("r{i}"), 0),
+                Lookup::Replay(_)
+            ));
+        }
+    }
+
+    #[test]
+    #[ignore = "unbounded: see docs/reviews/2026-10-17-engine-state-bounds.md"]
+    fn rnf_06_effect_bearing_journal_grows_beyond_capacity_without_delivering_input() {
+        for indeterminate in [false, true] {
+            let mut journal = Journal::new(JOURNAL_CAPACITY);
+            for i in 0..10_000 {
+                let id = format!("r{i}");
+                let mut receipt = result(&id);
+                receipt.delivered = !indeterminate;
+                receipt.status = if indeterminate {
+                    ActionStatus::Indeterminate
+                } else {
+                    ActionStatus::InputDelivered
+                };
+                journal.record(&id, 0, receipt);
+            }
+            assert_eq!(journal.sizes(), (10_000, 0));
+            assert!(journal.sizes().0 <= JOURNAL_CAPACITY);
         }
     }
 
