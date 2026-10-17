@@ -39,6 +39,12 @@ name = "candidate_index"
 test = true
 
 [[example]]
+## AG-01 (ADR-0033): the synthetic scenes of the offline agent-decision experiment, built on
+## the real engine over the simulator and the fixtures. Its tests run with `cargo test`.
+name = "agent_scenes"
+test = true
+
+[[example]]
 ## Offline RNF-06 evidence complementary to PERF-03; never captures or delivers input.
 name = "state_bounds"
 test = true
