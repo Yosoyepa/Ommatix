@@ -1,12 +1,12 @@
 # S4: sesiones supervisadas pendientes de la Definition of Done
 
-**Fecha:** 15 de octubre de 2026 (`CHANGELOG.md`, 1.0.47). **Alcance:** lo que el responsable debe poner (tiempo, ajustes, órdenes) para producir, cada una en una sola sesión, la evidencia que falta de REL-01, PERF-03 (RNF-06) e IT-07 (RNF-07). Este documento y las herramientas que describe fueron **preparación** (1.0.47): entonces no se ejecutó ninguna sesión. La sesión B se ejecutó (1.0.55 y 1.0.66) y la sesión C se ejecutó el 15 de octubre de 2026 (1.0.73, §C.1). La sesión A sigue sin ejecutar.
+**Fecha:** 15 de octubre de 2026 (`CHANGELOG.md`, 1.0.47). **Alcance:** lo que el responsable debe poner (tiempo, ajustes, órdenes) para producir, cada una en una sola sesión, la evidencia que falta de REL-01, PERF-03 (RNF-06) e IT-07 (RNF-07). Este documento y las herramientas que describe fueron **preparación** (1.0.47): entonces no se ejecutó ninguna sesión. La sesión B se ejecutó (1.0.55, 1.0.66 y 1.0.89) y la sesión C se ejecutó el 15 de octubre de 2026 (1.0.73, §C.1). La sesión A sigue sin ejecutar.
 
 **Alcance del MVP (15 de octubre de 2026):** la sesión A (REL-01, instalación y reversión) y la sesión B (PERF-03, soak de 2 h) siguen en el MVP; la sesión C (IT-07, DPI) pasó al próximo corte, como EV-01, EV-02 y el corpus de REL-01 (capítulo 06 §6.7, [ADR-0023](../adr/0023-licence-and-reduced-mvp-scope.md)), y el responsable la adelantó y la ejecutó el 15 de octubre de 2026 (§C.1).
 
 Ninguna de las tres sesiones envía entrada (ni de teclado, ni de ratón) ni usa `execute_action`. Las herramientas de `tools/perf/` observan, y están escritas para negarse a empezar si la configuración del operador pudiera entregar entrada ([`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) §5.1).
 
-**Estado (1.0.66):** la sesión B se ejecutó dos veces, supervisada y sin entrada. La primera, sobre `fe35d80` y sin accesibilidad, fue completa (§12; veredicto del umbral en 1.0.62). La segunda, sobre `745caff` con `uia` y la pantalla encendida, también fue completa (§15): con los criterios del [capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md), el conjunto de trabajo cumple (+1,25 MiB/h) y los manejadores **no cumplen** (pendiente positiva: un manejador más en el minuto 69). La cola no tiene veredicto porque no tiene cota (decisión 9 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)). Un intento anterior de repetirla con `uia` quedó bloqueado antes de la corrida (§14). Seguía sin ejecutar la sesión A (REL-01). **Estado (1.0.73):** la sesión C (IT-07) se ejecutó el 15 de octubre de 2026 a 100, 125 y 150 %, con el cambio de escala en vivo y una escala fuera de perfil (§C.1); la sesión A sigue sin ejecutar.
+**Estado (1.0.66):** la sesión B se ejecutó dos veces, supervisada y sin entrada. La primera, sobre `fe35d80` y sin accesibilidad, fue completa (§12; veredicto del umbral en 1.0.62). La segunda, sobre `745caff` con `uia` y la pantalla encendida, también fue completa (§15): con los criterios del [capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md), el conjunto de trabajo cumple (+1,25 MiB/h) y los manejadores **no cumplen** (pendiente positiva: un manejador más en el minuto 69). La cola no tiene veredicto porque no tiene cota (decisión 9 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)). Un intento anterior de repetirla con `uia` quedó bloqueado antes de la corrida (§14). Seguía sin ejecutar la sesión A (REL-01). **Estado (1.0.73):** la sesión C (IT-07) se ejecutó el 15 de octubre de 2026 a 100, 125 y 150 %, con el cambio de escala en vivo y una escala fuera de perfil (§C.1); la sesión A sigue sin ejecutar. **Estado (1.0.89):** la sesión B se ejecutó otra vez el 17 de octubre de 2026 sobre `1c46b87` con `uia` (§B y [S0 §18](S0_RESULTADOS.md)); M1 se ejecutó el 17 de octubre de 2026 (§D.1.1); M2 e IT-08 siguen sin ejecutar.
 
 ## 0. Condiciones comunes
 
@@ -41,10 +41,12 @@ Pasos: seguir [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) d
 
 ## B. PERF-03 / RNF-06: recursos y soak de 2 h
 
+**Ejecutada el 17 de octubre de 2026 sobre `1c46b87` con `uia`** ([S0 §18](S0_RESULTADOS.md)), con `--max-pending-regions 510` y `--foreground-wait 300`. Cumplen el conjunto de trabajo (+1,39 MiB/h) y la cola (máximo 0); los manejadores no cumplen en sentido estricto (un paso de 998 a 999 en el minuto 13). Hubo dos monitores de 1920 × 1080, no uno: la desviación queda registrada en S0 §18.
+
 | | |
 |---|---|
 | **Tiempo** | 125 minutos ininterrumpidos (5 de preparación y 120 de corrida), más 5 minutos antes para el ensayo corto. |
-| **Necesita del responsable** | Dejar el equipo solo; sin suspensión ni bloqueo de pantalla durante 2 h. Los criterios de conjunto de trabajo (no más de 10 MiB/h) y de manejadores (sin crecimiento) ya están fijados ([capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md)). Falta **fijar la cota de la cola** de regiones pendientes (decisión 9 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)) si quiere que la herramienta la juzgue. |
+| **Necesita del responsable** | Dejar el equipo solo; sin suspensión ni bloqueo de pantalla durante 2 h. Los criterios de conjunto de trabajo (no más de 10 MiB/h) y de manejadores (sin crecimiento) ya están fijados ([capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md)). La cota de la cola de regiones pendientes está fijada desde el 17 de octubre de 2026 (decisión 9 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)): 510 teselas en 1920 × 1080. |
 | **Ajustes** | Plan de energía «Alto rendimiento» (el de S0); un solo monitor; 100 % de escala (como en RNF-05); notificaciones desactivadas. |
 
 1. Ensayo corto, con la corrida real entera por delante: confirma que la aplicación de prueba toma el primer plano sola, que el contador de GPU responde y que el informe se escribe (la herramienta se negará con código 2 si no puede mantener el primer plano sin entrada).
@@ -59,7 +61,7 @@ Pasos: seguir [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) d
    python tools/perf/soak.py --config "$env:LOCALAPPDATA\Ommatix\ommatix.rnf05.directml.toml" --minutes 120 --out C:\ruta\fuera\soak-120.json
    ```
 
-   Los criterios son los valores por defecto (`--max-rss-growth-mib-per-hour 10` y `--max-handle-growth-per-hour 0`). Cuando el responsable fije la cota de la cola, se añade `--max-pending-regions <n>`. Cambiar un criterio sólo por decisión del responsable, y se anota en el informe.
+   Los criterios son los valores por defecto (`--max-rss-growth-mib-per-hour 10` y `--max-handle-growth-per-hour 0`). Con la cota de la cola ya fijada (decisión 9), para el monitor del MVP (1920 × 1080) se añade `--max-pending-regions 510`; sin esa opción la herramienta no juzga la cola. Cambiar un criterio sólo por decisión del responsable, y se anota en el informe.
 
 **Qué hace** (sin entrada, sin `execute_action`): lanza sólo la aplicación de prueba con `--animate` (dos etiquetas que cambian cada 100 ms, para que haya regiones incrementales continuas) y `ommatix serve --source dxgi` con la configuración, y cada 5 s observa y muestrea. Termina sólo sus procesos.
 
@@ -136,16 +138,16 @@ PC de referencia, monitor principal 1920×1080 con origen (0, 0), motor con las 
 
 **Qué no cubre.** Un solo monitor, la aplicación de prueba propia, ninguna acción en vivo a 125 o 150 % y un solo tema. La fila IT-07 de `plan_pruebas.csv` y el estado de RNF-07 no cambian: los decide el responsable.
 
-## D. Mediciones de frescura M1 y M2 / IT-08 (ADR-0032), pendientes
+## D. Mediciones de frescura M1 y M2 / IT-08 (ADR-0032): M1 ejecutada, M2 e IT-08 pendientes
 
-**Preparación de herramientas, sin evidencia viva nueva.** M1, M2 e IT-08 no se han ejecutado.
+**Preparación de herramientas, sin evidencia viva nueva.** M1 se ejecutó el 17 de octubre de 2026 (§D.1.1), sin entrada ni actuación. M2 e IT-08 no se han ejecutado.
 El responsable registra antes de cada sesión el commit, configuración, N, aplicaciones,
 estado del menú y protocolo descriptivo (M1) o criterio de aceptación (M2), fuera del
 repositorio. IT-08 sigue planificado;
 ningún estado de requisito ni casilla de §6.7 cambia. El valor por defecto sigue siendo
 `action_freshness = "screen"`.
 
-### D.1 M1, sólo lectura y sin motor ni entrada
+### D.1 M1, sólo lectura y sin motor ni entrada (ejecutada el 17 de octubre de 2026: §D.1.1)
 
 Compilar `cargo build --release -p ommatix --features sendinput`. Esa característica permite
 reutilizar las consultas Win32 del adaptador; el subcomando construye **únicamente**
@@ -218,6 +220,27 @@ bruto de un fallo. El archivo no se sobrescribe. No se
 guardan fotogramas, clases, handles, coordenadas, etiquetas, títulos ni texto de pantalla.
 La comparación DWM/GetWindowRect de ADR-0032 permanece pendiente: M1 usa los límites DWM
 que atestigua actualmente el motor y no afirma resolver aquella medición.
+
+### D.1.1 Resultados de M1 (17 de octubre de 2026)
+
+**Qué es.** La primera ejecución de M1, con el responsable presente y en su escritorio tal como estaba. Es descriptiva: no hay umbral de aprobación y no decide nada. No activa `action_freshness = "target_window"`, no acredita IT-08 y no cambia ningún estado de requisito ni casilla de §6.7. M2 e IT-08 no se han ejecutado.
+
+**Binario y configuración.** Compilado desde el commit `8587f4e` de `main` con `--features sendinput`; el SHA-256 empieza por `1D363C36A9637F33`. Herramienta `tools/perf/freshness_probe.py`, en modo descriptivo, con N = 60 pares (30 con el menú cerrado y 30 con el menú abierto), intervalo de 150 ms y margen 0.
+
+**Condiciones.**
+
+- Escritorio del responsable tal como estaba, con las ventanas sin minimizar. Dos monitores de 1920 × 1080; se midió la salida 0. El perfil del MVP es de un monitor: es una desviación, que se declara aquí.
+- DPI de 96 (100 %).
+- El responsable trajo al frente el Bloc de notas a mano. La caja objetivo fue la de «Editar» (56 × 32 píxeles físicos), leída con UI Automation en solo lectura. Sus coordenadas no se registran (ADR-0012 y ADR-0032). El responsable abrió y cerró el menú a mano.
+- Ninguna entrada de herramienta, ninguna actuación del motor y nada guardado de la pantalla. Los informes JSON en bruto quedan fuera del repositorio, en `%LOCALAPPDATA%\Ommatix\runs\m1-menu-cerrado.json` y `%LOCALAPPDATA%\Ommatix\runs\m1-menu-abierto.json`.
+- El primer intento falló antes de medir, por un error de configuración del operador: `allowed_window_classes` estaba escrito como lista y no como el mapa por aplicación. Se corrigió y la medición se repitió completa.
+
+**Resultados.** Los dos grupos tienen 30 de 30 pares válidos.
+
+- **Menú cerrado (30 pares):** 5 ventanas en el grupo en todos los pares; `group_frame_fraction` 1,0 y `group_covers_whole_frame` verdadero en 30 de 30; `total_tiles` 0 en todos los pares; `touches_target` 0; `outside_pairs` 0; mediana de `capture_gap_ms` de 166,1 ms.
+- **Menú abierto (30 pares):** 6 ventanas en el grupo (el menú emergente cuenta); cobertura 1,0 en 30 de 30; `total_tiles` 0 en todos los pares; `outside_pairs` 0; mediana de `capture_gap_ms` de 166,8 ms.
+
+**Lectura.** En este escritorio, el grupo de ADR-0032 cubre toda la salida en cada par, así que `target_window` no puede reducir el área comparada. La salida no identifica las ventanas que forman esa cobertura. El propio ADR-0032 advierte que un fondo que cubre la salida puede extender el grupo a toda la pantalla; M1 confirma el efecto sin establecer la causa. La pantalla estuvo quieta, así que tampoco se observó ningún cambio: M1 no dice nada sobre los rechazos de S3 §9.6 y §10. Es el caso que se acordó de antemano para proponer una enmienda. **Decisión del responsable (17 de octubre de 2026): proponer la enmienda**, [ADR-0035](../adr/0035-freshness-group-limited-to-occluders.md), en estado *Proposed*. No se implementa. Antes de cualquier uso en vivo, la enmienda necesita repetir M1 en el escritorio del responsable.
 
 ### D.2 M2 supervisada, IT-08: copia de configuración y diagnóstico D0
 
