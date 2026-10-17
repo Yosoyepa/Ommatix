@@ -3,17 +3,22 @@
 decision model (SubQ, Decisions API) acts as the agent: given a goal and the element list
 of an `observe_screen` page, it names the `target_id` to act on, or none.
 
-It reads the scenes written by `cargo run -p ommatix-acceptance --example agent_scenes`
-and nothing else: a file that does not declare itself synthetic and made by that generator
-is refused. It is an operator-side tool, never part of the product, never run in CI with a
-network and never a safety mechanism: the engine's gate stays the only authority
+It never reads a scenes file it is given: it generates the scenes itself, by running the
+repository's own generator (`cargo run --locked -p ommatix-acceptance --example agent_scenes`)
+from the checkout it lives in, into a fresh temporary directory outside the checkout, and
+reads only that output. A file that says it is synthetic proves nothing, so there is no way
+to hand the tool one. It is an operator-side tool, never part of the product, never run in CI
+with a network and never a safety mechanism: the engine's gate stays the only authority
 (ADR-0007). The report says how often the model is right, how often it abstains when it
 should, how it reacts to a label that tries to redirect it and how much of its error the
 gate would have refused.
 
-    python tools/agent/subq_decisions.py --scenes scenes.json --max-input-tokens 60000 --plan
-    python tools/agent/subq_decisions.py --scenes scenes.json --max-input-tokens 60000 \\
+    python tools/agent/subq_decisions.py --max-input-tokens 60000 --plan
+    python tools/agent/subq_decisions.py --max-input-tokens 60000 \
         --key-file <outside the checkout> --out <outside the checkout>/agent.json
+
+`--scenes-out PATH` (outside the checkout) only saves a copy of the generated scenes for the
+record.
 
 The key comes from the environment (SUBQ_API_KEY) or from `--key-file`; it is never
 printed, logged or written. Standard library only.
@@ -23,15 +28,22 @@ import argparse
 import json
 import math
 import os
+import re
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import http.client
 from pathlib import Path
 
 MODEL = "subq-snap-preview"
 DEFAULT_BASE_URL = "https://api.subq.ai"
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
 ENDPOINT = "/v1/systemone"
+GENERATOR_TIMEOUT_SECONDS = 1800
 KEY_ENV = "SUBQ_API_KEY"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RETRY_DELAY_SECONDS = 5.0
@@ -60,19 +72,49 @@ class Refusal(Exception):
 # ---- scenes ----
 
 
+def generator_command(out):
+    """The repository's own scene generator, exactly; nothing here comes from the caller."""
+    return ["cargo", "run", "--locked", "--quiet", "-p", "ommatix-acceptance",
+            "--example", "agent_scenes", "--", "--out", str(out)]
+
+
+def run_generator(out):
+    """Runs the generator from the checkout this file lives in; its output is `out`."""
+    try:
+        done = subprocess.run(generator_command(out), cwd=REPO_ROOT, stdout=subprocess.DEVNULL,
+                              check=False, timeout=GENERATOR_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise Refusal(f"cannot run the scene generator: {type(error).__name__}") from None
+    if done.returncode != 0:
+        raise Refusal(f"the scene generator failed (exit {done.returncode})")
+
+
+def generate_scenes(generate=run_generator):
+    """(scenes, raw bytes) of a fresh run of the generator in a temporary directory that
+    lies outside the checkout and is gone afterwards."""
+    with tempfile.TemporaryDirectory(prefix="ag01-") as directory:
+        if inside_checkout(directory):
+            raise Refusal("refusing to generate the scenes inside the git checkout")
+        out = Path(directory) / "scenes.json"
+        generate(out)
+        return load_scenes(out), out.read_bytes()
+
+
 def load_scenes(path):
-    """The scenes of `path`, or a refusal if it is not the synthetic output of the generator."""
+    """The scenes the generator wrote at `path`, or a refusal if they are not the shape it
+    writes. The markers are a sanity check of that shape, not proof of provenance: the
+    provenance is that the tool ran the generator itself."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
-        raise Refusal(f"cannot read the scenes file: {error}") from error
+        raise Refusal(f"cannot read the generated scenes: {error}") from error
     if not isinstance(data, dict) or data.get("synthetic") is not True:
-        raise Refusal("refusing a scenes file that does not declare \"synthetic\": true (ADR-0033)")
+        raise Refusal("the generator output does not declare \"synthetic\": true (ADR-0033)")
     if data.get("generator") != "agent_scenes":
-        raise Refusal("refusing a scenes file not made by the \"agent_scenes\" generator (ADR-0033)")
+        raise Refusal("the generator output is not marked as made by \"agent_scenes\" (ADR-0033)")
     scenes = data.get("scenes")
     if not isinstance(scenes, list) or not scenes:
-        raise Refusal("the scenes file has no scenes")
+        raise Refusal("the generated scenes are empty")
     for scene in scenes:
         try:
             elements = scene["observation"]["elements"]
@@ -85,7 +127,7 @@ def load_scenes(path):
                 ):
                     raise TypeError
         except (KeyError, TypeError) as error:
-            raise Refusal("the scenes file does not have the shape agent_scenes writes") from error
+            raise Refusal("the generated scenes do not have the shape agent_scenes writes") from error
     return scenes
 
 
@@ -170,8 +212,6 @@ def requests_for(scenes):
 def checkout_roots():
     roots = [REPO_ROOT.resolve()]
     try:
-        import subprocess
-
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=10, check=False,
@@ -188,6 +228,17 @@ def inside_checkout(path):
     return any(resolved.is_relative_to(root) for root in checkout_roots())
 
 
+# Printable ASCII with no space: what an HTTP header value can carry without ambiguity.
+KEY_PATTERN = re.compile(r"[\x21-\x7e]{8,512}")
+
+
+def validate_key(key):
+    """Refuses a key that could not travel in a header as it is; the message never has the key."""
+    if not KEY_PATTERN.fullmatch(key):
+        raise Refusal("the API key must be 8 to 512 printable ASCII characters with no spaces "
+                      "or line breaks (the key is not shown)")
+
+
 def read_key(key_file):
     if key_file is not None:
         if inside_checkout(key_file):
@@ -200,6 +251,7 @@ def read_key(key_file):
         key = os.environ.get(KEY_ENV, "").strip()
     if not key:
         raise Refusal(f"no API key: set {KEY_ENV} or pass --key-file")
+    validate_key(key)
     return key
 
 
@@ -217,21 +269,47 @@ class Reply:
         return detail.get("error_type") if isinstance(detail, dict) else None
 
 
-def post(base_url, key, body):
-    """One POST; the reply of any HTTP status, a Refusal on a transport failure."""
-    request = urllib.request.Request(
-        base_url.rstrip("/") + ENDPOINT,
-        data=encode(body),
-        method="POST",
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-    )
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would carry the bearer key to wherever it points: it is never followed."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def check_base_url(url):
+    """https, or plain http only to this machine (the tests' fake server)."""
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname
+        parts.port  # noqa: B018 - raises ValueError on a malformed port
+    except ValueError:
+        raise Refusal("the base URL is not valid") from None
+    if not host or parts.username or parts.password or parts.query or parts.fragment:
+        raise Refusal("the base URL must be a plain http(s) address")
+    if parts.scheme == "https" or (parts.scheme == "http" and host in LOOPBACK_HOSTS):
+        return
+    raise Refusal("the base URL must be https (plain http only for 127.0.0.1 or localhost)")
+
+
+def post(base_url, key, body):
+    """One POST; the reply of any HTTP status (a redirect is returned, never followed), a
+    Refusal on a transport failure. Nothing raised here carries the key."""
+    try:
+        request = urllib.request.Request(
+            base_url.rstrip("/") + ENDPOINT,
+            data=encode(body),
+            method="POST",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        )
+        opener = urllib.request.build_opener(_NoRedirect)
+        with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             status, raw = response.status, response.read()
     except urllib.error.HTTPError as error:
         status, raw = error.code, error.read()
-    except (urllib.error.URLError, OSError) as error:
-        raise Refusal(f"the request failed: {type(error).__name__}") from error
+    except (urllib.error.URLError, http.client.HTTPException, OSError) as error:
+        raise Refusal(f"the request failed: {type(error).__name__}") from None
+    except (ValueError, UnicodeError):
+        raise Refusal("the request could not be built") from None
     try:
         return Reply(status, json.loads(raw))
     except ValueError:
@@ -242,7 +320,8 @@ def post(base_url, key, body):
 
 
 def parse_answers(reply):
-    """(target, achievable, injection, tokens) of a good reply, or None if it is malformed."""
+    """The answers of a good reply, or None if it is malformed. What it cost is
+    `billed_tokens`, which does not depend on the answers."""
     try:
         answers = reply.body["answers"]
         target = answers["target"]
@@ -251,7 +330,6 @@ def parse_answers(reply):
         injection = float(answers["injection"]["noul"])
         probabilities = {str(k): float(v) for k, v in target["probabilities"].items()}
         confidence = float(target["confidence"])
-        tokens = int(reply.body["usage"]["input_tokens"])
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
     if not isinstance(choice, str):
@@ -262,50 +340,86 @@ def parse_answers(reply):
         "confidence": confidence,
         "achievable": achievable,
         "injection": injection,
-        "tokens": tokens,
     }
 
 
-def run(scenes, max_input_tokens, base_url, key, sleep=time.sleep):
-    """Asks every goal in order. Returns (results, used tokens, why it stopped or None)."""
-    results = []
-    used = 0
+def billed_tokens(reply):
+    """The input tokens a 200 reply says it cost, or None if that is missing or not a
+    non-negative integer. A booleans or a float is not a count."""
+    try:
+        tokens = reply.body["usage"]["input_tokens"]
+    except (KeyError, TypeError):
+        return None
+    if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+        return None
+    return tokens
+
+
+class RunState:
+    """What a run has produced so far; the report is written from it however the run ends."""
+
+    def __init__(self):
+        self.results = []
+        self.used = 0
+        self.stopped = None
+
+
+def run(state, scenes, max_input_tokens, base_url, key, sleep=time.sleep):
+    """Asks every goal in order, recording in `state`; sets `state.stopped` if it stops early.
+    Every 200 reply is billed to `state.used` before the next request is decided."""
     consecutive_errors = 0
     for scene, goal, body in requests_for(scenes):
         estimate = estimate_tokens(body)
-        remaining = max_input_tokens - used
+        remaining = max_input_tokens - state.used
         if estimate > remaining:
-            return results, used, (
-                f"budget: the next request is estimated at {estimate} tokens "
-                f"and {max(remaining, 0)} remain"
-            )
-        reply = post(base_url, key, body)
-        if reply.status in RETRY_STATUSES:
-            sleep(RETRY_DELAY_SECONDS)
+            state.stopped = (f"budget: the next request is estimated at {estimate} tokens "
+                             f"and {max(remaining, 0)} remain")
+            return
+        try:
             reply = post(base_url, key, body)
             if reply.status in RETRY_STATUSES:
-                return results, used, f"HTTP {reply.status} twice"
+                sleep(RETRY_DELAY_SECONDS)
+                reply = post(base_url, key, body)
+        except Refusal as error:
+            state.stopped = str(error)
+            return
+        if reply.status in RETRY_STATUSES:
+            state.stopped = f"HTTP {reply.status} twice"
+            return
         if reply.status in FATAL_STATUSES:
-            return results, used, f"HTTP {reply.status} ({reply.error_type or 'no error type'})"
+            state.stopped = f"HTTP {reply.status} ({reply.error_type or 'no error type'})"
+            return
+        if 300 <= reply.status < 400:
+            state.stopped = f"HTTP {reply.status}: a redirect is never followed with the key"
+            return
         entry = {"scene": scene["name"], "injected": scene.get("injected") is True,
                  "goal": goal["goal"], "expected": goal["expected"]}
-        parsed = parse_answers(reply) if reply.status == 200 else None
+        parsed = None
+        if reply.status == 200:
+            tokens = billed_tokens(reply)
+            if tokens is None:
+                state.results.append({**entry, "error": {"status": 200,
+                                                         "error_type": "usage_unreadable"}})
+                state.stopped = ("a 200 reply without a valid input-token count: "
+                                 "the charge is unknown")
+                return
+            state.used += tokens
+            parsed = parse_answers(reply)
         if parsed is None:
             consecutive_errors += 1
-            results.append({**entry, "error": {"status": reply.status,
-                                               "error_type": reply.error_type or "malformed_reply"}})
+            state.results.append({**entry, "error": {
+                "status": reply.status, "error_type": reply.error_type or "malformed_reply"}})
             if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                return results, used, f"{consecutive_errors} failed requests in a row"
+                state.stopped = f"{consecutive_errors} failed requests in a row"
+                return
             continue
         consecutive_errors = 0
-        used += parsed["tokens"]
         chosen = parsed["choice"]
-        results.append({
-            **entry, **parsed,
+        state.results.append({
+            **entry, **parsed, "tokens": tokens,
             "gate": None if chosen == "none" else scene["gate"].get(chosen, "unknown_target"),
             "error": None,
         })
-    return results, used, None
 
 
 # ---- the summary ----
@@ -381,14 +495,15 @@ def report(results, used, max_input_tokens, stopped, base_url):
 
 
 def parse_args(argv):
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--scenes", required=True, type=Path,
-                        help="the file written by the agent_scenes example")
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], allow_abbrev=False)
     parser.add_argument("--max-input-tokens", required=True, type=int,
                         help="hard budget of input tokens for the whole run")
     parser.add_argument("--plan", action="store_true",
                         help="no network: print the number of requests and the estimated tokens")
     parser.add_argument("--out", type=Path, help="the report; outside the git checkout")
+    parser.add_argument("--scenes-out", type=Path,
+                        help="save a copy of the generated scenes here (outside the git "
+                             "checkout); it is never read back")
     parser.add_argument("--key-file", type=Path, help="the API key; outside the git checkout")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     args = parser.parse_args(argv)
@@ -396,8 +511,10 @@ def parse_args(argv):
         parser.error("--max-input-tokens must be positive")
     if not args.plan and args.out is None:
         parser.error("--out is required unless --plan")
-    if not args.base_url.startswith(("https://", "http://")):
-        parser.error("--base-url must be an http(s) URL")
+    try:
+        check_base_url(args.base_url)
+    except Refusal as error:
+        parser.error(f"--base-url: {error}")
     return args
 
 
@@ -413,34 +530,45 @@ def plan(scenes, max_input_tokens):
     }
 
 
-def main(argv=None, sleep=time.sleep):
+def main(argv=None, sleep=time.sleep, generate=run_generator):
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        scenes = load_scenes(args.scenes)
+        if args.scenes_out is not None and inside_checkout(args.scenes_out):
+            raise Refusal("refusing a --scenes-out path inside the git checkout")
+        scenes, raw = generate_scenes(generate)
+        if args.scenes_out is not None:
+            try:
+                args.scenes_out.write_bytes(raw)
+            except OSError as error:
+                raise Refusal(f"cannot write the scenes copy: {error.strerror}") from None
         if args.plan:
             print(json.dumps(plan(scenes, args.max_input_tokens), indent=2))
             return 0
         if inside_checkout(args.out):
             raise Refusal("refusing an --out path inside the git checkout")
         key = read_key(args.key_file)
-        results, used, stopped = [], 0, None
+        state = RunState()
         try:
-            results, used, stopped = run(scenes, args.max_input_tokens, args.base_url, key, sleep)
-        except Refusal as error:
-            stopped = str(error)
-        text = json.dumps(report(results, used, args.max_input_tokens, stopped, args.base_url),
-                          indent=2, ensure_ascii=False) + "\n"
+            run(state, scenes, args.max_input_tokens, args.base_url, key, sleep)
+        except Exception as error:  # a bug: say its type only, the text could carry the header
+            state.stopped = f"unexpected {type(error).__name__}; details withheld"
+        text = json.dumps(report(state.results, state.used, args.max_input_tokens,
+                                 state.stopped, args.base_url), indent=2, ensure_ascii=False) + "\n"
         try:
             args.out.write_text(text, encoding="utf-8")
         except OSError as error:
-            raise Refusal(f"cannot write the report: {error.strerror}") from error
-        if stopped:
-            print(f"stopped early: {stopped}", file=sys.stderr)
+            raise Refusal(f"cannot write the report: {error.strerror}") from None
+        if state.stopped:
+            print(f"stopped early: {state.stopped}", file=sys.stderr)
             return 1
         return 0
     except Refusal as error:
         print(f"subq_decisions: {error}", file=sys.stderr)
         return 2
+    except Exception as error:  # never print the text of an unexpected exception
+        print(f"subq_decisions: unexpected {type(error).__name__}; details withheld",
+              file=sys.stderr)
+        return 3
 
 
 if __name__ == "__main__":

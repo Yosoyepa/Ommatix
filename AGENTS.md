@@ -195,8 +195,8 @@ python tools/perf/measure_latency.py --variant NAME=EXE,CONFIG ... --out perf.js
 python tools/perf/soak.py --config CONFIG --minutes 120 --out soak.json  # PERF-03 / RNF-06: resources and 2 h soak, Windows, no input; the test app must be in front (S4_SESIONES_PENDIENTES.md B)
 python tools/perf/dpi_probe.py --config CONFIG --out dpi-probe.json  # IT-07: DPI per session, read only; never changes the scaling (S4_SESIONES_PENDIENTES.md C)
 cargo run --release -p ommatix-acceptance --example core_latency -- --out perf01.json  # PERF-01: the core on 300 controls and 600 spans, no screen (S0_RESULTADOS.md §11)
-cargo run -p ommatix-acceptance --example agent_scenes -- --out scenes.json  # AG-01: synthetic scenes for the offline agent-decision experiment, no screen (ADR-0033, chapter 09 §9.10)
-python tools/agent/subq_decisions.py --scenes scenes.json --max-input-tokens N --plan  # AG-01: operator-side, synthetic scenes only; drop --plan and add --key-file and --out (outside the checkout) to call the model
+cargo run -p ommatix-acceptance --example agent_scenes -- --out scenes.json  # AG-01: the synthetic scenes of the offline agent-decision experiment, no screen (ADR-0033, chapter 09 §9.10); the tool below runs it itself
+python tools/agent/subq_decisions.py --max-input-tokens N --plan  # AG-01: operator-side; it generates its own synthetic scenes and takes no scenes file; drop --plan and add --key-file and --out (outside the checkout) to call the model
 python tools/repro/environment.py --out environment.json  # REL-01: commit, toolchain, lockfiles, machine and pinned artefacts (S4_REPRODUCIBILIDAD.md)
 python -m unittest discover -s tools/repro -p "test_*.py"  # REL-01 helper tests
 python -m unittest discover -s tools/agent -p "test_*.py"  # AG-01 tool tests (fake server on 127.0.0.1, no network)
