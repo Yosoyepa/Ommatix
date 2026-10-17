@@ -92,6 +92,7 @@ An external decision model may be used under these conditions, and only these:
 - The results depend on a preview model that can change; a result is valid for the model name and
   the date it was recorded.
 - The tool needs a key and a network and so is never part of the CI gate; its own tests do not.
+- First result (2026-10-17, two runs, 26 goals): the model grounded all 13 achievable goals but abstained on only 11 of 13 impossible ones, and the gate refused none of its 5 wrong choices because they were enabled, confirmed elements. This is why decision 5 stands: the gate cannot replace the agent's judgement, and the model's judgement cannot replace the gate. Details in chapter 09 §9.10.
 
 ## Required validation
 
