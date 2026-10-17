@@ -19,9 +19,12 @@ the raw samples, the latency percentiles per window of time, and for each resour
 and last medians and the least-squares slope per hour after the warm-up. Its ``criteria`` judge
 the working-set slope and the handle slope against the owner's thresholds of 15 October 2026
 (dossier chapter 09, section 9.7: 10 MiB per hour, and no growth), which are the defaults of
-``--max-rss-growth-mib-per-hour`` and ``--max-handle-growth-per-hour``. The queue has no
-threshold yet: ``--max-pending-regions`` has no default and its criterion appears only when it is
-given. The tool states no verdict on RNF-06 as a whole; the reading is the owner's.
+``--max-rss-growth-mib-per-hour`` and ``--max-handle-growth-per-hour``. The queue has the
+owner's bound of 17 October 2026 (dossier chapter 06, decision 9): a structural one, the tile
+count of the current frame, ``ceil(W/64) * ceil(H/64)``, which is 510 for a 1920x1080 frame.
+``--max-pending-regions`` has no default, since the bound depends on the frame: for a 1920x1080
+frame, pass ``--max-pending-regions 510``. Its criterion appears only when the flag is given. The
+tool states no verdict on RNF-06 as a whole; the reading is the owner's.
 
 What it will not do, by construction:
 
@@ -388,8 +391,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                     help="threshold for the slope of the handle count after the warm-up "
                          "(default 0: no growth; the owner's, 15 October 2026)")
     ap.add_argument("--max-pending-regions", type=int, default=None,
-                    help="bound for the queue (pending_regions); no default: the owner has "
-                         "set none (dossier chapter 06, decision 9)")
+                    help="the owner's structural bound for the queue (pending_regions): the tile "
+                         "count of the frame, ceil(W/64) * ceil(H/64), 510 for 1920x1080 "
+                         "(dossier chapter 06, decision 9); no default, it depends on the frame")
     args = ap.parse_args(argv)
     if args.minutes <= 0 or args.interval <= 0:
         ap.error("--minutes and --interval must be positive")
