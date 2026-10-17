@@ -328,7 +328,7 @@ class Verdict(unittest.TestCase):
         result = soak.criteria(resources, {"n": 1440, "max": 0}, args)
         self.assertTrue(result["working_set_growth_mib_per_hour"]["met"])
         self.assertTrue(result["handle_growth_per_hour"]["met"])
-        self.assertNotIn("pending_regions_max", result)  # the owner has set no queue bound
+        self.assertNotIn("pending_regions_max", result)  # no bound given: no queue criterion
 
     def test_any_positive_handle_slope_is_not_met_and_a_missing_trend_is_not_met(self):
         args = SimpleNamespace(max_rss_growth_mib_per_hour=10.0,
@@ -347,7 +347,7 @@ class Command(unittest.TestCase):
         self.assertEqual(args.minutes, 120.0)
         self.assertEqual((args.max_rss_growth_mib_per_hour, args.max_handle_growth_per_hour),
                          (10.0, 0.0))
-        self.assertIsNone(args.max_pending_regions)  # the owner has set no bound for the queue
+        self.assertIsNone(args.max_pending_regions)  # the frame sets the bound: no default
 
     def test_the_tool_has_no_way_to_send_an_action(self):
         source = Path(soak.__file__).read_text(encoding="utf-8")
