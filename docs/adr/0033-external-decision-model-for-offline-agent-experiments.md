@@ -1,8 +1,8 @@
 # 0033. Allow an external decision model only in an offline experiment on synthetic scenes
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-17
-- **Approval:** Pending. The project owner decides. Acceptance would change no test status and no checkbox of chapter 06 §6.7.
+- **Approval:** The project owner, 2026-10-17. The external decision model is accepted only on the conditions below. Acceptance changes no test status or checkbox of chapter 06 §6.7.
 
 ## Context
 
