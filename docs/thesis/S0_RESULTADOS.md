@@ -1037,7 +1037,7 @@ La prueba aparte `rnf_06_pending_tiles_equal_changed_union_after_1000_failures_a
 
 La regresión de **10 000 observaciones** conserva una publicación/base y como máximo un track/entrada almacenada para su escena. Falló con el conjunto histórico anterior. La clasificación derivada de retirados conserva la ausencia de reutilización y el rechazo de IDs ausentes, incluso después de purga, **para toda historia que no agote el contador de 64 bits; el agotamiento ahora falla cerrado**: otro diferencial recorre **1 000 historias de 24 pasos**, compara con la implementación anterior basada en conjunto y comprueba cada ID entre 0 y `next_id + 4` (semántica de UT-35/OR-38 y UT-41/OR-47). Las pruebas no asignan IDs nuevos en las matrices ni sustituyen al oráculo Python.
 
-**Corrección de revisión de 1.0.88:** dos regresiones sembradas sitúan el contador junto al agotamiento y conservan un ID retirado previo. Fallaron primero con el asignador anterior tanto en debug (overflow) como en release (retorno incorrecto con `next_id = 0`); la suma comprobada devuelve ahora un error de identidad, sin publicar ni consumir IDs del candidato fallido. `u64::MAX` es el centinela de agotamiento y `u64::MAX - 1` el último ID emitible; observar tracks existentes sin creaciones sigue siendo posible. El motor ya trata ese error como observación fallida y mantiene las teselas pendientes. Las mediciones de §17 son las del commit limpio indicado (`31297f0`), anterior a esta protección del extremo; no se atribuyen a ella sus tiempos ni se afirma haber medido el agotamiento con esa corrida.
+**Corrección de revisión de 1.0.88:** dos regresiones sembradas sitúan el contador junto al agotamiento y conservan un ID retirado previo. Fallaron primero con el asignador anterior tanto en debug (overflow) como en release (retorno incorrecto con `next_id = 0`); la suma comprobada devuelve ahora un error de identidad, sin publicar ni consumir IDs del candidato fallido. `u64::MAX` es el centinela de agotamiento y `u64::MAX - 1` el último ID emitible; observar tracks existentes sin creaciones sigue siendo posible. El motor ya trata ese error como observación fallida y mantiene las teselas pendientes. Las mediciones de colecciones (§17.1–§17.2) y la comparación original de §17.3 son las del commit limpio indicado (`31297f0`), anterior a esta protección del extremo; no se atribuyen a ella esos tiempos ni se afirma haber medido el agotamiento con esa corrida. La medida posterior de §17.3 identifica por separado el commit con la protección.
 
 **Dos retenciones sin cota constante permanecen abiertas.** (1) El diario conserva todos los resultados entregados o indeterminados: `entradas ≤ 1024 + D`, con D resultados protegidos desde la purga del diario, incluidos intentos indeterminados sin entrega confirmada. Una prueba de 10 000 recibos fabricados —sin actuador— conserva exactamente 5 000 protegidos + 1 024 expulsables = **6 024 entradas**, **1 004 952 bytes** de payload estimado, **166,825 bytes/entrada** en esa mezcla; no incluye los nodos/overhead del árbol. (2) Lecturas de accesibilidad truncadas sucesivas sobre píxeles iguales pueden acumular evidencia no contradicha; una regresión sintética devuelve un elemento nuevo por lectura y llega a **100 registros retenidos**. Ambas regresiones de cota constante están ignoradas y, al ejecutarse explícitamente, fallan después de comprobar el crecimiento. No se expulsan resultados con efectos ni evidencia sensible; [ADR-0034](../adr/0034-propose-fail-closed-retained-state-budgets.md) propone presupuestos seguros, pendientes y sin implementar.
 
@@ -1082,6 +1082,23 @@ Comando en ambas variantes: `cargo run --release -p ommatix-acceptance --example
 | application_core / warm_one_region / observe_screen_wall | 3.688 / 4.608 | 3.835 / 4.428 |
 
 Es una corrida por variante, no una comparación causal ni una promesa de mejora; el ruido y la carga concurrente de la máquina no se controlaron. PERF-01 no genera una sesión larga con retiradas acumulativas ni fallos de percepción: no cuantifica el coste antiguo frente al nuevo a 20 000 retiradas. Sí publica los tramos de la ruta normal exigidos para el cambio del núcleo; no hay nuevas asignaciones ni dependencias en la observación exitosa. El diagnóstico crea su mapa únicamente cuando la herramienta local de investigación lo solicita.
+
+**Corrida posterior a la protección de agotamiento (revisión del PR #81, 1.0.88).** Mismo equipo, toolchain, escena, comando y número de muestras/calentamiento; commit **`f0589bee584e2c890ca68c48bd88591d22da5a49`**, árbol limpio. [JSON de todos los tramos](evidencias/state-bounds-core-exhaustion-2026-10-17.json). La tabla compara la corrida original después de acotar el registro (`31297f0`) con esta corrida que ya comprueba la suma; cada celda es p50 / p95 en ms. Mide el coste por etapas sobre contadores normales, no una sesión que agote IDs; esa frontera se verifica con las regresiones sembradas, no con los tiempos. Una corrida por versión y carga no controlada no establecen causalidad ni ausencia de regresión.
+
+| Capa / caso / tramo | Sin protección p50 / p95 | Con protección p50 / p95 |
+|---|---:|---:|
+| domain_core / cold_full_refresh / identity | 0.264 / 0.464 | 0.268 / 0.346 |
+| domain_core / cold_full_refresh / core_total | 1.576 / 2.762 | 1.566 / 1.832 |
+| domain_core / warm_unchanged / identity | 0.503 / 0.850 | 0.504 / 0.640 |
+| domain_core / warm_unchanged / core_total | 3.034 / 4.814 | 3.025 / 3.935 |
+| domain_core / warm_one_region / identity | 0.508 / 0.641 | 0.508 / 0.653 |
+| domain_core / warm_one_region / core_total | 3.407 / 4.184 | 3.282 / 4.247 |
+| application_core / cold_full_refresh / stage_track | 0.409 / 0.491 | 0.405 / 0.495 |
+| application_core / cold_full_refresh / observe_screen_wall | 1.799 / 2.038 | 1.803 / 2.091 |
+| application_core / warm_unchanged / stage_track | 0.653 / 0.861 | 0.648 / 0.761 |
+| application_core / warm_unchanged / observe_screen_wall | 3.374 / 4.305 | 3.316 / 3.890 |
+| application_core / warm_one_region / stage_track | 0.666 / 0.821 | 0.651 / 0.736 |
+| application_core / warm_one_region / observe_screen_wall | 3.835 / 4.428 | 3.682 / 4.097 |
 
 ### 17.4 Qué sigue pendiente
 
