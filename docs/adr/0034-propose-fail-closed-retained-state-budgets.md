@@ -33,7 +33,7 @@ No fail-closed budget, reservation, eviction, cap, configuration key or wire err
 
 ## Consequences and cost
 
-Two structures have no constant bound, and their bounds are conditional on evidence counts. The journal grows with the session's effect-bearing results. The accessibility union grows with repeated truncated reads. An operator who runs long sessions with many effects or truncated reads should expect growth, which the state audit measures offline. Entry counts do not bound request strings, allocator overhead, model memory or RSS; bytes and live resources are measured separately, and PERF-03 with `uia` on the current code is still pending. The decision keeps the default behaviour and needs no new configuration. Its cost is that nothing stops a long session from growing: the operator ends or purges the session instead.
+Two structures have no constant bound, and their bounds are conditional on evidence counts. The journal grows with the session's effect-bearing results. The accessibility union grows with repeated truncated reads. An operator who runs long sessions with many effects or truncated reads should expect growth, which the state audit measures offline. Entry counts do not bound request strings, allocator overhead, model memory or RSS; bytes and live resources are measured separately. PERF-03 with `uia` on `1c46b87` completed on 2026-10-17 ([S0 §18](../thesis/S0_RESULTADOS.md)); its handle criterion failed, the icon cache was inactive, and box 7 remains unticked. The decision keeps the default behaviour and needs no new configuration. Its cost is that nothing stops a long session from growing: the operator ends or purges the session instead.
 
 ## Required validation
 
