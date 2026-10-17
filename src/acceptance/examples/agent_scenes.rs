@@ -700,6 +700,29 @@ mod tests {
         }
     }
 
+    /// SHA-256 of the bytes this example writes. `tools/agent/subq_decisions.py` refuses to
+    /// send anything unless the scenes it generated hash to the same value, so a change to the
+    /// generator that does not update both places fails here or in that tool's tests.
+    const PINNED_SCENES_SHA256: &str =
+        "c2cdafd6e4aab2cfc6bdf3d8570d3c2961eb5959ec1700ed2b2a09e34a4b43e4";
+
+    #[test]
+    fn ag_01_the_scenes_match_the_pinned_hash() {
+        use std::fmt::Write as _;
+
+        use sha2::{Digest, Sha256};
+
+        let digest = Sha256::digest(render().unwrap().as_bytes());
+        let hex = digest.iter().fold(String::new(), |mut hex, byte| {
+            write!(hex, "{byte:02x}").expect("writing to a String does not fail");
+            hex
+        });
+        assert_eq!(
+            hex, PINNED_SCENES_SHA256,
+            "the scenes changed: update PINNED_SCENES_SHA256 here and in tools/agent/subq_decisions.py"
+        );
+    }
+
     #[test]
     fn ag_01_an_unresolvable_goal_is_an_error_not_a_guess() {
         let page = json!({"elements": [{"target_id": "e1", "role": "button", "label": "Save"}]});

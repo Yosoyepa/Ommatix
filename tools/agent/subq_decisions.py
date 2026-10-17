@@ -25,10 +25,12 @@ printed, logged or written. Standard library only.
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -44,6 +46,19 @@ DEFAULT_BASE_URL = "https://api.subq.ai"
 LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
 ENDPOINT = "/v1/systemone"
 GENERATOR_TIMEOUT_SECONDS = 1800
+# SHA-256 of the bytes `agent_scenes` writes. The scenes are deterministic, so the tool sends
+# nothing unless what it generated hashes to this value (every loaded artefact is pinned, as in
+# ADR-0021). The Rust test `ag_01_the_scenes_match_the_pinned_hash` pins the same value: a
+# change to the generator that does not update both places fails CI.
+PINNED_SCENES_SHA256 = "c2cdafd6e4aab2cfc6bdf3d8570d3c2961eb5959ec1700ed2b2a09e34a4b43e4"
+# What the generator subprocess may see of the caller's environment; everything else (runners,
+# wrappers, flags, target directories) is dropped.
+ENVIRONMENT_ALLOWLIST = frozenset({
+    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "USERPROFILE", "HOME", "HOMEDRIVE",
+    "HOMEPATH", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)",
+    "PROGRAMW6432", "CARGO_HOME", "RUSTUP_HOME", "TEMP", "TMP", "TMPDIR",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+})
 KEY_ENV = "SUBQ_API_KEY"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RETRY_DELAY_SECONDS = 5.0
@@ -73,31 +88,55 @@ class Refusal(Exception):
 
 
 def generator_command(out):
-    """The repository's own scene generator, exactly; nothing here comes from the caller."""
-    return ["cargo", "run", "--locked", "--quiet", "-p", "ommatix-acceptance",
+    """The repository's own scene generator, exactly; nothing here comes from the caller.
+    `--frozen` is `--locked` and `--offline`: the lock file is not touched and nothing is
+    downloaded, so neither the run nor `--plan` can reach a network."""
+    return ["cargo", "run", "--frozen", "--quiet", "-p", "ommatix-acceptance",
             "--example", "agent_scenes", "--", "--out", str(out)]
 
 
+def minimal_environment(environ):
+    """The caller's environment reduced to what a build needs to find its tools."""
+    return {name: value for name, value in environ.items()
+            if name.upper() in ENVIRONMENT_ALLOWLIST}
+
+
 def run_generator(out):
-    """Runs the generator from the checkout this file lives in; its output is `out`."""
+    """Runs the generator from the checkout this file lives in; its output is `out`. The
+    program is resolved once to an absolute path and runs with a minimal environment. Neither
+    makes the output trustworthy (that is the pin); they keep the usual overrides out."""
+    program = shutil.which("cargo")
+    if program is None:
+        raise Refusal("cargo was not found on PATH; it builds the scene generator")
+    command = [program] + generator_command(out)[1:]
     try:
-        done = subprocess.run(generator_command(out), cwd=REPO_ROOT, stdout=subprocess.DEVNULL,
-                              check=False, timeout=GENERATOR_TIMEOUT_SECONDS)
+        done = subprocess.run(command, cwd=REPO_ROOT, env=minimal_environment(os.environ),
+                              stdout=subprocess.DEVNULL, check=False,
+                              timeout=GENERATOR_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError) as error:
         raise Refusal(f"cannot run the scene generator: {type(error).__name__}") from None
     if done.returncode != 0:
         raise Refusal(f"the scene generator failed (exit {done.returncode})")
 
 
-def generate_scenes(generate=run_generator):
+def generate_scenes(generate=run_generator, pinned=PINNED_SCENES_SHA256):
     """(scenes, raw bytes) of a fresh run of the generator in a temporary directory that
-    lies outside the checkout and is gone afterwards."""
+    lies outside the checkout and is gone afterwards. The bytes must hash to `pinned` before
+    anything reads them: the pin is what makes them the canonical synthetic scenes."""
     with tempfile.TemporaryDirectory(prefix="ag01-") as directory:
         if inside_checkout(directory):
             raise Refusal("refusing to generate the scenes inside the git checkout")
         out = Path(directory) / "scenes.json"
         generate(out)
-        return load_scenes(out), out.read_bytes()
+        try:
+            raw = out.read_bytes()
+        except OSError as error:
+            raise Refusal(f"cannot read the generated scenes: {error.strerror}") from None
+        if hashlib.sha256(raw).hexdigest() != pinned:
+            raise Refusal("the generated scenes do not match the pinned SHA-256 of the "
+                          "repository's scenes; nothing is sent (the pin is in the tool and in "
+                          "the agent_scenes test)")
+        return load_scenes(out), raw
 
 
 def load_scenes(path):
@@ -293,7 +332,8 @@ def check_base_url(url):
 
 def post(base_url, key, body):
     """One POST; the reply of any HTTP status (a redirect is returned, never followed), a
-    Refusal on a transport failure. Nothing raised here carries the key."""
+    Refusal on a transport failure. No proxy is ever used, whatever the environment says, so
+    the key goes to the base URL's host and nowhere else. Nothing raised here carries the key."""
     try:
         request = urllib.request.Request(
             base_url.rstrip("/") + ENDPOINT,
@@ -301,7 +341,7 @@ def post(base_url, key, body):
             method="POST",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         )
-        opener = urllib.request.build_opener(_NoRedirect)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
         with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
             status, raw = response.status, response.read()
     except urllib.error.HTTPError as error:
@@ -355,6 +395,15 @@ def billed_tokens(reply):
     return tokens
 
 
+def charge_reported(state, reply):
+    """A charge reported on a reply that is not a 200 (a 429 or a 503 that did bill) counts
+    too. A 200 is handled by `run` with stricter rules."""
+    if reply.status != 200:
+        tokens = billed_tokens(reply)
+        if tokens is not None:
+            state.used += tokens
+
+
 class RunState:
     """What a run has produced so far; the report is written from it however the run ends."""
 
@@ -377,9 +426,16 @@ def run(state, scenes, max_input_tokens, base_url, key, sleep=time.sleep):
             return
         try:
             reply = post(base_url, key, body)
+            charge_reported(state, reply)
             if reply.status in RETRY_STATUSES:
                 sleep(RETRY_DELAY_SECONDS)
+                remaining = max_input_tokens - state.used
+                if estimate > remaining:
+                    state.stopped = (f"budget: the retry is estimated at {estimate} tokens "
+                                     f"and {max(remaining, 0)} remain")
+                    return
                 reply = post(base_url, key, body)
+                charge_reported(state, reply)
         except Refusal as error:
             state.stopped = str(error)
             return
@@ -478,9 +534,10 @@ def summarize(results):
     }
 
 
-def report(results, used, max_input_tokens, stopped, base_url):
+def report(results, used, max_input_tokens, stopped, base_url, interrupted=False):
     return {
         "experiment": "AG-01",
+        "status": "interrupted" if interrupted else ("stopped" if stopped else "complete"),
         "synthetic": True,
         "model": MODEL,
         "base_url": base_url,
@@ -530,12 +587,12 @@ def plan(scenes, max_input_tokens):
     }
 
 
-def main(argv=None, sleep=time.sleep, generate=run_generator):
+def main(argv=None, sleep=time.sleep, generate=run_generator, pinned=PINNED_SCENES_SHA256):
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
         if args.scenes_out is not None and inside_checkout(args.scenes_out):
             raise Refusal("refusing a --scenes-out path inside the git checkout")
-        scenes, raw = generate_scenes(generate)
+        scenes, raw = generate_scenes(generate, pinned)
         if args.scenes_out is not None:
             try:
                 args.scenes_out.write_bytes(raw)
@@ -548,20 +605,28 @@ def main(argv=None, sleep=time.sleep, generate=run_generator):
             raise Refusal("refusing an --out path inside the git checkout")
         key = read_key(args.key_file)
         state = RunState()
+        interrupted = False
         try:
             run(state, scenes, args.max_input_tokens, args.base_url, key, sleep)
+        except KeyboardInterrupt:
+            interrupted = True
+            state.stopped = "interrupted by the operator"
         except Exception as error:  # a bug: say its type only, the text could carry the header
             state.stopped = f"unexpected {type(error).__name__}; details withheld"
         text = json.dumps(report(state.results, state.used, args.max_input_tokens,
-                                 state.stopped, args.base_url), indent=2, ensure_ascii=False) + "\n"
+                                 state.stopped, args.base_url, interrupted),
+                          indent=2, ensure_ascii=False) + "\n"
         try:
             args.out.write_text(text, encoding="utf-8")
         except OSError as error:
             raise Refusal(f"cannot write the report: {error.strerror}") from None
         if state.stopped:
             print(f"stopped early: {state.stopped}", file=sys.stderr)
-            return 1
+            return 130 if interrupted else 1
         return 0
+    except KeyboardInterrupt:  # before any request was sent: nothing was paid for
+        print("subq_decisions: interrupted", file=sys.stderr)
+        return 130
     except Refusal as error:
         print(f"subq_decisions: {error}", file=sys.stderr)
         return 2

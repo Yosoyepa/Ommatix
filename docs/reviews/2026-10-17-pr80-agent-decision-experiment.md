@@ -132,3 +132,107 @@ but [("button", "OK")] achieves it`.
 and `tools/agent` (58 tests, of which 14 failed on the reviewed code before the fixes), and the
 thesis checks. The real generator was run through the tool's `--plan` (25 requests, about 12.9
 thousand estimated input tokens); the API was not called.
+
+# Round 2: the re-review of `73a073e`
+
+A second read-only review (Codex, extra-high effort) confirmed that findings 2, 3 (ordinary paths), 4
+(redirects), 5 (ordinary paths) and 6 were fixed, and reported one P1, two P2 and one P3, plus a
+conditional billing note and a wording inconsistency. It also recomputed both result summaries of
+chapter 09 §9.10 from the raw files and found them exact. Every item below has a regression test that
+failed on `73a073e` and passes now. The recorded results stay valid: the SHA-256 of the scenes the
+fixed tool generates equals that of the scenes of the first valid run
+(`c2cdafd6e4aab2cfc6bdf3d8570d3c2961eb5959ec1700ed2b2a09e34a4b43e4`).
+
+## R2-1. P1: inherited Cargo configuration still substituted the generator
+
+**Finding.** The subprocess inherited the caller's environment, resolved a bare `cargo` from `PATH`
+and used Cargo's runners and target directory. A `CARGO_TARGET_<triple>_RUNNER`, a shadowing
+`cargo` or a planted `agent_scenes` artefact could write a well-shaped scene with real labels, and
+those labels became the next request. Fixing the working directory and `--locked` authenticates
+nothing.
+
+**Resolution (architect's decision).** The scenes are deterministic, so their output is pinned. The
+SHA-256 of the canonical bytes is a constant in the tool (`PINNED_SCENES_SHA256`) and in a test of the
+generator (`ag_01_the_scenes_match_the_pinned_hash`); the tool hashes what it generated before
+anything reads it, and refuses (no request built) unless it matches, the same idea as ADR-0021. A
+change to the generator that does not update both constants fails CI. Additionally `cargo` runs with
+`--frozen` (locked and offline), resolved once with `shutil.which` to an absolute path, and with a
+minimal environment (an allow-list: `PATH`, system and user directories, `CARGO_HOME`, `RUSTUP_HOME`,
+temporary directories); every runner, wrapper, flag and target-directory override is dropped. A private
+target directory is not needed once the output is pinned. ADR-0033 states the threat model: the pin
+prevents the tool from sending anything but the canonical synthetic scenes, and a compromised
+operator machine is out of scope.
+
+**Regression tests** (`ProductionProvenance`, production generation path, no test seam; 6 of them
+failed on `73a073e`): `test_a_shadowed_cargo_that_writes_a_canary_scene_is_refused_and_no_request_is_built`
+(a fake `cargo` first on `PATH` writes a well-shaped scene with a canary label; `build_request` and
+`post` are guarded to fail if reached),
+`test_a_canary_runner_and_other_cargo_overrides_never_reach_the_subprocess` (a fake `cargo` records the
+names of the variables it received while the runner, wrapper, flags and target-directory variables are
+set; none arrives),
+`test_a_planted_artifact_with_a_well_shaped_scene_is_refused_by_the_pin`,
+`test_cargo_is_resolved_to_an_absolute_path_with_a_minimal_environment`,
+`test_without_cargo_the_tool_refuses_with_a_fixed_message`,
+`test_the_pin_in_the_tool_is_the_pin_the_generator_test_asserts`. The Rust test
+`ag_01_the_scenes_match_the_pinned_hash` pins the same value on the generator side.
+
+## R2-2. P2: a proxy could receive the bearer key in clear text
+
+**Finding.** The default opener honours proxy variables, so with `http_proxy` set, a base URL of
+`http://127.0.0.1:8000` was sent to the proxy, key included.
+
+**Resolution.** The opener uses `ProxyHandler({})` for every request: the connection goes to the base
+URL's host and nowhere else.
+
+**Regression test** (`Proxies`): `test_the_destination_is_the_base_url_host_even_with_proxy_variables`
+(proxy variables set; the connection class is replaced by one that records its destination and raises
+before any socket; the destination must be `127.0.0.1:8123`).
+
+## R2-3. P2: an interruption discarded completed, paid results
+
+**Finding.** `KeyboardInterrupt` is not an `Exception`, so Ctrl+C during the second request left no
+report.
+
+**Resolution.** `main` catches it, finalises the report from the accumulated `RunState` with
+`"status": "interrupted"` (the report now carries `status`: `complete`, `stopped` or `interrupted`)
+and exits 130. An interrupt before any request was sent writes nothing and exits 130.
+
+**Regression tests** (`Interruption`): `test_an_interrupt_on_the_second_request_writes_the_first_result`
+(the interrupt escaped on `73a073e`), `test_a_finished_run_says_it_is_complete`,
+`test_a_run_that_stops_says_so`.
+
+## R2-4. P3: `--plan` could permit network access through Cargo
+
+**Finding.** `--plan` generated the scenes with `--locked`, which does not stop a download on an
+incomplete dependency cache, although it advertises no network.
+
+**Resolution.** The generator always runs with `--frozen` (locked and offline), so `"network": false`
+holds by construction.
+
+**Regression tests** (`Offline`): `test_the_generator_runs_frozen_so_planning_cannot_touch_the_network`,
+`test_plan_reports_no_network_by_construction`.
+
+## R2-5. Conditional: a charge reported on a 429 or 503 was discarded
+
+**Finding.** The accounting assumed that non-200 replies are unbilled. A 429 carrying a valid
+`usage.input_tokens` was dropped before the retry, so a retry could pass the budget. The review did not
+establish that SubQ bills such replies.
+
+**Resolution.** A valid charge reported on any reply counts toward `used`, and a retry is sent only if
+its estimate still fits the remainder.
+
+**Regression tests** (`ChargeOnAnyReply`): `test_a_billed_429_counts_and_can_forbid_the_retry`,
+`test_a_billed_503_counts_toward_the_total` (both failed on `73a073e`),
+`test_a_429_without_usage_is_still_retried`.
+
+## R2-6. Wording
+
+The changelog said that the six defects were corrected before anything was executed against the API,
+while two earlier executions had been discarded. It now says "before the valid runs".
+
+## Checks (round 2)
+
+`cargo fmt`, both `clippy` runs, `cargo test --workspace` (the example has 10 tests), the Python
+suites of `tools/s4`, `tools/perf`, `tools/repro` and `tools/agent` (73 tests), `run_tests.py` and the
+validator. `--plan` through the production path (`--frozen`, minimal environment, pin) gives 25
+requests and about 12.9 thousand estimated tokens. The API was not called.

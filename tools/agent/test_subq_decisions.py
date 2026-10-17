@@ -1,9 +1,13 @@
 """AG-01 tool tests. They talk to a fake server on 127.0.0.1 and never to the network."""
 
 import contextlib
+import hashlib
 import io
 import json
+import os
+import re
 import socket
+import sys
 import tempfile
 import threading
 import unittest
@@ -129,7 +133,8 @@ class Case(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             try:
-                code = tool.main(list(argv), sleep=self.sleeps.append, generate=self.generate)
+                code = tool.main(list(argv), sleep=self.sleeps.append, generate=self.generate,
+                                 pinned=hashlib.sha256(self.generated.encode()).hexdigest())
             except SystemExit as exit_:
                 code = exit_.code
         return code, out.getvalue(), err.getvalue()
@@ -197,26 +202,30 @@ class GeneratedScenes(Case):
     def test_the_generator_command_is_fixed_and_locked(self):
         out = Path("somewhere") / "scenes.json"
         self.assertEqual(tool.generator_command(out), [
-            "cargo", "run", "--locked", "--quiet", "-p", "ommatix-acceptance",
+            "cargo", "run", "--frozen", "--quiet", "-p", "ommatix-acceptance",
             "--example", "agent_scenes", "--", "--out", str(out)])
 
     def test_the_generator_runs_from_the_checkout_the_tool_lives_in(self):
         done = mock.Mock(returncode=0)
-        with mock.patch.object(tool.subprocess, "run", return_value=done) as run:
+        with mock.patch.object(tool.shutil, "which", return_value="/opt/rust/cargo"), \
+                mock.patch.object(tool.subprocess, "run", return_value=done) as run:
             tool.run_generator(self.dir / "scenes.json")
         command = run.call_args.args[0]
-        self.assertEqual(command, tool.generator_command(self.dir / "scenes.json"))
+        self.assertEqual(command[0], "/opt/rust/cargo")
+        self.assertEqual(command[1:], tool.generator_command(self.dir / "scenes.json")[1:])
         self.assertEqual(run.call_args.kwargs["cwd"], tool.REPO_ROOT)
         self.assertEqual(tool.REPO_ROOT, Path(tool.__file__).resolve().parents[2])
         self.assertTrue((tool.REPO_ROOT / "Cargo.toml").exists())
 
     def test_a_failing_generator_is_a_fixed_refusal(self):
         done = mock.Mock(returncode=101)
-        with mock.patch.object(tool.subprocess, "run", return_value=done):
+        with mock.patch.object(tool.shutil, "which", return_value="cargo"), \
+                mock.patch.object(tool.subprocess, "run", return_value=done):
             with self.assertRaises(tool.Refusal) as caught:
                 tool.run_generator(self.dir / "scenes.json")
         self.assertIn("exit 101", str(caught.exception))
-        with mock.patch.object(tool.subprocess, "run", side_effect=FileNotFoundError("cargo")):
+        with mock.patch.object(tool.shutil, "which", return_value="cargo"), \
+                mock.patch.object(tool.subprocess, "run", side_effect=FileNotFoundError("cargo")):
             with self.assertRaises(tool.Refusal) as caught:
                 tool.run_generator(self.dir / "scenes.json")
         self.assertIn("FileNotFoundError", str(caught.exception))
@@ -700,6 +709,201 @@ class PartialResults(Case):
         self.assertEqual(report["budget"]["used_input_tokens"], 100)
         self.assertEqual(len(report["results"]), 1)
         self.assertEqual(self.sleeps, [5.0])
+
+
+def install_fake_cargo(directory, scenes_text, env_dump=None):
+    """A `cargo` that ignores everything and writes `scenes_text` to its last argument (the
+    --out of the generator), optionally recording the names of the variables it was given."""
+    directory = Path(directory)
+    script = directory / "fake_cargo.py"
+    script.write_text(
+        "import json, os, sys\n"
+        f"dump = {str(env_dump)!r}\n"
+        "if dump != 'None':\n"
+        "    json.dump(sorted(os.environ), open(dump, 'w'))\n"
+        f"open(sys.argv[-1], 'w', encoding='utf-8').write({scenes_text!r})\n",
+        encoding="utf-8")
+    if os.name == "nt":
+        launcher = directory / "cargo.cmd"
+        launcher.write_text(f'@"{sys.executable}" "{script}" %*\r\n', encoding="utf-8")
+    else:
+        launcher = directory / "cargo"
+        launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+        launcher.chmod(0o755)
+    return launcher
+
+
+CANARY = "PRIVATE_DESKTOP_VALUE_CANARY"
+
+
+class ProductionProvenance(Case):
+    """Review round 2, finding 1: the production generation path cannot be made to send
+    anything but the canonical scenes (a runner, a shadowed cargo or a planted artifact)."""
+
+    def canary_scenes(self):
+        return generated_file([scene()]).replace("Cancel", CANARY)
+
+    def production_main(self, extra_env=None):
+        """The real generation path (no seam), with a would-be request guarded."""
+        out = self.dir / "report.json"
+        env = {"PATH": f"{self.dir}{os.pathsep}{os.environ['PATH']}"}
+        env.update(extra_env or {})
+        with mock.patch.dict("os.environ", env), \
+                mock.patch.object(tool, "build_request", side_effect=AssertionError("request")), \
+                mock.patch.object(tool, "post", side_effect=AssertionError("network")):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = tool.main(["--max-input-tokens", "100000", "--out", str(out)],
+                                 sleep=self.sleeps.append)
+        return code, stdout.getvalue() + stderr.getvalue(), out
+
+    def test_a_shadowed_cargo_that_writes_a_canary_scene_is_refused_and_no_request_is_built(self):
+        install_fake_cargo(self.dir, self.canary_scenes())
+        code, text, out = self.production_main()
+        self.assertEqual(code, 2)
+        self.assertIn("do not match the pinned", text)
+        self.assertNotIn(CANARY, text)
+        self.assertFalse(out.exists())
+
+    def test_a_canary_runner_and_other_cargo_overrides_never_reach_the_subprocess(self):
+        dump = self.dir / "environment.json"
+        install_fake_cargo(self.dir, self.canary_scenes(), env_dump=dump)
+        poison = {
+            "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER": sys.executable,
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER": sys.executable,
+            "RUSTC_WRAPPER": sys.executable, "RUSTC_WORKSPACE_WRAPPER": sys.executable,
+            "RUSTFLAGS": "-Clinker=evil", "CARGO_ENCODED_RUSTFLAGS": "evil",
+            "CARGO_BUILD_RUSTFLAGS": "evil", "CARGO_BUILD_TARGET_DIR": "evil",
+            "CARGO_TARGET_DIR": "evil", "RUSTC": sys.executable,
+        }
+        code, _, _ = self.production_main(poison)
+        self.assertEqual(code, 2)
+        given = {name.upper() for name in json.loads(dump.read_text(encoding="utf-8"))}
+        for name in poison:
+            self.assertNotIn(name, given)
+        self.assertIn("PATH", given)
+
+    def test_a_planted_artifact_with_a_well_shaped_scene_is_refused_by_the_pin(self):
+        planted = self.canary_scenes()
+        with self.assertRaises(tool.Refusal) as caught:
+            tool.generate_scenes(lambda out: Path(out).write_text(planted, encoding="utf-8"))
+        self.assertNotIn(CANARY, str(caught.exception))
+        self.assertIn("do not match the pinned", str(caught.exception))
+
+    def test_cargo_is_resolved_to_an_absolute_path_with_a_minimal_environment(self):
+        done = mock.Mock(returncode=0)
+        with mock.patch.dict("os.environ", {"RUSTC_WRAPPER": "evil", "KEEP_OUT": "1"}), \
+                mock.patch.object(tool.shutil, "which", return_value="/opt/rust/cargo") as which, \
+                mock.patch.object(tool.subprocess, "run", return_value=done) as run:
+            tool.run_generator(self.dir / "scenes.json")
+        which.assert_called_once()
+        self.assertEqual(run.call_args.args[0][0], "/opt/rust/cargo")
+        self.assertNotIn("RUSTC_WRAPPER", run.call_args.kwargs["env"])
+        self.assertNotIn("KEEP_OUT", run.call_args.kwargs["env"])
+        self.assertIn("PATH", run.call_args.kwargs["env"])
+
+    def test_without_cargo_the_tool_refuses_with_a_fixed_message(self):
+        with mock.patch.object(tool.shutil, "which", return_value=None):
+            with self.assertRaises(tool.Refusal) as caught:
+                tool.run_generator(self.dir / "scenes.json")
+        self.assertIn("cargo", str(caught.exception))
+
+    def test_the_pin_in_the_tool_is_the_pin_the_generator_test_asserts(self):
+        source = (tool.REPO_ROOT / "src" / "acceptance" / "examples" / "agent_scenes.rs")
+        match = re.search(r'PINNED_SCENES_SHA256: &str =\s*"([0-9a-f]{64})"',
+                          source.read_text(encoding="utf-8"))
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), tool.PINNED_SCENES_SHA256)
+
+
+class Offline(Case):
+    def test_the_generator_runs_frozen_so_planning_cannot_touch_the_network(self):
+        command = tool.generator_command(self.dir / "scenes.json")
+        self.assertIn("--frozen", command)
+        self.assertNotIn("--locked", command)
+
+    def test_plan_reports_no_network_by_construction(self):
+        code, out, _ = self.main("--max-input-tokens", "1000", "--plan")
+        self.assertEqual(code, 0)
+        self.assertFalse(json.loads(out)["network"])
+
+
+class Proxies(Case):
+    """Review round 2, finding 2: ambient proxies never see the key."""
+
+    def test_the_destination_is_the_base_url_host_even_with_proxy_variables(self):
+        seen = []
+
+        def connect(connection):
+            seen.append((connection.host, connection.port))
+            raise OSError("no socket in this test")
+
+        proxies = {"http_proxy": "http://untrusted.invalid:8080",
+                   "https_proxy": "http://untrusted.invalid:8080",
+                   "ALL_PROXY": "http://untrusted.invalid:8080",
+                   "NO_PROXY": "", "no_proxy": ""}
+        with mock.patch.dict("os.environ", proxies), \
+                mock.patch.object(tool.http.client.HTTPConnection, "connect", connect):
+            with self.assertRaises(tool.Refusal):
+                tool.post("http://127.0.0.1:8123", KEY, {"a": 1})
+        self.assertEqual(seen, [("127.0.0.1", 8123)])
+
+
+class Interruption(Case):
+    """Review round 2, finding 3: Ctrl+C keeps what was paid for."""
+
+    def test_an_interrupt_on_the_second_request_writes_the_first_result(self):
+        first = tool.Reply(200, answer(tokens=100))
+        with FakeServer([answer()]) as server:
+            with mock.patch.object(tool, "post", side_effect=[first, KeyboardInterrupt()]):
+                code, report, _, err = self.run_against(server)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(report["status"], "interrupted")
+        self.assertEqual(len(report["results"]), 1)
+        self.assertEqual(report["budget"]["used_input_tokens"], 100)
+        self.assertIn("interrupted", err)
+
+    def test_a_finished_run_says_it_is_complete(self):
+        with FakeServer([answer()]) as server:
+            _, report, _, _ = self.run_against(server)
+        self.assertEqual(report["status"], "complete")
+
+    def test_a_run_that_stops_says_so(self):
+        with FakeServer([(401, {"detail": {"error_type": "auth_error"}})]) as server:
+            _, report, _, _ = self.run_against(server)
+        self.assertEqual(report["status"], "stopped")
+
+
+class ChargeOnAnyReply(Case):
+    """Review round 2, finding 5: a charge reported on a 429/503 is honoured before a retry."""
+
+    def first_estimate(self):
+        return tool.estimate_tokens(tool.build_request(scene(), scene()["goals"][0]["goal"]))
+
+    def test_a_billed_429_counts_and_can_forbid_the_retry(self):
+        estimate = self.first_estimate()
+        limited = (429, {"detail": {"error_type": "rate_limit"},
+                         "usage": {"input_tokens": estimate}})
+        with FakeServer([limited, answer(tokens=estimate)]) as server:
+            code, report, _, _ = self.run_against(server, budget=estimate)
+        self.assertEqual(len(server.requests), 1)
+        self.assertEqual(code, 1)
+        self.assertEqual(report["budget"]["used_input_tokens"], estimate)
+        self.assertIn("budget", report["budget"]["stopped"])
+
+    def test_a_billed_503_counts_toward_the_total(self):
+        limited = (503, {"detail": {"error_type": "unavailable"}, "usage": {"input_tokens": 77}})
+        with FakeServer([limited, answer(tokens=100)]) as server:
+            _, report, _, _ = self.run_against(server)
+        self.assertEqual(report["budget"]["used_input_tokens"], 77 + 100 * 4)
+
+    def test_a_429_without_usage_is_still_retried(self):
+        limited = (429, {"detail": {"error_type": "rate_limit"}})
+        with FakeServer([limited, answer()]) as server:
+            code, report, _, _ = self.run_against(server)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.sleeps[0], 5.0)
+        self.assertEqual(len(report["results"]), 4)
 
 
 if __name__ == "__main__":
