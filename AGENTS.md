@@ -195,8 +195,11 @@ python tools/perf/measure_latency.py --variant NAME=EXE,CONFIG ... --out perf.js
 python tools/perf/soak.py --config CONFIG --minutes 120 --out soak.json  # PERF-03 / RNF-06: resources and 2 h soak, Windows, no input; the test app must be in front (S4_SESIONES_PENDIENTES.md B)
 python tools/perf/dpi_probe.py --config CONFIG --out dpi-probe.json  # IT-07: DPI per session, read only; never changes the scaling (S4_SESIONES_PENDIENTES.md C)
 cargo run --release -p ommatix-acceptance --example core_latency -- --out perf01.json  # PERF-01: the core on 300 controls and 600 spans, no screen (S0_RESULTADOS.md §11)
+cargo run -p ommatix-acceptance --example agent_scenes -- --out scenes.json  # AG-01: the synthetic scenes of the offline agent-decision experiment, no screen (ADR-0033, chapter 09 §9.10); the tool below runs it itself
+python tools/agent/subq_decisions.py --max-input-tokens N --plan  # AG-01: operator-side; it generates its own synthetic scenes (offline, pinned by SHA-256) and takes no scenes file; drop --plan and add --key-file and --out (outside the checkout) to call the model
 python tools/repro/environment.py --out environment.json  # REL-01: commit, toolchain, lockfiles, machine and pinned artefacts (S4_REPRODUCIBILIDAD.md)
 python -m unittest discover -s tools/repro -p "test_*.py"  # REL-01 helper tests
+python -m unittest discover -s tools/agent -p "test_*.py"  # AG-01 tool tests (fake server on 127.0.0.1, no network)
 cargo clippy -p ommatix --features screen,native-input --all-targets -- -D warnings  # when touching capture/input
 cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia --all-targets -- -D warnings  # on Windows (CI job `windows`)
 cargo test -p ommatix-adapter-capture --features dxgi -- --ignored                   # manual: one DXGI frame, never saved
@@ -272,4 +275,4 @@ element-level keyboard focus (0018) and the perception stages of one observation
 concurrently on scoped threads (0019), the operator's scope on windows (0020) and every
 loaded artefact pinned before anything loads, with screen and agent text kept out of errors
 (0021) and the supervised test clients' point grounding before every click, with a closed
-list of navigating clicks decided by the operating system's state (0022), and the age bound of every authorisation, the snapshot's and the accessibility evidence's, checked at every real-input boundary (0025, accepted on 2026-10-15), and optional target-window freshness with whole-frame geometry and window-group identity checks, off by default, with refusal counts in MCP `_meta` only (0032, accepted on 2026-10-15).
+list of navigating clicks decided by the operating system's state (0022), and the age bound of every authorisation, the snapshot's and the accessibility evidence's, checked at every real-input boundary (0025, accepted on 2026-10-15), and optional target-window freshness with whole-frame geometry and window-group identity checks, off by default, with refusal counts in MCP `_meta` only (0032, accepted on 2026-10-15), and an external decision model only in an offline experiment on pinned synthetic scenes, never on live observations and never as a safety mechanism (0033, accepted on 2026-10-17).
