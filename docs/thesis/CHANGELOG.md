@@ -1,5 +1,11 @@
 # Historial documental
 
+## 1.0.87 — 2026-10-17: experimento exploratorio de un agente de decisiones externo (AG-01, ADR-0033 propuesta)
+
+Se añade al capítulo 09 el apartado 9.10: un experimento exploratorio, fuera del producto, en el que un modelo de decisión externo (SubQ, `subq-snap-preview`) elige el `target_id` de una meta sobre el contrato Ommatix 1.0, con tres preguntas por meta (`target`, `achievable`, `injection`), un presupuesto obligatorio de tokens de entrada y un informe que contrasta sus errores con el resultado de la puerta del motor. Las escenas las genera el repositorio (`src/acceptance/examples/agent_scenes.rs`, 5 escenas y 26 metas sobre el simulador y los fixtures); la herramienta (`tools/agent/subq_decisions.py`) se niega a leer cualquier archivo que no sea sintético y de ese generador. [ADR-0033](../adr/0033-external-decision-model-for-offline-agent-experiments.md), propuesta y sin decidir, fija las condiciones: solo escenas sintéticas, nunca observaciones reales (ADR-0012), nunca en el binario ni en CI con red, nunca como mecanismo de seguridad (ADR-0007).
+
+AG-01 es exploratorio: no entra en `plan_pruebas.csv` ni en las matrices, no es un criterio de §6.7 y la tabla de resultados queda «pendiente de ejecución por el arquitecto». No se ha llamado a la API, ni capturado pantalla, ni enviado entrada; ningún estado de requisito ni casilla de §6.7 cambia.
+
 ## 1.0.86 — 2026-10-16: lista blanca de texto crudo para no normalizar el anclaje M2 (tercera revisión del PR #79)
 
 La revisión de `5ef4fb1` detectó que `window_pin_file = 'pin\'` perdía el separador final al pasar por `pathlib`: el original no podía abrir un archivo regular de anclaje y denegaba, pero la copia podía leerlo y autorizar. Por decisión del arquitecto, se elimina toda biblioteca de rutas de la validación y construcción de los valores copiados. Una lista blanca sobre el texto crudo admite sólo absolutas estándar o relativas con componentes ASCII válidos, sin vacíos, puntos aislados, separador final, punto/espacio final ni caracteres especiales. Las absolutas permanecen idénticas y las relativas se forman por concatenación del directorio absoluto suministrado, una barra inversa y el valor sin reescribir.
