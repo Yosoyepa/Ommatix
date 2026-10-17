@@ -79,6 +79,9 @@ pub struct Track {
 pub enum IdentityError {
     #[error("association IoU threshold must be in (0, 1], got {0}")]
     InvalidMinIou(f64),
+    /// No new target ID can be issued while preserving the monotonic issued prefix.
+    #[error("target identifier space is exhausted")]
+    IdentifierExhausted,
 }
 
 /// How close an observation must stay to its track to keep the ID.
@@ -252,7 +255,10 @@ impl Registry {
                 }
             } else {
                 let id = TargetId(next.next_id);
-                next.next_id += 1;
+                next.next_id = next
+                    .next_id
+                    .checked_add(1)
+                    .ok_or(IdentityError::IdentifierExhausted)?;
                 delta.created.push(id);
                 Track {
                     target_id: id,

@@ -1,10 +1,12 @@
 # Historial documental
 
-## 1.0.87 — 2026-10-17: cotas de estado retenido y evidencia sintética de RNF-06
+## 1.0.88 — 2026-10-17: cotas de estado retenido y evidencia sintética de RNF-06
 
 Auditoría en `docs/reviews/2026-10-17-engine-state-bounds.md`, diagnóstico local bajo demanda y ejemplo `state_bounds --out PATH`: 20 000 intentos sin pantalla ni entrada, con churn, fallos inyectados y caché sintética. Se elimina el conjunto histórico de IDs retirados, derivando la misma clasificación desde el contador y los tracks actuales; se recortan las teselas pendientes al cuadro fallido. Regresiones fallan antes de cada corrección; dos diferenciales de 1 000 historias comparan clasificación/rechazos/no reutilización/purga y planes completos/regionales con sus regiones y teselas. El oráculo permanece independiente.
 
 La caché de prototipos y los payloads del diario se estiman por almacenamiento tipado/capacidades, no por RSS. El diario conserva los resultados con efectos: su cota es `1024 + D`, no 1024 para toda la sesión. La evidencia de accesibilidad puede crecer en lecturas truncadas sucesivas sin repintado; se conserva por seguridad. Las dos rutas tienen regresiones de crecimiento ignoradas y propuestas sin implementar en ADR-0034. S0 §17 publica la medida y los tiempos de PERF-01 antes/después; §6.7 conserva la casilla 7 sin marcar, propone la cota estructural al responsable (decisión 9) y mantiene pendiente el soak actual con `uia` (decisión 6). Ningún estado de requisito ni matriz cambia; no se afirma ausencia de fugas.
+
+Correcciones de revisión del PR #81: esta entrada y sus referencias pasan a **1.0.88**, reservando 1.0.87 para el PR #80 y conservando el orden de más reciente a más antigua al integrarlos. La equivalencia de identidad se limita a historias que no agotan el contador de 64 bits: el agotamiento ahora falla cerrado mediante aritmética comprobada, sin publicación ni consumo de IDs de candidatos descartados. Dos regresiones sembradas fallaron antes del arreglo tanto en debug (panic por overflow) como en release (contador envuelto a cero); comprueban ID retirado previo, último ID emitible, rechazo de una creación posterior, observaciones sin IDs nuevos y descarte de candidatos parcialmente asignados. La aplicación conserva su tratamiento existente de observación fallida y sus teselas pendientes; el oráculo y el contrato no cambian.
 
 ## 1.0.86 — 2026-10-16: lista blanca de texto crudo para no normalizar el anclaje M2 (tercera revisión del PR #79)
 

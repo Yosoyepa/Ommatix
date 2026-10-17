@@ -286,3 +286,69 @@ fn rnf_06_derived_retirement_matches_set_reference_over_1000_histories() {
         }
     }
 }
+
+fn registry_with_retired_id(next_id: u64) -> Registry {
+    let (registry, _) = Registry::new("s", 1)
+        .observe(
+            1,
+            &[observation(0, "retired")],
+            AssociationPolicy::default(),
+        )
+        .unwrap();
+    let (mut registry, _) = registry
+        .observe(1, &[], AssociationPolicy::default())
+        .unwrap();
+    assert!(registry.is_retired(TargetId(1)));
+    registry.next_id = next_id;
+    registry
+}
+
+#[test]
+fn rnf_06_identifier_exhaustion_rejects_creation_without_wrapping_or_reusing_ids() {
+    let registry = registry_with_retired_id(u64::MAX);
+    let before = registry.clone();
+    let result = registry.observe(1, &[observation(0, "new")], AssociationPolicy::default());
+    assert_eq!(result, Err(IdentityError::IdentifierExhausted));
+    assert_eq!(registry, before);
+    assert!(registry.is_retired(TargetId(1)));
+    assert!(!registry.is_retired(TargetId(u64::MAX)));
+    assert_eq!(registry.stored_identity_count(), 0);
+}
+
+#[test]
+fn rnf_06_identifier_exhaustion_discards_partially_allocated_candidates() {
+    // MAX is the exhausted next-ID sentinel; MAX - 1 is the final issuable ID.
+    let registry = registry_with_retired_id(u64::MAX - 1);
+    let before = registry.clone();
+    let observations = [observation(0, "a"), observation(30, "b")];
+    assert_eq!(
+        registry.observe(1, &observations, AssociationPolicy::default()),
+        Err(IdentityError::IdentifierExhausted)
+    );
+    assert_eq!(registry, before);
+    assert!(registry.is_retired(TargetId(1)));
+    assert!(!registry.is_retired(TargetId(u64::MAX - 1)));
+    assert!(registry.get(TargetId(u64::MAX - 1)).is_none());
+    // A failed candidate consumes no ID: committing just one candidate can still succeed.
+    let (last, changes) = registry
+        .observe(1, &observations[..1], AssociationPolicy::default())
+        .unwrap();
+    assert_eq!(changes.created, vec![TargetId(u64::MAX - 1)]);
+    assert_eq!(last.next_id, u64::MAX);
+    assert!(last.is_retired(TargetId(1)));
+    assert!(!last.is_retired(TargetId(u64::MAX - 1)));
+    // Existing tracks can still be observed without issuing another ID.
+    let (unchanged, changes) = last
+        .observe(1, &observations[..1], AssociationPolicy::default())
+        .unwrap();
+    assert_eq!(changes.created, vec![]);
+    assert_eq!(unchanged.next_id, u64::MAX);
+    assert_eq!(
+        last.observe(1, &observations, AssociationPolicy::default()),
+        Err(IdentityError::IdentifierExhausted)
+    );
+    assert_eq!(
+        last.get(TargetId(u64::MAX - 1)).unwrap().target_id,
+        TargetId(u64::MAX - 1)
+    );
+}
