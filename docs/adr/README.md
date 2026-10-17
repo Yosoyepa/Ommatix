@@ -57,7 +57,6 @@ continuity abstain with a new ID and a recorded reason. ADR-0027, accepted the s
 | [0030](0030-adaptive-full-or-regional-plan.md) | Choose between the full refresh and the regional plan with a measured cost rule (`adaptive_min_regions`), taking Algorithm 1's fallback earlier | Accepted (2026-10-15) |
 | [0031](0031-refuse-scaling-outside-the-dpi-profile.md) | Refuse a monitor scaling outside the dossier's DPI profile (100, 125, 150 %) with `UNSUPPORTED_GEOMETRY`, and carry the scaling with the frame | Accepted (2026-10-15) |
 | [0032](0032-freshness-scoped-to-the-target-window.md) | Scope the freshness check to the target window, behind a switch that stays off | Accepted (2026-10-15) |
-
 | [0034](0034-propose-fail-closed-retained-state-budgets.md) | Propose fail-closed budgets for retained session state | Proposed (2026-10-17); not implemented |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was

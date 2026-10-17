@@ -1,0 +1,355 @@
+{
+  "application_core": [
+    {
+      "elements_published": 604,
+      "observe_screen_wall": {
+        "max_ms": 3.779,
+        "mean_ms": 2.324,
+        "min_ms": 1.782,
+        "n": 300,
+        "p50_ms": 1.893,
+        "p95_ms": 3.262,
+        "p99_ms": 3.636
+      },
+      "plan_fuse_track": {
+        "max_ms": 3.512,
+        "mean_ms": 2.265,
+        "min_ms": 1.748,
+        "n": 300,
+        "p50_ms": 1.855,
+        "p95_ms": 3.197,
+        "p99_ms": 3.481
+      },
+      "situation": "cold_full_refresh",
+      "stage_capture_double": {
+        "max_ms": 0.0,
+        "mean_ms": 0.0,
+        "min_ms": 0.0,
+        "n": 300,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "p99_ms": 0.0
+      },
+      "stage_fuse": {
+        "max_ms": 2.614,
+        "mean_ms": 1.713,
+        "min_ms": 1.334,
+        "n": 300,
+        "p50_ms": 1.39,
+        "p95_ms": 2.412,
+        "p99_ms": 2.584
+      },
+      "stage_plan": {
+        "max_ms": 0.111,
+        "mean_ms": 0.008,
+        "min_ms": 0.005,
+        "n": 300,
+        "p50_ms": 0.006,
+        "p95_ms": 0.017,
+        "p99_ms": 0.03
+      },
+      "stage_track": {
+        "max_ms": 0.889,
+        "mean_ms": 0.544,
+        "min_ms": 0.405,
+        "n": 300,
+        "p50_ms": 0.459,
+        "p95_ms": 0.78,
+        "p99_ms": 0.878
+      }
+    },
+    {
+      "elements_published": 604,
+      "observe_screen_wall": {
+        "max_ms": 4.431,
+        "mean_ms": 3.344,
+        "min_ms": 3.11,
+        "n": 300,
+        "p50_ms": 3.29,
+        "p95_ms": 3.695,
+        "p99_ms": 4.181
+      },
+      "plan_fuse_track": {
+        "max_ms": 4.301,
+        "mean_ms": 3.299,
+        "min_ms": 3.078,
+        "n": 300,
+        "p50_ms": 3.243,
+        "p95_ms": 3.617,
+        "p99_ms": 4.14
+      },
+      "situation": "warm_unchanged",
+      "stage_capture_double": {
+        "max_ms": 0.001,
+        "mean_ms": 0.0,
+        "min_ms": 0.0,
+        "n": 300,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "p99_ms": 0.001
+      },
+      "stage_fuse": {
+        "max_ms": 1.854,
+        "mean_ms": 1.395,
+        "min_ms": 1.331,
+        "n": 300,
+        "p50_ms": 1.357,
+        "p95_ms": 1.583,
+        "p99_ms": 1.722
+      },
+      "stage_plan": {
+        "max_ms": 1.767,
+        "mean_ms": 1.234,
+        "min_ms": 1.106,
+        "n": 300,
+        "p50_ms": 1.197,
+        "p95_ms": 1.453,
+        "p99_ms": 1.6
+      },
+      "stage_track": {
+        "max_ms": 0.894,
+        "mean_ms": 0.669,
+        "min_ms": 0.629,
+        "n": 300,
+        "p50_ms": 0.653,
+        "p95_ms": 0.744,
+        "p99_ms": 0.83
+      }
+    },
+    {
+      "elements_published": 604,
+      "observe_screen_wall": {
+        "max_ms": 6.65,
+        "mean_ms": 3.809,
+        "min_ms": 3.33,
+        "n": 300,
+        "p50_ms": 3.688,
+        "p95_ms": 4.608,
+        "p99_ms": 6.135
+      },
+      "plan_fuse_track": {
+        "max_ms": 6.527,
+        "mean_ms": 3.756,
+        "min_ms": 3.291,
+        "n": 300,
+        "p50_ms": 3.639,
+        "p95_ms": 4.538,
+        "p99_ms": 6.054
+      },
+      "situation": "warm_one_region",
+      "stage_capture_double": {
+        "max_ms": 0.001,
+        "mean_ms": 0.0,
+        "min_ms": 0.0,
+        "n": 300,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "p99_ms": 0.001
+      },
+      "stage_fuse": {
+        "max_ms": 2.579,
+        "mean_ms": 1.426,
+        "min_ms": 1.334,
+        "n": 300,
+        "p50_ms": 1.366,
+        "p95_ms": 1.707,
+        "p99_ms": 2.35
+      },
+      "stage_plan": {
+        "max_ms": 2.701,
+        "mean_ms": 1.624,
+        "min_ms": 1.271,
+        "n": 300,
+        "p50_ms": 1.582,
+        "p95_ms": 1.921,
+        "p99_ms": 2.514
+      },
+      "stage_track": {
+        "max_ms": 1.449,
+        "mean_ms": 0.707,
+        "min_ms": 0.634,
+        "n": 300,
+        "p50_ms": 0.671,
+        "p95_ms": 0.915,
+        "p99_ms": 1.22
+      }
+    }
+  ],
+  "domain_core": [
+    {
+      "algorithm_1_plan": {
+        "max_ms": 0.076,
+        "mean_ms": 0.015,
+        "min_ms": 0.005,
+        "n": 1000,
+        "p50_ms": 0.009,
+        "p95_ms": 0.037,
+        "p99_ms": 0.058
+      },
+      "core_total": {
+        "max_ms": 3.253,
+        "mean_ms": 1.786,
+        "min_ms": 1.52,
+        "n": 1000,
+        "p50_ms": 1.667,
+        "p95_ms": 2.814,
+        "p99_ms": 3.012
+      },
+      "fusion": {
+        "max_ms": 2.683,
+        "mean_ms": 1.459,
+        "min_ms": 1.264,
+        "n": 1000,
+        "p50_ms": 1.354,
+        "p95_ms": 2.3,
+        "p99_ms": 2.411
+      },
+      "identity": {
+        "max_ms": 0.995,
+        "mean_ms": 0.312,
+        "min_ms": 0.25,
+        "n": 1000,
+        "p50_ms": 0.285,
+        "p95_ms": 0.501,
+        "p99_ms": 0.581
+      },
+      "plan_decision": "full_refresh",
+      "situation": "cold_full_refresh",
+      "snapshot_commit": {
+        "max_ms": 0.0,
+        "mean_ms": 0.0,
+        "min_ms": 0.0,
+        "n": 1000,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "p99_ms": 0.0
+      }
+    },
+    {
+      "algorithm_1_plan": {
+        "max_ms": 2.83,
+        "mean_ms": 1.352,
+        "min_ms": 1.09,
+        "n": 1000,
+        "p50_ms": 1.234,
+        "p95_ms": 2.12,
+        "p99_ms": 2.466
+      },
+      "core_total": {
+        "max_ms": 6.867,
+        "mean_ms": 3.27,
+        "min_ms": 2.855,
+        "n": 1000,
+        "p50_ms": 3.069,
+        "p95_ms": 4.704,
+        "p99_ms": 5.641
+      },
+      "fusion": {
+        "max_ms": 2.852,
+        "mean_ms": 1.356,
+        "min_ms": 1.259,
+        "n": 1000,
+        "p50_ms": 1.288,
+        "p95_ms": 1.919,
+        "p99_ms": 2.299
+      },
+      "identity": {
+        "max_ms": 1.198,
+        "mean_ms": 0.544,
+        "min_ms": 0.481,
+        "n": 1000,
+        "p50_ms": 0.511,
+        "p95_ms": 0.794,
+        "p99_ms": 0.954
+      },
+      "plan_decision": "nothing",
+      "situation": "warm_unchanged",
+      "snapshot_commit": {
+        "max_ms": 0.104,
+        "mean_ms": 0.019,
+        "min_ms": 0.015,
+        "n": 1000,
+        "p50_ms": 0.016,
+        "p95_ms": 0.029,
+        "p99_ms": 0.044
+      }
+    },
+    {
+      "algorithm_1_plan": {
+        "max_ms": 3.105,
+        "mean_ms": 1.671,
+        "min_ms": 1.282,
+        "n": 1000,
+        "p50_ms": 1.582,
+        "p95_ms": 2.393,
+        "p99_ms": 2.617
+      },
+      "core_total": {
+        "max_ms": 6.475,
+        "mean_ms": 3.694,
+        "min_ms": 3.077,
+        "n": 1000,
+        "p50_ms": 3.466,
+        "p95_ms": 5.556,
+        "p99_ms": 5.946
+      },
+      "fusion": {
+        "max_ms": 2.563,
+        "mean_ms": 1.424,
+        "min_ms": 1.267,
+        "n": 1000,
+        "p50_ms": 1.307,
+        "p95_ms": 2.255,
+        "p99_ms": 2.354
+      },
+      "identity": {
+        "max_ms": 1.192,
+        "mean_ms": 0.577,
+        "min_ms": 0.489,
+        "n": 1000,
+        "p50_ms": 0.527,
+        "p95_ms": 0.935,
+        "p99_ms": 1.033
+      },
+      "plan_decision": "regions",
+      "situation": "warm_one_region",
+      "snapshot_commit": {
+        "max_ms": 0.115,
+        "mean_ms": 0.022,
+        "min_ms": 0.015,
+        "n": 1000,
+        "p50_ms": 0.019,
+        "p95_ms": 0.036,
+        "p99_ms": 0.051
+      }
+    }
+  ],
+  "environment": {
+    "arch": "x86_64",
+    "commit": "8587f4e9b414d36293dc67ed806d456ee5db03c3",
+    "dirty": true,
+    "logical_processors": 16,
+    "optimised": true,
+    "os": "windows",
+    "processor": "AMD64 Family 25 Model 33 Stepping 2, AuthenticAMD",
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)"
+  },
+  "method": {
+    "core_total": "plan + fusion + identity + stage and commit, timed as one block",
+    "domain_samples": 1000,
+    "engine_samples": 300,
+    "percentiles": "nearest rank over the samples after the warm-up",
+    "warmup": 50
+  },
+  "requirement": "RNF-04: p95 <= 10 ms for 300 controls and 600 spans, core only",
+  "scene": {
+    "controls": 300,
+    "frame": [
+      1920,
+      1080
+    ],
+    "spans": 600,
+    "tile_size": 64
+  },
+  "test": "PERF-01"
+}
