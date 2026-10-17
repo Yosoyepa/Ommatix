@@ -974,3 +974,132 @@ En `full`, B1 y AD sólo analizaron 66 y 70 observaciones (las que siguieron a u
 **Límites.** Un equipo, una aplicación sintética, un modelo y la animación de 30 ms; sin carga de CPU muestreada; las cifras de `full` de B1 y AD se apoyan en 66 y 70 observaciones; los intervalos del p95 son bootstrap sobre 40 procesos; el acuerdo es con B0 (que no es la verdad); la comparación con §13.11 es indicativa, no apareada.
 
 **Reproducir.** Desde la raíz del repositorio, con los dos ejecutables compilados y tres configuraciones que difieren sólo en `[engine] experimental_full_frame` y `[engine] adaptive_min_regions` (B0 `true`/`0`; B1 `false`/`0`; AD `false`/`2`): `python tools/perf/measure_latency.py --experiment-id EXPERIMENT --variant B0=EXE,B0.toml --variant B1=EXE,B1.toml --variant AD=EXE,AD.toml --allow-difference engine.experimental_full_frame --allow-difference engine.adaptive_min_regions --paired B0:B1 --paired B0:AD --paired B1:AD --processes 20 --cases CASE --out chunk.json` por caso (`incr1`, `incr2`, `full`) y trozo, y después `--combine`. Los percentiles con intervalo, los elementos publicados y los tramos de este apartado salen de un guion de lectura del informe combinado (no forma parte del repositorio; su método es el descrito arriba).
+
+
+## 17. RNF-06: estado retenido en simulación sin conexión (1.0.88)
+
+**Medición [V], 17 de octubre de 2026.** Evidencia complementaria de PERF-03, sin cambiar su estado ni el de RNF-06. Máquina `DESKTOP-C6E7TKL`, Windows x86_64, procesador `AMD64 Family 25 Model 33 Stepping 2, AuthenticAMD`, 16 procesadores lógicos; perfil de referencia de §1 (Ryzen 7 5700X, 32 GiB). `rustc 1.99.0 (b940084d7 2026-09-28)`, perfil `release`, commit **`31297f0d1dbaaaa40299baff71168cb4cf565baf`**, árbol limpio durante la corrida. SHA-256 del ejecutable `state_bounds`: `471cd1842739d76e0c8e2448eceb6861305938a3d7c8e35ccee8be67a188efa6`.
+
+### 17.1 Procedimiento y alcance
+
+`src/acceptance/examples/state_bounds.rs --out PATH` ejecuta por defecto **20 000 intentos**, con `ManualClock`, sobre `FixtureScene` de **128×64**, teselas de 64: **G = 2**. Una palabra cambia en cada intento y un ícono aparece/desaparece o cambia de posición; no hay más de dos candidatos. Se inyectan diez fallos consecutivos por bloque de cien intentos, alternando detector y reconocedor por bloque: **2 000 fallos**, 1 000 por puerto, y **18 000 commits**. Se envía una petición simulada rechazada por intento para ejercitar el diario, sin actuar sobre ningún elemento. La caché contiene 64 prototipos curados sintéticos, todos para el patrón generado; `tau = 3`, distancia máxima y margen mínimo de 0,1 son parámetros de esta prueba, no valores por defecto del producto ni calibración de H4.
+
+Los puertos consultan la verdad de la escena y evitan el registro acumulativo de llamadas de `FixtureDetector`. No cargan modelos, no capturan la pantalla ni entregan entrada; `NoAccessibility` sustituye a UIA y las etapas se ejecutan en secuencia. Cada 1 000 intentos se registran **todas** las colecciones expuestas por el diagnóstico local y se conservan sus máximos sobre los 20 000 intentos. [JSON completo](evidencias/state-bounds-2026-10-17.json), con commit, hash binario, parámetros, veinte muestras y máximos.
+
+```powershell
+cargo run --release -p ommatix-acceptance --example state_bounds -- --out "$env:TEMP\state-bounds.json"
+```
+
+**Conjunto de trabajo:** no medido. `sysinfo` no está en `Cargo.lock`; no se añade dependencia ni `unsafe`. Los bytes siguientes suman almacenamiento tipado y capacidades de cadenas/vectores; excluyen nodos de árbol, cabeceras del asignador, fragmentación, memoria transitoria, modelos, GPU y SDK. Por tanto, la medición de la caché es una medida de su representación retenida, no de su impacto en RSS ni una medición de PERF-02/B2.
+
+### 17.2 Tamaños retenidos
+
+| Colección / dato | Máximo observado | Cota demostrada en esta escena |
+|---|---:|---|
+| Publicaciones / cuadros base | 1 / 1 | Una publicación y una base |
+| Píxeles de la base (bytes) | 32 768 | 128 × 64 × 4 |
+| Teselas pendientes | 2 | G = ceil(128/64) × ceil(64/64) = 2 |
+| Tracks activos / entradas almacenadas de identidad | 2 / 2 | E ≤ 2; no hay conjunto almacenado de retirados |
+| IDs retirados lógicos (contador derivado) | 29 998 | Escalar calculado; no son 29 998 entradas almacenadas |
+| Controles / palabras / elementos | 1 / 1 / 2 | E ≤ C + A + W |
+| Prototipos / etiquetas de ícono | 64 / 1 | Configuración fija / candidatos actuales |
+| Almacenamiento de prototipos (bytes) | 5 592 | Capacidad del vector, cadenas y estructura de caché |
+| Entradas del diario / FIFO expulsable | 1 024 / 1 024 | J = 1024, sin resultados con efectos en esta corrida |
+| Payload retenido del diario (bytes) | 287 744 | Estimación parcial; máximo 281 bytes por entrada a capacidad completa |
+| Relaciones / accesibles / huecos de accesibilidad | 0 / 0 / 0 | UIA no ejecutada |
+| Ventanas / enlaces de frescura / shapes | 0 / 0 / 0 | Modo screen, detector doble sin shapes |
+| Cambios creados / actualizados / retirados / motivos | 2 / 0 / 2 / 2 | Sólo última publicación |
+
+| Intentos | Commits | Fallos acumulados | Tracks / elementos | Pendientes | Etiquetas de ícono | Diario |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1000 | 900 | 100 | 1 / 1 | 2 | 0 | 1000 |
+| 2000 | 1800 | 200 | 2 / 2 | 2 | 1 | 1024 |
+| 3000 | 2700 | 300 | 2 / 2 | 1 | 1 | 1024 |
+| 4000 | 3600 | 400 | 1 / 1 | 2 | 0 | 1024 |
+| 5000 | 4500 | 500 | 2 / 2 | 2 | 1 | 1024 |
+| 6000 | 5400 | 600 | 2 / 2 | 1 | 1 | 1024 |
+| 7000 | 6300 | 700 | 1 / 1 | 2 | 0 | 1024 |
+| 8000 | 7200 | 800 | 2 / 2 | 2 | 1 | 1024 |
+| 9000 | 8100 | 900 | 2 / 2 | 1 | 1 | 1024 |
+| 10000 | 9000 | 1000 | 1 / 1 | 2 | 0 | 1024 |
+| 11000 | 9900 | 1100 | 2 / 2 | 2 | 1 | 1024 |
+| 12000 | 10800 | 1200 | 2 / 2 | 1 | 1 | 1024 |
+| 13000 | 11700 | 1300 | 1 / 1 | 2 | 0 | 1024 |
+| 14000 | 12600 | 1400 | 2 / 2 | 2 | 1 | 1024 |
+| 15000 | 13500 | 1500 | 2 / 2 | 1 | 1 | 1024 |
+| 16000 | 14400 | 1600 | 1 / 1 | 2 | 0 | 1024 |
+| 17000 | 15300 | 1700 | 2 / 2 | 2 | 1 | 1024 |
+| 18000 | 16200 | 1800 | 2 / 2 | 1 | 1 | 1024 |
+| 19000 | 17100 | 1900 | 1 / 1 | 2 | 0 | 1024 |
+| 20000 | 18000 | 2000 | 2 / 2 | 2 | 1 | 1024 |
+
+La prueba aparte `rnf_06_pending_tiles_equal_changed_union_after_1000_failures_and_clear_on_commit` aplica **1 000 fallos consecutivos por cada puerto**, alternando cambios y reversiones de píxeles: las pendientes son exactamente la unión de cambios respecto de la base confirmada, nunca más de las 50 teselas de su cuadro de 640×320, y el siguiente commit las vacía. Una regresión ancha/alta falló primero (5 teselas retenidas frente a 3 del cuadro actual); el motor recorta ahora las pendientes a la cuadrícula del cuadro fallido. Un diferencial compara los planes completos/regionales, sus regiones y teselas con el almacén anterior sin recorte en **1 000 historias de 40 pasos**, con éxitos, fallos, vuelta a tamaños anteriores y épocas crecientes.
+
+La regresión de **10 000 observaciones** conserva una publicación/base y como máximo un track/entrada almacenada para su escena. Falló con el conjunto histórico anterior. La clasificación derivada de retirados conserva la ausencia de reutilización y el rechazo de IDs ausentes, incluso después de purga, **para toda historia que no agote el contador de 64 bits; el agotamiento ahora falla cerrado**: otro diferencial recorre **1 000 historias de 24 pasos**, compara con la implementación anterior basada en conjunto y comprueba cada ID entre 0 y `next_id + 4` (semántica de UT-35/OR-38 y UT-41/OR-47). Las pruebas no asignan IDs nuevos en las matrices ni sustituyen al oráculo Python.
+
+**Corrección de revisión de 1.0.88:** dos regresiones sembradas sitúan el contador junto al agotamiento y conservan un ID retirado previo. Fallaron primero con el asignador anterior tanto en debug (overflow) como en release (retorno incorrecto con `next_id = 0`); la suma comprobada devuelve ahora un error de identidad, sin publicar ni consumir IDs del candidato fallido. `u64::MAX` es el centinela de agotamiento y `u64::MAX - 1` el último ID emitible; observar tracks existentes sin creaciones sigue siendo posible. El motor ya trata ese error como observación fallida y mantiene las teselas pendientes. Las mediciones de colecciones (§17.1–§17.2) y la comparación original de §17.3 son las del commit limpio indicado (`31297f0`), anterior a esta protección del extremo; no se atribuyen a ella esos tiempos ni se afirma haber medido el agotamiento con esa corrida. La medida posterior de §17.3 identifica por separado el commit con la protección.
+
+**Dos retenciones sin cota constante permanecen abiertas.** (1) El diario conserva todos los resultados entregados o indeterminados: `entradas ≤ 1024 + D`, con D resultados protegidos desde la purga del diario, incluidos intentos indeterminados sin entrega confirmada. Una prueba de 10 000 recibos fabricados —sin actuador— conserva exactamente 5 000 protegidos + 1 024 expulsables = **6 024 entradas**, **1 004 952 bytes** de payload estimado, **166,825 bytes/entrada** en esa mezcla; no incluye los nodos/overhead del árbol. (2) Lecturas de accesibilidad truncadas sucesivas sobre píxeles iguales pueden acumular evidencia no contradicha; una regresión sintética devuelve un elemento nuevo por lectura y llega a **100 registros retenidos**. Ambas regresiones de cota constante están ignoradas y, al ejecutarse explícitamente, fallan después de comprobar el crecimiento. No se expulsan resultados con efectos ni evidencia sensible; [ADR-0034](../adr/0034-propose-fail-closed-retained-state-budgets.md) propone presupuestos seguros, pendientes y sin implementar.
+
+### 17.3 PERF-01 antes y después de la representación acotada
+
+Comando en ambas variantes: `cargo run --release -p ommatix-acceptance --example core_latency -- --samples 1000 --engine-samples 300 --warmup 50 --out PATH`. Escena de PERF-01: 300 controles, 600 palabras, 1920×1080. Percentiles nearest-rank; mil muestras del dominio y trescientas del motor por caso, tras 50 de calentamiento. Antes: `8587f4e` con árbol modificado sólo para el diagnóstico/pruebas, todavía con el conjunto histórico de retirados y sin el recorte de pendientes. Después: `31297f0`, árbol limpio. [JSON anterior](evidencias/state-bounds-core-before-2026-10-17.json) y [posterior](evidencias/state-bounds-core-after-2026-10-17.json). Cada celda es **p50 / p95 en ms**; no se suman percentiles de etapas.
+
+| Capa / caso / etapa | Antes p50 / p95 | Después p50 / p95 |
+|---|---:|---:|
+| domain_core / cold_full_refresh / algorithm_1_plan | 0.009 / 0.037 | 0.006 / 0.026 |
+| domain_core / cold_full_refresh / fusion | 1.354 / 2.300 | 1.303 / 2.274 |
+| domain_core / cold_full_refresh / identity | 0.285 / 0.501 | 0.264 / 0.464 |
+| domain_core / cold_full_refresh / snapshot_commit | 0.000 / 0.000 | 0.000 / 0.000 |
+| domain_core / cold_full_refresh / core_total | 1.667 / 2.814 | 1.576 / 2.762 |
+| domain_core / warm_unchanged / algorithm_1_plan | 1.234 / 2.120 | 1.211 / 2.181 |
+| domain_core / warm_unchanged / fusion | 1.288 / 1.919 | 1.287 / 1.853 |
+| domain_core / warm_unchanged / identity | 0.511 / 0.794 | 0.503 / 0.850 |
+| domain_core / warm_unchanged / snapshot_commit | 0.016 / 0.029 | 0.016 / 0.034 |
+| domain_core / warm_unchanged / core_total | 3.069 / 4.704 | 3.034 / 4.814 |
+| domain_core / warm_one_region / algorithm_1_plan | 1.582 / 2.393 | 1.581 / 2.009 |
+| domain_core / warm_one_region / fusion | 1.307 / 2.255 | 1.289 / 1.571 |
+| domain_core / warm_one_region / identity | 0.527 / 0.935 | 0.508 / 0.641 |
+| domain_core / warm_one_region / snapshot_commit | 0.019 / 0.036 | 0.018 / 0.029 |
+| domain_core / warm_one_region / core_total | 3.466 / 5.556 | 3.407 / 4.184 |
+| application_core / cold_full_refresh / stage_capture_double | 0.000 / 0.000 | 0.000 / 0.000 |
+| application_core / cold_full_refresh / stage_plan | 0.006 / 0.017 | 0.005 / 0.007 |
+| application_core / cold_full_refresh / stage_fuse | 1.390 / 2.412 | 1.348 / 1.443 |
+| application_core / cold_full_refresh / stage_track | 0.459 / 0.780 | 0.409 / 0.491 |
+| application_core / cold_full_refresh / plan_fuse_track | 1.855 / 3.197 | 1.765 / 1.943 |
+| application_core / cold_full_refresh / observe_screen_wall | 1.893 / 3.262 | 1.799 / 2.038 |
+| application_core / warm_unchanged / stage_capture_double | 0.000 / 0.000 | 0.000 / 0.001 |
+| application_core / warm_unchanged / stage_plan | 1.197 / 1.453 | 1.310 / 1.831 |
+| application_core / warm_unchanged / stage_fuse | 1.357 / 1.583 | 1.364 / 1.623 |
+| application_core / warm_unchanged / stage_track | 0.653 / 0.744 | 0.653 / 0.861 |
+| application_core / warm_unchanged / plan_fuse_track | 3.243 / 3.617 | 3.336 / 4.231 |
+| application_core / warm_unchanged / observe_screen_wall | 3.290 / 3.695 | 3.374 / 4.305 |
+| application_core / warm_one_region / stage_capture_double | 0.000 / 0.000 | 0.000 / 0.000 |
+| application_core / warm_one_region / stage_plan | 1.582 / 1.921 | 1.734 / 2.061 |
+| application_core / warm_one_region / stage_fuse | 1.366 / 1.707 | 1.368 / 1.694 |
+| application_core / warm_one_region / stage_track | 0.671 / 0.915 | 0.666 / 0.821 |
+| application_core / warm_one_region / plan_fuse_track | 3.639 / 4.538 | 3.788 / 4.374 |
+| application_core / warm_one_region / observe_screen_wall | 3.688 / 4.608 | 3.835 / 4.428 |
+
+Es una corrida por variante, no una comparación causal ni una promesa de mejora; el ruido y la carga concurrente de la máquina no se controlaron. PERF-01 no genera una sesión larga con retiradas acumulativas ni fallos de percepción: no cuantifica el coste antiguo frente al nuevo a 20 000 retiradas. Sí publica los tramos de la ruta normal exigidos para el cambio del núcleo; no hay nuevas asignaciones ni dependencias en la observación exitosa. El diagnóstico crea su mapa únicamente cuando la herramienta local de investigación lo solicita.
+
+**Corrida posterior a la protección de agotamiento (revisión del PR #81, 1.0.88).** Mismo equipo, toolchain, escena, comando y número de muestras/calentamiento; commit **`f0589bee584e2c890ca68c48bd88591d22da5a49`**, árbol limpio. [JSON de todos los tramos](evidencias/state-bounds-core-exhaustion-2026-10-17.json). La tabla compara la corrida original después de acotar el registro (`31297f0`) con esta corrida que ya comprueba la suma; cada celda es p50 / p95 en ms. Mide el coste por etapas sobre contadores normales, no una sesión que agote IDs; esa frontera se verifica con las regresiones sembradas, no con los tiempos. Una corrida por versión y carga no controlada no establecen causalidad ni ausencia de regresión.
+
+| Capa / caso / tramo | Sin protección p50 / p95 | Con protección p50 / p95 |
+|---|---:|---:|
+| domain_core / cold_full_refresh / identity | 0.264 / 0.464 | 0.268 / 0.346 |
+| domain_core / cold_full_refresh / core_total | 1.576 / 2.762 | 1.566 / 1.832 |
+| domain_core / warm_unchanged / identity | 0.503 / 0.850 | 0.504 / 0.640 |
+| domain_core / warm_unchanged / core_total | 3.034 / 4.814 | 3.025 / 3.935 |
+| domain_core / warm_one_region / identity | 0.508 / 0.641 | 0.508 / 0.653 |
+| domain_core / warm_one_region / core_total | 3.407 / 4.184 | 3.282 / 4.247 |
+| application_core / cold_full_refresh / stage_track | 0.409 / 0.491 | 0.405 / 0.495 |
+| application_core / cold_full_refresh / observe_screen_wall | 1.799 / 2.038 | 1.803 / 2.091 |
+| application_core / warm_unchanged / stage_track | 0.653 / 0.861 | 0.648 / 0.761 |
+| application_core / warm_unchanged / observe_screen_wall | 3.374 / 4.305 | 3.316 / 3.890 |
+| application_core / warm_one_region / stage_track | 0.666 / 0.821 | 0.651 / 0.736 |
+| application_core / warm_one_region / observe_screen_wall | 3.835 / 4.428 | 3.682 / 4.097 |
+
+### 17.4 Qué sigue pendiente
+
+La auditoría completa está en [la revisión de estado retenido](../reviews/2026-10-17-engine-state-bounds.md). Las cotas de evidencia se expresan en función de las entradas actuales o de su unión parcial: no son un máximo universal de memoria por sesión. La propuesta de decisión 9 es **a lo sumo el número de teselas del fotograma**, también para componentes conexas; el responsable todavía debe aceptar la fórmula o fijar el número de `--max-pending-regions`. Siguen pendientes el soak del código actual con `uia` (decisión 6), las políticas de retención de ADR-0034 y la variación entre corridas. Esta prueba es sintética, offline, sin UIA/modelos/entrada ni medida de RSS/VRAM; **no es un soak del camino vivo ni evidencia de ausencia de fugas**. La casilla 7 de §6.7 continúa sin marcar y ningún estado de requisito cambia.

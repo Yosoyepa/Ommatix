@@ -91,6 +91,12 @@ pub(super) struct WindowSnapshot {
     targets: BTreeMap<TargetId, u64>,
 }
 
+impl WindowSnapshot {
+    pub(super) fn sizes(&self) -> (usize, usize) {
+        (self.read.windows.len(), self.targets.len())
+    }
+}
+
 /// Identity includes both seed handles and the ordered (z-order, handle, rectangle) list.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct WindowGroup {

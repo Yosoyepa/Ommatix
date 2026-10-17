@@ -624,7 +624,7 @@ impl Engine {
             inference_shapes,
         }) = self.infer(&frame, &regions, &read_regions)
         else {
-            self.store.record_failure(&plan.dirty);
+            self.record_planned_failure(&plan.dirty, &frame);
             return Err(inference_failed());
         };
         let t_access = clock.now();
@@ -647,7 +647,7 @@ impl Engine {
         );
         let t_track = clock.now();
         let Some(tracked) = tracked else {
-            self.store.record_failure(&plan.dirty);
+            self.record_planned_failure(&plan.dirty, &frame);
             return Err(inference_failed());
         };
 
@@ -662,6 +662,7 @@ impl Engine {
             tracked.relations.len(),
         );
         let windows = self.observation_windows(windows, &tracked.registry);
+        let dimensions = (frame.width(), frame.height());
         let staged = self.store.stage(
             frame,
             Published {
@@ -678,8 +679,14 @@ impl Engine {
             },
         );
         if self.store.commit(staged).is_err() {
-            // Unreachable with a single writer; fail closed all the same.
-            self.store.record_failure(&plan.dirty);
+            // Unreachable with a single writer; the successful plan validated this grid.
+            let grid = ommatix_domain::incremental::TileGrid::new(
+                dimensions.0,
+                dimensions.1,
+                self.config.plan.tile_size,
+            )
+            .expect("a successful plan has validated this frame grid");
+            self.store.record_failure_on_grid(&plan.dirty, &grid);
             return Err(inference_failed());
         }
         // The publication is the last stage: `total` ends here (ADR-0024).
@@ -701,6 +708,18 @@ impl Engine {
             plan: observed_plan,
         });
         Ok(())
+    }
+
+    /// The successful planner already validated this exact frame and tile size.
+    fn record_planned_failure(
+        &mut self,
+        dirty: &BTreeSet<ommatix_domain::incremental::TileCoord>,
+        frame: &BgraFrame,
+    ) {
+        let grid =
+            ommatix_domain::incremental::TileGrid::for_frame(frame, self.config.plan.tile_size)
+                .expect("a successful plan has validated this frame grid");
+        self.store.record_failure_on_grid(dirty, &grid);
     }
 
     /// The regions the accessibility provider reads: the plan, the gaps where an earlier read
