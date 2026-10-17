@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 
 use thiserror::Error;
 
-use crate::incremental::{BgraFrame, TileCoord};
+use crate::incremental::{BgraFrame, TileCoord, TileGrid};
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum CommitError {
@@ -147,6 +147,15 @@ impl<P> SnapshotStore<P> {
         self.degraded = true;
     }
 
+    /// Records failure on a validated frame grid. Old out-of-grid coordinates cannot
+    /// affect Algorithm 1, which clips them when planning; do not retain them in memory.
+    pub fn record_failure_on_grid(&mut self, dirty: &BTreeSet<TileCoord>, grid: &TileGrid) {
+        self.pending_dirty.retain(|&tile| grid.contains(tile));
+        self.pending_dirty
+            .extend(dirty.iter().copied().filter(|&tile| grid.contains(tile)));
+        self.degraded = true;
+    }
+
     /// Deletes the published payload, the committed base and the pending work (chapter 08
     /// §8.4), and returns the deleted payload. The base frame is overwritten when the store
     /// holds its only copy. The revision stays: it counts commits, and it never goes back.
@@ -258,5 +267,85 @@ mod tests {
 
         assert_eq!(store.commit(store.stage(f, vec!["e2"])), Ok(2));
         assert_eq!(store.revision(), 2);
+    }
+}
+
+#[cfg(test)]
+mod state_bounds {
+    use super::*;
+    use crate::incremental::{Evidence, PlanParams, TileGrid, plan_regions};
+
+    fn frame(w: u32, h: u32, epoch: u64, mark: u8) -> BgraFrame {
+        let mut pixels = vec![0; w as usize * h as usize * 4];
+        pixels[0] = mark;
+        BgraFrame::new(w, h, w as usize * 4, epoch, pixels).unwrap()
+    }
+
+    #[test]
+    fn rnf_06_pending_tiles_never_outlive_the_failed_frame_grid() {
+        let mut store = SnapshotStore::<()>::new();
+        let wide = TileGrid::new(12, 4, 4).unwrap();
+        let tall = TileGrid::new(4, 12, 4).unwrap();
+        store.record_failure_on_grid(&wide.all_tiles(), &wide);
+        store.record_failure_on_grid(&tall.all_tiles(), &tall);
+        assert_eq!(store.pending_dirty(), &tall.all_tiles());
+    }
+    /// The old pending set is the independent reference; epoch increases on geometry change
+    /// as required of capturers, including when returning to a previously seen size.
+    #[test]
+    fn rnf_06_clipped_failures_preserve_plans_over_1000_generated_histories() {
+        let params = PlanParams {
+            tile_size: 4,
+            halo_px: 0.0,
+            ..PlanParams::default()
+        };
+        for history in 0..1000_u32 {
+            let mut store = SnapshotStore::<()>::new();
+            let mut old_pending = BTreeSet::new();
+            let mut old_base = None;
+            let mut epoch = 1;
+            let mut previous_size = (12, 4);
+            let mut seed = history + 1;
+            for step in 0..40 {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let size = match (seed >> 16) % 3 {
+                    0 => (12, 4),
+                    1 => (4, 12),
+                    _ => (8, 8),
+                };
+                if size != previous_size || step % 11 == 0 {
+                    epoch += 1;
+                }
+                previous_size = size;
+                let current = frame(size.0, size.1, epoch, (seed >> 24) as u8);
+                let grid = TileGrid::for_frame(&current, 4).unwrap();
+                let plan = plan_regions(
+                    store.base(),
+                    &current,
+                    store.pending_dirty(),
+                    Evidence::default(),
+                    &params,
+                )
+                .unwrap();
+                let old_plan = plan_regions(
+                    old_base.as_ref(),
+                    &current,
+                    &old_pending,
+                    Evidence::default(),
+                    &params,
+                )
+                .unwrap();
+                assert_eq!(plan, old_plan, "history={history}, step={step}");
+                if seed % 5 == 0 {
+                    old_base = Some(current.clone());
+                    old_pending.clear();
+                    store.commit(store.stage(current, ())).unwrap();
+                } else {
+                    old_pending.extend(old_plan.dirty);
+                    store.record_failure_on_grid(&plan.dirty, &grid);
+                }
+                assert!(store.pending_dirty().len() <= grid.cols() as usize * grid.rows() as usize);
+            }
+        }
     }
 }

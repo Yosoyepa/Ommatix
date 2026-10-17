@@ -198,6 +198,17 @@ impl IconCache {
         &self.prototypes
     }
 
+    /// Retained vector storage and string capacities, excluding allocator overhead.
+    pub fn retained_storage_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.prototypes.capacity() * std::mem::size_of::<Prototype>()
+            + self
+                .prototypes
+                .iter()
+                .map(|p| p.label.capacity() + p.context.capacity())
+                .sum::<usize>()
+    }
+
     /// The curated label for `query` in `context`, or why there is none.
     pub fn lookup(
         &self,

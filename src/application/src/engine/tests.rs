@@ -2508,6 +2508,41 @@ mod icons {
     }
 
     #[test]
+    fn rnf_06_icon_resolver_replaces_labels_and_keeps_prototypes_under_churn() {
+        let mut r = rig_with(
+            icon_world(Some(grid(1)), Actionability::Confirmed),
+            config(APP, vec![prototype("Settings", APP, &grid(1))]),
+        );
+        r.engine.config.concurrent_stages = false;
+        for i in 0..1000 {
+            {
+                let mut w = r.world();
+                let x = f64::from(i % 2 * 64);
+                let b = bx(x, 0.0, x + 18.0, 16.0);
+                w.controls = if i % 3 == 0 {
+                    vec![]
+                } else {
+                    vec![Control {
+                        bbox: b,
+                        role: Role::IconButton,
+                        affordance: confirmed(),
+                    }]
+                };
+                w.words.clear();
+                w.textures = vec![(b, grid(1))];
+                w.events.clear();
+                w.detect_calls.clear();
+                w.access_calls.clear();
+            }
+            r.observe();
+            let sizes = r.engine.retained_state_sizes();
+            assert_eq!(sizes["icon_prototypes"], 1);
+            assert_eq!(sizes["icon_labels"], usize::from(i % 3 != 0));
+            r.clock.advance(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
     fn the_crop_is_resampled_to_the_descriptor_grid() {
         let world = icon_world(Some(grid(1)), Actionability::Confirmed);
         let frame = render(&world);
@@ -2692,3 +2727,5 @@ mod snapshot_age;
 mod stop;
 mod typing;
 mod window_scope;
+
+mod state_bounds;

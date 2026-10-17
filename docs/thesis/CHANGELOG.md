@@ -1,5 +1,11 @@
 # Historial documental
 
+## 1.0.87 — 2026-10-17: cotas de estado retenido y evidencia sintética de RNF-06
+
+Auditoría en `docs/reviews/2026-10-17-engine-state-bounds.md`, diagnóstico local bajo demanda y ejemplo `state_bounds --out PATH`: 20 000 intentos sin pantalla ni entrada, con churn, fallos inyectados y caché sintética. Se elimina el conjunto histórico de IDs retirados, derivando la misma clasificación desde el contador y los tracks actuales; se recortan las teselas pendientes al cuadro fallido. Regresiones fallan antes de cada corrección; dos diferenciales de 1 000 historias comparan clasificación/rechazos/no reutilización/purga y planes completos/regionales con sus regiones y teselas. El oráculo permanece independiente.
+
+La caché de prototipos y los payloads del diario se estiman por almacenamiento tipado/capacidades, no por RSS. El diario conserva los resultados con efectos: su cota es `1024 + D`, no 1024 para toda la sesión. La evidencia de accesibilidad puede crecer en lecturas truncadas sucesivas sin repintado; se conserva por seguridad. Las dos rutas tienen regresiones de crecimiento ignoradas y propuestas sin implementar en ADR-0034. S0 §17 publica la medida y los tiempos de PERF-01 antes/después; §6.7 conserva la casilla 7 sin marcar, propone la cota estructural al responsable (decisión 9) y mantiene pendiente el soak actual con `uia` (decisión 6). Ningún estado de requisito ni matriz cambia; no se afirma ausencia de fugas.
+
 ## 1.0.86 — 2026-10-16: lista blanca de texto crudo para no normalizar el anclaje M2 (tercera revisión del PR #79)
 
 La revisión de `5ef4fb1` detectó que `window_pin_file = 'pin\'` perdía el separador final al pasar por `pathlib`: el original no podía abrir un archivo regular de anclaje y denegaba, pero la copia podía leerlo y autorizar. Por decisión del arquitecto, se elimina toda biblioteca de rutas de la validación y construcción de los valores copiados. Una lista blanca sobre el texto crudo admite sólo absolutas estándar o relativas con componentes ASCII válidos, sin vacíos, puntos aislados, separador final, punto/espacio final ni caracteres especiales. Las absolutas permanecen idénticas y las relativas se forman por concatenación del directorio absoluto suministrado, una barra inversa y el valor sin reescribir.

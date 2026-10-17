@@ -71,6 +71,8 @@ La regla **sólo adelanta el respaldo que el algoritmo ya tiene**: el refresco c
 
 El motor construye candidatos regionales sin borrar primero el estado útil. Cada caja se devuelve a píxeles físicos deshaciendo padding y escalado. Se actualiza el soporte de evidencia; se invalidan las entidades y relaciones alcanzadas, incluso si su centro no estaba dentro de R. Se hace matching temporal y publicación atómica de registro e índice.
 
+La representación de las teselas pendientes del motor se recorta a la cuadrícula del fotograma cuya observación falla: como máximo `ceil(ancho / tesela) × ceil(alto / tesela)` entradas; un cambio geométrico conserva el respaldo completo y la época aumenta incluso al volver a un tamaño anterior (evidencia sin conexión de 1.0.87).
+
 Si hay error, ni la base confirmada ni las regiones pendientes avanzan como si el trabajo hubiera terminado. Una estrategia simple y segura bloquea acciones hasta completar una reobservación consistente. Un índice parcialmente actualizado jamás se presenta como snapshot completo.
 
 ### Casos límite obligatorios
@@ -151,6 +153,8 @@ El caché exacto tiene límite LRU/TTL y key con contexto, versión del descript
 ## 4.5 Algoritmo 3B: identidad estable por tracking
 
 ### Ciclo de vida
+
+La clasificación de un ID retirado se deriva del prefijo de IDs emitidos y de su ausencia entre los tracks actuales; no se almacena un conjunto histórico de retirados ni se reciclan IDs, tampoco tras una purga (1.0.87).
 
 Un track pasa por `new → active → ambiguous/occluded → retired`. Un ID se asigna una sola vez dentro de la sesión, se guarda como cadena opaca y no se recicla. La etiqueta puede cambiar sin renumerar todo el snapshot; una modificación significativa incrementa revisión.
 

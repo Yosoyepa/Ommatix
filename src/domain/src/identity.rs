@@ -10,7 +10,9 @@
 //!
 //! Reference: `Registry` in the Python oracle (OR-37..OR-47).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::BTreeSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -129,7 +131,6 @@ pub struct Registry {
     snapshot_id: u64,
     next_id: u64,
     tracks: BTreeMap<TargetId, Track>,
-    retired: BTreeSet<TargetId>,
 }
 
 impl Registry {
@@ -140,7 +141,6 @@ impl Registry {
             snapshot_id: 0,
             next_id: 1,
             tracks: BTreeMap::new(),
-            retired: BTreeSet::new(),
         }
     }
 
@@ -165,12 +165,24 @@ impl Registry {
         self.tracks.get(&id)
     }
 
+    /// Stored identifier entries: only tracks of the current snapshot.
+    pub fn stored_identity_count(&self) -> usize {
+        self.tracks.len()
+    }
+
+    /// Number of retired IDs, derived from the issued prefix rather than retained entries.
+    pub fn retired_count(&self) -> usize {
+        usize::try_from(self.next_id - 1)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(self.tracks.len())
+    }
+
     pub fn is_retired(&self, id: TargetId) -> bool {
-        self.retired.contains(&id)
+        id.0 > 0 && id.0 < self.next_id && !self.tracks.contains_key(&id)
     }
 
     /// The registry a purge leaves behind (chapter 08 §8.4): no track, hence no label, box or
-    /// revision, but the same session, epoch and counters. The live IDs join the retired set,
+    /// revision, but the same session, epoch and counters. Issued IDs remain retired,
     /// so the next observation issues new ones and an action naming an old one is refused.
     pub fn purged(&self) -> Self {
         Self {
@@ -179,12 +191,6 @@ impl Registry {
             snapshot_id: self.snapshot_id,
             next_id: self.next_id,
             tracks: BTreeMap::new(),
-            retired: self
-                .retired
-                .iter()
-                .chain(self.tracks.keys())
-                .copied()
-                .collect(),
         }
     }
 
@@ -230,7 +236,6 @@ impl Registry {
             snapshot_id: self.snapshot_id + 1,
             next_id: self.next_id,
             tracks: BTreeMap::new(),
-            retired: self.retired.clone(),
         };
         let mut delta = Changes::default();
         for (j, observation) in order.iter().enumerate() {
@@ -259,7 +264,6 @@ impl Registry {
         }
         for (t, retirement) in tracks.iter().zip(retirements) {
             if let Some(reason) = retirement {
-                next.retired.insert(t.target_id);
                 delta.retired.push(t.target_id);
                 delta.reasons.push((t.target_id, reason));
             }
@@ -1216,3 +1220,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod state_bounds;
