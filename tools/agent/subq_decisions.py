@@ -108,6 +108,11 @@ def run_generator(out):
     program = shutil.which("cargo")
     if program is None:
         raise Refusal("cargo was not found on PATH; it builds the scene generator")
+    # `which` returns a relative path for a relative PATH entry, and the child runs in another
+    # directory: make it absolute here, against this process's directory.
+    program = os.path.abspath(program)
+    if not os.path.isabs(program):
+        raise Refusal("cargo could not be resolved to an absolute path")
     command = [program] + generator_command(out)[1:]
     try:
         done = subprocess.run(command, cwd=REPO_ROOT, env=minimal_environment(os.environ),
@@ -121,8 +126,9 @@ def run_generator(out):
 
 def generate_scenes(generate=run_generator, pinned=PINNED_SCENES_SHA256):
     """(scenes, raw bytes) of a fresh run of the generator in a temporary directory that
-    lies outside the checkout and is gone afterwards. The bytes must hash to `pinned` before
-    anything reads them: the pin is what makes them the canonical synthetic scenes."""
+    lies outside the checkout and is gone afterwards. The output file is read once, into a
+    buffer; the buffer must hash to `pinned`, and that same buffer is what is parsed (and what
+    `--scenes-out` saves), so nothing can change between the check and the use."""
     with tempfile.TemporaryDirectory(prefix="ag01-") as directory:
         if inside_checkout(directory):
             raise Refusal("refusing to generate the scenes inside the git checkout")
@@ -136,17 +142,17 @@ def generate_scenes(generate=run_generator, pinned=PINNED_SCENES_SHA256):
             raise Refusal("the generated scenes do not match the pinned SHA-256 of the "
                           "repository's scenes; nothing is sent (the pin is in the tool and in "
                           "the agent_scenes test)")
-        return load_scenes(out), raw
+        return load_scenes(raw), raw
 
 
-def load_scenes(path):
-    """The scenes the generator wrote at `path`, or a refusal if they are not the shape it
-    writes. The markers are a sanity check of that shape, not proof of provenance: the
-    provenance is that the tool ran the generator itself."""
+def load_scenes(raw):
+    """The scenes in `raw`, the bytes the generator wrote (already checked against the pin), or
+    a refusal if they are not the shape it writes. It never opens a file. The markers are a
+    sanity check of that shape, not proof of provenance: the provenance is the pin."""
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise Refusal(f"cannot read the generated scenes: {error}") from error
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, ValueError):
+        raise Refusal("the generated scenes are not valid JSON") from None
     if not isinstance(data, dict) or data.get("synthetic") is not True:
         raise Refusal("the generator output does not declare \"synthetic\": true (ADR-0033)")
     if data.get("generator") != "agent_scenes":

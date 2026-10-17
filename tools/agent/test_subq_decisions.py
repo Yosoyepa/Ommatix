@@ -18,6 +18,7 @@ from unittest import mock
 import subq_decisions as tool
 
 KEY = "test-key-0123456789"
+ABSOLUTE_CARGO = os.path.abspath(os.sep + os.path.join("opt", "rust", "cargo"))
 
 
 def element(target_id, role, label, enabled=True):
@@ -207,11 +208,11 @@ class GeneratedScenes(Case):
 
     def test_the_generator_runs_from_the_checkout_the_tool_lives_in(self):
         done = mock.Mock(returncode=0)
-        with mock.patch.object(tool.shutil, "which", return_value="/opt/rust/cargo"), \
+        with mock.patch.object(tool.shutil, "which", return_value=ABSOLUTE_CARGO), \
                 mock.patch.object(tool.subprocess, "run", return_value=done) as run:
             tool.run_generator(self.dir / "scenes.json")
         command = run.call_args.args[0]
-        self.assertEqual(command[0], "/opt/rust/cargo")
+        self.assertEqual(command[0], ABSOLUTE_CARGO)
         self.assertEqual(command[1:], tool.generator_command(self.dir / "scenes.json")[1:])
         self.assertEqual(run.call_args.kwargs["cwd"], tool.REPO_ROOT)
         self.assertEqual(tool.REPO_ROOT, Path(tool.__file__).resolve().parents[2])
@@ -793,11 +794,11 @@ class ProductionProvenance(Case):
     def test_cargo_is_resolved_to_an_absolute_path_with_a_minimal_environment(self):
         done = mock.Mock(returncode=0)
         with mock.patch.dict("os.environ", {"RUSTC_WRAPPER": "evil", "KEEP_OUT": "1"}), \
-                mock.patch.object(tool.shutil, "which", return_value="/opt/rust/cargo") as which, \
+                mock.patch.object(tool.shutil, "which", return_value=ABSOLUTE_CARGO) as which, \
                 mock.patch.object(tool.subprocess, "run", return_value=done) as run:
             tool.run_generator(self.dir / "scenes.json")
         which.assert_called_once()
-        self.assertEqual(run.call_args.args[0][0], "/opt/rust/cargo")
+        self.assertEqual(run.call_args.args[0][0], ABSOLUTE_CARGO)
         self.assertNotIn("RUSTC_WRAPPER", run.call_args.kwargs["env"])
         self.assertNotIn("KEEP_OUT", run.call_args.kwargs["env"])
         self.assertIn("PATH", run.call_args.kwargs["env"])
@@ -904,6 +905,92 @@ class ChargeOnAnyReply(Case):
         self.assertEqual(code, 0)
         self.assertEqual(self.sleeps[0], 5.0)
         self.assertEqual(len(report["results"]), 4)
+
+
+class OneRead(Case):
+    """Review round 3, finding 1: what is hashed is what is parsed and what is sent."""
+
+    def swapping_reader(self, replacement):
+        """Every read of the generated file returns the bytes really there and then swaps the
+        file for `replacement`, as a helper of a substituted generator could; it counts the
+        reads."""
+        reads = []
+        real_read_bytes, real_read_text = Path.read_bytes, Path.read_text
+
+        def swap(path):
+            Path(path).write_text(replacement, encoding="utf-8")
+
+        def read_bytes(path):
+            data = real_read_bytes(path)
+            if Path(path).name == "scenes.json":
+                reads.append("bytes")
+                swap(path)
+            return data
+
+        def read_text(path, *args, **kwargs):
+            data = real_read_text(path, *args, **kwargs)
+            if Path(path).name == "scenes.json":
+                reads.append("text")
+                swap(path)
+            return data
+
+        return reads, mock.patch.object(Path, "read_bytes", read_bytes), \
+            mock.patch.object(Path, "read_text", read_text)
+
+    def test_a_file_swapped_after_the_first_read_never_reaches_a_request(self):
+        canonical = self.generated
+        hostile = canonical.replace("Cancel", CANARY)
+        reads, patch_bytes, patch_text = self.swapping_reader(hostile)
+        copy = self.dir / "saved.json"
+        out = self.dir / "report.json"
+        with FakeServer([answer()]) as server, patch_bytes, patch_text:
+            code, _, _ = self.main("--max-input-tokens", "100000", "--out", str(out),
+                                   "--base-url", server.url, "--scenes-out", str(copy))
+        self.assertEqual(code, 0)
+        self.assertTrue(server.requests)
+        for request in server.requests:
+            self.assertNotIn(CANARY, json.dumps(request["body"]))
+        self.assertEqual(copy.read_text(encoding="utf-8"), canonical)
+
+    def test_the_generated_file_is_read_exactly_once(self):
+        reads, patch_bytes, patch_text = self.swapping_reader(self.generated)
+        with patch_bytes, patch_text:
+            code, _, _ = self.main("--max-input-tokens", "1000", "--plan")
+        self.assertEqual(code, 0)
+        self.assertEqual(reads, ["bytes"])
+
+    def test_the_scenes_are_parsed_from_the_buffer_not_from_a_path(self):
+        scenes = tool.load_scenes(self.generated.encode("utf-8"))
+        self.assertEqual(scenes[0]["name"], "form")
+        with self.assertRaises(tool.Refusal):
+            tool.load_scenes(b"\xff\xfe not json")
+        with self.assertRaises(tool.Refusal):
+            tool.load_scenes(b"[1, 2]")
+
+
+class AbsoluteCargo(Case):
+    """Review round 3, finding 2: a relative PATH entry still finds cargo from another cwd."""
+
+    def test_a_relative_path_entry_resolves_to_an_absolute_program(self):
+        with mock.patch.object(tool.shutil, "which", return_value=os.path.join("bin", "cargo")), \
+                mock.patch.object(tool.subprocess, "run",
+                                  return_value=mock.Mock(returncode=0)) as run:
+            tool.run_generator(self.dir / "scenes.json")
+        program = run.call_args.args[0][0]
+        self.assertTrue(os.path.isabs(program))
+        self.assertEqual(program, os.path.abspath(os.path.join("bin", "cargo")))
+
+    def test_a_launcher_found_through_a_relative_path_entry_runs_from_the_checkout(self):
+        bin_dir = self.dir / "bin"
+        bin_dir.mkdir()
+        install_fake_cargo(bin_dir, generated_file())
+        out = self.dir / "scenes.json"
+        previous = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, previous)
+        with mock.patch.dict("os.environ", {"PATH": f"bin{os.pathsep}{os.environ['PATH']}"}):
+            tool.run_generator(out)
+        self.assertEqual(out.read_text(encoding="utf-8"), generated_file())
 
 
 if __name__ == "__main__":

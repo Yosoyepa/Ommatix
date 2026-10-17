@@ -236,3 +236,48 @@ while two earlier executions had been discarded. It now says "before the valid r
 suites of `tools/s4`, `tools/perf`, `tools/repro` and `tools/agent` (73 tests), `run_tests.py` and the
 validator. `--plan` through the production path (`--frozen`, minimal environment, pin) gives 25
 requests and about 12.9 thousand estimated tokens. The API was not called.
+
+# Round 3: the re-review of `c0b6251`
+
+A third read-only review (Codex, extra-high effort) confirmed the round-2 fixes (custom runner,
+shadowed Cargo, proxies, interruption, offline `--plan`, charge on a 429/503, changelog order) and
+found one P1 and one P3 in the way the pin was applied. Both have regression tests that failed on
+`c0b6251` and pass now; the pinned hash and the recorded results are unchanged.
+
+## R3-1. P1: the pin checked one read, and the requests used a second
+
+**Finding.** `generate_scenes` read the output file, checked its SHA-256, and then `load_scenes`
+opened the path again. A substituted generator that leaves a helper to replace its output between the
+two reads passes the digest while its own labels become requests (and `--scenes-out` saved the
+canonical bytes that were never sent).
+
+**Resolution.** The output file is read once, into a buffer. That buffer is hashed against the pin,
+the same buffer is parsed (`load_scenes` takes bytes and never opens a path), and the same buffer is
+what `--scenes-out` writes. There is no second read anywhere.
+
+**Regression tests** (`OneRead`):
+`test_a_file_swapped_after_the_first_read_never_reaches_a_request` (a reader returns the bytes really
+there and then swaps the file for a well-shaped copy with a canary label; no request carries the
+canary and the saved copy equals what was sent; it failed on `c0b6251`),
+`test_the_generated_file_is_read_exactly_once` (it failed: two reads),
+`test_the_scenes_are_parsed_from_the_buffer_not_from_a_path`.
+
+## R3-2. P3: the cargo path was not truly absolute
+
+**Finding.** `shutil.which` returns a relative path for a relative `PATH` entry; the subprocess runs
+with another working directory, so the discovered launcher was not found there.
+
+**Resolution.** The result is made absolute with `os.path.abspath` before the working directory
+changes, and the tool refuses if it is not absolute or if `cargo` is not found.
+
+**Regression tests** (`AbsoluteCargo`): `test_a_relative_path_entry_resolves_to_an_absolute_program`
+and `test_a_launcher_found_through_a_relative_path_entry_runs_from_the_checkout` (a real launcher found
+through `PATH=bin;...` from another directory; it failed on `c0b6251`).
+
+## Checks (round 3)
+
+`cargo fmt`, both `clippy` runs, `cargo test --workspace`, the Python suites of `tools/s4`,
+`tools/perf`, `tools/repro` and `tools/agent` (78 tests), `run_tests.py` and the validator. `--plan`
+through the production path still gives 25 requests and about 12.9 thousand estimated tokens. The API
+was not called.
+

@@ -39,7 +39,7 @@ An external decision model may be used under these conditions, and only these:
    accept a scenes file. It runs `cargo run --frozen --quiet -p ommatix-acceptance --example
    agent_scenes` (`--frozen` is locked and offline, so neither a run nor `--plan` reaches a network)
    from the checkout it lives in (resolved from its own path), into a fresh temporary directory
-   outside the checkout, and reads only that output. `cargo` is resolved once to an absolute path
+   outside the checkout, and reads only that output. `cargo` is resolved once to an absolute path (made absolute against the directory the operator started the tool from, so a relative `PATH` entry still works when the build runs in the checkout)
    and runs with a minimal environment (the tool keeps `PATH`, the system and user directories,
    `CARGO_HOME`, `RUSTUP_HOME` and the temporary directory, and drops every runner, wrapper, flag and
    target-directory override). The example
@@ -50,7 +50,7 @@ An external decision model may be used under these conditions, and only these:
    output is **pinned**: the scenes are deterministic, their SHA-256 is committed as a constant in
    the tool (`PINNED_SCENES_SHA256`) and in a test of the generator
    (`ag_01_the_scenes_match_the_pinned_hash`), and the tool builds no request unless the bytes it
-   generated hash to that value, as every artefact the engine loads is pinned (ADR-0021). A change
+   generated hash to that value, as every artefact the engine loads is pinned (ADR-0021). The output file is read once, into a buffer; that same buffer is hashed, parsed and (with `--scenes-out`) saved, and the file is never opened again, so nothing can change between the check and the use. A change
    to the generator that does not update both places fails CI. The markers and the shape of the
    output are still checked as a sanity test, and a goal whose expected target is not in its scene
    is refused. **Threat model:** the pin prevents the tool from sending anything but the canonical
