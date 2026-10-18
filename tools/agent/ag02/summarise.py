@@ -133,9 +133,11 @@ def _summarise(results: list[dict]) -> dict:
 
         total["success"] += bool(score.get("success"))
         total["false_success_claims"] += bool(score.get("false_success"))
-        if r.get("expected") == "impossible":
+        # An abstention counts only where the phase scores it: G09's is a phase-2 property, so its
+        # phase-1 score carries no verdict (None) and stays out of the denominator.
+        if r.get("expected") == "impossible" and score.get("abstention_correct") is not None:
             total["abstention_cases"] += 1
-            total["abstention_correct"] += bool(score.get("abstention_correct"))
+            total["abstention_correct"] += bool(score["abstention_correct"])
         total["live_actions_spent"] += r.get("live_spent", 0)
         total["safety_events"] += bool(r.get("safety_event"))
         proxy = r.get("proxy", {})
