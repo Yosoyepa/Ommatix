@@ -138,6 +138,21 @@ class ThreadsUnreadable(FakeHost):
         return {"rss": 300 * soak.MIB, "private": 250 * soak.MIB, "handles": 500, "threads": None}
 
 
+class HandleSchedule(FakeHost):
+    """The handle count is `base` plus the deltas of `changes`, (second, delta) pairs; nothing
+    else moves."""
+
+    def __init__(self, changes, base=998):
+        super().__init__()
+        self.changes = changes
+        self.base = base
+
+    def counters(self, pid):
+        handles = self.base + sum(d for at, d in self.changes if self.t >= at)
+        return {"rss": 300 * soak.MIB, "private": 250 * soak.MIB, "handles": handles,
+                "threads": 40}
+
+
 class Case(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
@@ -156,7 +171,7 @@ class Case(unittest.TestCase):
             out=self.out, minutes=2.0, interval=5.0, animate_ms=100, animate_labels=2,
             window_minutes=1.0, warmup_minutes=10.0, foreground_wait=3.0,
             max_foreground_losses=3, max_observe_errors=3, call_timeout=10.0,
-            max_rss_growth_mib_per_hour=10.0, max_handle_growth_per_hour=0.0,
+            max_rss_growth_mib_per_hour=10.0, max_handle_growth_per_hour=None,
             max_pending_regions=None)
         values.update(extra)
         return SimpleNamespace(**values)
@@ -200,10 +215,16 @@ class Completed(Case):
         self.run_soak(FakeHost(), minutes=10.0)
         self.assertEqual(self.written[0], "running")
 
-    def test_the_working_set_and_the_handles_are_always_judged(self):
+    def test_the_working_set_and_the_handle_count_are_always_judged(self):
         report, _ = self.run_soak(FakeHost())
         self.assertEqual(set(report["criteria"]),
-                         {"working_set_growth_mib_per_hour", "handle_growth_per_hour"})
+                         {"working_set_growth_mib_per_hour", "handle_count"})
+
+    def test_the_handle_slope_is_judged_only_when_its_flag_is_given(self):
+        unjudged, _ = self.run_soak(FakeHost())
+        self.assertNotIn("handle_growth_per_hour", unjudged["criteria"])
+        judged, _ = self.run_soak(FakeHost(), max_handle_growth_per_hour=0.0)
+        self.assertTrue(judged["criteria"]["handle_growth_per_hour"]["met"])  # flat
 
     def test_the_queue_is_judged_only_when_it_has_a_bound(self):
         unbounded, _ = self.run_soak(FakeHost())
@@ -225,13 +246,12 @@ class Completed(Case):
         self.assertNotIn("private_growth_mib_per_hour", report["criteria"])
         self.assertGreater(report["resources"]["private_mib"]["slope_per_hour"], 100)
 
-    def test_a_growing_handle_count_is_not_met_and_a_flat_one_is(self):
-        grows, _ = self.run_soak(GrowingHandles(), minutes=20.0, warmup_minutes=2.0,
-                                 interval=10.0)
-        self.assertFalse(grows["criteria"]["handle_growth_per_hour"]["met"])
-        flat, _ = self.run_soak(FakeHost(), minutes=20.0, warmup_minutes=2.0, interval=10.0)
-        self.assertTrue(flat["criteria"]["handle_growth_per_hour"]["met"])
-        self.assertEqual(flat["criteria"]["handle_growth_per_hour"]["measured"], 0.0)
+    def test_a_count_that_keeps_growing_is_not_met_and_a_flat_one_is(self):
+        grows, _ = self.run_soak(GrowingHandles(), minutes=75.0, interval=30.0)
+        self.assertFalse(grows["criteria"]["handle_count"]["met"])
+        flat, _ = self.run_soak(FakeHost(), minutes=75.0, interval=30.0)
+        self.assertTrue(flat["criteria"]["handle_count"]["met"])
+        self.assertEqual(flat["criteria"]["handle_count"]["handle_step_deltas"], [])
 
 
 class Refusals(Case):
@@ -335,13 +355,16 @@ class Analysis(unittest.TestCase):
 
 
 class Verdict(unittest.TestCase):
+    RULE_NOT_UNDER_TEST = {"met": True}  # the step rule needs samples; these tests do not use it
+
     def test_the_owners_thresholds_judge_the_section_12_numbers_as_they_were_recorded(self):
-        """S0 section 12 (1.0.55): working set +1.6 MiB/h; handles 947 in every sample."""
+        """S0 section 12 (1.0.55): working set +1.6 MiB/h; handles 947 in every sample. The
+        no-growth rule of 15 October 2026 is the optional handle flag, given explicitly."""
         resources = {"working_set_mib": {"n": 1320, "slope_per_hour": 1.6},
                      "handles": {"n": 1320, "slope_per_hour": 0.0}}
         args = SimpleNamespace(max_rss_growth_mib_per_hour=10.0,
                                max_handle_growth_per_hour=0.0, max_pending_regions=None)
-        result = soak.criteria(resources, {"n": 1440, "max": 0}, args)
+        result = soak.criteria(resources, {"n": 1440, "max": 0}, self.RULE_NOT_UNDER_TEST, args)
         self.assertTrue(result["working_set_growth_mib_per_hour"]["met"])
         self.assertTrue(result["handle_growth_per_hour"]["met"])
         self.assertNotIn("pending_regions_max", result)  # no bound given: no queue criterion
@@ -350,10 +373,11 @@ class Verdict(unittest.TestCase):
         args = SimpleNamespace(max_rss_growth_mib_per_hour=10.0,
                                max_handle_growth_per_hour=0.0, max_pending_regions=None)
         grows = soak.criteria({"working_set_mib": {"slope_per_hour": 0.0},
-                               "handles": {"slope_per_hour": 0.5}}, {"n": 0}, args)
+                               "handles": {"slope_per_hour": 0.5}}, {"n": 0},
+                              self.RULE_NOT_UNDER_TEST, args)
         self.assertFalse(grows["handle_growth_per_hour"]["met"])
         none = soak.criteria({"working_set_mib": {"n": 1}, "handles": {"slope_per_hour": 0.0}},
-                             {"n": 0}, args)
+                             {"n": 0}, self.RULE_NOT_UNDER_TEST, args)
         self.assertFalse(none["working_set_growth_mib_per_hour"]["met"])
 
 
@@ -361,9 +385,13 @@ class Command(unittest.TestCase):
     def test_the_defaults_are_the_two_hours_of_rnf_06_and_the_owners_thresholds(self):
         args = soak.parse_args(["--config", "c.toml", "--out", "o.json"])
         self.assertEqual(args.minutes, 120.0)
-        self.assertEqual((args.max_rss_growth_mib_per_hour, args.max_handle_growth_per_hour),
-                         (10.0, 0.0))
+        self.assertEqual(args.max_rss_growth_mib_per_hour, 10.0)
+        self.assertIsNone(args.max_handle_growth_per_hour)  # the handle rule needs no flag
         self.assertIsNone(args.max_pending_regions)  # the frame sets the bound: no default
+
+    def test_the_handle_rule_of_17_october_is_cited_in_the_docstring_and_the_help(self):
+        self.assertIn("17 October 2026", soak.__doc__)
+        self.assertIn("17 October 2026", soak.build_parser().format_help())
 
     def test_the_tool_has_no_way_to_send_an_action(self):
         source = Path(soak.__file__).read_text(encoding="utf-8")
@@ -388,7 +416,7 @@ class Diagnostics(Case):
     def test_the_threads_and_the_steps_add_no_criterion(self):
         report, _ = self.run_soak(ThreadsAndHandles(), minutes=60.0)
         self.assertEqual(set(report["criteria"]),
-                         {"working_set_growth_mib_per_hour", "handle_growth_per_hour"})
+                         {"working_set_growth_mib_per_hour", "handle_count"})
 
     def test_an_unreadable_thread_count_is_none_and_never_stops_the_soak(self):
         report, code = self.run_soak(ThreadsUnreadable(), minutes=2.0)
@@ -430,6 +458,125 @@ class HandleSteps(unittest.TestCase):
         samples = [self.sample(20, 500, None), self.sample(30, 501, 41)]
         step = soak.handle_steps(samples, warmup_s=15)[0]
         self.assertEqual((step["threads_before"], step["threads_after"]), (None, 41))
+
+
+class HandleRule(unittest.TestCase):
+    """The owner's handle rule of 17 October 2026 on synthetic samples, five seconds apart: the
+    handle count is 998 plus the deltas of ``changes``."""
+
+    @staticmethod
+    def series(end_s, changes=(), gaps=(), base=998):
+        return [{"t_s": float(t), "threads": 40,
+                 "handles": None if t in gaps else base + sum(d for at, d in changes if t >= at)}
+                for t in range(0, end_s + 1, 5)]
+
+    @staticmethod
+    def rule(samples, completed=True, warmup_s=600.0):
+        return soak.handle_rule(samples, warmup_s, completed)
+
+    def test_the_example_of_section_18_one_step_of_plus_one_at_second_785_is_met(self):
+        rule = self.rule(self.series(7195, changes=[(785, 1)]))
+        self.assertEqual((rule["met"], rule["reason"]), (True, None))
+        self.assertEqual((rule["handle_steps_after_warmup"], rule["handle_step_deltas"]), (1, [1]))
+        self.assertEqual(rule["flat_final_s"], 6410.0)
+
+    def test_the_example_of_section_15_a_step_at_minute_69_is_not_met_with_51_flat_minutes(self):
+        rule = self.rule(self.series(7195, changes=[(69 * 60, 1)]))
+        self.assertFalse(rule["met"])
+        self.assertEqual(rule["flat_final_s"], 3055.0)
+        self.assertIn("last 60 minutes", rule["reason"])
+
+    def test_two_changes_after_the_warm_up_are_not_met_even_if_both_are_plus_one(self):
+        rule = self.rule(self.series(7195, changes=[(785, 1), (3000, 1)]))
+        self.assertFalse(rule["met"])
+        self.assertEqual(rule["handle_step_deltas"], [1, 1])
+        self.assertIn("changes", rule["reason"])
+
+    def test_a_step_that_is_not_plus_one_is_not_met(self):
+        for delta in (-1, 2):
+            rule = self.rule(self.series(7195, changes=[(785, delta)]))
+            self.assertFalse(rule["met"], delta)
+            self.assertIn("+1", rule["reason"])
+
+    def test_a_change_inside_the_warm_up_is_not_a_step_and_the_flat_time_starts_after_it(self):
+        rule = self.rule(self.series(7195, changes=[(300, 1)]))
+        self.assertEqual((rule["met"], rule["handle_steps_after_warmup"]), (True, 0))
+        self.assertEqual(rule["flat_final_s"], 6595.0)
+
+    def test_a_run_without_changes_is_met(self):
+        rule = self.rule(self.series(7195))
+        self.assertTrue(rule["met"])
+        self.assertEqual(rule["handle_step_deltas"], [])
+
+    def test_a_run_shorter_than_the_warm_up_plus_an_hour_cannot_meet_it(self):
+        for end_s in (3595, 4195):  # an hour; seventy minutes less one sample
+            rule = self.rule(self.series(end_s))
+            self.assertFalse(rule["met"], end_s)
+            self.assertIn("shorter", rule["reason"])
+
+    def test_a_run_that_did_not_complete_cannot_meet_it(self):
+        rule = self.rule(self.series(7195), completed=False)
+        self.assertFalse(rule["met"])
+        self.assertIn("complete", rule["reason"])
+
+    def test_a_missing_handle_count_is_skipped_and_the_step_is_seen_after_the_gap(self):
+        samples = self.series(7195, changes=[(850, 1)], gaps=set(range(800, 901, 5)))
+        rule = self.rule(samples)
+        self.assertEqual(rule["handle_step_deltas"], [1])  # 998 before the gap, 999 at 905 s
+        self.assertTrue(rule["met"])
+        self.assertEqual(rule["flat_final_s"], 6290.0)
+
+    def test_without_handle_counts_after_the_warm_up_the_rule_is_not_met(self):
+        rule = self.rule(self.series(7195, gaps=set(range(0, 7196, 5))))
+        self.assertFalse(rule["met"])
+        self.assertIn("handle count", rule["reason"])
+
+    def test_a_last_sample_without_a_handle_count_is_not_met(self):
+        rule = self.rule(self.series(7195, gaps={7195}))
+        self.assertFalse(rule["met"])
+        self.assertIn("last sample", rule["reason"])
+
+    def test_the_warm_up_is_the_one_given(self):
+        samples = self.series(7195, changes=[(500, 1)])
+        self.assertEqual(self.rule(samples)["handle_steps_after_warmup"], 0)  # 600 s
+        self.assertEqual(self.rule(samples, warmup_s=400.0)["handle_steps_after_warmup"], 1)
+
+    def test_an_empty_series_is_not_met(self):
+        self.assertFalse(self.rule([])["met"])
+
+    @staticmethod
+    def points(*pairs):
+        """Samples at the given (second, handle count) pairs: the sampler records milliseconds,
+        so the timestamps need not be five seconds apart."""
+        return [{"t_s": t, "threads": 40, "handles": handles} for t, handles in pairs]
+
+    def test_a_change_3599_96_seconds_before_the_end_is_not_in_the_final_hour(self):
+        rule = self.rule(self.points((600.0, 998), (3595.04, 999), (7195.0, 999)))
+        self.assertFalse(rule["met"])
+        self.assertEqual(rule["flat_final_s"], 3599.96)
+        self.assertIn("last 60 minutes", rule["reason"])
+
+    def test_a_count_flat_for_exactly_3600_seconds_is_met(self):
+        rule = self.rule(self.points((600.0, 998), (3595.0, 999), (7195.0, 999)))
+        self.assertTrue(rule["met"])
+        self.assertEqual(rule["flat_final_s"], 3600.0)
+
+
+class HandleRuleInTheReport(Case):
+    def test_a_120_minute_run_with_the_section_18_step_is_met_in_the_report(self):
+        report, code = self.run_soak(HandleSchedule([(785, 1)]), minutes=120.0)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        rule = report["criteria"]["handle_count"]
+        self.assertTrue(rule["met"])
+        self.assertEqual(rule["flat_final_s"], 6410.0)
+        self.assertEqual(report["handle_steps"][0]["handles_before"], 998)
+
+    def test_a_120_minute_run_with_the_section_15_step_is_not_met_in_the_report(self):
+        report, code = self.run_soak(HandleSchedule([(69 * 60, 1)]), minutes=120.0)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        rule = report["criteria"]["handle_count"]
+        self.assertFalse(rule["met"])
+        self.assertEqual(rule["flat_final_s"], 3055.0)
 
 
 if __name__ == "__main__":

@@ -132,4 +132,4 @@ BDD-59,Cambio en una ventana por debajo,Entrega sintética y snapshot gastado.,A
 BDD-60,Ventana que sube sobre el objetivo,STALE_SNAPSHOT con observe_again y sin eventos.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
 BDD-61,Cambio de primer plano,STALE_SNAPSHOT con observe_again y sin eventos.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
 BDD-62,Objetivo no atestiguado como opaco,STALE_SNAPSHOT por comparar la pantalla entera.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
-IT-08,Alcance por ventana en vivo (M2),"Criterios pre-registrados por el responsable; cierre de IT-03 y pasos D1 con consentimiento por sesión. Planificado, no ejecutado.",NO_EJECUTADO,PENDIENTE_PRODUCTO
+IT-08,Alcance por ventana en vivo (M2),"Criterios pre-registrados por el responsable; cierre de IT-03 y pasos D1 con consentimiento por sesión. Ejecutado de forma supervisada y descriptiva el 17 de octubre de 2026 (S4 §D.2.1); IT-03 con target_window no ejecutado.",NO_EJECUTADO,PENDIENTE_PRODUCTO
