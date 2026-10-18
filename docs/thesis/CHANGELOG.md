@@ -1,5 +1,9 @@
 # Historial documental
 
+## 1.0.97 — 2026-10-18: AG-02, el resumen de la fase 1 ya no cuenta una abstención que la fase no puntúa (sólo herramienta)
+
+El resumen de la corrida parcial de la fase 1 de [9.11.1](09_EVALUACION_EXPERIMENTAL.md) decía «abstention correct 1/2»: contaba G09 (meta del campo señuelo) en el denominador aunque su abstención es una propiedad de la fase 2 (en la fase 1 su `phase1_verdict` y su `abstention_correct` son nulos). `tools/agent/ag02/summarise.py` cuenta ahora una abstención sólo donde la fase la puntúa (`abstention_correct` no nulo); la fase 2 no cambia. Prueba de regresión y registro en [la revisión de AG-02](../reviews/2026-10-17-pr86-ag02-harness.md) (A1). Los números ya publicados en 9.11.1 no citan esa fracción. Sin cambios en el motor, el contrato MCP, ningún requisito, escenario ni casilla de 06 §6.7.
+
 ## 1.0.96 — 2026-10-18: resultados parciales de la fase 1 de AG-02 (sólo documentación)
 
 Se añade a [9.11](09_EVALUACION_EXPERIMENTAL.md) el apartado 9.11.1 con los resultados parciales de la fase 1 de AG-02, ejecutada el 18 de octubre de 2026 con el responsable presente: siete de las once metas fijas completadas, todas sobre `ommatix-testapp.exe` (G01 a G06 y G10), sin ninguna acción en vivo ni entrega. G07 se abortó por un defecto del ejecutor, corregido en la PR #88 (fusionada); G08, G09 y G11 no se ejecutaron, y la fase 2 no se ha ejecutado.
