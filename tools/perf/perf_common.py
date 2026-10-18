@@ -226,6 +226,11 @@ if sys.platform == "win32":
 
         def owner(self, ok):
             if ok:
+                # The kernel may return fewer bytes than dwSize asked for: a record that stops
+                # before the owner field names no owner, so it is an error, not a PID of zero.
+                owner_end = ThreadEntry32.th32OwnerProcessID.offset + ctypes.sizeof(wintypes.DWORD)
+                if self.entry.dwSize < owner_end:
+                    raise OSError("the thread entry is too short to name its owning process")
                 return int(self.entry.th32OwnerProcessID)
             error = ctypes.get_last_error()
             if error == ERROR_NO_MORE_FILES:

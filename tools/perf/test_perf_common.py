@@ -173,6 +173,50 @@ class ThreadCountOnWindows(unittest.TestCase):
             self.assertIsNone(c.thread_count(os.getpid()))
         kernel32.CloseHandle.assert_not_called()
 
+    def mocked_walk(self, records):
+        """A kernel32 whose thread walk yields ``records`` in order, each ``(ok, size, owner)``.
+        Like the kernel, it writes the first ``size`` bytes of the entry: the owner field
+        (bytes 12 to 16) only when ``size`` reaches it, so an unwritten field keeps its value."""
+        kernel32 = mock.Mock()
+        kernel32.CreateToolhelp32Snapshot.return_value = 4242
+        pending = list(records)
+        owner_end = c.ThreadEntry32.th32OwnerProcessID.offset + ctypes.sizeof(ctypes.c_uint32)
+
+        def step(handle, entry_pointer):
+            ok, size, owner = pending.pop(0) if pending else (False, 0, 0)
+            if not ok:
+                return 0
+            entry = ctypes.cast(entry_pointer, ctypes.POINTER(c.ThreadEntry32)).contents
+            entry.dwSize = size
+            if size >= owner_end:
+                entry.th32OwnerProcessID = owner
+            return 1
+
+        kernel32.Thread32First.side_effect = step
+        kernel32.Thread32Next.side_effect = step
+        return kernel32
+
+    def test_a_short_first_entry_is_none_and_the_snapshot_is_closed_once(self):
+        kernel32 = self.mocked_walk([(True, 12, 0)])
+        with mock.patch.object(c, "kernel32", kernel32):
+            with mock.patch("ctypes.get_last_error", return_value=18):
+                self.assertIsNone(c.thread_count(100))
+        kernel32.CloseHandle.assert_called_once_with(4242)
+
+    def test_a_short_later_entry_is_none_not_the_count_of_the_valid_prefix(self):
+        kernel32 = self.mocked_walk([(True, 28, 100), (True, 12, 0)])
+        with mock.patch.object(c, "kernel32", kernel32):
+            with mock.patch("ctypes.get_last_error", return_value=18):
+                self.assertIsNone(c.thread_count(100))
+        kernel32.CloseHandle.assert_called_once_with(4242)
+
+    def test_an_entry_whose_size_reaches_the_owner_field_is_counted(self):
+        kernel32 = self.mocked_walk([(True, 16, 100), (True, 28, 200)])
+        with mock.patch.object(c, "kernel32", kernel32):
+            with mock.patch("ctypes.get_last_error", return_value=18):
+                self.assertEqual(c.thread_count(100), 1)
+        kernel32.CloseHandle.assert_called_once_with(4242)
+
 
 if __name__ == "__main__":
     unittest.main()
