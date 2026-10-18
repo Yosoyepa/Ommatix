@@ -288,8 +288,8 @@ fn ut_73_the_casting_window_enters_the_list_only_inside_the_expanded_region() {
 }
 
 /// UT-74: over generated frames, windows and margins, the amended scope accepts exactly when
-/// no changed tile meets T or an overlapping window above it, and it refuses on pixels only
-/// where the ADR-0032 group does. The expectation is independent scalar interval arithmetic.
+/// no changed tile meets T or an overlapping window above it, and at margin 0 it refuses on
+/// pixels only where the ADR-0032 group does. The expectation is independent scalar interval arithmetic.
 #[test]
 fn ut_74_the_amended_scope_refuses_on_pixels_only_where_adr_0032_does() {
     type Rect = (f64, f64, f64, f64);
@@ -346,7 +346,12 @@ fn ut_74_the_amended_scope_refuses_on_pixels_only_where_adr_0032_does() {
                     )
                     .collect();
                 let adr_32 = old.iter().any(|&rect| hit(rect, m, left, top));
-                assert!(!amended || adr_32, "pixel {x},{y}; margin {margin}");
+                // The subset holds at margin 0 only: a positive margin can add a window that
+                // ADR-0032 excludes (a conservative extension, see the next tests).
+                assert!(
+                    margin != 0 || !amended || adr_32,
+                    "pixel {x},{y}; margin {margin}"
+                );
                 let result = click(&mut r, &page);
                 assert_eq!(
                     error_code(&result),
@@ -356,5 +361,162 @@ fn ut_74_the_amended_scope_refuses_on_pixels_only_where_adr_0032_does() {
                 assert_eq!(r.world().delivered.len(), usize::from(!amended));
             }
         }
+    }
+}
+
+/// UT-70 (review 2, F3): when the opacity cannot be attested, an identity refusal keeps the
+/// refusal and spends the snapshot but reports no group: the scope was not available.
+#[test]
+fn ut_70_an_identity_refusal_without_attested_opacity_omits_the_group_count() {
+    let other = || scoped_window(7, 1, bx(0.0, 200.0, 40.0, 320.0));
+    // 0: the actuator never attests; 1: it attests twice and loses it at the last look.
+    for loses_at_the_last_look in [false, true] {
+        let mut r = rig_with_windows(vec![target(0), other()], 1);
+        let page = r.observe();
+        r.world().foreground_window = Some(other());
+        if loses_at_the_last_look {
+            let opaque = Some(WindowOpacity {
+                corner_exclusion_px: 0,
+            });
+            r.world().opacity_script.extend([opaque, opaque, None]);
+        } else {
+            r.world().opacity = None;
+        }
+        let result = click(&mut r, &page);
+        assert_stale_and_nothing_sent(&r, &result);
+        let d = diagnostic(&r);
+        assert_eq!(
+            (d.total_tiles, d.group_tiles),
+            (0, None),
+            "last look {loses_at_the_last_look}"
+        );
+        let retry = click(&mut r, &page);
+        assert_eq!(error_code(&retry), Some(ErrorCode::StaleSnapshot));
+    }
+}
+
+/// UT-74 (review 2, F4): with a positive margin ADR-0035 can include a window that ADR-0032
+/// excludes (a conservative extension: more refusals, never fewer). T is `[300,64,500,320)`
+/// and the window above it `[504,100,640,150)`; at margin 5 only the expanded T reaches it.
+#[test]
+fn ut_74_a_window_that_enters_only_through_the_margin_refuses_where_adr_0032_accepts() {
+    let t = || scoped_window(1, 1, bx(300.0, 64.0, 500.0, 320.0));
+    let w = || scoped_window(2, 0, bx(504.0, 100.0, 640.0, 150.0));
+    for (margin, refuses) in [(0, false), (3, false), (4, false), (5, true)] {
+        let mut r = rig_with_windows(vec![w(), t()], 1);
+        r.engine.config.action_freshness_margin_px = margin;
+        let page = r.observe();
+        r.world().pixels.push((600, 110, WHITE));
+        let result = click(&mut r, &page);
+        if refuses {
+            assert_stale_and_nothing_sent(&r, &result);
+        } else {
+            delivered(&result);
+        }
+    }
+}
+
+/// UT-74 (review 2, F4): deterministic layouts (rectangles and relative z-orders, with windows
+/// that enter only through the margin) against an independent scalar reference. T is
+/// `[300,64,500,320)` and is the foreground; at margin 0 the group is a subset of ADR-0032's.
+#[test]
+fn ut_74_generated_layouts_match_the_scalar_reference_for_every_margin() {
+    type Rect = (f64, f64, f64, f64);
+    let to_box = |r: Rect| bx(r.0, r.1, r.2, r.3);
+    let t: Rect = (300.0, 64.0, 500.0, 320.0);
+    let overlaps =
+        |a: Rect, b: Rect, m: f64| a.0 < b.2 + m && a.2 > b.0 - m && a.1 < b.3 + m && a.3 > b.1 - m;
+    let tile_hit = |r: Rect, m: f64, col: u32, row: u32| {
+        let (left, top) = (f64::from(col * 64), f64::from(row * 64));
+        left < r.2 + m && left + 64.0 > r.0 - m && top < r.3 + m && top + 64.0 > r.1 - m
+    };
+    for margin in [0u32, 1, 5, 64] {
+        let m = f64::from(margin);
+        for layout in 0..16u32 {
+            // Up to four other windows, handles 2.., and T somewhere in the relative order.
+            let n = 1 + layout % 4;
+            let others: Vec<Rect> = (0..n)
+                .map(|j| {
+                    let x0 = f64::from((layout * 37 + j * 53) % 560);
+                    let y0 = f64::from((layout * 17 + j * 71) % 250);
+                    let w = f64::from(40 + (layout * 13 + j * 29) % 120);
+                    let h = f64::from(30 + (layout * 7 + j * 19) % 100);
+                    (x0, y0, (x0 + w).min(640.0), (y0 + h).min(320.0))
+                })
+                .collect();
+            let t_position = (layout % (n + 1)) as usize;
+            let mut listed: Vec<TopLevelWindow> = Vec::new();
+            let mut other = others.iter().zip(2u64..);
+            for position in 0..=others.len() {
+                let z = u32::try_from(position).unwrap();
+                if position == t_position {
+                    listed.push(scoped_window(1, z, to_box(t)));
+                } else if let Some((rect, handle)) = other.next() {
+                    listed.push(scoped_window(handle, z, to_box(*rect)));
+                }
+            }
+            // Members: T, and the windows listed before T that overlap T grown by the margin.
+            let members: Vec<Rect> = std::iter::once(t)
+                .chain(
+                    listed
+                        .iter()
+                        .take(t_position)
+                        .map(|w| w.rectangle.unwrap())
+                        .map(|b| (b.x0(), b.y0(), b.x1(), b.y1()))
+                        .filter(|&r| overlaps(r, t, m)),
+                )
+                .collect();
+            let adr_32: Vec<Rect> = std::iter::once(t)
+                .chain(
+                    listed
+                        .iter()
+                        .map(|w| w.rectangle.unwrap())
+                        .map(|b| (b.x0(), b.y0(), b.x1(), b.y1()))
+                        .filter(|&r| overlaps(r, t, 0.0)),
+                )
+                .collect();
+            for k in 0..10u32 {
+                let x = (layout * 89 + k * 61 + 7) % 640;
+                let y = (layout * 43 + k * 37 + 5) % 320;
+                let (col, row) = (x / 64, y / 64);
+                let expect = members.iter().any(|&r| tile_hit(r, m, col, row));
+                let old = adr_32.iter().any(|&r| tile_hit(r, m, col, row));
+                assert!(
+                    margin != 0 || !expect || old,
+                    "subset at margin 0: layout {layout} pixel {x},{y}"
+                );
+                let mut r = rig_with_windows(listed.clone(), 1);
+                r.engine.config.action_freshness_margin_px = margin;
+                let page = r.observe();
+                r.world().pixels.push((x, y, WHITE));
+                let result = click(&mut r, &page);
+                assert_eq!(
+                    error_code(&result),
+                    expect.then_some(ErrorCode::StaleSnapshot),
+                    "layout {layout}; pixel {x},{y}; margin {margin}"
+                );
+            }
+        }
+    }
+}
+
+/// UT-70 (review 2, F1/F2): whichever look loses the opacity attestation (a failed style
+/// query, or a window composed without a redirection bitmap, makes the adapter answer
+/// `None`), the whole frame is compared and a far changed pixel refuses.
+#[test]
+fn ut_70_losing_the_opacity_at_any_look_takes_the_whole_frame_path() {
+    let opaque = Some(WindowOpacity {
+        corner_exclusion_px: 0,
+    });
+    for lost_at in 0..3 {
+        let mut r = scoped_rig();
+        let page = r.observe();
+        let mut reads = [opaque, opaque, opaque];
+        reads[lost_at] = None;
+        r.world().opacity_script.extend(reads);
+        r.world().pixels.push((FAR_PIXEL.0, FAR_PIXEL.1, WHITE));
+        let result = click(&mut r, &page);
+        assert_stale_and_nothing_sent(&r, &result);
+        assert_eq!(diagnostic(&r).group_tiles, None, "lost at look {lost_at}");
     }
 }

@@ -281,6 +281,10 @@ pub(super) struct FreshFrame {
     pub frame: BgraFrame,
     diff: TileDiff,
     expected: Option<WindowGroup>,
+    /// The scope was attested around the capture (both reads equal and usable, opacity
+    /// included), so the comparison was regional. Separate from `expected`, which is only
+    /// the observed identity.
+    scoped: bool,
     known_group_change: bool,
 }
 
@@ -399,7 +403,8 @@ impl Engine {
         // Keep their known identity changes even when the scope cannot be used.
         let captured_group =
             first.filter(|g| Some(g) == second.as_ref() && g.contains_target(bbox));
-        let scope = expected.as_ref().filter(|_| captured_group.is_some());
+        let scoped = captured_group.is_some();
+        let scope = expected.as_ref().filter(|_| scoped);
         let regions: Vec<BBox> = scope
             .into_iter()
             .flat_map(|g| &g.windows)
@@ -436,6 +441,7 @@ impl Engine {
             frame: captured.frame,
             diff,
             expected,
+            scoped,
             known_group_change,
         })
     }
@@ -457,7 +463,10 @@ impl Engine {
         // and age after it, before comparing identity or handing anything to the actuator.
         self.last_look(foreground, bbox.center(), target)?;
         if fresh.known_group_change || known_change {
-            return Err(self.freshness_refusal(&fresh.frame, &fresh.diff, bbox, Some(expected)));
+            // The identity refusal keeps its code and spends the snapshot; the group is
+            // reported only while the scope was usable at every look, opacity included.
+            let attested = (fresh.scoped && current.is_some()).then_some(expected);
+            return Err(self.freshness_refusal(&fresh.frame, &fresh.diff, bbox, attested));
         }
         // Losing final attestation requires an actual whole-frame comparison: ignored
         // pixels cannot be authorised by a scoped diff, and no second capture is needed.

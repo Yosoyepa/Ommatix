@@ -8,7 +8,9 @@ use std::time::Duration;
 use ommatix_application::contract::{ActionKind, ValidatedAction};
 use ommatix_application::{DeliveryReceipt, OsActuator, PortError, TopLevelWindow, WindowOpacity};
 use ommatix_domain::DisplayMapping;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, POINT, RECT};
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, HANDLE, HWND, POINT, RECT, SetLastError, WIN32_ERROR,
+};
 use windows::Win32::Graphics::Dwm::{
     DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_SYSTEMBACKDROP_TYPE, DwmGetWindowAttribute,
 };
@@ -39,10 +41,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, PWSTR};
 
 use super::{
-    ADAPTER, Event, FocusFacts, HOSTED_CONTENT_CLASS, MUST_BE_UP, TopLevel, VirtualScreen,
-    WindowWalk, batch, exe_name_utf16, first_held, focus_problem, frame_bounds, integrity_allows,
-    is_frame_host, keys_problem, normalise, point_application, shown_application, split_keys,
-    window_opacity_of,
+    ADAPTER, Event, FocusFacts, HOSTED_CONTENT_CLASS, MUST_BE_UP, Sibling, TopLevel, VirtualScreen,
+    batch, exe_name_utf16, extended_style_of, first_held, focus_problem, frame_bounds,
+    integrity_allows, is_frame_host, keys_problem, normalise, point_application, shown_application,
+    sibling, split_keys, walk_windows, window_opacity_of,
 };
 use crate::aim::frame_pixel;
 
@@ -338,54 +340,62 @@ fn visible_bounds(hwnd: HWND) -> Option<[i32; 4]> {
 /// partial list; every visible, uncloaked window needs a rectangle, even without a label.
 fn visible_windows(mapping: DisplayMapping) -> Option<Vec<TopLevelWindow>> {
     // SAFETY: null parent requests the first top-level window; handle returned by value.
-    let mut hwnd = unsafe { GetTopWindow(None) }.ok()?;
-    let mut walk = WindowWalk::default();
+    let first = unsafe { GetTopWindow(None) }.ok()?;
     let mut windows = Vec::new();
     let mut z_order = 0u32;
-    loop {
-        if !walk.visit(top_level_handle(hwnd)?) {
-            return None;
-        }
-        // SAFETY: window handle by value; invalid/stale handles return false.
-        let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
-        // SAFETY: window handle by value; queries state without reading client memory.
-        let minimized = unsafe { IsIconic(hwnd) }.as_bool();
-        if visible && !minimized {
-            let mut cloaked = 0u32;
-            // SAFETY: this attribute writes a DWORD into our live local with its exact
-            // size; DWM keeps neither the out-pointer nor the window handle.
-            unsafe {
-                DwmGetWindowAttribute(
-                    hwnd,
-                    DWMWA_CLOAKED,
-                    (&raw mut cloaked).cast(),
-                    u32::try_from(size_of::<u32>()).ok()?,
-                )
-            }
-            .ok()?;
-            if cloaked == 0 {
-                let rect = visible_bounds(hwnd)?;
-                if let Some(rectangle) = frame_bounds(mapping, rect) {
-                    let mut window = attest_window(hwnd)?;
-                    window.rectangle = Some(rectangle);
-                    window.z_order = z_order;
-                    windows.push(window);
-                    z_order = z_order.checked_add(1)?;
+    walk_windows(
+        first,
+        top_level_handle,
+        |hwnd| {
+            // SAFETY: window handle by value; invalid/stale handles return false.
+            let visible = unsafe { IsWindowVisible(hwnd) }.as_bool();
+            // SAFETY: window handle by value; queries state without reading client memory.
+            let minimized = unsafe { IsIconic(hwnd) }.as_bool();
+            if visible && !minimized {
+                let mut cloaked = 0u32;
+                // SAFETY: this attribute writes a DWORD into our live local with its exact
+                // size; DWM keeps neither the out-pointer nor the window handle.
+                unsafe {
+                    DwmGetWindowAttribute(
+                        hwnd,
+                        DWMWA_CLOAKED,
+                        (&raw mut cloaked).cast(),
+                        u32::try_from(size_of::<u32>()).ok()?,
+                    )
+                }
+                .ok()?;
+                if cloaked == 0 {
+                    let rect = visible_bounds(hwnd)?;
+                    if let Some(rectangle) = frame_bounds(mapping, rect) {
+                        let mut window = attest_window(hwnd)?;
+                        window.rectangle = Some(rectangle);
+                        window.z_order = z_order;
+                        windows.push(window);
+                        z_order = z_order.checked_add(1)?;
+                    }
                 }
             }
-        }
-        // SAFETY: queries the next top-level sibling from a handle value; no pointers.
-        let next = unsafe { GetWindow(hwnd, GW_HWNDNEXT) }.ok();
-        // SAFETY: handle value only. A destroyed cursor cannot terminate an attested walk.
-        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
-            return None;
-        }
-        match next {
-            Some(next) => hwnd = next,
-            None => break,
-        }
-    }
+            Some(())
+        },
+        next_sibling,
+        // A destroyed cursor cannot terminate an attested walk.
+        // SAFETY: handle value only.
+        |hwnd| unsafe { IsWindow(Some(hwnd)) }.as_bool(),
+    )?;
     Some(windows)
+}
+
+/// The next top-level sibling of `hwnd`, telling the end of the list from a failure: the
+/// thread's last error is cleared right before the query and read right after it, with no
+/// other native call in between (`GetWindow` returns null at the end and on an error).
+fn next_sibling(hwnd: HWND) -> Sibling<HWND> {
+    // SAFETY: clears the calling thread's last-error value; a plain value, no pointers.
+    unsafe { SetLastError(WIN32_ERROR(0)) };
+    // SAFETY: queries the next top-level sibling from a handle value; no pointers.
+    let next = unsafe { GetWindow(hwnd, GW_HWNDNEXT) }.ok();
+    // SAFETY: reads the calling thread's last-error value; no arguments.
+    let error = unsafe { GetLastError() }.0;
+    sibling(next, error)
 }
 
 /// What this adapter attests about the opacity of the top-level window `handle` (ADR-0035):
@@ -399,9 +409,14 @@ fn read_window_opacity(handle: u64) -> Option<WindowOpacity> {
     if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
         return None;
     }
+    // SAFETY: clears the calling thread's last-error value; a plain value, no pointers.
+    unsafe { SetLastError(WIN32_ERROR(0)) };
     // SAFETY: window handle by value and a constant index; returns the style bits, with
     // no pointer read or written.
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    // SAFETY: reads the calling thread's last-error value; no arguments. A zero style is
+    // valid (an empty style) or a failure: only the error tells them apart.
+    let style_error = unsafe { GetLastError() }.0;
     let mut backdrop = 0u32;
     // SAFETY: this attribute writes a DWORD into our live local with its exact size; DWM
     // keeps neither the out-pointer nor the window handle.
@@ -413,9 +428,8 @@ fn read_window_opacity(handle: u64) -> Option<WindowOpacity> {
             u32::try_from(size_of::<u32>()).ok()?,
         )
     };
-    // Style bits are the low 32 bits of the pointer-sized value.
     window_opacity_of(
-        u32::try_from(style & 0xFFFF_FFFF).ok()?,
+        extended_style_of(style, style_error),
         read.is_ok().then_some(backdrop),
     )
 }
