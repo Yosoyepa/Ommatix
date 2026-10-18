@@ -544,6 +544,23 @@ class HandleRule(unittest.TestCase):
     def test_an_empty_series_is_not_met(self):
         self.assertFalse(self.rule([])["met"])
 
+    @staticmethod
+    def points(*pairs):
+        """Samples at the given (second, handle count) pairs: the sampler records milliseconds,
+        so the timestamps need not be five seconds apart."""
+        return [{"t_s": t, "threads": 40, "handles": handles} for t, handles in pairs]
+
+    def test_a_change_3599_96_seconds_before_the_end_is_not_in_the_final_hour(self):
+        rule = self.rule(self.points((600.0, 998), (3595.04, 999), (7195.0, 999)))
+        self.assertFalse(rule["met"])
+        self.assertEqual(rule["flat_final_s"], 3599.96)
+        self.assertIn("last 60 minutes", rule["reason"])
+
+    def test_a_count_flat_for_exactly_3600_seconds_is_met(self):
+        rule = self.rule(self.points((600.0, 998), (3595.0, 999), (7195.0, 999)))
+        self.assertTrue(rule["met"])
+        self.assertEqual(rule["flat_final_s"], 3600.0)
+
 
 class HandleRuleInTheReport(Case):
     def test_a_120_minute_run_with_the_section_18_step_is_met_in_the_report(self):

@@ -173,12 +173,13 @@ def handle_rule(samples: list[dict], warmup_s: float, completed: bool) -> dict:
         rule["reason"] = "no handle count in the last sample"
     else:
         last_change_s = steps[-1]["t_s"] if steps else readings[0]["t_s"]
-        rule["flat_final_s"] = round(end_s - last_change_s, 1)
+        flat_s = end_s - last_change_s  # unrounded: the comparison must see the exact final hour
+        rule["flat_final_s"] = round(flat_s, 3)  # the sampler's resolution is milliseconds
         if len(steps) > 1:
             rule["reason"] = f"{len(steps)} changes of the handle count after the warm-up"
         elif steps and rule["handle_step_deltas"][0] != 1:
             rule["reason"] = "the change of the handle count is not +1"
-        elif rule["flat_final_s"] < FLAT_FINAL_S:
+        elif flat_s < FLAT_FINAL_S:
             rule["reason"] = "the handle count changed during the last 60 minutes"
         else:
             rule["met"] = True
