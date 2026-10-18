@@ -37,6 +37,7 @@ use ommatix_application::{
     AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, ActionFreshness,
     Clock, DeliveryReceipt, Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock,
     NoAccessibility, OsActuator, PolicyStore, PortError, Ports, TopLevelWindow, VerifyParams,
+    WindowOpacity,
 };
 use ommatix_domain::appearance::{
     CachePolicy, DESCRIPTOR_VERSION, GRID_LEN, GradientDescriptor, IconCache, IconMatch, Prototype,
@@ -67,7 +68,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
     "BDD-37", "BDD-38", "BDD-39", "BDD-40", "BDD-41", "BDD-42", "BDD-43", "BDD-44", "BDD-45",
     "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52", "BDD-53", "BDD-54",
-    "BDD-55", "BDD-56", "BDD-57", "BDD-58",
+    "BDD-55", "BDD-56", "BDD-57", "BDD-58", "BDD-59", "BDD-60", "BDD-61", "BDD-62",
 ];
 
 #[derive(Debug, Default, World)]
@@ -944,6 +945,8 @@ struct Foreground {
     window: Option<TopLevelWindow>,
     window_at_point: Option<TopLevelWindow>,
     windows: Option<Vec<TopLevelWindow>>,
+    /// What the actuator attests about the opacity of any window (ADR-0035).
+    opacity: Option<WindowOpacity>,
 }
 
 impl Default for Foreground {
@@ -955,6 +958,9 @@ impl Default for Foreground {
             window: None,
             window_at_point: None,
             windows: None,
+            opacity: Some(WindowOpacity {
+                corner_exclusion_px: 0,
+            }),
         }
     }
 }
@@ -1030,6 +1036,13 @@ impl OsActuator for LiveDouble {
             .unwrap_or_else(PoisonError::into_inner)
             .window_at_point
             .clone()
+    }
+
+    fn window_opacity(&self, _window: &TopLevelWindow) -> Option<WindowOpacity> {
+        self.1
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .opacity
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
@@ -3235,8 +3248,15 @@ fn bdd_55_an_observation_with_target_window_freshness(e: &mut Engine) {
     let window = TopLevelWindow {
         class: "SyntheticWindow".into(),
         handle: 1,
-        z_order: 0,
+        z_order: 1,
         rectangle: Some(bx(0.0, 0.0, 256.0, 200.0)),
+    };
+    // A window below the target window that overlaps it (ADR-0035: not in the group).
+    let background = TopLevelWindow {
+        class: "SyntheticBackground".into(),
+        handle: 3,
+        z_order: 2,
+        rectangle: Some(bx(200.0, 0.0, 400.0, 100.0)),
     };
     {
         let mut foreground = agent
@@ -3245,7 +3265,7 @@ fn bdd_55_an_observation_with_target_window_freshness(e: &mut Engine) {
             .unwrap_or_else(PoisonError::into_inner);
         foreground.window = Some(window.clone());
         foreground.window_at_point = Some(window.clone());
-        foreground.windows = Some(vec![window]);
+        foreground.windows = Some(vec![window, background]);
     }
     agent.observe(json!({}));
     agent.target = Some(agent.element("Guardar"));
@@ -3278,9 +3298,59 @@ fn bdd_57_an_overlapping_popup_appears(e: &mut Engine) {
         .push(TopLevelWindow {
             class: "SyntheticPopup".into(),
             handle: 2,
-            z_order: 1,
+            z_order: 0,
             rectangle: Some(bx(200.0, 0.0, 400.0, 100.0)),
         });
+}
+
+#[given(
+    "una ventana por debajo de la ventana objetivo, que la solapa, cambia su contenido antes de la entrega"
+)]
+fn bdd_59_a_window_below_the_target_changes(e: &mut Engine) {
+    an_unrelated_window_changes(e);
+}
+
+#[given("esa ventana sube por encima de la ventana objetivo antes de la entrega")]
+fn bdd_60_the_window_rises_above_the_target(e: &mut Engine) {
+    let mut foreground = e
+        .agent()
+        .foreground
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let background = foreground
+        .windows
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|w| w.handle == 3)
+        .expect("the background window");
+    background.z_order = 0;
+}
+
+#[given("otra ventana de la misma aplicación pasa a primer plano antes de la entrega")]
+fn bdd_61_another_window_takes_the_foreground(e: &mut Engine) {
+    let mut foreground = e
+        .agent()
+        .foreground
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    let background = foreground
+        .windows
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|w| w.handle == 3)
+        .cloned();
+    foreground.window = background;
+}
+
+#[given("la ventana objetivo no se puede atestiguar como opaca")]
+fn bdd_62_the_target_window_cannot_be_attested_opaque(e: &mut Engine) {
+    e.agent()
+        .foreground
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .opacity = None;
 }
 
 #[given("el monitor cambia de escala antes de la entrega")]

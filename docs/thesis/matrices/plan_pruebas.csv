@@ -113,8 +113,23 @@ UT-61,Atestación no disponible,Sin rectángulos/grupo o sin contener la caja ob
 UT-62,Efecto sobre la pantalla entera,visual_change conserva la comparación global bajo ambos alcances.,ADR-0032,IMPLEMENTADO_EN_RUST_S4
 UT-63,Diferencial de tiles y grupo,En frames y grupos generados acepta exactamente si ningún tile distinto interseca el grupo con margen.,ADR-0032,IMPLEMENTADO_EN_RUST_S4
 UT-64,Configuración validada y apagada por defecto,screen y margen cero por defecto; claves o valores desconocidos y márgenes inválidos se rechazan al inicio.,ADR-0032,IMPLEMENTADO_EN_RUST_S4
+UT-65,Ventana por debajo del objetivo,Un cambio de píxeles o de rectángulo en una ventana por debajo del objetivo se acepta; la misma ventana por encima rechaza.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
+UT-66,Pertenencia y orden del grupo,"El grupo es el objetivo más las ventanas por encima que solapan su rectángulo con margen; el primer plano sólo entra por esa regla; el orden es z-order y luego manejador.",ADR-0035,IMPLEMENTADO_EN_RUST_S4
+UT-67,Identidad por orden relativo,"Un intercambio de orden entre miembros, una entrada o una salida del grupo y un cambio de rectángulo rechazan sin cambio de píxeles; cerrar una ventana superior sin solape no.",ADR-0035,IMPLEMENTADO_EN_RUST_S4
+UT-68,Ventana que sube entre las miradas,Una ventana que sube sobre el objetivo y lo solapa entre las dos lecturas del grupo rechaza y gasta el snapshot.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
+UT-69,Manejador de primer plano,"Un cambio del manejador de la ventana de primer plano rechaza con STALE_SNAPSHOT con píxeles y grupo idénticos, la misma aplicación y sin ámbito de ventana.",ADR-0035,IMPLEMENTADO_EN_RUST_S4
+UT-70,Opacidad no atestiguada,"Si el actuador no atestigua la opacidad de la ventana objetivo (capa, transparencia a clics, material de fondo, consulta fallida o pérdida en la última mirada) se compara la pantalla entera.",ADR-0035,IMPLEMENTADO_EN_RUST_S4
+UT-71,Esquina redondeada,Una caja que toca un cuadrado de esquina de la ventana objetivo compara la pantalla entera; una caja fuera de los cuatro cuadrados conserva el alcance.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
+UT-72,Sombra dentro del objetivo,Un píxel cambiado dentro de la ventana objetivo rechaza con margen 0 aunque lo proyecte otra ventana.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
+UT-73,Identidad de la ventana que proyecta sombra,Su identidad entra en la lista sólo si sus límites intersecan el rectángulo objetivo ampliado con el margen.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
+UT-74,Diferencial del grupo enmendado,"Con frames, ventanas y márgenes generados acepta exactamente si ningún tile cambiado interseca el grupo y rechaza por píxeles sólo donde lo hace el grupo de ADR-0032.",ADR-0035,IMPLEMENTADO_EN_RUST_S4
+UT-75,Atestación de opacidad en Windows,"Capa, transparencia a clics, material de fondo distinto de NONE/AUTO o una consulta fallida no se atestiguan; la exclusión de esquina es de 32 px.",ADR-0035,IMPLEMENTADO_EN_RUST_S4
 BDD-55,Cambio fuera de la ventana objetivo,Entrega sintética y snapshot gastado.,ADR-0032,IMPLEMENTADO_EN_RUST_S4
 BDD-56,Cambio dentro de la ventana objetivo,STALE_SNAPSHOT con observe_again y sin eventos.,ADR-0032,IMPLEMENTADO_EN_RUST_S4
 BDD-57,Ventana emergente solapada,STALE_SNAPSHOT al cambiar el grupo incluso sin repintado.,ADR-0032,IMPLEMENTADO_EN_RUST_S4
 BDD-58,Geometría en cualquier alcance,STALE_SNAPSHOT ante un cambio de escala/época.,ADR-0032,IMPLEMENTADO_EN_RUST_S4
+BDD-59,Cambio en una ventana por debajo,Entrega sintética y snapshot gastado.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
+BDD-60,Ventana que sube sobre el objetivo,STALE_SNAPSHOT con observe_again y sin eventos.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
+BDD-61,Cambio de primer plano,STALE_SNAPSHOT con observe_again y sin eventos.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
+BDD-62,Objetivo no atestiguado como opaco,STALE_SNAPSHOT por comparar la pantalla entera.,ADR-0035,IMPLEMENTADO_EN_RUST_S4
 IT-08,Alcance por ventana en vivo (M2),"Criterios pre-registrados por el responsable; cierre de IT-03 y pasos D1 con consentimiento por sesión. Planificado, no ejecutado.",NO_EJECUTADO,PENDIENTE_PRODUCTO

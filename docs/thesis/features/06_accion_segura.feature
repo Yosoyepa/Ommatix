@@ -97,3 +97,32 @@ Característica: Actuación y verificación honestas
     Y el monitor cambia de escala antes de la entrega
     Cuando el agente solicita un clic real sobre el objetivo
     Entonces se devuelve STALE_SNAPSHOT con observe_again y no se envía ningún evento
+
+  @BDD-59 @RF-11 @UT-65
+  Escenario: BDD-59 Un cambio en una ventana por debajo del objetivo no rechaza la acción
+    Dado un snapshot observado con el alcance de frescura «ventana objetivo»
+    Y una ventana por debajo de la ventana objetivo, que la solapa, cambia su contenido antes de la entrega
+    Cuando el agente solicita un clic real sobre el objetivo
+    Entonces la acción se entrega y el snapshot queda gastado
+
+  @BDD-60 @RF-11 @UT-68
+  Escenario: BDD-60 Una ventana que sube sobre el objetivo rechaza la acción
+    Dado un snapshot observado con el alcance de frescura «ventana objetivo»
+    Y esa ventana sube por encima de la ventana objetivo antes de la entrega
+    Cuando el agente solicita un clic real sobre el objetivo
+    Entonces se devuelve STALE_SNAPSHOT con observe_again y no se envía ningún evento
+
+  @BDD-61 @RF-11 @UT-69
+  Escenario: BDD-61 Un cambio de la ventana de primer plano rechaza la acción
+    Dado un snapshot observado con el alcance de frescura «ventana objetivo»
+    Y otra ventana de la misma aplicación pasa a primer plano antes de la entrega
+    Cuando el agente solicita un clic real sobre el objetivo
+    Entonces se devuelve STALE_SNAPSHOT con observe_again y no se envía ningún evento
+
+  @BDD-62 @RF-11 @UT-70
+  Escenario: BDD-62 Un objetivo no atestiguado como opaco compara la pantalla entera
+    Dado un snapshot observado con el alcance de frescura «ventana objetivo»
+    Y la ventana objetivo no se puede atestiguar como opaca
+    Y una ventana sin relación con el objetivo que cambia su contenido antes de la entrega
+    Cuando el agente solicita un clic real sobre el objetivo
+    Entonces se devuelve STALE_SNAPSHOT con observe_again y no se envía ningún evento
