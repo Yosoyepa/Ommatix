@@ -435,7 +435,7 @@ impl Engine {
         let changed = diff.full_refresh.is_some() || !diff.tiles.is_empty();
         if changed {
             let scope = scope.filter(|_| diff.full_refresh.is_none());
-            return Err(self.freshness_refusal(&captured.frame, &diff, bbox, scope));
+            return Err(self.freshness_refusal(&captured.frame, &diff, bbox, scope, false));
         }
         Ok(FreshFrame {
             frame: captured.frame,
@@ -466,7 +466,13 @@ impl Engine {
             // The identity refusal keeps its code and spends the snapshot; the group is
             // reported only while the scope was usable at every look, opacity included.
             let attested = (fresh.scoped && current.is_some()).then_some(expected);
-            return Err(self.freshness_refusal(&fresh.frame, &fresh.diff, bbox, attested));
+            return Err(self.freshness_refusal(
+                &fresh.frame,
+                &fresh.diff,
+                bbox,
+                attested,
+                fresh.scoped,
+            ));
         }
         // Losing final attestation requires an actual whole-frame comparison: ignored
         // pixels cannot be authorised by a scoped diff, and no second capture is needed.
@@ -477,7 +483,7 @@ impl Engine {
                     changed_screen()
                 })?;
             if full.full_refresh.is_some() || !full.tiles.is_empty() {
-                return Err(self.freshness_refusal(&fresh.frame, &full, bbox, None));
+                return Err(self.freshness_refusal(&fresh.frame, &full, bbox, None, false));
             }
         }
         Ok(())
@@ -489,11 +495,15 @@ impl Engine {
         diff: &TileDiff,
         target: &BBox,
         group: Option<&WindowGroup>,
+        regional: bool,
     ) -> ToolError {
         self.snapshot_spent = true;
-        // Only a refusal pays for the global diagnostic scan in target-window mode.
-        let full = group
-            .and_then(|_| dirty_tiles(self.store.base(), frame, self.config.plan.tile_size).ok());
+        // Only a refusal pays for the global diagnostic scan in target-window mode. It is
+        // needed whenever the supplied diff is regional, whether or not the group may be
+        // reported: the global count must not depend on the scope's availability.
+        let full = (group.is_some() || regional)
+            .then(|| dirty_tiles(self.store.base(), frame, self.config.plan.tile_size).ok())
+            .flatten();
         let diff = full.as_ref().unwrap_or(diff);
         if let (Ok(grid), Some(timings)) = (
             TileGrid::for_frame(frame, self.config.plan.tile_size),

@@ -6,7 +6,7 @@
 
 **Planificación.** UT-65..UT-75 y BDD-59..BDD-62 en `matrices/plan_pruebas.csv` y las matrices de trazabilidad; las pruebas UT-57 y UT-63 y otras de ADR-0032 se reescriben porque fijaban el grupo anterior (la lista está en el PR). Ningún requisito cambia de estado ni se marca ninguna casilla de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md). Se actualizan los capítulos 02, 04, 07 y 08.
 
-**Revisión independiente (ronda 2).** [docs/reviews/2026-10-17-pr85-freshness-occluder-group.md](../reviews/2026-10-17-pr85-freshness-occluder-group.md): una consulta de estilo fallida ya no cuenta como estilo vacío, `WS_EX_NOREDIRECTIONBITMAP` nunca se atestigua opaca, el rechazo por identidad sin opacidad atestiguada omite `group_tiles`, la enumeración con error no es una ventana completa (también endurece el camino de ADR-0032), y se corrigen las filas UT-57, UT-59 y UT-63 del plan y la afirmación de subconjunto de UT-74, que sólo vale con margen 0.
+**Revisión independiente (ronda 2).** [docs/reviews/2026-10-17-pr85-freshness-occluder-group.md](../reviews/2026-10-17-pr85-freshness-occluder-group.md): una consulta de estilo fallida ya no cuenta como estilo vacío, `WS_EX_NOREDIRECTIONBITMAP` nunca se atestigua opaca, el rechazo por identidad sin opacidad atestiguada omite `group_tiles`, la enumeración con error no es una ventana completa (también endurece el camino de ADR-0032), y se corrigen las filas UT-57, UT-59 y UT-63 del plan y la afirmación de subconjunto de UT-74, que sólo vale con margen 0. Ronda 3: el recuento global de tiles de D0 no depende de que el grupo pueda informarse.
 
 ## 1.0.90 — 2026-10-17: hilos y pasos de manejadores en el soak (diagnóstico, sin criterio)
 

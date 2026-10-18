@@ -520,3 +520,36 @@ fn ut_70_losing_the_opacity_at_any_look_takes_the_whole_frame_path() {
         assert_eq!(diagnostic(&r).group_tiles, None, "lost at look {lost_at}");
     }
 }
+
+/// UT-70 (review 3, R1): the whole-frame diagnostic scan does not depend on whether the group
+/// may be reported. A changed external pixel, a foreground identity change and the loss of the
+/// opacity at the last look refuse with the global count and no group count.
+#[test]
+fn ut_70_an_identity_refusal_after_a_regional_comparison_still_counts_the_whole_frame() {
+    let other = || scoped_window(2, 1, bx(0.0, 200.0, 40.0, 320.0));
+    let mut r = rig_with_windows(vec![target(0), other()], 1);
+    let page = r.observe();
+    let opaque = Some(WindowOpacity {
+        corner_exclusion_px: 0,
+    });
+    // Two foreground queries per group read: the first two reads keep T in front, the last
+    // one reports the other window.
+    let front = Some(target(0));
+    r.world().foreground_window_script.extend([
+        front.clone(),
+        front.clone(),
+        front.clone(),
+        front,
+        Some(other()),
+        Some(other()),
+    ]);
+    r.world().opacity_script.extend([opaque, opaque, None]);
+    r.world().pixels.push((FAR_PIXEL.0, FAR_PIXEL.1, WHITE));
+    let result = click(&mut r, &page);
+    assert_stale_and_nothing_sent(&r, &result);
+    let d = diagnostic(&r);
+    assert_eq!((d.total_tiles, d.group_tiles), (1, None));
+    let retry = click(&mut r, &page);
+    assert_eq!(error_code(&retry), Some(ErrorCode::StaleSnapshot));
+    assert!(r.world().delivered.is_empty(), "the snapshot stays spent");
+}
