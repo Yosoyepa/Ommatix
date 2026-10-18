@@ -7,7 +7,7 @@
 use super::*;
 
 /// Far from every element of `form()`: where a blinking caret would not be.
-const FAR_PIXEL: (u32, u32) = (630, 10);
+pub(super) const FAR_PIXEL: (u32, u32) = (630, 10);
 
 /// Inside the Save button and outside its caption: a hover or focus mark on the target.
 const TARGET_PIXEL: (u32, u32) = (405, 255);
@@ -30,7 +30,7 @@ fn live_click_after_one_pixel(pixel: (u32, u32)) -> (Rig, ObservePage, ActionRes
 
 /// `STALE_SNAPSHOT` as chapter 07 §7.7 gives it (not retryable, observe again), and no event
 /// reached the actuator: no delivery, no focus click, no keys.
-fn assert_stale_and_nothing_sent(r: &Rig, result: &ActionResult) {
+pub(super) fn assert_stale_and_nothing_sent(r: &Rig, result: &ActionResult) {
     assert_eq!(result.status, ActionStatus::Rejected, "{result:?}");
     assert!(!result.input_delivered(), "{result:?}");
     let error = result.error.as_ref().expect("an error");
@@ -115,7 +115,7 @@ fn a_dry_run_never_captures_or_predicts_pixel_freshness() {
     );
 }
 
-fn scoped_window(handle: u64, z_order: u32, rectangle: BBox) -> TopLevelWindow {
+pub(super) fn scoped_window(handle: u64, z_order: u32, rectangle: BBox) -> TopLevelWindow {
     TopLevelWindow {
         class: "TestWindow".into(),
         handle,
@@ -124,7 +124,7 @@ fn scoped_window(handle: u64, z_order: u32, rectangle: BBox) -> TopLevelWindow {
     }
 }
 
-fn scoped_rig() -> Rig {
+pub(super) fn scoped_rig() -> Rig {
     let mut r = rig(form());
     r.engine.config.action_freshness = ActionFreshness::TargetWindow;
     r.world().live = true;
@@ -134,6 +134,22 @@ fn scoped_rig() -> Rig {
     r.world().window_at_point = Some(window.clone());
     r.world().top_windows = Some(vec![window]);
     r
+}
+
+/// `scoped_rig` with the target window at z-order 1, so that a window can rise above it.
+fn raisable_rig() -> Rig {
+    let r = scoped_rig();
+    r.world().top_windows.as_mut().unwrap()[0].z_order = 1;
+    r
+}
+
+/// A group change that leaves every pixel alone (ADR-0035): a window overlapping the target
+/// window appears above it. A z-order index alone is not an identity.
+fn raise_overlay(windows: &mut Option<Vec<TopLevelWindow>>) {
+    windows
+        .as_mut()
+        .unwrap()
+        .push(scoped_window(9, 0, bx(500.0, 0.0, 640.0, 100.0)));
 }
 
 #[test]
@@ -180,11 +196,13 @@ fn ut_56_a_one_pixel_change_inside_the_target_window_refuses_far_from_the_target
 #[test]
 fn ut_57_a_window_overlapping_the_target_window_is_in_the_group() {
     let mut r = scoped_rig();
+    // ADR-0035: the overlapping window is above the target window.
+    r.world().top_windows.as_mut().unwrap()[0].z_order = 1;
     r.world()
         .top_windows
         .as_mut()
         .unwrap()
-        .push(scoped_window(2, 1, bx(500.0, 0.0, 640.0, 100.0)));
+        .push(scoped_window(2, 0, bx(500.0, 0.0, 640.0, 100.0)));
     let page = r.observe();
     r.world().pixels.push((630, 10, [255, 255, 255]));
     let result = r
@@ -310,12 +328,13 @@ fn ut_63_target_window_accepts_exactly_when_no_changed_tile_meets_the_group() {
                     let y = row * 64 + (col * 11 + row * 3) % 64;
                     let mut r = scoped_rig();
                     let rectangles = if split {
+                        // ADR-0035: the foreground window overlaps the target and is above it.
                         let target = scoped_window(1, 1, bx(384.0, 192.0, 576.0, 320.0));
-                        let foreground = scoped_window(2, 0, bx(0.0, 0.0, 64.0, 64.0));
+                        let foreground = scoped_window(2, 0, bx(320.0, 128.0, 448.0, 224.0));
                         r.world().top_windows = Some(vec![target.clone(), foreground.clone()]);
                         r.world().window_at_point = Some(target);
                         r.world().foreground_window = Some(foreground);
-                        vec![(384.0, 192.0, 576.0, 320.0), (0.0, 0.0, 64.0, 64.0)]
+                        vec![(384.0, 192.0, 576.0, 320.0), (320.0, 128.0, 448.0, 224.0)]
                     } else {
                         vec![(64.0, 64.0, 576.0, 320.0)]
                     };
@@ -351,12 +370,12 @@ fn ut_63_target_window_accepts_exactly_when_no_changed_tile_meets_the_group() {
 #[test]
 fn changing_or_losing_group_attestation_around_the_action_capture_checks_the_whole_frame() {
     for changed in [false, true] {
-        let mut r = scoped_rig();
+        let mut r = raisable_rig();
         let page = r.observe();
         let first = r.world().top_windows.clone();
         let mut second = first.clone();
         if changed {
-            second.as_mut().unwrap()[0].z_order = 1;
+            raise_overlay(&mut second);
         } else {
             second = None;
         }
@@ -399,14 +418,11 @@ fn losing_group_attestation_after_the_last_look_cannot_ignore_changed_pixels() {
 
 #[test]
 fn a_group_change_after_the_last_look_spends_the_snapshot_without_a_pixel_change() {
-    let mut r = scoped_rig();
+    let mut r = raisable_rig();
     let page = r.observe();
     let original = r.world().top_windows.clone();
     let mut overlay = original.clone();
-    overlay
-        .as_mut()
-        .unwrap()
-        .push(scoped_window(3, 1, bx(500.0, 0.0, 640.0, 100.0)));
+    raise_overlay(&mut overlay);
     r.world()
         .top_windows_script
         .extend([original.clone(), original, overlay]);
@@ -429,9 +445,12 @@ fn a_group_change_after_the_last_look_spends_the_snapshot_without_a_pixel_change
 
 #[test]
 fn a_policy_change_keeps_its_refusal_before_group_identity_is_checked() {
-    let mut r = scoped_rig();
+    let mut r = raisable_rig();
     let page = r.observe();
-    r.world().top_windows.as_mut().unwrap()[0].z_order = 2;
+    let observed = r.world().top_windows.clone();
+    let mut overlaid = observed.clone();
+    raise_overlay(&mut overlaid);
+    r.world().top_windows = overlaid;
     r.world()
         .foreground_script
         .extend([Some(APP.into()), Some("other-app".into())]);
@@ -442,7 +461,7 @@ fn a_policy_change_keeps_its_refusal_before_group_identity_is_checked() {
     assert!(r.world().delivered.is_empty(), "nothing sent");
     // Policy keeps its refusal code, but the already-known mismatch still spends the
     // observation. Restoring both the policy and group cannot revive that snapshot.
-    r.world().top_windows.as_mut().unwrap()[0].z_order = 0;
+    r.world().top_windows = observed;
     r.world().foreground_script.clear();
     let retry = r.engine.execute_action(&live_click(
         &page,
@@ -532,15 +551,16 @@ fn an_unstable_window_read_during_observation_keeps_whole_frame_freshness() {
 }
 
 #[test]
-fn the_window_group_is_one_hop_from_the_two_seeds_not_a_transitive_closure() {
+fn the_window_group_is_one_hop_from_the_target_not_a_transitive_closure() {
     let mut r = scoped_rig();
-    let seed = scoped_window(1, 0, bx(384.0, 192.0, 576.0, 320.0));
-    r.world().foreground_window = Some(seed.clone());
-    r.world().window_at_point = Some(seed.clone());
+    let target = scoped_window(1, 2, bx(384.0, 192.0, 576.0, 320.0));
+    r.world().foreground_window = Some(target.clone());
+    r.world().window_at_point = Some(target.clone());
+    // Both windows are above the target; only the first overlaps it.
     r.world().top_windows = Some(vec![
-        seed,
+        scoped_window(3, 0, bx(128.0, 0.0, 320.0, 128.0)),
         scoped_window(2, 1, bx(256.0, 64.0, 448.0, 256.0)),
-        scoped_window(3, 2, bx(128.0, 0.0, 320.0, 128.0)),
+        target,
     ]);
     let page = r.observe();
     r.world().pixels.push((130, 10, [255, 255, 255]));
@@ -606,11 +626,11 @@ fn a_known_group_change_refuses_even_when_the_final_read_is_unavailable() {
         [1, 0, 0],
         [0, 1, 0],
     ] {
-        let mut r = scoped_rig();
+        let mut r = raisable_rig();
         let page = r.observe();
         let observed = r.world().top_windows.clone();
         let mut changed = observed.clone();
-        changed.as_mut().unwrap()[0].z_order += 1;
+        raise_overlay(&mut changed);
         r.world()
             .top_windows_script
             .extend(sequence.map(|read| match read {
@@ -737,10 +757,10 @@ fn unavailable_group_reads_without_a_known_change_keep_the_whole_frame_fallback(
 
 #[test]
 fn a_known_group_change_spends_the_snapshot_even_when_the_capture_fails() {
-    let mut r = scoped_rig();
+    let mut r = raisable_rig();
     let page = r.observe();
     let mut changed = r.world().top_windows.clone();
-    changed.as_mut().unwrap()[0].z_order += 1;
+    raise_overlay(&mut changed);
     r.world().top_windows_script.push_back(changed);
     r.world().fail_capture = true;
     let result =

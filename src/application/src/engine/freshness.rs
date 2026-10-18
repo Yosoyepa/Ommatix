@@ -1,4 +1,5 @@
-//! Optional freshness scope (ADR-0032); all OS evidence comes through the actuator port.
+//! Optional freshness scope (ADR-0032, amended by ADR-0035); all OS evidence comes through
+//! the actuator port.
 
 /// Which exact tile comparison may authorise an action. No tolerance in either scope.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -60,6 +61,8 @@ impl WindowRead {
         })
     }
 
+    /// The ADR-0032 group: the target, the foreground window and every window overlapping
+    /// either. The engine no longer uses it; the M1 probe keeps it as its baseline.
     fn group(&self, target: &TopLevelWindow) -> Option<WindowGroup> {
         let target = self.windows.iter().find(|w| same_window(w, target))?;
         let target_rect = target.rectangle?;
@@ -75,6 +78,38 @@ impl WindowRead {
                         .is_some_and(|r| r.overlaps(&target_rect) || r.overlaps(&foreground_rect))
             })
             .cloned()
+            .collect();
+        Some(WindowGroup {
+            target: target.handle,
+            foreground: self.foreground,
+            windows,
+        })
+    }
+}
+
+impl WindowRead {
+    /// The ADR-0035 group of `target`: the target window plus every visible window above it
+    /// whose rectangle overlaps the target's rectangle grown by `margin`. Windows below it are
+    /// not members, and neither is the foreground window unless it meets the same rule; the
+    /// foreground handle stays in the identity. Members are ranked by their order in the
+    /// group, so a window that closes elsewhere in the list does not change the identity.
+    fn occluders(&self, target: &TopLevelWindow, margin: u32) -> Option<WindowGroup> {
+        let target = self.windows.iter().find(|w| same_window(w, target))?;
+        let reach = target.rectangle?.pad(f64::from(margin));
+        let key = (target.z_order, target.handle);
+        let windows = self
+            .windows
+            .iter()
+            .filter(|w| {
+                w.handle == target.handle
+                    || ((w.z_order, w.handle) < key
+                        && w.rectangle.is_some_and(|r| r.overlaps(&reach)))
+            })
+            .zip(0..)
+            .map(|(w, rank)| TopLevelWindow {
+                z_order: rank,
+                ..w.clone()
+            })
             .collect();
         Some(WindowGroup {
             target: target.handle,
@@ -112,6 +147,23 @@ impl WindowGroup {
             .find(|w| w.handle == self.target)
             .and_then(|w| w.rectangle)
             .is_some_and(|rect| rect.contains(bbox))
+    }
+
+    /// Whether the target window is attested opaque over `bbox` (ADR-0035): the box lies
+    /// inside the window, the actuator attests the window opaque, and the box does not meet
+    /// one of the window's corner squares, where the window manager may draw transparently.
+    fn opaque_over(&self, bbox: &BBox, actuator: &dyn OsActuator) -> bool {
+        let Some(target) = self.windows.iter().find(|w| w.handle == self.target) else {
+            return false;
+        };
+        let (Some(rect), Some(opacity)) = (target.rectangle, actuator.window_opacity(target))
+        else {
+            return false;
+        };
+        let corner = f64::from(opacity.corner_exclusion_px);
+        let near_x = bbox.x0() < rect.x0() + corner || bbox.x1() > rect.x1() - corner;
+        let near_y = bbox.y0() < rect.y0() + corner || bbox.y1() > rect.y1() - corner;
+        rect.contains(bbox) && !(near_x && near_y)
     }
 
     fn touches(&self, tile: &BBox, margin: u32, bounds: &BBox) -> bool {
@@ -288,27 +340,32 @@ impl Engine {
         let windows = self.store.published()?.windows.as_ref()?;
         let handle = windows.targets.get(&target)?;
         let window = windows.read.windows.iter().find(|w| w.handle == *handle)?;
-        windows.read.group(window)
+        windows
+            .read
+            .occluders(window, self.config.action_freshness_margin_px)
     }
 
     /// Preserve positive identity evidence separately from scope availability. A later
     /// failed read, or a target box that no longer fits, cannot erase a known change.
     fn current_group(&self, bbox: &BBox, expected: &WindowGroup) -> (Option<WindowGroup>, bool) {
+        let margin = self.config.action_freshness_margin_px;
         let read = WindowRead::read(self.ports.actuator.as_ref());
-        let current = read
+        let identity = read
             .as_ref()
-            .and_then(|r| r.group(&self.ports.actuator.window_at(bbox.center())?));
-        let known_change = current.as_ref().is_some_and(|group| group != expected)
-            || (current.is_none()
+            .and_then(|r| r.occluders(&self.ports.actuator.window_at(bbox.center())?, margin));
+        let known_change = identity.as_ref().is_some_and(|group| group != expected)
+            || (identity.is_none()
                 && read.as_ref().is_some_and(|r| {
                     let observed_now = r
                         .windows
                         .iter()
                         .find(|w| w.handle == expected.target)
-                        .and_then(|window| r.group(window));
+                        .and_then(|window| r.occluders(window, margin));
                     observed_now.as_ref() != Some(expected)
                 }));
-        (current, known_change)
+        // An opacity the actuator cannot attest is not a change: it only costs the scope.
+        let usable = identity.filter(|group| group.opaque_over(bbox, self.ports.actuator.as_ref()));
+        (usable, known_change)
     }
 
     /// Compare only intersecting tiles when the window group is attested. D0 counts

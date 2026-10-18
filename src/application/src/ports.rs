@@ -250,6 +250,18 @@ pub struct TopLevelWindow {
     pub handle: u64,
 }
 
+/// What an actuator attests about how a top-level window is drawn over its own rectangle
+/// (ADR-0035). Its presence says the window is opaque there: not layered, not click-through,
+/// with no system backdrop material. Anything the actuator cannot attest is `None`, and the
+/// freshness check then compares the whole frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowOpacity {
+    /// Each corner of the window is a square of this many physical pixels on a side in
+    /// which the window manager may draw transparently (rounded corners). A target box that
+    /// intersects one of those squares is not attested opaque.
+    pub corner_exclusion_px: u32,
+}
+
 /// Injects validated input into the OS (`SendInput` in S3). Implementations that do not
 /// touch the real OS report `is_live() == false` and are never handed a live action.
 pub trait OsActuator: Send {
@@ -285,6 +297,13 @@ pub trait OsActuator: Send {
     /// desktop. An incomplete/bounded walk must return None, including on any failed
     /// rectangle read. No titles or screen text are read.
     fn top_level_windows(&self) -> Option<Vec<TopLevelWindow>> {
+        None
+    }
+
+    /// Whether `window` is opaque over its rectangle (ADR-0035). `None` when the actuator
+    /// cannot attest it (the default): the scoped freshness check then compares the whole
+    /// frame. Never reads a title or any text the window shows.
+    fn window_opacity(&self, _window: &TopLevelWindow) -> Option<WindowOpacity> {
         None
     }
 

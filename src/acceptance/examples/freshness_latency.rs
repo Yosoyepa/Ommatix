@@ -56,6 +56,12 @@ impl OsActuator for SyntheticActuator {
     fn window_at(&self, point: (f64, f64)) -> Option<ommatix_application::TopLevelWindow> {
         self.0.actuator().window_at(point)
     }
+    fn window_opacity(
+        &self,
+        window: &ommatix_application::TopLevelWindow,
+    ) -> Option<ommatix_application::WindowOpacity> {
+        self.0.actuator().window_opacity(window)
+    }
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
         self.0.actuator().deliver(action)
     }

@@ -19,7 +19,7 @@ use crate::contract::{
 };
 use crate::ports::{
     AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame, Clock, DeliveryReceipt,
-    LocalPolicy, TopLevelWindow,
+    LocalPolicy, TopLevelWindow, WindowOpacity,
 };
 use crate::{ManualClock, PortError};
 
@@ -102,6 +102,11 @@ struct World {
     top_windows: Option<Vec<TopLevelWindow>>,
     top_windows_script: VecDeque<Option<Vec<TopLevelWindow>>>,
     window_at_point: Option<TopLevelWindow>,
+    /// What the actuator attests about the opacity of any window (ADR-0035): by default
+    /// opaque with no rounded corner. `None`: it cannot attest it.
+    opacity: Option<WindowOpacity>,
+    /// Answers to the next opacity reads, before `opacity` takes over.
+    opacity_script: VecDeque<Option<WindowOpacity>>,
     /// Answers to the next foreground-window reads, before `foreground_window` takes
     /// over: a window that changes while the engine works.
     foreground_window_script: VecDeque<Option<TopLevelWindow>>,
@@ -160,6 +165,10 @@ impl Default for World {
             top_windows: None,
             top_windows_script: VecDeque::new(),
             window_at_point: None,
+            opacity: Some(WindowOpacity {
+                corner_exclusion_px: 0,
+            }),
+            opacity_script: VecDeque::new(),
             foreground_window_script: VecDeque::new(),
             access_delay: Duration::ZERO,
             advance_on_capture: Duration::ZERO,
@@ -415,6 +424,14 @@ impl OsActuator for Actuator {
         let mut w = lock(&self.0);
         w.note("window_at");
         w.window_at_point.clone()
+    }
+
+    fn window_opacity(&self, _window: &TopLevelWindow) -> Option<WindowOpacity> {
+        let mut w = lock(&self.0);
+        match w.opacity_script.pop_front() {
+            Some(answer) => answer,
+            None => w.opacity,
+        }
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
@@ -2721,6 +2738,7 @@ mod candidates;
 mod concurrency;
 mod freshness;
 mod identity;
+mod occluders;
 mod purge;
 mod security;
 mod snapshot_age;
