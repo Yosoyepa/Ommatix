@@ -25,7 +25,8 @@ mod window_scope;
 pub use clock::ManualClock;
 pub use engine::{
     ActionFreshness, Engine, EngineConfig, FreshnessProbeCounts, FreshnessProbeGroup,
-    IconResolverConfig, JOURNAL_CAPACITY, Ports, VerifyParams,
+    IconResolverConfig, JOURNAL_CAPACITY, OccluderFallback, OccluderProbeCounts, Ports,
+    VerifyParams,
 };
 pub use error::{PortError, error_chain};
 pub use ports::{

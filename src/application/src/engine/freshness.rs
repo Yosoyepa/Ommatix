@@ -153,17 +153,40 @@ impl WindowGroup {
     /// inside the window, the actuator attests the window opaque, and the box does not meet
     /// one of the window's corner squares, where the window manager may draw transparently.
     fn opaque_over(&self, bbox: &BBox, actuator: &dyn OsActuator) -> bool {
+        self.attest(bbox, actuator).0.is_ok()
+    }
+
+    /// The same decision with its reason, and whether the actuator attested the opacity at
+    /// all. The actuator is always asked once, as the engine's decision needs it.
+    fn attest(
+        &self,
+        bbox: &BBox,
+        actuator: &dyn OsActuator,
+    ) -> (Result<(), OccluderFallback>, bool) {
         let Some(target) = self.windows.iter().find(|w| w.handle == self.target) else {
-            return false;
+            return (Err(OccluderFallback::UnattestedRect), false);
         };
-        let (Some(rect), Some(opacity)) = (target.rectangle, actuator.window_opacity(target))
-        else {
-            return false;
+        let opacity = actuator.window_opacity(target);
+        let attested = opacity.is_some();
+        let (Some(rect), Some(opacity)) = (target.rectangle, opacity) else {
+            let reason = if target.rectangle.is_none() {
+                OccluderFallback::UnattestedRect
+            } else {
+                OccluderFallback::NoOpacity
+            };
+            return (Err(reason), attested);
         };
         let corner = f64::from(opacity.corner_exclusion_px);
         let near_x = bbox.x0() < rect.x0() + corner || bbox.x1() > rect.x1() - corner;
         let near_y = bbox.y0() < rect.y0() + corner || bbox.y1() > rect.y1() - corner;
-        rect.contains(bbox) && !(near_x && near_y)
+        let reason = if !rect.contains(bbox) {
+            Err(OccluderFallback::BoxOutsideTarget)
+        } else if near_x && near_y {
+            Err(OccluderFallback::Corner)
+        } else {
+            Ok(())
+        };
+        (reason, true)
     }
 
     fn touches(&self, tile: &BBox, margin: u32, bounds: &BBox) -> bool {
@@ -175,12 +198,64 @@ impl WindowGroup {
     }
 }
 
-/// Opaque, read-only attestation for the operator's M1 measurement (ADR-0032).
-/// It shares the engine's complete window read and one-hop group selection.
+/// Why the ADR-0035 scope would compare the whole frame instead of the group. Only these
+/// names leave the probe (ADR-0012): never a window title, class, handle or coordinate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OccluderFallback {
+    /// The window walk failed. Reserved: the probe aborts a pair whose walk fails (the
+    /// ADR-0032 path) before this could be recorded.
+    WalkFailed,
+    /// The window under the target, or its rectangle, is not attested.
+    UnattestedRect,
+    /// The reads around the captures disagree on the amended group or its attestation.
+    RepeatedReadsDiffer,
+    /// The target box does not lie inside the target window. Reserved, like `WalkFailed`:
+    /// the probe aborts such a pair first.
+    BoxOutsideTarget,
+    /// The actuator does not attest the target window opaque.
+    NoOpacity,
+    /// The target box meets a corner square of the target window.
+    Corner,
+}
+
+impl OccluderFallback {
+    /// The enum string the report carries.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::WalkFailed => "walk_failed",
+            Self::UnattestedRect => "unattested_rect",
+            Self::RepeatedReadsDiffer => "reads_differ",
+            Self::BoxOutsideTarget => "box_outside_target",
+            Self::NoOpacity => "no_opacity",
+            Self::Corner => "corner",
+        }
+    }
+}
+
+/// What one read says about the ADR-0035 group of the probed target: the group, and whether
+/// the scope would apply (the engine's own `attest`).
 #[derive(Debug, Clone, PartialEq)]
+struct OccluderRead {
+    group: Option<WindowGroup>,
+    attested: Result<(), OccluderFallback>,
+    opacity_attested: bool,
+}
+
+/// Opaque, read-only attestation for the operator's M1 measurement (ADR-0032), carrying the
+/// ADR-0035 group of the same read for the paired repeat. Both groups come from the engine's
+/// own complete window read and group selection; the equality of two attestations is that of
+/// the ADR-0032 group and target, as before.
+#[derive(Debug, Clone)]
 pub struct FreshnessProbeGroup {
     group: WindowGroup,
     target: BBox,
+    occluder: OccluderRead,
+}
+
+impl PartialEq for FreshnessProbeGroup {
+    fn eq(&self, other: &Self) -> bool {
+        self.group == other.group && self.target == other.target
+    }
 }
 
 /// Counts only; no window identities, rectangles or screen content leave the probe.
@@ -194,19 +269,117 @@ pub struct FreshnessProbeCounts {
     pub group_covers_whole_frame: bool,
 }
 
+/// The ADR-0035 group's counts for one pair; numbers, flags and one enum string only. The
+/// group counts are absent when the group itself is not attested.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OccluderProbeCounts {
+    pub group_tiles: Option<usize>,
+    pub group_window_count: Option<usize>,
+    pub group_frame_fraction: Option<f64>,
+    pub group_covers_whole_frame: Option<bool>,
+    pub opacity_attested: bool,
+    /// `None`: the scoped comparison would apply. `Some`: the whole frame would be compared.
+    pub fallback: Option<OccluderFallback>,
+}
+
+impl OccluderProbeCounts {
+    pub const fn scoped(&self) -> bool {
+        self.fallback.is_none()
+    }
+}
+
 impl FreshnessProbeGroup {
     /// Require a non-live reader and a complete, stable read containing the target box.
     /// The caller brackets each capture with equal attestations; no delivery is called.
     pub fn read(reader: &dyn OsActuator, target: BBox) -> Option<Self> {
+        Self::read_with_margin(reader, target, 0)
+    }
+
+    /// [`read`](Self::read), also selecting the ADR-0035 group with the engine's margin.
+    pub fn read_with_margin(reader: &dyn OsActuator, target: BBox, margin: u32) -> Option<Self> {
         if reader.is_live() {
             return None;
         }
         let first = WindowRead::read(reader)?;
-        let group = first.group(&reader.window_at(target.center())?)?;
+        let window = reader.window_at(target.center())?;
+        let group = first.group(&window)?;
         if !group.contains_target(&target) || WindowRead::read(reader)? != first {
             return None;
         }
-        Some(Self { group, target })
+        let occluders = first.occluders(&window, margin);
+        let (attested, opacity_attested) = occluders
+            .as_ref()
+            .map_or((Err(OccluderFallback::UnattestedRect), false), |g| {
+                g.attest(&target, reader)
+            });
+        Some(Self {
+            group,
+            target,
+            occluder: OccluderRead {
+                group: occluders,
+                attested,
+                opacity_attested,
+            },
+        })
+    }
+
+    /// Whether two attestations agree on the ADR-0035 group and on whether its scope applies.
+    pub fn same_occluders(&self, other: &Self) -> bool {
+        self.occluder == other.occluder
+    }
+
+    /// The ADR-0035 counts of one pair, next to [`measure`](Self::measure): what the amended
+    /// group would compare, and why the scope would fall back to the whole frame, if it
+    /// would. `reads_stable` is false when the attestations around the captures disagreed.
+    /// Changed geometry/epoch or a target outside the frame has no valid measurement.
+    pub fn measure_occluder(
+        &self,
+        base: &BgraFrame,
+        current: &BgraFrame,
+        margin: u32,
+        reads_stable: bool,
+    ) -> Option<OccluderProbeCounts> {
+        let bounds = current.bounds();
+        if !bounds.contains(&self.target) {
+            return None;
+        }
+        let total = dirty_tiles(Some(base), current, 64).ok()?;
+        if total.full_refresh.is_some() {
+            return None;
+        }
+        let fallback = if self.occluder.group.is_none() {
+            Some(OccluderFallback::UnattestedRect)
+        } else if !reads_stable {
+            Some(OccluderFallback::RepeatedReadsDiffer)
+        } else {
+            self.occluder.attested.err()
+        };
+        let mut counts = OccluderProbeCounts {
+            group_tiles: None,
+            group_window_count: None,
+            group_frame_fraction: None,
+            group_covers_whole_frame: None,
+            opacity_attested: self.occluder.opacity_attested,
+            fallback,
+        };
+        if let Some(group) = &self.occluder.group {
+            let regions: Vec<_> = group
+                .windows
+                .iter()
+                .filter_map(|w| w.rectangle)
+                .filter_map(|r| r.pad(f64::from(margin)).clip(&bounds))
+                .collect();
+            let scoped = dirty_tiles_in_regions(Some(base), current, 64, &regions).ok()?;
+            if scoped.full_refresh.is_some() {
+                return None;
+            }
+            let area = rectangle_union_area(&regions);
+            counts.group_tiles = Some(scoped.tiles.len());
+            counts.group_window_count = Some(group.windows.len());
+            counts.group_frame_fraction = Some(area / bounds.area());
+            counts.group_covers_whole_frame = Some(area >= bounds.area());
+        }
+        Some(counts)
     }
 
     /// Compare one pair at the thesis's 64-pixel tile size. Changed geometry/epoch or
@@ -537,11 +710,37 @@ impl Engine {
 mod probe_tests {
     use super::*;
     use crate::contract::ValidatedAction;
+    use crate::ports::WindowOpacity;
     use crate::{DeliveryReceipt, PortError};
 
     struct Reader {
         windows: Vec<TopLevelWindow>,
         live: bool,
+        /// What the reader attests about the opacity of any window (ADR-0035).
+        opacity: Option<WindowOpacity>,
+        /// The foreground window and the window under the target: by default the first.
+        target: u64,
+    }
+    impl Reader {
+        fn new(windows: Vec<TopLevelWindow>) -> Self {
+            let target = windows.first().map_or(0, |w| w.handle);
+            Self {
+                windows,
+                live: false,
+                opacity: None,
+                target,
+            }
+        }
+        fn opaque(mut self, corner_exclusion_px: u32) -> Self {
+            self.opacity = Some(WindowOpacity {
+                corner_exclusion_px,
+            });
+            self
+        }
+        fn at(mut self, handle: u64) -> Self {
+            self.target = handle;
+            self
+        }
     }
     impl OsActuator for Reader {
         fn name(&self) -> &'static str {
@@ -551,7 +750,13 @@ mod probe_tests {
             self.live
         }
         fn foreground_window(&self) -> Option<TopLevelWindow> {
-            self.windows.first().cloned()
+            self.windows
+                .iter()
+                .find(|w| w.handle == self.target)
+                .cloned()
+        }
+        fn window_opacity(&self, _: &TopLevelWindow) -> Option<WindowOpacity> {
+            self.opacity
         }
         fn window_at(&self, _: (f64, f64)) -> Option<TopLevelWindow> {
             self.foreground_window()
@@ -582,14 +787,26 @@ mod probe_tests {
         BgraFrame::new(256, 128, 256 * 4, epoch, pixels).unwrap()
     }
     fn group(windows: Vec<TopLevelWindow>) -> FreshnessProbeGroup {
-        FreshnessProbeGroup::read(
-            &Reader {
-                windows,
-                live: false,
-            },
-            box_at(8.0, 8.0, 16.0, 16.0),
-        )
-        .unwrap()
+        FreshnessProbeGroup::read(&Reader::new(windows), box_at(8.0, 8.0, 16.0, 16.0)).unwrap()
+    }
+    fn at_z(handle: u64, z_order: u32, rectangle: BBox) -> TopLevelWindow {
+        TopLevelWindow {
+            z_order,
+            ..window(handle, rectangle)
+        }
+    }
+    /// T (handle 1, z 1) with a window above it that overlaps it (2), a window below it that
+    /// overlaps it (3) and one above that overlaps nothing (4).
+    fn stack() -> Vec<TopLevelWindow> {
+        vec![
+            at_z(2, 0, box_at(40.0, 0.0, 120.0, 64.0)),
+            at_z(4, 0, box_at(200.0, 0.0, 256.0, 40.0)),
+            at_z(1, 1, box_at(0.0, 0.0, 64.0, 64.0)),
+            at_z(3, 2, box_at(32.0, 40.0, 96.0, 100.0)),
+        ]
+    }
+    fn read_stack(reader: &Reader, margin: u32) -> FreshnessProbeGroup {
+        FreshnessProbeGroup::read_with_margin(reader, box_at(8.0, 8.0, 16.0, 16.0), margin).unwrap()
     }
 
     #[test]
@@ -656,10 +873,8 @@ mod probe_tests {
 
     #[test]
     fn probe_refuses_live_readers_missing_rectangles_and_geometry_changes() {
-        let mut reader = Reader {
-            windows: vec![window(1, box_at(0.0, 0.0, 64.0, 64.0))],
-            live: true,
-        };
+        let mut reader = Reader::new(vec![window(1, box_at(0.0, 0.0, 64.0, 64.0))]);
+        reader.live = true;
         let target = box_at(8.0, 8.0, 16.0, 16.0);
         assert!(FreshnessProbeGroup::read(&reader, target).is_none());
         reader.live = false;
@@ -669,5 +884,129 @@ mod probe_tests {
         assert!(FreshnessProbeGroup::read(&reader, target).is_none());
         reader.windows.clear();
         assert!(FreshnessProbeGroup::read(&reader, target).is_none());
+    }
+
+    /// ADR-0035 (paired M1): the ADR-0032 fields stay as they were and the amended group is
+    /// reported beside them, from the same read.
+    #[test]
+    fn probe_reports_the_adr_0035_group_beside_the_adr_0032_one() {
+        let reader = Reader::new(stack()).at(1).opaque(0);
+        let group = read_stack(&reader, 0);
+        // A change in the window below T only: ADR-0032 counts it, ADR-0035 does not.
+        let counts = group
+            .measure(&frame(1, None), &frame(1, Some((80, 90))), 0)
+            .unwrap();
+        let occluder = group
+            .measure_occluder(&frame(1, None), &frame(1, Some((80, 90))), 0, true)
+            .unwrap();
+        assert_eq!(
+            (
+                counts.total_tiles,
+                counts.group_tiles,
+                counts.group_window_count
+            ),
+            (1, 1, 3)
+        );
+        assert_eq!(
+            (occluder.group_tiles, occluder.group_window_count),
+            (Some(0), Some(2))
+        );
+        assert!(occluder.scoped() && occluder.opacity_attested);
+        assert_eq!(occluder.fallback, None);
+        // A change in the window above T: both count it.
+        let occluder = group
+            .measure_occluder(&frame(1, None), &frame(1, Some((100, 10))), 0, true)
+            .unwrap();
+        assert_eq!(occluder.group_tiles, Some(1));
+        assert!(occluder.group_frame_fraction.unwrap() < 1.0);
+        assert_eq!(occluder.group_covers_whole_frame, Some(false));
+    }
+
+    #[test]
+    fn probe_names_why_the_amended_scope_would_compare_the_whole_frame() {
+        let pair = |reader: &Reader, stable: bool| {
+            read_stack(reader, 0)
+                .measure_occluder(&frame(1, None), &frame(1, None), 0, stable)
+                .unwrap()
+        };
+        let none = pair(&Reader::new(stack()).at(1), true);
+        assert_eq!(none.fallback, Some(OccluderFallback::NoOpacity));
+        assert!(!none.opacity_attested && !none.scoped());
+        assert_eq!(
+            none.group_window_count,
+            Some(2),
+            "the group is still counted"
+        );
+        let corner = pair(&Reader::new(stack()).at(1).opaque(100), true);
+        assert_eq!(corner.fallback, Some(OccluderFallback::Corner));
+        assert!(corner.opacity_attested);
+        let differ = pair(&Reader::new(stack()).at(1).opaque(0), false);
+        assert_eq!(differ.fallback, Some(OccluderFallback::RepeatedReadsDiffer));
+        let names: Vec<_> = [
+            OccluderFallback::WalkFailed,
+            OccluderFallback::UnattestedRect,
+            OccluderFallback::RepeatedReadsDiffer,
+            OccluderFallback::BoxOutsideTarget,
+            OccluderFallback::NoOpacity,
+            OccluderFallback::Corner,
+        ]
+        .map(OccluderFallback::as_str)
+        .into();
+        assert_eq!(
+            names,
+            [
+                "walk_failed",
+                "unattested_rect",
+                "reads_differ",
+                "box_outside_target",
+                "no_opacity",
+                "corner"
+            ]
+        );
+    }
+
+    /// The reasons the probe cannot reach through a read (it aborts those pairs first) still
+    /// come from the engine's own decision.
+    #[test]
+    fn the_engines_attestation_names_the_remaining_reasons() {
+        let reader = Reader::new(stack()).at(1).opaque(0);
+        let read = WindowRead::read(&reader).unwrap();
+        let window = reader.window_at((0.0, 0.0)).unwrap();
+        let group = read.occluders(&window, 0).unwrap();
+        assert_eq!(
+            group.attest(&box_at(8.0, 8.0, 16.0, 16.0), &reader).0,
+            Ok(())
+        );
+        assert_eq!(
+            group.attest(&box_at(60.0, 60.0, 90.0, 70.0), &reader).0,
+            Err(OccluderFallback::BoxOutsideTarget)
+        );
+        let missing = WindowGroup {
+            target: 99,
+            ..group.clone()
+        };
+        assert_eq!(
+            missing.attest(&box_at(8.0, 8.0, 16.0, 16.0), &reader),
+            (Err(OccluderFallback::UnattestedRect), false)
+        );
+    }
+
+    /// A window that enters the amended group only through the margin changes it between two
+    /// reads while the ADR-0032 groups, and so the old equality, stay equal.
+    #[test]
+    fn probe_sees_an_occluder_change_that_adr_0032_does_not() {
+        let with = |x: f64| {
+            vec![
+                at_z(2, 0, box_at(x, 10.0, 120.0, 40.0)),
+                at_z(1, 1, box_at(0.0, 0.0, 64.0, 64.0)),
+            ]
+        };
+        let (a, b) = (
+            read_stack(&Reader::new(with(66.0)).at(1).opaque(0), 5),
+            read_stack(&Reader::new(with(70.0)).at(1).opaque(0), 5),
+        );
+        assert_eq!(a, b, "the ADR-0032 group and target are unchanged");
+        assert!(!a.same_occluders(&b));
+        assert!(a.same_occluders(&a.clone()));
     }
 }

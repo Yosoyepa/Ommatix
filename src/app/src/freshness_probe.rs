@@ -48,43 +48,62 @@ pub fn run(args: &FreshnessProbeArgs) -> Result<()> {
     let _ = capture
         .capture()
         .map_err(|_| anyhow::anyhow!("M1 capture unavailable"))?;
+    let margin = config.engine.action_freshness_margin_px;
     let mut records = Vec::new();
     let mut outside = 0;
+    let mut occluder_scoped = 0;
+    let mut occluder_outside = 0;
     for _ in 0..args.pairs {
         let mut read = || -> Result<_> {
             check_scope(&reader, &policy.current(), &args.window_class, Some(target))?;
-            let group = FreshnessProbeGroup::read(&reader, target)
+            let group = FreshnessProbeGroup::read_with_margin(&reader, target, margin)
                 .context("M1 window group cannot be attested")?;
             let frame = capture
                 .capture()
                 .map_err(|_| anyhow::anyhow!("M1 capture unavailable"))?;
+            let after = FreshnessProbeGroup::read_with_margin(&reader, target, margin);
             ensure!(
-                FreshnessProbeGroup::read(&reader, target).as_ref() == Some(&group),
+                after.as_ref() == Some(&group),
                 "M1 window group changed during capture"
             );
+            // The ADR-0032 groups agree; the amended ones may still differ (ADR-0035).
+            let stable = after.is_some_and(|after| after.same_occluders(&group));
             check_scope(&reader, &policy.current(), &args.window_class, Some(target))?;
-            Ok((group, frame))
+            Ok((group, frame, stable))
         };
-        let (first, base) = read()?;
+        let (first, base, first_stable) = read()?;
         clock.sleep(Duration::from_millis(args.interval_ms));
-        let (second, frame) = read()?;
+        let (second, frame, second_stable) = read()?;
         ensure!(first == second, "M1 window group changed between frames");
         let counts = first
-            .measure(
+            .measure(&base.frame, &frame.frame, margin)
+            .context("M1 geometry or target changed; no valid pair")?;
+        let occluder = first
+            .measure_occluder(
                 &base.frame,
                 &frame.frame,
-                config.engine.action_freshness_margin_px,
+                margin,
+                first_stable && second_stable && first.same_occluders(&second),
             )
             .context("M1 geometry or target changed; no valid pair")?;
         outside += u32::from(counts.total_tiles > counts.group_tiles);
+        occluder_scoped += u32::from(occluder.scoped());
+        occluder_outside += u32::from(
+            occluder.scoped()
+                && occluder
+                    .group_tiles
+                    .is_some_and(|tiles| counts.total_tiles > tiles),
+        );
         records.push(json!({"capture_gap_ms": frame.captured_at.saturating_sub(base.captured_at).as_secs_f64() * 1000.0,
             "total_tiles": counts.total_tiles, "group_tiles": counts.group_tiles,
             "touches_target": counts.touches_target, "group_window_count": counts.group_window_count,
             "group_frame_fraction": counts.group_frame_fraction,
-            "group_covers_whole_frame": counts.group_covers_whole_frame}));
+            "group_covers_whole_frame": counts.group_covers_whole_frame,
+            "occluder_group": occluder_record(&occluder)}));
     }
     let mut report = json!({"pairs": records, "interval_ms": args.interval_ms,
-        "margin_px": config.engine.action_freshness_margin_px, "outside_pairs": outside,
+        "margin_px": margin, "outside_pairs": outside,
+        "occluder_scoped_pairs": occluder_scoped, "occluder_outside_pairs": occluder_outside,
         "descriptive": args.descriptive});
     if let Some(minimum) = args.min_outside_pairs {
         report["min_outside_pairs"] = json!(minimum);
@@ -94,6 +113,21 @@ pub fn run(args: &FreshnessProbeArgs) -> Result<()> {
     // these counts and persists them outside the checkout; stdout remains untouched.
     serde_json::to_writer(std::io::stderr().lock(), &report)
         .context("cannot write the measurement counts")
+}
+
+/// The ADR-0035 group of one pair, as the report carries it: numbers, flags and one enum
+/// string (`fallback`), never a title, class, handle or coordinate (ADR-0012, ADR-0032).
+#[cfg(any(test, all(windows, feature = "sendinput")))]
+fn occluder_record(counts: &ommatix_application::OccluderProbeCounts) -> serde_json::Value {
+    serde_json::json!({
+        "group_tiles": counts.group_tiles,
+        "group_window_count": counts.group_window_count,
+        "group_frame_fraction": counts.group_frame_fraction,
+        "group_covers_whole_frame": counts.group_covers_whole_frame,
+        "opacity_attested": counts.opacity_attested,
+        "scoped": counts.scoped(),
+        "fallback": counts.fallback.map(ommatix_application::OccluderFallback::as_str),
+    })
 }
 
 #[cfg(any(test, all(windows, feature = "sendinput")))]
@@ -231,6 +265,51 @@ mod tests {
         config.engine.mode = crate::config::EngineMode::Native;
         assert!(target_box(&args, &config).is_err());
     }
+    #[test]
+    fn the_occluder_record_has_only_numbers_flags_and_an_enum_string() {
+        use ommatix_application::{OccluderFallback, OccluderProbeCounts};
+        let scoped = occluder_record(&OccluderProbeCounts {
+            group_tiles: Some(2),
+            group_window_count: Some(3),
+            group_frame_fraction: Some(0.25),
+            group_covers_whole_frame: Some(false),
+            opacity_attested: true,
+            fallback: None,
+        });
+        assert_eq!(
+            scoped,
+            serde_json::json!({"group_tiles": 2, "group_window_count": 3,
+                "group_frame_fraction": 0.25, "group_covers_whole_frame": false,
+                "opacity_attested": true, "scoped": true, "fallback": null})
+        );
+        let fallback = occluder_record(&OccluderProbeCounts {
+            group_tiles: None,
+            group_window_count: None,
+            group_frame_fraction: None,
+            group_covers_whole_frame: None,
+            opacity_attested: false,
+            fallback: Some(OccluderFallback::NoOpacity),
+        });
+        assert_eq!(fallback["scoped"], false);
+        assert_eq!(fallback["fallback"], "no_opacity");
+        assert_eq!(fallback["group_tiles"], serde_json::Value::Null);
+        // Exactly these keys: nothing else can carry a title, class, handle or coordinate.
+        let keys: Vec<_> = fallback.as_object().unwrap().keys().cloned().collect();
+        let mut expected = vec![
+            "fallback",
+            "group_covers_whole_frame",
+            "group_frame_fraction",
+            "group_tiles",
+            "group_window_count",
+            "opacity_attested",
+            "scoped",
+        ];
+        expected.sort_unstable();
+        let mut keys = keys;
+        keys.sort_unstable();
+        assert_eq!(keys, expected);
+    }
+
     struct Reader;
     impl OsActuator for Reader {
         fn name(&self) -> &'static str {
