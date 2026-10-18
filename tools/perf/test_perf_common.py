@@ -1,9 +1,13 @@
 """Tests of the pure parts of perf_common.py. Run: python -m unittest discover -s tools/perf"""
+import ctypes
 import json
+import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import perf_common as c  # noqa: E402
@@ -59,6 +63,115 @@ class ReadOnlyEngine(unittest.TestCase):
             with self.assertRaises(ValueError):
                 engine.call(tool, {})
         self.assertEqual(c.Engine.ALLOWED, ("observe_screen", "get_engine_metrics"))
+
+
+class FakeThreads:
+    """A thread snapshot: the owning process of each entry, in order. ``fail_at`` is the call
+    that raises (0 is Thread32First, n the n-th Thread32Next); ``closed`` records the handles
+    that were closed."""
+
+    def __init__(self, owners, snapshot=True, fail_at=None):
+        self.owners = list(owners)
+        self.handle = "snapshot" if snapshot else None
+        self.fail_at = fail_at
+        self.cursor = 0
+        self.closed = []
+
+    def snapshot(self):
+        return self.handle
+
+    def first(self, handle):
+        self.cursor = 0
+        return self.entry()
+
+    def next(self, handle):
+        self.cursor += 1
+        return self.entry()
+
+    def entry(self):
+        if self.cursor == self.fail_at:
+            raise OSError(5, "access denied")
+        return self.owners[self.cursor] if self.cursor < len(self.owners) else None
+
+    def close(self, handle):
+        self.closed.append(handle)
+
+
+class ThreadCount(unittest.TestCase):
+    def test_only_the_threads_of_the_process_are_counted(self):
+        api = FakeThreads([100, 200, 100, 300, 100])
+        self.assertEqual(c.count_threads(100, api), 3)
+        self.assertEqual(api.closed, ["snapshot"])
+
+    def test_a_process_with_no_thread_in_the_snapshot_counts_zero(self):
+        api = FakeThreads([200, 300])
+        self.assertEqual(c.count_threads(100, api), 0)
+        self.assertEqual(api.closed, ["snapshot"])
+
+    def test_an_empty_snapshot_counts_zero(self):
+        api = FakeThreads([])
+        self.assertEqual(c.count_threads(100, api), 0)
+        self.assertEqual(api.closed, ["snapshot"])
+
+    def test_no_snapshot_is_none_and_there_is_no_handle_to_close(self):
+        api = FakeThreads([100], snapshot=False)
+        self.assertIsNone(c.count_threads(100, api))
+        self.assertEqual(api.closed, [])
+
+    def test_a_failing_first_call_is_none_and_the_snapshot_is_still_closed(self):
+        api = FakeThreads([100, 100], fail_at=0)
+        self.assertIsNone(c.count_threads(100, api))
+        self.assertEqual(api.closed, ["snapshot"])
+
+    def test_a_failing_later_call_is_none_and_the_snapshot_is_still_closed(self):
+        api = FakeThreads([100, 100, 100], fail_at=2)
+        self.assertIsNone(c.count_threads(100, api))
+        self.assertEqual(api.closed, ["snapshot"])
+
+
+@unittest.skipUnless(sys.platform == "win32", "the thread snapshot is a Windows call")
+class ThreadCountOnWindows(unittest.TestCase):
+    def test_a_thread_started_here_is_counted_on_this_process(self):
+        before = c.thread_count(os.getpid())
+        release = threading.Event()
+        worker = threading.Thread(target=release.wait)
+        worker.start()
+        try:
+            after = c.thread_count(os.getpid())
+        finally:
+            release.set()
+            worker.join()
+        self.assertGreaterEqual(after, before + 1)
+
+    def test_the_process_counters_carry_the_thread_count(self):
+        counters = c.process_counters(os.getpid())
+        self.assertEqual(set(counters), {"rss", "private", "handles", "threads"})
+        self.assertGreaterEqual(counters["threads"], 1)
+
+    def test_the_snapshot_is_closed_when_the_walk_fails(self):
+        kernel32 = mock.Mock()
+        kernel32.CreateToolhelp32Snapshot.return_value = 4242
+        kernel32.Thread32First.return_value = 0
+        with mock.patch.object(c, "kernel32", kernel32):
+            with mock.patch("ctypes.get_last_error", return_value=5):
+                self.assertIsNone(c.thread_count(os.getpid()))
+        kernel32.CloseHandle.assert_called_once_with(4242)
+
+    def test_the_snapshot_is_closed_after_an_empty_walk(self):
+        kernel32 = mock.Mock()
+        kernel32.CreateToolhelp32Snapshot.return_value = 4242
+        kernel32.Thread32First.return_value = 0
+        with mock.patch.object(c, "kernel32", kernel32):
+            with mock.patch("ctypes.get_last_error", return_value=18):
+                self.assertEqual(c.thread_count(os.getpid()), 0)
+        kernel32.CloseHandle.assert_called_once_with(4242)
+
+    def test_an_invalid_snapshot_is_none_and_nothing_is_closed(self):
+        kernel32 = mock.Mock()
+        kernel32.CreateToolhelp32Snapshot.return_value = ctypes.c_void_p(-1).value
+        with mock.patch.object(c, "kernel32", kernel32):
+            self.assertIsNone(c.thread_count(os.getpid()))
+        kernel32.CloseHandle.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,11 @@
 # Historial documental
 
+## 1.0.90 — 2026-10-17: hilos y pasos de manejadores en el soak (diagnóstico, sin criterio)
+
+La corrida de 120 minutos con `[models] accessibility = "uia"` de [S0 §15](S0_RESULTADOS.md) tuvo un manejador más tras el calentamiento (1008 a 1009 en el minuto 69), y no se sabe qué es. `tools/perf/soak.py` registra ahora el número de hilos de `ommatix.exe` en cada muestra (`threads`, con el mismo resumen de crecimiento que los manejadores) y `handle_steps`: cada cambio del número de manejadores después del calentamiento, con su instante y los manejadores y los hilos antes y después. Así una corrida posterior distingue un manejador que llega con un hilo nuevo de uno que llega sin hilo. Es un diagnóstico: no añade criterio, y la lectura de RNF-06 sigue siendo del responsable. La corrida sobre `1c46b87` se registra en el PR #82.
+
+Sin cambios en el motor, en el contrato MCP ni en los requisitos.
+
 ## 1.0.88 — 2026-10-17: cotas de estado retenido y evidencia sintética de RNF-06
 
 Auditoría en `docs/reviews/2026-10-17-engine-state-bounds.md`, diagnóstico local bajo demanda y ejemplo `state_bounds --out PATH`: 20 000 intentos sin pantalla ni entrada, con churn, fallos inyectados y caché sintética. Se elimina el conjunto histórico de IDs retirados, derivando la misma clasificación desde el contador y los tracks actuales; se recortan las teselas pendientes al cuadro fallido. Regresiones fallan antes de cada corrección; dos diferenciales de 1 000 historias comparan clasificación/rechazos/no reutilización/purga y planes completos/regionales con sus regiones y teselas. El oráculo permanece independiente.

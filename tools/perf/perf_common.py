@@ -99,6 +99,30 @@ def source_state() -> dict:
     }
 
 
+def count_threads(pid: int, api) -> int | None:
+    """Threads of ``pid`` in a system thread snapshot, or None when the snapshot cannot be
+    read. ``api`` is the snapshot surface: ``snapshot()`` returns a handle or None;
+    ``first(handle)`` and ``next(handle)`` return the owning process id of the next entry, or
+    None at the end, and raise OSError when the walk fails; ``close(handle)`` runs once a
+    handle was obtained, on every path. The Windows calls are ``Win32Threads``; the tests pass
+    a fake."""
+    handle = api.snapshot()
+    if handle is None:
+        return None
+    try:
+        count = 0
+        owner = api.first(handle)
+        while owner is not None:
+            if owner == pid:
+                count += 1
+            owner = api.next(handle)
+        return count
+    except OSError:
+        return None
+    finally:
+        api.close(handle)
+
+
 # ---- Windows, read only -------------------------------------------------------------------
 
 if sys.platform == "win32":
@@ -137,6 +161,26 @@ if sys.platform == "win32":
     psapi.GetProcessMemoryInfo.argtypes = [
         wintypes.HANDLE, ctypes.POINTER(ProcessMemoryCountersEx), wintypes.DWORD]
 
+    TH32CS_SNAPTHREAD = 0x00000004
+    ERROR_NO_MORE_FILES = 18
+    INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    class ThreadEntry32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ThreadID", wintypes.DWORD),
+            ("th32OwnerProcessID", wintypes.DWORD),
+            ("tpBasePri", wintypes.LONG),
+            ("tpDeltaPri", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+        ]
+
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry32)]
+    kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry32)]
+
     def foreground_pid() -> int:
         """The process that owns the foreground window (0 when there is none)."""
         pid = wintypes.DWORD(0)
@@ -158,9 +202,43 @@ if sys.platform == "win32":
                 return None
             return {"rss": int(counters.WorkingSetSize),
                     "private": int(counters.PrivateUsage),
-                    "handles": int(handles.value)}
+                    "handles": int(handles.value),
+                    "threads": thread_count(pid)}
         finally:
             kernel32.CloseHandle(handle)
+
+    class Win32Threads:
+        """The thread snapshot calls of kernel32, read only; the walk is ``count_threads``."""
+
+        def __init__(self):
+            self.entry = ThreadEntry32()
+            self.entry.dwSize = ctypes.sizeof(self.entry)
+
+        def snapshot(self):
+            handle = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
+            return None if not handle or handle == INVALID_HANDLE_VALUE else handle
+
+        def first(self, handle):
+            return self.owner(kernel32.Thread32First(handle, ctypes.byref(self.entry)))
+
+        def next(self, handle):
+            return self.owner(kernel32.Thread32Next(handle, ctypes.byref(self.entry)))
+
+        def owner(self, ok):
+            if ok:
+                return int(self.entry.th32OwnerProcessID)
+            error = ctypes.get_last_error()
+            if error == ERROR_NO_MORE_FILES:
+                return None
+            raise OSError(error, "the thread snapshot could not be walked")
+
+        def close(self, handle):
+            kernel32.CloseHandle(handle)
+
+    def thread_count(pid: int) -> int | None:
+        """Threads of the process in a system thread snapshot, or None when it cannot be read
+        (the soak records None for that sample and goes on)."""
+        return count_threads(pid, Win32Threads())
 
     class PdhValue(ctypes.Structure):
         _fields_ = [("CStatus", wintypes.DWORD), ("value", ctypes.c_longlong)]
@@ -231,6 +309,9 @@ else:  # pragma: no cover - the tools are Windows only; the pure parts import an
         raise OSError("Windows only")
 
     def process_counters(pid: int) -> dict | None:
+        raise OSError("Windows only")
+
+    def thread_count(pid: int) -> int | None:
         raise OSError("Windows only")
 
     def image_running(image: str) -> bool:
