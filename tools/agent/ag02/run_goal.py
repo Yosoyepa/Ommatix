@@ -57,7 +57,7 @@ import proxy as proxy_module  # noqa: E402
 
 GOALS_PATH = HERE / "goals.json"
 # Pinned: a change to the goals is a deliberate change of this constant (and of the dossier).
-GOALS_SHA256 = "ed66d8bb85972fa1a372e0ce7de512873c284e8bbff0001c698b8a262c7b6975"
+GOALS_SHA256 = "ea02093074b06d661be62761c22a21fb7970de61789f25a53e7a7bc65895cbbb"
 SERVER_NAME = "ommatix"
 TOOLS = ("observe_screen", "execute_action", "get_engine_metrics")
 ALLOWED_TOOL_NAMES = tuple(f"mcp__{SERVER_NAME}__{t}" for t in TOOLS)
@@ -79,7 +79,8 @@ SCRATCH_ROOT_NAME = "ommatix-ag02"
 # ---- goals ---------------------------------------------------------------------------------
 
 def goals_sha256(path: Path = GOALS_PATH) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    # Line endings normalised: a Windows checkout may hold CRLF where the repository holds LF.
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def load_goals(path: Path = GOALS_PATH, *, check_hash: bool = True) -> dict:

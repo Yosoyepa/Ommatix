@@ -1,9 +1,11 @@
 """Tests of the AG-02 summary (synthetic per-goal results, no files from a real session)."""
 
+import io
 import json
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -65,7 +67,8 @@ class SummariseTests(unittest.TestCase):
             text = summarise.render(summarise.summarise(loaded))
             self.assertIn("phase 1: 1/1 succeeded", text)
             out = run / "summary.json"
-            self.assertEqual(summarise.main([str(run), "--out", str(out)]), 0)
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(summarise.main([str(run), "--out", str(out)]), 0)
             self.assertIn("phases", json.loads(out.read_text(encoding="utf-8")))
 
     def test_an_empty_directory_is_an_error(self):
