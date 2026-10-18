@@ -96,7 +96,7 @@ PHASE_LINES = {
         "mean to deliver now; a call with dry_run true is a rehearsal that changes nothing."),
 }
 SCRATCH_ROOT_NAME = "ommatix-ag02"
-PROOF_SCHEMA = "ag02-isolation-proof-1"
+PROOF_SCHEMA = "ag02-isolation-proof-2"
 VERSION = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,80}$")
 
@@ -147,9 +147,53 @@ def absolute_arg(value: str | Path | None) -> Path | None:
     return Path(os.path.abspath(os.fspath(value)))
 
 
+SIMPLE_RELATIVE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*(?:[\\/][A-Za-z0-9_][A-Za-z0-9_.-]*)*$")
+WINDOWS_ABSOLUTE = re.compile(r"^[A-Za-z]:[\\/]")
+DEVICE_NAMES = frozenset({"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
+                          *(f"lpt{i}" for i in range(1, 10))})
+
+
+def raw_path_problem(value) -> str | None:
+    """Why a path written in the engine's configuration is not accepted, judged on the text as
+    written and before any joining (fail closed: nothing is emulated). Accepted: a plain relative
+    path (letters, digits, ``_``, ``.``, ``-`` and separators, no ``.``/``..`` component, none
+    ending in a dot), a standard absolute Windows path (``C:\\...``) or, off Windows, a
+    ``/``-rooted one. Refused: drive-relative (``C:STOP``), root-relative (``\\STOP``), UNC,
+    extended-length and device forms, alternate data streams, ``..``, device names, characters
+    Windows rewrites. Rust's ``Path::join`` and the operating system give these forms a meaning
+    that depends on the current directory of each drive, which a Python join does not share."""
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        return "empty or malformed"
+    if value.startswith(("\\\\", "//")):
+        return "UNC, extended-length and device forms are not accepted"
+    if re.match(r"^[A-Za-z]:", value) and not WINDOWS_ABSOLUTE.match(value):
+        return "drive-relative form is not accepted"
+    if WINDOWS_ABSOLUTE.match(value):
+        rest = value[3:]
+    elif value[0] in "\\/":
+        if os.name == "nt" or value.startswith("//"):
+            return "root-relative form is not accepted"
+        rest = value[1:]
+    else:
+        if not SIMPLE_RELATIVE.match(value):
+            return "not a plain relative path"
+        rest = value
+    if re.search(r"[<>\"|?*:]", rest):
+        return "characters that Windows rewrites or reads as streams are not accepted"
+    for part in re.split(r"[\\/]", rest):
+        if part in ("", ".", "..") or part.endswith((".", " ")):
+            return "empty, dot and trailing-dot components are not accepted"
+        if part.split(".")[0].lower() in DEVICE_NAMES:
+            return "device names are not accepted"
+    return None
+
+
 def engine_path(config_dir: Path, value: str) -> Path:
     """A path from the engine's configuration, resolved exactly as the engine does
-    (``Config::resolve_path``): a relative one against the file's directory."""
+    (``Config::resolve_path``): a relative one against the file's directory. Only a form that
+    ``raw_path_problem`` accepts is resolved; any other raises ``ValueError``."""
+    if (problem := raw_path_problem(value)) is not None:
+        raise ValueError(problem)
     path = Path(value)
     return path if path.is_absolute() else config_dir / path
 
@@ -287,9 +331,166 @@ def build_claude_argv(*, claude: str, model: str, mcp_config: Path, system_instr
             "--max-budget-usd", f"{max_budget_usd:g}"]
 
 
+# Variables that select another provider or another endpoint, or add routing headers: a session
+# that sets any of them may send observations somewhere ADR-0036 does not cover.
+ROUTING_SELECTORS = ("CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+                     "ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL",
+                     "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_FOUNDRY_RESOURCE",
+                     "ANTHROPIC_CUSTOM_HEADERS", "ANTHROPIC_UNIX_SOCKET")
+ROUTING_PREFIXES = ("CLAUDE_CODE_USE_", "ANTHROPIC_FOUNDRY_", "ANTHROPIC_VERTEX_", "ANTHROPIC_BEDROCK_",
+                    "ANTHROPIC_AWS_")
+# What a scrubbed child (the preflight's) may inherit: the operating system's basics, nothing that
+# names a provider, a credential, a profile, a proxy or a telemetry endpoint.
+BASIC_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "TEMP", "TMP", "TMPDIR",
+             "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "HOME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA",
+             "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "COMMONPROGRAMFILES",
+             "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "OS", "USERNAME", "USERDOMAIN",
+             "COMPUTERNAME", "LANG", "LC_ALL", "TERM", "SHELL", "USER", "CLAUDE_CODE_GIT_BASH_PATH")
+
+
+def routing_problems(env) -> list[str]:
+    """The names (never the values) of the variables in `env` that select a provider or an
+    endpoint other than Anthropic's direct API."""
+    return sorted(name for name, value in env.items()
+                  if value and (name in ROUTING_SELECTORS or name.startswith(ROUTING_PREFIXES)))
+
+
 def agent_env(extra: dict | None = None) -> dict:
-    """The agent's environment: the operator's, plus no CLAUDE.md files in its context."""
+    """The agent's environment: the operator's, plus no CLAUDE.md files in its context. A caller
+    that runs a real session refuses first if ``routing_problems`` is not empty."""
     return {**os.environ, "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", **(extra or {})}
+
+
+# Switches the preflight sets. Only these two: pointing the outgoing proxies at a closed port, and
+# the usual telemetry switches (DISABLE_TELEMETRY, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC), were
+# tried and rejected, because with any of them the CLI lists two tools at init, not three
+# (`execute_action` is missing), in every run: the CLI's tool surface depends on its own network
+# state, so those controls would change what the preflight measures. A production session whose
+# environment sets them fails the runner's init comparison (`tools_differ`), closed.
+QUIET_ENV = {"DISABLE_ERROR_REPORTING": "1", "DISABLE_AUTOUPDATER": "1"}
+
+
+def scrubbed_env(extra: dict) -> dict:
+    """A minimal child environment for the preflight: the basics above and nothing that names a
+    provider, an endpoint, a credential, a profile, a proxy or a telemetry route of the
+    operator's; the two switches above; plus `extra` (the loopback stand-in's URL and
+    a dummy key)."""
+    env = {k: v for k, v in os.environ.items() if k.upper() in {b.upper() for b in BASIC_ENV}}
+    env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
+    env |= QUIET_ENV
+    return env | extra
+
+
+def managed_config_found(paths=None) -> list[str]:
+    """Closed tokens for any managed (policy) configuration present: it can set providers, hooks
+    and endpoints above everything the operator controls, so the preflight refuses to claim a
+    local run under it. Best effort: the file locations and, on Windows, the policy key."""
+    found = []
+    real = paths is None
+    if real:
+        paths = [Path("/etc/claude-code/managed-settings.json"),
+                 Path("/Library/Application Support/ClaudeCode/managed-settings.json")]
+        for var in ("PROGRAMFILES", "PROGRAMDATA"):
+            if os.environ.get(var):
+                paths.append(Path(os.environ[var]) / "ClaudeCode" / "managed-settings.json")
+    found += [f"managed_settings_file_{i}" for i, path in enumerate(paths) if path.exists()]
+    if real and os.name == "nt":
+        try:
+            import winreg
+            for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                try:
+                    winreg.CloseKey(winreg.OpenKey(hive, r"SOFTWARE\Policies\ClaudeCode"))
+                    found.append("managed_policy_registry_key")
+                except OSError:
+                    pass
+        except ImportError:
+            pass
+    return found
+
+
+CONTEXT_FILES = ("CLAUDE.md", "settings.json", "settings.local.json")
+CONTEXT_DIRS = ("rules", "skills", "commands", "agents", "hooks")
+CLAUDE_JSON_KEYS = ("mcpServers", "hooks", "env", "apiKeyHelper", "enabledPlugins")
+MANIFEST_FILE_CAP = 5000
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def config_identity(config_dir: Path) -> str:
+    """A fingerprint of which directory this is (its resolved path), not of what it holds."""
+    return _sha(os.path.normcase(os.path.realpath(config_dir)).encode("utf-8"))
+
+
+def config_manifest(config_dir: Path) -> dict:
+    """What the configuration directory holds that could reach the agent's context, as hashes:
+    CLAUDE.md, settings, rules, skills, commands, agents, hooks, the memory directories under
+    ``projects``, and the parts of ``.claude.json`` that name servers, hooks, environment or
+    plugins. Contents are hashed and dropped; credentials and session files are ignored. A new,
+    removed or edited item changes the manifest."""
+    manifest: dict[str, str] = {}
+
+    def tree(root: Path) -> str:
+        digest, count = hashlib.sha256(), 0
+        for file in sorted(root.rglob("*")):
+            if file.is_file():
+                count += 1
+                if count > MANIFEST_FILE_CAP:
+                    digest.update(b"cap")
+                    break
+                digest.update(file.relative_to(root).as_posix().encode("utf-8") + b"\0")
+                digest.update(_sha(file.read_bytes()).encode() + b"\0")
+        return digest.hexdigest()
+    for name in CONTEXT_FILES:
+        file = config_dir / name
+        if file.is_file():
+            manifest[name] = _sha(file.read_bytes())
+    for name in CONTEXT_DIRS:
+        if (config_dir / name).is_dir():
+            manifest[name] = tree(config_dir / name)
+    claude_json = config_dir / ".claude.json"
+    if claude_json.is_file():
+        try:
+            data = json.loads(claude_json.read_text(encoding="utf-8"))
+            subset = {k: data[k] for k in CLAUDE_JSON_KEYS if isinstance(data, dict) and k in data}
+        except ValueError:
+            subset = "unreadable"
+        if subset:  # the CLI writes this file itself; with none of the context keys it holds nothing
+            manifest[".claude.json"] = _sha(json.dumps(subset, sort_keys=True).encode("utf-8"))
+    projects = config_dir / "projects"
+    if projects.is_dir():
+        memories = sorted(m for m in projects.glob("*/memory") if m.is_dir())
+        if memories:
+            digest = hashlib.sha256()
+            for memory in memories:
+                digest.update(memory.parent.name.encode("utf-8") + b"\0" + tree(memory).encode() + b"\0")
+            manifest["projects/*/memory"] = digest.hexdigest()
+    return manifest
+
+
+def ancestor_context(path: Path, config_dir: Path | None = None) -> list[str]:
+    """Closed tokens for context files that a session started in `path` would find: CLAUDE.md and
+    CLAUDE.local.md in it and in every ancestor (the canary shows ancestors are read), and, in
+    `path` itself, ``.mcp.json`` and a project ``.claude`` with settings, rules, commands, skills
+    or agents (project configuration is read from the working directory, not from ancestors),
+    apart from the configuration directory itself."""
+    skip = os.path.normcase(os.path.realpath(config_dir)) if config_dir else None
+    found = []
+    here = Path(os.path.realpath(path))
+    for index, folder in enumerate([here, *here.parents]):
+        for name in ("CLAUDE.md", "CLAUDE.local.md"):
+            if (folder / name).exists():
+                found.append(f"ancestor_{index}_{name.replace('.', '_').lower()}")
+    if (here / ".mcp.json").exists():
+        found.append("project_mcp_json")
+    project = here / ".claude"
+    if project.is_dir() and os.path.normcase(os.path.realpath(project)) != skip:
+        for name in ("CLAUDE.md", "settings.json", "settings.local.json", "rules", "commands",
+                     "skills", "agents"):
+            if (project / name).exists():
+                found.append(f"project_{name.replace('.', '_').lower()}")
+    return found
 
 
 def engine_argv(args, phase: int, config: Path | None) -> list[str]:
@@ -323,6 +524,10 @@ def config_problems(phase: int, config: dict, config_dir: Path) -> list[str]:
     safety, engine = config.get("safety", {}), config.get("engine", {})
     allowed = safety.get("allowed_applications", [])
     problems = []
+    for name in ("stop_file", "purge_file"):  # the written form first, in every phase
+        value = safety.get(name)
+        if value and (problem := raw_path_problem(value)):
+            problems.append(f"[safety] {name}: {problem}")
     if phase == 1:
         if safety.get("actuation_enabled"):
             problems.append("[safety] actuation_enabled must be false in phase 1")
@@ -337,7 +542,8 @@ def config_problems(phase: int, config: dict, config_dir: Path) -> list[str]:
         value = safety.get(name)
         if not value:
             problems.append(f"[safety] {name} is not set")
-        elif (problem := proxy_module.path_problem(engine_path(config_dir, value))):
+        elif raw_path_problem(value) is None and (
+                problem := proxy_module.path_problem(engine_path(config_dir, value))):
             problems.append(f"[safety] {name}: {problem}")
     if safety.get("window_pin_file"):
         problems.append("[safety] window_pin_file is set (not needed for these applications)")
@@ -359,33 +565,50 @@ def stop_path_of(config: dict, config_dir: Path) -> Path | None:
 # ---- isolation proof and the init attestation ----------------------------------------------
 
 def load_isolation_proof(path: Path) -> dict:
-    """The proof ``preflight.py`` wrote: schema, a pass, the exact Claude Code version, the init
-    lists it saw and a positive control that did detect leaks. Anything else is refused."""
+    """The proof ``preflight.py`` wrote: schema, a pass, the exact Claude Code version and model,
+    the init facts it saw, the configuration directory it was made for (identity and manifest) and
+    a positive control that did detect leaks. Anything else is refused."""
     try:
         proof = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise SystemExit("the isolation proof is unreadable") from None
+    lists = ("plugins", "agents", "plugin_hashes", "agent_hashes", "canary_kinds", "control_leaked_kinds")
     ok = (isinstance(proof, dict) and proof.get("schema") == PROOF_SCHEMA and proof.get("passed") is True
           and isinstance(proof.get("claude_code_version"), str)
           and VERSION.match(proof["claude_code_version"])
+          and isinstance(proof.get("model"), str) and MODEL_NAME.match(proof["model"])
+          and isinstance(proof.get("requested_model"), str)
           and sorted(proof.get("tools", [])) == sorted(ALLOWED_TOOL_NAMES)
-          and all(isinstance(proof.get(k), list) and all(isinstance(x, str) for x in proof[k])
-                  for k in ("plugins", "agents", "memory_keys", "canary_kinds", "control_leaked_kinds"))
+          and all(isinstance(proof.get(k), list) and all(isinstance(x, str) for x in proof[k]) for k in lists)
           and proof["canary_kinds"] and proof["control_leaked_kinds"]
+          and isinstance(proof.get("init_keys_sha256"), str)
+          and isinstance(proof.get("config_identity"), str)
+          and isinstance(proof.get("context_manifest"), dict)
           and isinstance(proof.get("date_utc"), str))
     if not ok:
-        raise SystemExit("the isolation proof is not a passing ag02-isolation-proof-1 file")
+        raise SystemExit("the isolation proof is not a passing ag02-isolation-proof-2 file")
     return proof
 
 
+def _entry_hash(entry) -> str:
+    return _sha(json.dumps(entry, sort_keys=True, default=str).encode("utf-8"))
+
+
 def init_attestation(init: dict) -> dict:
-    """What one ``init`` event says about the session, reduced to comparable facts."""
+    """What one ``init`` event says about the session, reduced to comparable facts. Names are kept
+    for the comparison; whole entries (a plugin's path and version, say) are compared by hash so
+    that a same-named but different entry is a different fact; the set of keys of the event is
+    hashed so that a field nobody has reviewed is a change."""
     def names(key):
         value = init.get(key)
         if not isinstance(value, list):
             return None
         return sorted(x if isinstance(x, str) else str(x.get("name")) if isinstance(x, dict) else "?"
                       for x in value)
+
+    def hashes(key):
+        value = init.get(key)
+        return sorted(_entry_hash(x) for x in value) if isinstance(value, list) else None
     servers = init.get("mcp_servers")
     memory = init.get("memory_paths")
     return {
@@ -397,12 +620,36 @@ def init_attestation(init: dict) -> dict:
         "skills": names("skills"), "slash_commands": names("slash_commands"),
         "additional_directories": names("additional_directories"),
         "plugins": names("plugins"), "agents": names("agents"),
-        "memory_keys": sorted(memory) if isinstance(memory, dict) else (
-            [] if memory in (None, [], {}) else None),
+        "plugin_hashes": hashes("plugins"), "agent_hashes": hashes("agents"),
+        "memory_paths": dict(memory) if isinstance(memory, dict) else (
+            {} if memory in (None, [], {}) else "unreadable"),
+        "init_keys_sha256": _sha(json.dumps(sorted(init)).encode("utf-8")),
     }
 
 
-def init_problems(att: dict | None, proof: dict | None) -> list[str]:
+def memory_problem(memory, config_dir: Path | None) -> str | None:
+    """The memory directories init reports must be strings that lie under the controlled
+    configuration directory and hold no file: where the value points is checked, not that a
+    familiar key is present."""
+    if memory == "unreadable" or not isinstance(memory, dict):
+        return "memory_paths_unreadable"
+    if config_dir is None:
+        return None
+    root = os.path.normcase(os.path.realpath(config_dir))
+    for value in memory.values():
+        if not isinstance(value, str) or not value:
+            return "memory_paths_not_a_path"
+        target = os.path.normcase(os.path.realpath(value))
+        if not (target == root or target.startswith(root + os.sep)):
+            return "memory_paths_outside_the_configuration"
+        if os.path.isdir(target) and any(Path(target).rglob("*")):
+            return "memory_loaded"
+        if os.path.isfile(target):
+            return "memory_loaded"
+    return None
+
+
+def init_problems(att: dict | None, proof: dict | None, config_dir: Path | None = None) -> list[str]:
     """Why the session is not the proven one; fixed tokens only (never a name from the session).
     With no proof only the structural checks apply (smoke)."""
     if att is None:
@@ -416,6 +663,8 @@ def init_problems(att: dict | None, proof: dict | None) -> list[str]:
     model = att.get("model")
     if not isinstance(model, str) or not MODEL_NAME.match(model):
         problems.append("model_missing")
+    elif proof is not None and model != proof["model"]:
+        problems.append("model_differs_from_proof")
     if att.get("tools") != sorted(ALLOWED_TOOL_NAMES):
         problems.append("tools_differ")
     if att.get("mcp_servers") != [(SERVER_NAME, "connected")]:
@@ -423,20 +672,54 @@ def init_problems(att: dict | None, proof: dict | None) -> list[str]:
     for key in ("skills", "slash_commands", "additional_directories"):
         if att.get(key) != []:
             problems.append(f"{key}_loaded")
+    if (token := memory_problem(att.get("memory_paths"), config_dir)):
+        problems.append(token)
     if proof is not None:
-        if att.get("plugins") != sorted(proof["plugins"]):
+        if att.get("plugins") != sorted(proof["plugins"]) or att.get("plugin_hashes") != sorted(
+                proof["plugin_hashes"]):
             problems.append("plugins_differ")
-        if att.get("agents") != sorted(proof["agents"]):
+        if att.get("agents") != sorted(proof["agents"]) or att.get("agent_hashes") != sorted(
+                proof["agent_hashes"]):
             problems.append("agents_differ")
-        if att.get("memory_keys") is None or not set(att["memory_keys"]) <= set(proof["memory_keys"]):
-            problems.append("memory_paths_differ")
+        if att.get("init_keys_sha256") != proof["init_keys_sha256"]:
+            problems.append("init_fields_differ")
+    return problems
+
+
+def proof_problems(proof: dict, args, config_dir: Path | None) -> list[str]:
+    """Whether the proof is for THIS run: the requested model, the configuration directory
+    (identity and manifest) and the directories a session starts in. Closed tokens."""
+    problems = []
+    if args.model != proof["requested_model"]:
+        problems.append("requested_model_differs_from_proof")
+    if config_dir is None:
+        problems.append("no_configuration_directory")
+        return problems
+    if config_identity(config_dir) != proof["config_identity"]:
+        problems.append("configuration_directory_differs_from_proof")
+    if config_manifest(config_dir) != proof["context_manifest"]:
+        problems.append("configuration_manifest_differs_from_proof")
     return problems
 
 
 # ---- the stream ----------------------------------------------------------------------------
 
+UNKNOWN = "unknown"
+SUBTYPE = re.compile(r"^[a-z][a-z_]{0,39}$")
+
+
 def tool_short_name(name: str) -> str:
-    return name.rsplit("__", 1)[-1] if name.startswith("mcp__") else name
+    """The short name of one of the three Ommatix tools; every other string - whatever the model
+    wrote, a client-side rejected call included - is the closed marker ``unknown``."""
+    for full, short in zip(ALLOWED_TOOL_NAMES, TOOLS):
+        if name == full:
+            return short
+    return UNKNOWN
+
+
+def closed(value, allowed) -> str | None:
+    """`value` if it is one of the contract's enum members, else None (never the raw string)."""
+    return value if isinstance(value, str) and value in allowed else None
 
 
 def _result_json(block: dict):
@@ -457,7 +740,8 @@ class StreamMetrics:
     of the latest observation are held in a dict that is never written."""
 
     def __init__(self, vocabulary: list[str], expected_text: str | None = None,
-                 proof: dict | None = None, clock=time.monotonic):
+                 proof: dict | None = None, clock=time.monotonic, config_dir: Path | None = None):
+        self.config_dir = config_dir
         self.vocabulary = set(vocabulary)
         self.expected_text = expected_text
         self.proof = proof
@@ -485,6 +769,10 @@ class StreamMetrics:
         tools = (self.attestation or {}).get("tools") or []
         return [t for t in tools if t not in ALLOWED_TOOL_NAMES]
 
+    @property
+    def unexpected_tool_count(self) -> int:
+        return len(self.unexpected_tools)
+
     def feed(self, line: str) -> None:
         try:
             event = json.loads(line)
@@ -494,11 +782,14 @@ class StreamMetrics:
             return
         now = self.clock()
         kind = event.get("type")
-        label = f"{kind}/{event.get('subtype')}" if event.get("subtype") else str(kind)
+        safe_kind = kind if isinstance(kind, str) and SUBTYPE.match(kind) else "other"
+        subtype = event.get("subtype")
+        label = (f"{safe_kind}/{subtype if isinstance(subtype, str) and SUBTYPE.match(subtype) else 'other'}"
+                 if subtype else safe_kind)
         self.event_types[label] = self.event_types.get(label, 0) + 1
         if kind == "system" and event.get("subtype") == "init":
             self.attestation = init_attestation(event)
-            self.init_problems = init_problems(self.attestation, self.proof)
+            self.init_problems = init_problems(self.attestation, self.proof, self.config_dir)
         elif kind == "assistant":
             self._assistant(event.get("message", {}), now)
         elif kind == "user":
@@ -551,6 +842,13 @@ class StreamMetrics:
             body = _result_json(block)
             step = {"tool": record["tool"], "ms": round((now - record["t_sent"]) * 1000, 1)}
             step["is_error"] = bool(block.get("is_error"))
+            if record["tool"] == "observe_screen" and not (
+                    isinstance(body, dict) and isinstance(body.get("elements"), list)
+                    and not step["is_error"]):
+                # The newest observation failed or could not be read: the agent no longer holds
+                # current evidence, whatever an earlier observation said.
+                self.labels, self.revisions = {}, {}
+                self.observed_since_action = False
             if record["tool"] == "observe_screen" and isinstance(body, dict) \
                     and isinstance(body.get("elements"), list) and not step["is_error"]:
                 self.labels = {e["target_id"]: e.get("label", "") for e in body["elements"]
@@ -564,9 +862,10 @@ class StreamMetrics:
                 self.awaiting_observation = False
                 self.observed_since_action = True
             if isinstance(body, dict):
-                if isinstance(body.get("status"), str):
+                if closed(body.get("status"), proxy_module.STATUSES):
                     step["status"] = body["status"]
-                if isinstance(body.get("error"), dict) and isinstance(body["error"].get("code"), str):
+                if isinstance(body.get("error"), dict) and closed(body["error"].get("code"),
+                                                                  proxy_module.ERROR_CODES):
                     step["error_code"] = body["error"]["code"]
                 if isinstance(body.get("input_delivered"), bool):
                     step["input_delivered"] = body["input_delivered"]
@@ -620,15 +919,18 @@ class StreamMetrics:
             "wall_s": round(self.clock() - self.t0, 2),
             "verdict": self.verdict(),
             "cli_is_error": result.get("is_error"),
-            "cli_subtype": result.get("subtype"),
-            "mcp_status": dict(att.get("mcp_servers") or []),
+            "cli_subtype": (result.get("subtype") if isinstance(result.get("subtype"), str)
+                            and SUBTYPE.match(result["subtype"]) else None),
+            "mcp_status": {(name if name == SERVER_NAME else UNKNOWN): (
+                status if status in ("connected", "pending", "failed", "needs-auth") else UNKNOWN)
+                for name, status in (att.get("mcp_servers") or [])},
             "event_types": dict(sorted(self.event_types.items())),
             "init_counts": {k: len(att[k]) for k in ("tools", "skills", "slash_commands", "plugins",
                                                      "agents", "additional_directories",
                                                      "memory_keys") if isinstance(att.get(k), list)},
             "init_problems": self.init_problems,
-            "tools_listed": att.get("tools") or [],
-            "unexpected_tools": self.unexpected_tools,
+            "tools_listed": [tool_short_name(t) for t in att.get("tools") or []],
+            "unexpected_tool_count": self.unexpected_tool_count,
             "step_ms": self.steps,
             "actions": self.actions,
             "chosen_labels": compressed,
@@ -876,7 +1178,7 @@ class RealDeps:
 
 
 def parse_args(argv=None):
-    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], allow_abbrev=False)
     p.add_argument("--phase", type=int, choices=(1, 2), default=1)
     p.add_argument("--live", action="store_true",
                    help="phase 2 only: the owner is present and consents to THIS session")
@@ -895,6 +1197,9 @@ def parse_args(argv=None):
     p.add_argument("--testapp-exe", type=Path)
     p.add_argument("--editor-exe", type=Path)
     p.add_argument("--claude", default="claude")
+    p.add_argument("--claude-config-dir", type=Path,
+                   help="the controlled Claude Code configuration directory the proof was made for "
+                        "(an existing directory outside the repository; it holds the login)")
     p.add_argument("--isolation-proof", type=Path,
                    help="the passing file written by preflight.py for this Claude Code version")
     p.add_argument("--max-budget-usd", type=float, default=1.0)
@@ -905,7 +1210,8 @@ def parse_args(argv=None):
     p.add_argument("--ledger", type=Path)
     p.add_argument("--out", type=Path, default=None, help="output directory (outside the repo)")
     args = p.parse_args(argv)
-    for name in ("exe", "config", "testapp_exe", "editor_exe", "ledger", "out", "isolation_proof"):
+    for name in ("exe", "config", "testapp_exe", "editor_exe", "ledger", "out", "isolation_proof",
+                 "claude_config_dir"):
         setattr(args, name, absolute_arg(getattr(args, name)))
     if args.phase == 2 and not args.plan and not args.live:
         p.error("phase 2 needs --live (the owner present, consent for this session)")
@@ -917,11 +1223,11 @@ def parse_args(argv=None):
         p.error("--model is required (the owner pre-registers it)")
     if not args.plan and not args.exe:
         p.error("--exe is required")
-    if not args.plan and not args.smoke and args.isolation_proof is None:
-        p.error("--isolation-proof is required (run preflight.py first)")
+    if not args.plan and not args.smoke and (args.isolation_proof is None or args.claude_config_dir is None):
+        p.error("--isolation-proof and --claude-config-dir are required (run preflight.py first)")
     if args.phase == 2 and not args.plan and (args.max_live_session < 1 or args.ledger is None):
         p.error("phase 2 needs --max-live-session >= 1 and --ledger")
-    for name in ("ledger", "out", "isolation_proof"):
+    for name in ("ledger", "out", "isolation_proof", "claude_config_dir"):
         value = getattr(args, name)
         if value is not None and (problem := proxy_module.path_problem(value)):
             p.error(f"--{name.replace('_', '-')}: {problem}")
@@ -976,7 +1282,15 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
         mcp_path.write_text(json.dumps(build_mcp_config(
             sys.executable, proxy_args(args, phase, goal, log, ledger),
             engine_argv(args, phase, args.config))), encoding="utf-8")
-        metrics = StreamMetrics(goals["vocabulary"][goal["app"]], goal["choice"]["type_text"], proof)
+        config_dir = getattr(args, "claude_config_dir", None)
+        if proof is not None:
+            changed = proof_problems(proof, args, config_dir) + [
+                f"{t}" for t in ancestor_context(scratch, config_dir)]
+            if changed:
+                result["aborted"] = "isolation proof does not cover this run: " + ",".join(changed)
+                return result
+        metrics = StreamMetrics(goals["vocabulary"][goal["app"]], goal["choice"]["type_text"], proof,
+                                config_dir=config_dir)
         sampler = deps.make_sampler(app.state)
         sampler.start()
         spent_before = proxy_module.read_ledger(ledger)["total"] if ledger else 0
@@ -984,7 +1298,8 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
             build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
                               system_instruction=goals["system_instruction"],
                               max_budget_usd=args.max_budget_usd),
-            build_prompt(goal, phase), scratch, metrics, args.goal_timeout)
+            build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
+            env=agent_env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None))
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)
@@ -1054,6 +1369,9 @@ def main(argv=None, deps=RealDeps) -> int:
         problems = config_problems(args.phase, config, config_dir)
         if problems:
             raise SystemExit("configuration refused:\n- " + "\n- ".join(problems))
+    if (routing := routing_problems(os.environ)):
+        raise SystemExit("provider routing variables are set (ADR-0036 covers Anthropic's direct API "
+                         "only); unset: " + ", ".join(routing))
     proof = None if args.smoke else load_isolation_proof(args.isolation_proof)
     out.mkdir(parents=True)
     if args.smoke:

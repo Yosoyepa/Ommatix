@@ -102,28 +102,59 @@ The implementation follows from those choices:
    of the Definition of Done, changes no requirement and ticks no box. Results are reported as
    measured, with the model, the Claude Code version and the date.
 
-9. **Isolation is proven, then checked at every session.** `tools/agent/ag02/preflight.py` builds a
+9. **Isolation is proven for one configuration, then checked at every session.** The goals run with
+   a controlled configuration directory (`--claude-config-dir`, an existing directory outside the
+   repository that holds the login and nothing else the operator wants out of the agent's context).
+   `tools/agent/ag02/preflight.py` makes two sessions of the exact production command against a
+   local stand-in for the Anthropic endpoint on 127.0.0.1 that records the request bodies: (A) a
    synthetic world of harmless sentinels (user, ancestor, project and local CLAUDE.md, rules,
    auto-memory, a skill, a command, an agent, hooks, extra MCP servers, project settings) in a
-   temporary directory outside the repository and runs the exact production command and
-   environment against a local stand-in for the API on 127.0.0.1 that records the request bodies.
-   It passes only if no sentinel is in any body, no hook or extra server ran, and the `init`
-   event lists exactly the three Ommatix tools; a positive control (settings sources on) must leak
-   at least one sentinel, or the canary is blind and the preflight fails. It writes a proof for
-   that Claude Code version, and the runner starts no goal without it. Every session's first
-   event is then compared with the proof - version, model, tools, the one connected server, no
-   skill, command or extra directory, the same plugins and agents, no memory beyond the proven
-   keys - and any difference ends the session at once, unscored. The proof is repeated after any
-   Claude Code upgrade. It differs from production in three stated ways: the configuration
-   directory is the canary's, the endpoint is the stand-in and the key is a dummy; the operator's
-   real configuration is covered by the per-session comparison, not by the canary.
+   temporary directory outside the repository, which passes only if no sentinel is in any body, no
+   hook or extra server ran and `init` lists exactly the three Ommatix tools, with a positive control
+   (settings sources on) that must leak at least one sentinel or the canary is blind; and (B) the
+   production configuration directory itself, whose distinctive context lines (CLAUDE.md, rules,
+   memory) must not appear in the request. The proof records the Claude Code version, the resolved
+   model and the requested model, the `init` facts (plugins and agents by name and by hash of the
+   whole entry, a hash of the set of `init` fields), the directory's identity and a manifest of its
+   context-bearing items (hashes only; credentials and session files ignored). The runner starts no
+   goal without the proof and refuses a run whose requested model, configuration directory or
+   manifest differs from it, or whose session directory has a CLAUDE.md in it or an ancestor. Every
+   session's first event is then compared with the proof - version, model equal to the proven one,
+   exactly the three tools and the one connected server, no skill, command or extra directory, the
+   same plugin and agent entries, no new `init` field, and memory paths that are strings lying under
+   the configuration directory in directories that hold no file - and any difference ends the
+   session at once, unscored. The proof is repeated after any Claude Code upgrade or change of the
+   configuration directory, model or context. It differs from production in stated ways only: stage A
+   uses the canary's directory, the endpoint is the stand-in and the key is a dummy.
+   **No real provider is reached, by controls and not by assumption.** The preflight's child gets a
+   minimal environment allowlist (no provider selector, endpoint, credential, profile, proxy or
+   telemetry variable of the operator's; a dummy key for the stand-in only), and the preflight
+   refuses to run when provider-routing variables are set in its own environment or a managed
+   (policy) configuration is found; the goal runner refuses to start with those variables set,
+   because observations may only go to Anthropic's direct API (a Bedrock, Vertex or Foundry route
+   is a different recipient). What is not detected (policy delivered some other way) is not covered,
+   and the network is not blocked: the telemetry switches and an outgoing-proxy block were tried and
+   rejected because each removed `execute_action` from the CLI's tool list, which shows that the
+   CLI's tool surface depends on its own network state - one more reason for the per-session
+   comparison.
 10. **Provenance.** Each result keeps the Claude Code version and the model the session reported,
     the requested model and the proof's version and date; a session that cannot report them is
     refused. The prompt tells the agent the active phase and the `dry_run` value to use.
 11. **Paths.** Every path argument is resolved once against the launch directory; children get
     absolute paths only; the proxy refuses relative, drive-relative, extended-length and
-    alternate-stream forms and anything that resolves into a repository checkout (symbolic
-    links and junctions followed). `summarise.py --out` obeys the same rule.
+    alternate-stream forms and anything that resolves into a repository checkout (symbolic links and
+    junctions followed). `summarise.py --out` obeys the same rule. A path written in the engine's
+    configuration (`stop_file`, `purge_file`) is judged on its text before it is joined: only a plain
+    relative path or a standard absolute path is accepted; drive-relative (`C:STOP`), root-relative,
+    UNC, extended-length, device, dot-component and stream forms are refused outright rather than
+    emulated, because Rust's `Path::join` and the operating system give them a meaning that depends on
+    each drive's current directory. A Windows test compares the accepted forms with the engine's own
+    resolver. No command-line flag can be abbreviated.
+12. **Metadata only, everywhere.** Besides the proxy's closed vocabularies, the runner stores a tool
+    only as one of the three short names or `unknown`, a server only as `ommatix` or `unknown`, a
+    status, error code or subtype only if it is a member of the contract's enums (or a plain
+    lower-case identifier), and an observation counts as evidence only when its result arrived
+    without error: a failed or unreadable newer observation invalidates the earlier one.
 
 ## Alternatives considered
 
@@ -145,17 +176,24 @@ The implementation follows from those choices:
   two synthetic applications, one machine, one model per run, a handful of goals.
 - Observations of the two test applications reach Anthropic's API during a session. Anything else on
   screen would reach it too, which is why the owner arranges the screen before a session.
-- The agent's context is as clean as the canary shows for the version tested, no more: bundled
-  plugins and agents (`cc-plugin-*`, five built-in agents) are listed at init and pinned by the
-  proof, not removed. A Claude Code upgrade or a different configuration directory needs a new
-  proof; a session that differs from the proof is refused.
+- The agent's context is as clean as the canary shows for the version and configuration directory
+  tested, no more: bundled plugins and agents (`cc-plugin-*`, five built-in agents) are listed at
+  init and pinned by the proof, not removed. A Claude Code upgrade, a different configuration
+  directory, a changed model or an edited CLAUDE.md, rule or memory in that directory needs a new
+  proof; a session that differs from the proof is refused. A dedicated directory (a login made once
+  with `CLAUDE_CONFIG_DIR=<dir> claude auth login`, or `ANTHROPIC_API_KEY` in the environment)
+  keeps that proof stable; the operator's everyday `~/.claude` would need a new proof whenever the
+  operator's own memory changes.
 - Checks made while building it (2026-10-17, Claude Code 2.1.302): three calls to the smallest
   model on the simulated desktop (about USD 0.002 in total, no screen, no input) found that the
   legacy MCP profile (`--legacy` in the engine) is what Claude Code speaks, that with
   `--setting-sources ""` the session lists exactly the three Ommatix tools, and that `--safe-mode`
   produced no stream within 200 s. The review of PR 86 then asked for the canary of decision 9:
   it passed on the same version (no sentinel in the one captured request, 5.4 kB; the positive
-  control leaked seven kinds of sentinel), with no real API call. The canary's hook, extra-server,
+  control leaked seven kinds of sentinel), without a real provider. The second review found that the
+  first preflight inherited the operator's environment (provider selectors, endpoints, credentials)
+  and that the proof was not bound to the configuration the goals use; decision 9 is the fix, and the
+  preflight was repeated on the fixed code with the same result. The canary's hook, extra-server,
   skill, command and agent sentinels did not fire even in the positive control, so they are not
   evidence; what the canary proves is the absence of the CLAUDE.md, rules and auto-memory kinds.
 - The runner is Windows-specific only where it reads the foreground and the window titles; its
@@ -170,6 +208,11 @@ The implementation follows from those choices:
 - `tools/agent/ag02/test_rehearsal.py`: the proxy and a fake agent script against a fake engine
   and, when a binary is available, against `ommatix serve --source sim` (the simulated desktop),
   proving the same three behaviours end to end.
+- `tools/agent/ag02/test_rereview.py` (the second review's six findings: raw path forms, including a
+  Windows comparison with the engine's Rust resolver; provider routing; the proof's binding to the
+  configuration, model and context; failed observations; no abbreviated flags; closed names) and
+  `test_preflight.py` (including a scripted CLI that honours provider selectors and a scrubbed
+  environment that keeps them out).
 - `tools/agent/ag02/test_run_goal.py`, `test_preflight.py` and `test_summarise.py`: the goals pinned
   by hash (line-ending independent), the titles and oracles (and their agreement with the S4 clients
   on Windows), the phase-specific oracle through the whole runner with a fake application, sampler
@@ -225,3 +268,18 @@ la fase 1 tiene su propio oráculo; una palabra escrita se compara con la espera
 FNV-1a (el editor de pruebas con `--field-digest`); las metas inexistentes exigen cero acciones
 reales según los recibos del proxy; y un evento de seguridad descalifica la meta diga lo que diga
 el agente.
+
+**Segunda revisión del PR 86.** La prueba de aislamiento queda atada a una configuración controlada:
+las metas usan un directorio de configuración explícito (`--claude-config-dir`) y la prueba registra
+su identidad, un manifiesto de hashes de lo que contiene que pueda llegar al contexto, el modelo
+resuelto y el pedido, y los plugins y agentes por nombre y por hash de la entrada completa; el
+ejecutor rechaza una corrida cuyo directorio, manifiesto o modelo difiera, o cuyo directorio de
+sesión tenga un CLAUDE.md en él o en un ancestro, y compara cada sesión con la prueba (las rutas de
+memoria deben ser cadenas bajo el directorio de configuración y en carpetas sin archivos). El
+preflight no alcanza ningún proveedor real por controles y no por suposición: entorno hijo mínimo
+sin variables de proveedor, punto de acceso, credencial, perfil, proxy ni telemetría del operador, y
+se niega a correr si hay variables de enrutamiento o configuración gestionada; el ejecutor también
+se niega si hay variables de enrutamiento, porque las observaciones sólo pueden ir a la API directa
+de Anthropic. Las formas ambiguas de ruta en la configuración (`C:STOP`, relativa a la raíz, UNC...)
+se rechazan en vez de emularse; ninguna opción puede abreviarse; y el ejecutor guarda sólo nombres
+de herramienta, servidor y códigos de vocabularios cerrados.

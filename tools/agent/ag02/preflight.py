@@ -1,40 +1,46 @@
 #!/usr/bin/env python3
 """AG-02 isolation preflight: a canary that proves what reaches the agent's context.
 
-Run it once per Claude Code version, before any session that shows the agent a screen; the
-runner refuses to start a goal without the proof file it writes (``--isolation-proof``).
+Run it once per Claude Code version and per controlled configuration directory, before any
+session that shows the agent a screen; the runner refuses to start a goal without the proof file
+it writes (``--isolation-proof``) or with a different configuration directory, model or version.
 
-It builds, in a temporary directory outside the repository, a synthetic world full of harmless
-sentinels: a user CLAUDE.md, user rules, an auto-memory index, a skill, a command, an agent, hooks
-(which would write a marker file and print a sentinel if they ran), a second MCP server (which
-would write a marker if it started), ancestor and project CLAUDE.md files, a local CLAUDE.md,
-project settings, a project command and a project ``.mcp.json``. It then runs the exact production
-command - ``run_goal.build_claude_argv`` with ``--tools ""``, ``--strict-mcp-config`` and
-``--setting-sources ""``, the production MCP config (the proxy in front of ``ommatix serve
---source sim``), the production environment and an empty scratch working directory under the
-canary tree - with only the Anthropic endpoint replaced by a local stand-in on 127.0.0.1
-(``fake_api.py``) that records the request bodies. No real API call is made and no real
-instruction of the operator is used.
+It makes two sessions of the exact production command (``run_goal.build_claude_argv``: ``--tools
+""``, ``--strict-mcp-config``, ``--setting-sources ""``; the production MCP config, the proxy in
+front of ``ommatix serve --source sim``) against a local stand-in for the Anthropic endpoint
+(``fake_api.py``, 127.0.0.1) that records the request bodies:
 
-It passes only when, for the production run: the session exits cleanly; at least one request
-body was captured; no sentinel appears in any body; no hook marker and no extra-server marker
-exists; and the ``init`` event lists exactly the three Ommatix tools and the one connected
-server and loads no skill, command or extra directory. A positive control then runs the same
-world with the settings sources on and the CLAUDE.md switch off: it must leak at least one
-sentinel, or the canary is blind and the preflight fails.
+* **A. the canary.** A synthetic world of harmless sentinels in a temporary directory outside the
+  repository: a user CLAUDE.md, user rules, an auto-memory index, a skill, a command, an agent,
+  hooks (which would write a marker file and print a sentinel if they ran), a second MCP server
+  (which would write a marker if it started), ancestor and project CLAUDE.md files, a local
+  CLAUDE.md, project settings, a project command and a project ``.mcp.json``. It passes only
+  when no sentinel appears in any body, no hook marker and no extra-server marker exists and
+  ``init`` lists exactly the three Ommatix tools and the one connected server. A positive control
+  (settings sources on, the CLAUDE.md switch off) must leak at least one sentinel, or the canary
+  is blind and the preflight fails.
+* **B. the production configuration directory** (``--claude-config-dir``, the directory the goals
+  will use). The same command runs with ``CLAUDE_CONFIG_DIR`` set to it. The proof records its
+  identity and a manifest of the context-bearing items it holds (hashes only), and the preflight
+  fails if any distinctive line of those items (CLAUDE.md, rules, memory) appears in the request.
 
-Differences from a production session, stated rather than hidden: ``CLAUDE_CONFIG_DIR`` points at
-the canary's own configuration directory (so the operator's real one is never read or modified),
-``ANTHROPIC_BASE_URL`` points at the stand-in and ``ANTHROPIC_API_KEY`` is a dummy. The
-operator's real configuration is covered by the runner's check of the ``init`` event of every
-session against this proof, not by this canary.
+No real provider is reached, by construction and by three controls rather than by assumption: the
+child's environment is a minimal allowlist (no provider selector, endpoint, credential, profile,
+proxy or telemetry variable of the operator's reaches it; the only credential is a dummy key for
+the loopback stand-in); error reporting and auto-update are switched off; and the preflight refuses
+to run when provider-routing variables are set in its own environment or a managed (policy)
+configuration is found. It does not block the network: an outgoing-proxy block and the telemetry
+switches were tried and rejected, because each removed `execute_action` from the CLI's tool list. What it cannot see
+(for example a policy delivered some other way) is not covered, and the proof says so.
+
+Differences from a production session, stated rather than hidden: stage A's configuration
+directory is the canary's own; the endpoint is the stand-in; the key is a dummy.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import secrets
 import sys
@@ -65,6 +71,22 @@ with open(sys.argv[1], "a", encoding="utf-8") as handle:
 for _ in sys.stdin:
     pass
 '''
+EGRESS_CONTROLS = [
+    "child environment is a minimal allowlist: no provider selector, endpoint, credential, profile "
+    "or telemetry variable of the operator's reaches it",
+    "error reporting and auto-update are switched off; telemetry switches and an outgoing-proxy "
+    "block were tried and rejected because each removed `execute_action` from the CLI's tool list",
+    "refused to run with provider-routing variables set or a managed configuration found "
+    "(best effort: policy delivered another way is not detected)",
+]
+
+
+class PreflightRefused(Exception):
+    """The environment cannot honestly be called local; ``reasons`` are closed tokens or names."""
+
+    def __init__(self, reasons):
+        super().__init__("; ".join(reasons))
+        self.reasons = list(reasons)
 
 
 def project_slug(path: Path) -> str:
@@ -126,9 +148,24 @@ def leaked(bodies: list[bytes], sentinels: dict) -> list[str]:
     return sorted(kind for kind, text in sentinels.items() if text.encode("ascii") in blob)
 
 
-def one_session(args, world: dict, *, control: bool, log: Path, scratch_name: str) -> dict:
-    """One session of the canary world. Production flags, or (control) the settings sources on
-    and the CLAUDE.md switch off."""
+def context_snippets(config_dir: Path) -> list[bytes]:
+    """Distinctive lines of the context items in a configuration directory (CLAUDE.md, rules,
+    memory), held in memory only, to look for in a request body."""
+    files = [config_dir / "CLAUDE.md", *sorted((config_dir / "rules").rglob("*.md")),
+             *sorted(config_dir.glob("projects/*/memory/**/*.md"))]
+    snippets: list[bytes] = []
+    for file in files:
+        if not file.is_file():
+            continue
+        lines = [ln.strip() for ln in file.read_text(encoding="utf-8", errors="replace").splitlines()]
+        snippets += [ln.encode("utf-8") for ln in lines if len(ln) >= 16][:8]
+    return snippets
+
+
+def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path,
+                scratch_name: str, memory_dir: Path | None) -> dict:
+    """One session. Production flags, or (control) the settings sources on and the CLAUDE.md
+    switch off. `memory_dir` is the directory init's memory paths must lie under, if checked."""
     goals = rg.load_goals()
     mcp = rg.build_mcp_config(sys.executable, ["--dry-run-only", "--log", str(log)],
                               [str(args.exe), "serve", "--source", "sim", "--legacy"])
@@ -136,71 +173,106 @@ def one_session(args, world: dict, *, control: bool, log: Path, scratch_name: st
     mcp_path.write_text(json.dumps(mcp), encoding="utf-8")
     argv = rg.build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
                                 system_instruction=goals["system_instruction"], max_budget_usd=0.5)
-    env = rg.agent_env()
-    if control:
-        index = argv.index("--setting-sources")
-        argv[index + 1] = "user,project,local"
-        env.pop("CLAUDE_CODE_DISABLE_CLAUDE_MDS", None)
     with FakeApi() as api:
-        env |= {"CLAUDE_CONFIG_DIR": str(world["home"]), "ANTHROPIC_BASE_URL": api.url,
-                "ANTHROPIC_API_KEY": "sk-ant-canary-0000000000"}
-        metrics = rg.StreamMetrics([], None, None)
-        cli = rg.run_claude(argv, rg.build_prompt({"prompt": "Say hi."}, 1), world["cwd"], metrics,
-                            args.timeout, env=env)
+        env = rg.scrubbed_env({"CLAUDE_CONFIG_DIR": str(config_dir), "ANTHROPIC_BASE_URL": api.url,
+                               "ANTHROPIC_API_KEY": "sk-ant-canary-0000000000",
+                               **getattr(args, "extra_env", {})})
+        if control:
+            argv[argv.index("--setting-sources") + 1] = "user,project,local"
+            env.pop("CLAUDE_CODE_DISABLE_CLAUDE_MDS", None)
+        metrics = rg.StreamMetrics([], None, None, config_dir=memory_dir)
+        cli = rg.run_claude(argv, rg.build_prompt({"prompt": "Say hi."}, 1), cwd, metrics, args.timeout,
+                            env=env)
         bodies = list(api.bodies)
-    return {"cli": cli, "metrics": metrics, "bodies": bodies, "leaked": leaked(bodies, world["sentinels"]),
-            "attestation": metrics.attestation}
+    return {"cli": cli, "metrics": metrics, "bodies": bodies, "attestation": metrics.attestation}
+
+
+def refusals() -> list[str]:
+    """Why this environment cannot honestly be called local (closed names, never values)."""
+    import os
+    return [f"routing_variable:{name}" for name in rg.routing_problems(os.environ)] + \
+        rg.managed_config_found()
 
 
 def run(args) -> dict:
-    """The whole preflight; returns the proof (``passed`` says whether it holds)."""
+    """The whole preflight; returns the proof (``passed`` says whether it holds). Raises
+    ``PreflightRefused`` when the environment cannot be called local."""
+    if (reasons := refusals()):
+        raise PreflightRefused(reasons)
+    production_dir = Path(args.claude_config_dir)
+    problems = []
     with tempfile.TemporaryDirectory(prefix="ag02-canary-") as tmp:
         root = Path(tmp)
         world = build_world(root)
-        production = one_session(args, world, control=False, log=root / "production.jsonl",
-                                 scratch_name="production")
+        a = one_session(args, world["home"], world["cwd"], control=False, log=root / "a.jsonl",
+                        scratch_name="a", memory_dir=None)
         markers_production = sorted(k for k, m in world["markers"].items() if m.exists())
         for marker in world["markers"].values():
             marker.unlink(missing_ok=True)  # the control run may start them; start clean
-        control = one_session(args, world, control=True, log=root / "control.jsonl",
-                              scratch_name="control")
+        control = one_session(args, world["home"], world["cwd"], control=True, log=root / "c.jsonl",
+                              scratch_name="c", memory_dir=None)
         markers_seen = sorted(k for k, m in world["markers"].items() if m.exists())
-    att = production["attestation"] or {}
-    problems = []
-    cli = production["cli"]
-    if cli["exit_code"] != 0 or cli["killed"]:
-        problems.append("production_session_failed")
-    if not production["bodies"]:
-        problems.append("no_request_captured")
-    if production["leaked"]:
+        a_leaks, control_leaks = leaked(a["bodies"], world["sentinels"]), leaked(
+            control["bodies"], world["sentinels"])
+        # B: the directory the goals will use, in a fresh empty working directory.
+        scratch_b = root / "b" / "scratch"
+        scratch_b.mkdir(parents=True)
+        b = one_session(args, production_dir, scratch_b, control=False, log=root / "b.jsonl",
+                        scratch_name="b", memory_dir=production_dir)
+        b_snippets = context_snippets(production_dir)
+        b_blob = b"".join(b["bodies"])
+        b_leaked_lines = sum(1 for snippet in b_snippets if snippet in b_blob)
+        ancestors = rg.ancestor_context(scratch_b, production_dir)
+    att_a, att_b = a["attestation"] or {}, b["attestation"] or {}
+    for name, run_ in (("canary_session", a), ("production_dir_session", b)):
+        if run_["cli"]["exit_code"] != 0 or run_["cli"]["killed"]:
+            problems.append(f"{name}_failed")
+        if not run_["bodies"]:
+            problems.append(f"{name}_no_request_captured")
+    if a_leaks:
         problems.append("sentinels_in_production_request")
     if markers_production:
         problems.append("hook_or_extra_server_ran_in_production")
-    structural = rg.init_problems(production["attestation"], None)
-    problems += [f"init_{p}" for p in structural]
-    if not control["leaked"]:
+    problems += [f"init_{p}" for p in rg.init_problems(a["attestation"], None)]
+    problems += [f"production_dir_init_{p}" for p in rg.init_problems(b["attestation"], None, production_dir)]
+    if b_leaked_lines:
+        problems.append("production_dir_context_in_request")
+    if ancestors:
+        problems.append("ancestor_context_present")
+    if not control_leaks:
         problems.append("control_blind")
+    for key in ("claude_code_version", "model", "tools", "plugin_hashes", "agent_hashes", "init_keys_sha256"):
+        if att_a.get(key) != att_b.get(key):
+            problems.append(f"canary_and_production_dir_differ_in_{key}")
     return {
         "schema": rg.PROOF_SCHEMA, "passed": not problems, "problems": problems,
         "date_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "claude_code_version": att.get("claude_code_version"), "model": att.get("model"),
-        "requested_model": args.model, "tools": att.get("tools") or [],
-        "plugins": att.get("plugins") or [], "agents": att.get("agents") or [],
-        "memory_keys": att.get("memory_keys") or [],
-        "canary_kinds": list(KINDS), "production_leaked_kinds": production["leaked"],
-        "control_leaked_kinds": control["leaked"], "bodies": len(production["bodies"]),
-        "body_bytes": sum(len(b) for b in production["bodies"]),
+        "claude_code_version": att_b.get("claude_code_version"), "model": att_b.get("model"),
+        "requested_model": args.model, "tools": att_b.get("tools") or [],
+        "plugins": att_b.get("plugins") or [], "agents": att_b.get("agents") or [],
+        "plugin_hashes": att_b.get("plugin_hashes") or [], "agent_hashes": att_b.get("agent_hashes") or [],
+        "init_keys_sha256": att_b.get("init_keys_sha256") or "",
+        "config_identity": rg.config_identity(production_dir),
+        "context_manifest": rg.config_manifest(production_dir),
+        "canary_kinds": list(KINDS), "production_leaked_kinds": a_leaks,
+        "control_leaked_kinds": control_leaks, "bodies": len(a["bodies"]),
+        "body_bytes": sum(len(x) for x in a["bodies"]),
+        "production_dir_context_lines_checked": len(b_snippets),
+        "production_dir_context_lines_in_request": b_leaked_lines,
         "markers_after_production": markers_production, "markers_after_control": markers_seen,
+        "egress_controls": EGRESS_CONTROLS,
         "differences_from_production": [
-            "CLAUDE_CONFIG_DIR is the canary's own directory", "ANTHROPIC_BASE_URL is a local stand-in",
-            "ANTHROPIC_API_KEY is a dummy", "no real API call was made"],
+            "stage A uses the canary's own configuration directory", "ANTHROPIC_BASE_URL is a local stand-in",
+            "ANTHROPIC_API_KEY is a dummy"],
     }
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], allow_abbrev=False)
     parser.add_argument("--exe", type=Path, required=True, help="the ommatix binary (serves --source sim)")
-    parser.add_argument("--model", required=True)
+    parser.add_argument("--model", required=True, help="the model the goals will be run with")
+    parser.add_argument("--claude-config-dir", type=Path, required=True,
+                        help="the controlled configuration directory the goals will use (must exist)")
     parser.add_argument("--out", type=Path, required=True,
                         help="where to write the proof (absolute, outside the repository)")
     parser.add_argument("--claude", default="claude")
@@ -208,9 +280,17 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     args.exe = rg.absolute_arg(args.exe)
     args.out = rg.absolute_arg(args.out)
-    if (problem := proxy_module.path_problem(args.out)):
-        parser.error(f"--out: {problem}")
-    proof = run(args)
+    args.claude_config_dir = rg.absolute_arg(args.claude_config_dir)
+    for name in ("out", "claude_config_dir"):
+        if (problem := proxy_module.path_problem(getattr(args, name))):
+            parser.error(f"--{name.replace('_', '-')}: {problem}")
+    if not args.claude_config_dir.is_dir():
+        parser.error("--claude-config-dir must be an existing directory")
+    try:
+        proof = run(args)
+    except PreflightRefused as refused:
+        print(json.dumps({"passed": False, "refused": refused.reasons}))
+        return 2
     args.out.write_text(json.dumps(proof, indent=2), encoding="utf-8")
     print(json.dumps({k: proof[k] for k in ("passed", "problems", "claude_code_version", "model",
                                            "production_leaked_kinds", "control_leaked_kinds")}))

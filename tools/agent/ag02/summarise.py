@@ -138,7 +138,7 @@ def render(summary: dict) -> str:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], allow_abbrev=False)
     parser.add_argument("paths", nargs="+", type=Path, help="run directories or goal JSON files")
     parser.add_argument("--out", type=Path, help="write the summary as JSON here")
     args = parser.parse_args(argv)

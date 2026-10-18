@@ -19,20 +19,29 @@ import run_goal as rg  # noqa: E402
 GOALS = rg.load_goals()
 BY_ID = {g["id"]: g for g in GOALS["goals"]}
 TOOLS3 = sorted(rg.ALLOWED_TOOL_NAMES)
-PROOF = {"schema": rg.PROOF_SCHEMA, "passed": True, "claude_code_version": "2.1.302",
-         "tools": TOOLS3, "plugins": ["p1"], "agents": ["a1"], "memory_keys": ["auto"],
-         "canary_kinds": ["user_claude_md"], "control_leaked_kinds": ["user_claude_md"],
-         "date_utc": "2026-10-17T00:00:00Z"}
-
-
 def clean_init(**changes):
     event = {"type": "system", "subtype": "init", "claude_code_version": "2.1.302",
              "model": "claude-haiku-5-5", "tools": list(rg.ALLOWED_TOOL_NAMES),
              "mcp_servers": [{"name": "ommatix", "status": "connected"}], "skills": [],
-             "slash_commands": [], "plugins": [{"name": "p1"}], "agents": ["a1"],
-             "memory_paths": {"auto": "x"}, "additional_directories": []}
+             "slash_commands": [], "plugins": [{"name": "p1", "path": "/p1", "version": "1"}],
+             "agents": ["a1"], "memory_paths": {"auto": "x"}, "additional_directories": [],
+             "session_id": "s", "cwd": "c"}
     event.update(changes)
     return event
+
+
+def make_proof(**changes):
+    att = rg.init_attestation(clean_init())
+    proof = {"schema": rg.PROOF_SCHEMA, "passed": True, "claude_code_version": "2.1.302",
+             "model": "claude-haiku-5-5", "requested_model": "claude-haiku-5-5", "tools": TOOLS3,
+             "plugins": att["plugins"], "agents": att["agents"], "plugin_hashes": att["plugin_hashes"],
+             "agent_hashes": att["agent_hashes"], "init_keys_sha256": att["init_keys_sha256"],
+             "config_identity": "0" * 64, "context_manifest": {}, "canary_kinds": ["user_claude_md"],
+             "control_leaked_kinds": ["user_claude_md"], "date_utc": "2026-10-17T00:00:00Z"}
+    return proof | changes
+
+
+PROOF = make_proof()
 
 
 class GoalsTests(unittest.TestCase):
@@ -278,9 +287,6 @@ class CommandTests(unittest.TestCase):
     def test_every_settings_source_is_always_off_and_no_unrestricted_mode_exists(self):
         argv = self.argv()
         self.assertEqual(argv[argv.index("--setting-sources") + 1], "")
-        with redirect_stderr(io.StringIO()):
-            with self.assertRaises(SystemExit):
-                rg.parse_args(["--plan", "--isolation", "none"])
         with self.assertRaises(TypeError):
             rg.build_claude_argv(claude="claude", model="m", mcp_config=Path("c.json"),
                                  system_instruction="S", isolation="none", max_budget_usd=1.0)
@@ -322,10 +328,13 @@ class CommandTests(unittest.TestCase):
                     with self.assertRaises(SystemExit):
                         rg.parse_args(argv)
 
-    def test_a_goal_run_needs_the_isolation_proof_but_a_smoke_or_a_plan_does_not(self):
+    def test_a_goal_run_needs_the_isolation_proof_and_the_configuration_directory_but_a_smoke_or_a_plan_does_not(self):
         with redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 rg.parse_args(["--model", "m", "--exe", "x"])
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(SystemExit):  # the proof alone is not enough
+                    rg.parse_args(["--model", "m", "--exe", "x", "--isolation-proof", str(Path(tmp) / "p.json")])
         rg.parse_args(["--smoke", "--model", "m", "--exe", "x"])
         rg.parse_args(["--plan"])
 
@@ -516,7 +525,7 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(summary["tool_calls"], {"execute_action": 2, "observe_screen": 2})
         self.assertEqual((summary["turns"], summary["cost_usd"]), (3, 0.01))
         self.assertEqual(summary["mcp_status"], {"ommatix": "connected"})
-        self.assertEqual((summary["unexpected_tools"], summary["init_problems"]), ([], []))
+        self.assertEqual((summary["unexpected_tool_count"], summary["init_problems"]), (0, []))
         first, second = summary["actions"]
         self.assertEqual((first["label"], first["revision_current"], first["status"],
                           first["input_delivered"], first["observed_before"]),
@@ -598,7 +607,7 @@ class InitAttestationTests(unittest.TestCase):
             "additional_directories_loaded": {"additional_directories": ["C:/x"]},
             "plugins_differ": {"plugins": [{"name": "p1"}, {"name": "extra"}]},
             "agents_differ": {"agents": ["a1", "extra"]},
-            "memory_paths_differ": {"memory_paths": {"auto": "x", "user": "y"}},
+            "init_fields_differ": {"a_new_field": 1},
         }
         for token, change in cases.items():
             self.assertIn(token, self.problems(**change), token)
@@ -624,6 +633,8 @@ class InitAttestationTests(unittest.TestCase):
             self.assertEqual(load(PROOF)["claude_code_version"], "2.1.302")
             for bad in (PROOF | {"passed": False}, PROOF | {"schema": "x"},
                         PROOF | {"control_leaked_kinds": []}, PROOF | {"canary_kinds": []},
+                        PROOF | {"config_identity": 1}, PROOF | {"context_manifest": []},
+                        {k: v for k, v in PROOF.items() if k == "model" and False} | {"model": None},
                         PROOF | {"tools": ["Bash"]}, PROOF | {"claude_code_version": "latest"},
                         {k: v for k, v in PROOF.items() if k != "plugins"}):
                 with self.assertRaises(SystemExit):
@@ -802,11 +813,17 @@ class Harness:
                 "--editor-exe", str(self.tmp / "e.exe")]
         if phase == 2:
             argv += ["--live", "--max-live-session", "5", "--ledger", str(self.ledger)]
+        self.cfg = self.tmp / "cfg"
+        self.cfg.mkdir()
+        argv += ["--claude-config-dir", str(self.cfg)]
         self.args = rg.parse_args(argv)
+        self.proof = make_proof(config_identity=rg.config_identity(self.cfg),
+                                context_manifest=rg.config_manifest(self.cfg))
         initial = GOALS["initial_states"][self.goal["app"]]
         self.app = FakeApp(self.goal, dict(initial), foreground)
         self.final_state, self.history, self.events = final_state, list(history), list(events)
-        self.init = clean_init() if init is None else init
+        self.init = (clean_init(memory_paths={"auto": str(self.cfg / "projects" / "s" / "memory")})
+                     if init is None else init)
         self.proxy_records = proxy_records
         self.write_note = write_note
         self.captured = {}
@@ -849,11 +866,12 @@ class Harness:
         self.deps = Deps
         self.folder = None
 
-    def run(self, stop_file=None):
+    def run(self, stop_file=None, ancestors=()):
         (self.tmp / "folders").mkdir(exist_ok=True)
-        with mock.patch.object(rg, "temp_root", return_value=self.tmp / "folders"):
+        with mock.patch.object(rg, "temp_root", return_value=self.tmp / "folders"), \
+                mock.patch.object(rg, "ancestor_context", return_value=list(ancestors)):
             return rg.run_goal(self.args, GOALS, self.goal, self.out,
-                               self.ledger if self.phase == 2 else None, stop_file, PROOF, self.deps)
+                               self.ledger if self.phase == 2 else None, stop_file, self.proof, self.deps)
 
 
 CLEAN_LOG = [{"dir": "proxy", "kind": "end", "engine_exit": 0}]
@@ -982,6 +1000,7 @@ class FullRunnerTests(unittest.TestCase):
                            (clean_init(plugins=["x"]), "plugins_differ"),
                            (clean_init(claude_code_version="9.9.9"), "version_differs_from_proof"),
                            (clean_init(model=None), "model_missing"),
+                           (clean_init(model="claude-sonnet-5-5"), "model_differs_from_proof"),
                            (clean_init(tools=["Bash"]), "tools_differ")):
             h = Harness(self, "G01", 1, final_state=dict(init), init=bad, events=final("DONE"),
                         proxy_records=with_end([]))

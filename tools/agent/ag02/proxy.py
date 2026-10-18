@@ -517,7 +517,7 @@ class Proxy:
 
 
 def parse_args(argv):
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], allow_abbrev=False)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run-only", action="store_true",
                       help="phase 1: refuse any call whose dry_run is not true")

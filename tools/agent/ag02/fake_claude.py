@@ -10,7 +10,11 @@ directory and its ancestors, and the configuration directory's rules. ``FAKE_CLA
 ``normal`` loads nothing in the production flags; ``leak`` loads context regardless;
 ``blind`` loads nothing even in the control; ``hooks`` runs the configuration directory's hook
 commands; ``extra_tool`` lists an extra tool at init; ``silent`` sends no request.
-``FAKE_CLAUDE_ARGV_FILE`` receives one JSON line with the argv.
+``FAKE_CLAUDE_ARGV_FILE`` receives one JSON line with the argv. ``FAKE_CLAUDE_ENV_FILE`` receives the
+names of every environment variable it got and the two values a stand-in run needs. Like the real
+CLI, it honours provider-selection variables: with ``CLAUDE_CODE_USE_BEDROCK`` or a Bedrock/Vertex/
+Foundry endpoint in its environment it would send the request there instead; it only records that
+(``FAKE_CLAUDE_PROVIDER_FILE``) and sends nothing.
 """
 
 import json
@@ -34,6 +38,16 @@ def main() -> int:
     if record:
         with open(record, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(argv) + "\n")
+    env_file = os.environ.get("FAKE_CLAUDE_ENV_FILE")
+    if env_file:
+        with open(env_file, "w", encoding="utf-8") as handle:
+            json.dump({"names": sorted(os.environ), "base_url": os.environ.get("ANTHROPIC_BASE_URL"),
+                       "api_key": os.environ.get("ANTHROPIC_API_KEY")}, handle)
+    selectors = [n for n in os.environ if n.startswith(("CLAUDE_CODE_USE_", "ANTHROPIC_BEDROCK_",
+                                                         "ANTHROPIC_VERTEX_", "ANTHROPIC_FOUNDRY_"))]
+    if selectors and os.environ.get("FAKE_CLAUDE_PROVIDER_FILE"):
+        with open(os.environ["FAKE_CLAUDE_PROVIDER_FILE"], "w", encoding="utf-8") as handle:
+            handle.write("would have routed to a provider\n")
     prompt = sys.stdin.read()
     sources = flag(argv, "--setting-sources")
     home = Path(os.environ.get("CLAUDE_CONFIG_DIR", ""))
@@ -57,7 +71,8 @@ def main() -> int:
                       "model": flag(argv, "--model"), "tools": tools,
                       "mcp_servers": [{"name": "ommatix", "status": "connected"}], "skills": [],
                       "slash_commands": [], "plugins": [{"name": "p1"}], "agents": ["a1"],
-                      "memory_paths": {"auto": "x"}, "additional_directories": []}), flush=True)
+                      "memory_paths": {"auto": str(home / "projects" / "scratch" / "memory")},
+                      "additional_directories": []}), flush=True)
     answer = "VERDICT: DONE"
     if mode != "silent":
         body = json.dumps({"model": flag(argv, "--model"), "stream": False,
