@@ -17,15 +17,26 @@ seconds for ``--minutes`` (default 120, the soak of RNF-06), samples:
 The report is JSON with no screen data: no frame, no element label, no coordinates. It carries
 the raw samples, the latency percentiles per window of time, and for each resource the first
 and last medians and the least-squares slope per hour after the warm-up. ``handle_steps`` lists
-each change of the handle count after the warm-up with the thread count before and after it, a
-diagnostic for a later run: it has no criterion. Its ``criteria`` judge
-the working-set slope and the handle slope against the owner's thresholds of 15 October 2026
-(dossier chapter 09, section 9.7: 10 MiB per hour, and no growth), which are the defaults of
-``--max-rss-growth-mib-per-hour`` and ``--max-handle-growth-per-hour``. The queue has the
-owner's bound of 17 October 2026 (dossier chapter 06, decision 9): a structural one, the tile
-count of the current frame, ``ceil(W/64) * ceil(H/64)``, which is 510 for a 1920x1080 frame.
-``--max-pending-regions`` has no default, since the bound depends on the frame: for a 1920x1080
-frame, pass ``--max-pending-regions 510``. Its criterion appears only when the flag is given. The
+each change of the handle count after the warm-up with the thread count before and after it.
+Its ``criteria`` judge, each with the value measured against it:
+
+* the working-set slope per hour after the warm-up, against 10 MiB per hour (the owner's
+  threshold of 15 October 2026, dossier chapter 09, section 9.7; the default of
+  ``--max-rss-growth-mib-per-hour``);
+* the handle count (``handle_count``), against the owner's rule of 17 October 2026 (the same
+  section): after the warm-up, at most one change of the count, and that change exactly +1, and
+  the count constant during the last 60 minutes of the run. The warm-up is the configured one
+  (``--warmup-minutes``, 10 by default), so a run shorter than that warm-up plus 60 minutes
+  cannot meet the rule, and neither can a run that did not complete;
+* the handle slope per hour, only when ``--max-handle-growth-per-hour`` is given (0 is the
+  no-growth rule of 15 October 2026); it has no default;
+* the queue (``pending_regions``), only when ``--max-pending-regions`` is given: the owner's
+  bound of 17 October 2026 (dossier chapter 06, decision 9), a structural one, the tile count of
+  the current frame, ``ceil(W/64) * ceil(H/64)``, which is 510 for a 1920x1080 frame. It has no
+  default, since the bound depends on the frame: for a 1920x1080 frame, pass
+  ``--max-pending-regions 510``.
+
+The handle slope is reported in ``resources`` without criterion unless its flag is given. The
 tool states no verdict on RNF-06 as a whole; the reading is the owner's.
 
 What it will not do, by construction:
@@ -115,8 +126,9 @@ def growth(samples: list[dict], key: str, warmup_s: float, scale: float = 1.0) -
 
 def handle_steps(samples: list[dict], warmup_s: float) -> list[dict]:
     """Every change of the handle count after the warm-up, with the thread count before and
-    after it. A diagnostic: it carries no criterion. A sample without a handle count is
-    skipped, and a change is measured from the last count that was read."""
+    after it. The input of ``handle_rule``; on its own it carries no criterion. A sample
+    without a handle count is skipped, and a change is measured from the last count that was
+    read."""
     steps = []
     previous = None
     for s in samples:
@@ -132,6 +144,47 @@ def handle_steps(samples: list[dict], warmup_s: float) -> list[dict]:
     return steps
 
 
+HANDLE_RULE = ("after the warm-up, at most one change of the handle count, of +1, and the count "
+               "constant during the last 60 minutes of the run (owner, 17 October 2026)")
+FLAT_FINAL_S = 60 * 60
+
+
+def handle_rule(samples: list[dict], warmup_s: float, completed: bool) -> dict:
+    """The owner's handle rule (``HANDLE_RULE``), judged on the changes of ``handle_steps``.
+
+    The run ends at its last sample, which must carry a handle count, so that the count is
+    known at the end. A run that did not complete, or that is shorter than the warm-up plus 60
+    minutes, cannot meet the rule. ``reason`` says why it is not met, and is None when it is.
+    """
+    steps = handle_steps(samples, warmup_s)
+    readings = [s for s in samples if s["t_s"] >= warmup_s and s.get("handles") is not None]
+    end_s = samples[-1]["t_s"] if samples else 0.0
+    rule = {"rule": HANDLE_RULE, "warmup_s": round(warmup_s, 1),
+            "handle_steps_after_warmup": len(steps),
+            "handle_step_deltas": [s["handles_after"] - s["handles_before"] for s in steps],
+            "flat_final_s": None, "met": False, "reason": None}
+    if not completed:
+        rule["reason"] = "the run did not complete its configured duration"
+    elif end_s < warmup_s + FLAT_FINAL_S:
+        rule["reason"] = "the run is shorter than the warm-up plus 60 minutes"
+    elif len(readings) < 2:
+        rule["reason"] = "fewer than two handle counts after the warm-up"
+    elif samples[-1].get("handles") is None:
+        rule["reason"] = "no handle count in the last sample"
+    else:
+        last_change_s = steps[-1]["t_s"] if steps else readings[0]["t_s"]
+        rule["flat_final_s"] = round(end_s - last_change_s, 1)
+        if len(steps) > 1:
+            rule["reason"] = f"{len(steps)} changes of the handle count after the warm-up"
+        elif steps and rule["handle_step_deltas"][0] != 1:
+            rule["reason"] = "the change of the handle count is not +1"
+        elif rule["flat_final_s"] < FLAT_FINAL_S:
+            rule["reason"] = "the handle count changed during the last 60 minutes"
+        else:
+            rule["met"] = True
+    return rule
+
+
 def latency_windows(points: list[tuple[float, float]], window_s: float) -> list[dict]:
     """p50/p95/p99/max of (seconds, ms) points in consecutive windows of ``window_s``."""
     windows: dict[int, list[float]] = {}
@@ -145,18 +198,21 @@ def latency_windows(points: list[tuple[float, float]], window_s: float) -> list[
     return rows
 
 
-def criteria(report_resources: dict, pending: dict, args) -> dict:
+def criteria(report_resources: dict, pending: dict, handle: dict, args) -> dict:
     """The thresholds the owner set, each with the value measured against it. The working-set
-    and handle thresholds always apply; the queue only when it has a bound."""
+    threshold and the handle rule always apply; the handle slope only when its flag is given,
+    and the queue only when it has a bound."""
     result = {}
     slope = report_resources["working_set_mib"].get("slope_per_hour")
     result["working_set_growth_mib_per_hour"] = {
         "limit": args.max_rss_growth_mib_per_hour, "measured": slope,
         "met": slope is not None and slope <= args.max_rss_growth_mib_per_hour}
-    slope = report_resources["handles"].get("slope_per_hour")
-    result["handle_growth_per_hour"] = {
-        "limit": args.max_handle_growth_per_hour, "measured": slope,
-        "met": slope is not None and slope <= args.max_handle_growth_per_hour}
+    result["handle_count"] = handle
+    if args.max_handle_growth_per_hour is not None:
+        slope = report_resources["handles"].get("slope_per_hour")
+        result["handle_growth_per_hour"] = {
+            "limit": args.max_handle_growth_per_hour, "measured": slope,
+            "met": slope is not None and slope <= args.max_handle_growth_per_hour}
     if args.max_pending_regions is not None:
         result["pending_regions_max"] = {
             "limit": args.max_pending_regions, "measured": pending.get("max"),
@@ -368,7 +424,8 @@ class Soak:
                            zero_samples=sum(1 for v in pending_values if v == 0))
         report["resources"] = resources
         report["pending_regions"] = pending
-        report["handle_steps"] = handle_steps(samples, warmup)
+        handle_warmup = a.warmup_minutes * 60  # the owner's rule takes the warm-up as configured
+        report["handle_steps"] = handle_steps(samples, handle_warmup)
         report["delivered_actions_max"] = max(
             (s["delivered_actions"] for s in observed if s.get("delivered_actions") is not None),
             default=None)
@@ -383,10 +440,11 @@ class Soak:
                     [(s["t_s"], s["total_ms"]) for s in observed if s.get("total_ms")],
                     window_s)},
         }
-        report["criteria"] = criteria(resources, pending, a)
+        rule = handle_rule(samples, handle_warmup, report["ended"] == "completed")
+        report["criteria"] = criteria(resources, pending, rule, a)
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--config", required=True, type=Path,
                     help="the operator configuration (models loaded; must be input free)")
@@ -401,8 +459,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--window-minutes", type=float, default=10.0,
                     help="width of the windows of the latency percentiles over time")
     ap.add_argument("--warmup-minutes", type=float, default=10.0,
-                    help="samples before this are left out of the growth fit (at most a tenth "
-                         "of the run)")
+                    help="warm-up in minutes: the growth fits leave out at most a tenth of the "
+                         "run; the handle rule of 17 October 2026 always leaves out this many "
+                         "minutes")
     ap.add_argument("--foreground-wait", type=float, default=15.0)
     ap.add_argument("--max-foreground-losses", type=int, default=3)
     ap.add_argument("--max-observe-errors", type=int, default=3)
@@ -410,13 +469,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap.add_argument("--max-rss-growth-mib-per-hour", type=float, default=10.0,
                     help="threshold for the slope of the working set (RSS) after the warm-up, "
                          "in MiB per hour (default 10: the owner's, 15 October 2026)")
-    ap.add_argument("--max-handle-growth-per-hour", type=float, default=0.0,
-                    help="threshold for the slope of the handle count after the warm-up "
-                         "(default 0: no growth; the owner's, 15 October 2026)")
+    ap.add_argument("--max-handle-growth-per-hour", type=float, default=None,
+                    help="optional extra criterion: at most this slope of the handle count after "
+                         "the warm-up, per hour (no default: the owner's handle rule of 17 "
+                         "October 2026 is criteria.handle_count; 0 is the no-growth rule of 15 "
+                         "October 2026)")
     ap.add_argument("--max-pending-regions", type=int, default=None,
                     help="the owner's structural bound for the queue (pending_regions): the tile "
                          "count of the frame, ceil(W/64) * ceil(H/64), 510 for 1920x1080 "
                          "(dossier chapter 06, decision 9); no default, it depends on the frame")
+    return ap
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    ap = build_parser()
     args = ap.parse_args(argv)
     if args.minutes <= 0 or args.interval <= 0:
         ap.error("--minutes and --interval must be positive")
