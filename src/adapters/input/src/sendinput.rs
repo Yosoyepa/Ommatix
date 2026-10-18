@@ -14,6 +14,7 @@
     allow(dead_code, reason = "only the Windows module calls these helpers")
 )]
 
+use ommatix_application::WindowOpacity;
 use ommatix_application::contract::{ActionKind, ScrollDirection};
 
 #[cfg(windows)]
@@ -42,6 +43,31 @@ impl WindowWalk {
     pub fn visit(&mut self, handle: u64) -> bool {
         handle != 0 && self.0.len() < 4096 && self.0.insert(handle)
     }
+}
+
+/// ADR-0035: DWM draws the corners of a window transparently, so a target box within this many
+/// physical pixels of two adjacent edges of the window (it meets the square of this size at a
+/// corner) is not attested opaque. The radius DWM uses is 8 px at 100 % scaling; 32 px covers
+/// scaling up to 400 %. It applies whatever corner preference the window reports.
+pub(crate) const CORNER_EXCLUSION_PX: u32 = 32;
+
+/// `WS_EX_LAYERED`: the window is composed through an alpha or colour key.
+const WS_EX_LAYERED: u32 = 0x0008_0000;
+/// `WS_EX_TRANSPARENT`: hit testing passes through the window.
+const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
+
+/// What the actuator may attest about a window's opacity from the two facts it reads
+/// (ADR-0035): its extended style, and `DWMWA_SYSTEMBACKDROP_TYPE` (`None` when the query
+/// failed). Layered and click-through windows, and any backdrop material other than `AUTO`
+/// (0, the default of a window that never opted in) or `NONE` (1), are not attested. Legacy
+/// blur-behind has no documented getter, so its absence is not attested (ADR-0035,
+/// implementation notes).
+pub(crate) fn window_opacity_of(ex_style: u32, backdrop: Option<u32>) -> Option<WindowOpacity> {
+    let opaque_style = ex_style & (WS_EX_LAYERED | WS_EX_TRANSPARENT) == 0;
+    let no_backdrop = matches!(backdrop, Some(0 | 1));
+    (opaque_style && no_backdrop).then_some(WindowOpacity {
+        corner_exclusion_px: CORNER_EXCLUSION_PX,
+    })
 }
 
 /// Visible DWM frame bounds in the capture's physical-pixel mapping. A window entirely
@@ -640,6 +666,31 @@ mod tests {
 mod window_tests {
     use super::*;
     use ommatix_domain::{DisplayMapping, bbox::BBox};
+
+    /// UT-75: only a plain window with no backdrop is attested opaque.
+    #[test]
+    fn ut_75_only_an_unlayered_window_without_a_backdrop_is_attested_opaque() {
+        let opaque = Some(WindowOpacity {
+            corner_exclusion_px: 32,
+        });
+        assert_eq!(CORNER_EXCLUSION_PX, 32);
+        // AUTO and NONE.
+        assert_eq!(window_opacity_of(0, Some(0)), opaque);
+        assert_eq!(window_opacity_of(0x0004_0000, Some(1)), opaque);
+        // Layered, click-through, or both.
+        for style in [
+            WS_EX_LAYERED,
+            WS_EX_TRANSPARENT,
+            WS_EX_LAYERED | WS_EX_TRANSPARENT,
+        ] {
+            assert_eq!(window_opacity_of(style, Some(1)), None, "{style:#x}");
+        }
+        // MAINWINDOW (Mica), TRANSIENTWINDOW (Acrylic), TABBEDWINDOW (Mica Alt), unknown
+        // values, and a query that failed.
+        for backdrop in [Some(2), Some(3), Some(4), Some(5), Some(u32::MAX), None] {
+            assert_eq!(window_opacity_of(0, backdrop), None, "{backdrop:?}");
+        }
+    }
 
     #[test]
     fn a_window_walk_rejects_null_cycles_and_an_incomplete_list() {

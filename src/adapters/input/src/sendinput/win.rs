@@ -6,11 +6,11 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use ommatix_application::contract::{ActionKind, ValidatedAction};
-use ommatix_application::{DeliveryReceipt, OsActuator, PortError, TopLevelWindow};
+use ommatix_application::{DeliveryReceipt, OsActuator, PortError, TopLevelWindow, WindowOpacity};
 use ommatix_domain::DisplayMapping;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Dwm::{
-    DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute,
+    DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_SYSTEMBACKDROP_TYPE, DwmGetWindowAttribute,
 };
 use windows::Win32::Security::{
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL,
@@ -31,10 +31,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, GA_ROOT, GUITHREADINFO, GW_HWNDNEXT, GetAncestor, GetClassNameW,
+    FindWindowExW, GA_ROOT, GUITHREADINFO, GW_HWNDNEXT, GWL_EXSTYLE, GetAncestor, GetClassNameW,
     GetForegroundWindow, GetGUIThreadInfo, GetSystemMetrics, GetTopWindow, GetWindow,
-    GetWindowThreadProcessId, IsChild, IsIconic, IsWindow, IsWindowVisible, SM_CXVIRTUALSCREEN,
-    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WindowFromPoint,
+    GetWindowLongPtrW, GetWindowThreadProcessId, IsChild, IsIconic, IsWindow, IsWindowVisible,
+    SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WindowFromPoint,
 };
 use windows::core::{PCWSTR, PWSTR};
 
@@ -42,6 +42,7 @@ use super::{
     ADAPTER, Event, FocusFacts, HOSTED_CONTENT_CLASS, MUST_BE_UP, TopLevel, VirtualScreen,
     WindowWalk, batch, exe_name_utf16, first_held, focus_problem, frame_bounds, integrity_allows,
     is_frame_host, keys_problem, normalise, point_application, shown_application, split_keys,
+    window_opacity_of,
 };
 use crate::aim::frame_pixel;
 
@@ -102,6 +103,9 @@ impl OsActuator for WindowReader {
     }
     fn window_at(&self, point: (f64, f64)) -> Option<TopLevelWindow> {
         read_window_at((self.mapping)().ok()?, point)
+    }
+    fn window_opacity(&self, window: &TopLevelWindow) -> Option<WindowOpacity> {
+        read_window_opacity(window.handle)
     }
     fn deliver(&mut self, _action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
         Err(refuse("the measurement reader never delivers input"))
@@ -382,6 +386,38 @@ fn visible_windows(mapping: DisplayMapping) -> Option<Vec<TopLevelWindow>> {
         }
     }
     Some(windows)
+}
+
+/// What this adapter attests about the opacity of the top-level window `handle` (ADR-0035):
+/// its extended style and its DWM system backdrop type, read now. A window that is gone, or
+/// a read that fails, attests nothing.
+fn read_window_opacity(handle: u64) -> Option<WindowOpacity> {
+    let hwnd = HWND(std::ptr::without_provenance_mut(
+        usize::try_from(handle).ok()?,
+    ));
+    // SAFETY: window handle by value; a stale handle makes the call return false.
+    if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
+        return None;
+    }
+    // SAFETY: window handle by value and a constant index; returns the style bits, with
+    // no pointer read or written.
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let mut backdrop = 0u32;
+    // SAFETY: this attribute writes a DWORD into our live local with its exact size; DWM
+    // keeps neither the out-pointer nor the window handle.
+    let read = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_SYSTEMBACKDROP_TYPE,
+            (&raw mut backdrop).cast(),
+            u32::try_from(size_of::<u32>()).ok()?,
+        )
+    };
+    // Style bits are the low 32 bits of the pointer-sized value.
+    window_opacity_of(
+        u32::try_from(style & 0xFFFF_FFFF).ok()?,
+        read.is_ok().then_some(backdrop),
+    )
 }
 
 /// The handle as the number the operator writes in the pin file.
@@ -755,6 +791,10 @@ impl OsActuator for SendInputActuator {
 
     fn window_at(&self, point: (f64, f64)) -> Option<TopLevelWindow> {
         read_window_at((self.mapping)().ok()?, point)
+    }
+
+    fn window_opacity(&self, window: &TopLevelWindow) -> Option<WindowOpacity> {
+        read_window_opacity(window.handle)
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
