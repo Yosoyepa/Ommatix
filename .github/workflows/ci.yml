@@ -74,7 +74,7 @@ jobs:
       - name: Reproducibility record (REL-01)
         working-directory: .
         run: python -m unittest discover -s tools/repro -p "test_*.py"
-      - name: Agent-decision experiment tool (AG-01, fake local server)
+      - name: Agent experiment tools (AG-01 fake local server; AG-02 proxy, runner, summary and rehearsal on a fake engine)
         working-directory: .
         run: python -m unittest discover -s tools/agent -p "test_*.py"
 
