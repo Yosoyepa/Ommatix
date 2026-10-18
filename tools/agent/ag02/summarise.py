@@ -89,7 +89,8 @@ def summarise(results: list[dict]) -> dict:
             "abstention_cases": 0, "abstention_correct": 0, "live_actions_spent": 0, "delivered": 0,
             "proxy_refusals": {}, "engine_error_codes": {}, "statuses": {}, "safety_events": 0,
             "context_per_goal": [], "output_per_goal": [], "uncached_per_goal": [], "cost_usd_values": [],
-            "context_per_message": [], "token_sources": {}, "tool_ms": {}, "wall_s": []})
+            "context_per_message": [], "fresh_input_per_message_unavailable": [], "token_sources": {},
+            "tool_ms": {}, "wall_s": []})
         entry["runs"] += 1
         total["attempted"] += 1  # every attempt stays in the phase's denominator
         if r.get("aborted"):
@@ -128,9 +129,13 @@ def summarise(results: list[dict]) -> dict:
         if figures["cost_usd"] is not None:
             total["cost_usd_values"].append(figures["cost_usd"])
         for message in r.get("metrics", {}).get("tokens_per_message", []):
-            total["context_per_message"].append((_int(message.get("input")) or 0)
-                                                + (_int(message.get("cache_creation")) or 0)
-                                                + (_int(message.get("cache_read")) or 0))
+            creation, read = _int(message.get("cache_creation")), _int(message.get("cache_read"))
+            if creation is None or read is None:
+                # A report from before the cache fields were kept: what the message read from the
+                # cache is unknown (not zero) and cannot be rebuilt from the session totals.
+                total["fresh_input_per_message_unavailable"].append(_int(message.get("input")) or 0)
+            else:
+                total["context_per_message"].append((_int(message.get("input")) or 0) + creation + read)
         for step in r.get("metrics", {}).get("step_ms", []):
             total["tool_ms"].setdefault(step["tool"], []).append(step["ms"])
         if isinstance(r.get("metrics", {}).get("wall_s"), (int, float)):
@@ -139,10 +144,15 @@ def summarise(results: list[dict]) -> dict:
         context, output = total.pop("context_per_goal"), total.pop("output_per_goal")
         uncached, costs = total.pop("uncached_per_goal"), total.pop("cost_usd_values")
         per_message = total.pop("context_per_message")
+        unavailable = total.pop("fresh_input_per_message_unavailable")
         total["context_tokens_total"], total["context_tokens_per_goal_median"] = sum(context), _median(context)
         total["output_tokens_total"], total["output_tokens_per_goal_median"] = sum(output), _median(output)
         total["cost_usd_total"] = round(sum(costs), 8) if costs else None
+        # Per-message context only over messages whose cache fields were measured; never mixed with
+        # messages whose cache is unknown, never spread from a session total.
         total["context_tokens_per_message_median"] = _median(per_message)
+        total["context_per_message_coverage"] = {"measured": len(per_message), "unavailable": len(unavailable)}
+        total["fresh_input_per_message_median_extra_uncached_only"] = _median(unavailable)
         # The old figure (fresh input + output, cached tokens left out), kept only as a labelled extra.
         total["uncached_input_plus_output_tokens_per_goal_median_extra"] = _median(uncached)
         total["tool_latency_ms"] = {
@@ -159,6 +169,21 @@ def summarise(results: list[dict]) -> dict:
             cost = entry.pop("cost_usd")
             entry["cost_usd_total"] = round(sum(cost), 8) if cost else None
     return {"goals": dict(sorted(by_goal.items())), "phases": dict(sorted(phases.items()))}
+
+
+def _per_message_text(t: dict) -> str:
+    coverage = t["context_per_message_coverage"]
+    if coverage["measured"] == 0 and coverage["unavailable"] == 0:
+        return "none"
+    if coverage["measured"] == 0:
+        return (f"unavailable (historical report: the per-message cache fields were not kept; "
+                f"[extra, uncached input only] median {t['fresh_input_per_message_median_extra_uncached_only']}, "
+                f"{coverage['unavailable']} messages)")
+    text = f"{t['context_tokens_per_message_median']} over {coverage['measured']} measured messages"
+    if coverage["unavailable"]:
+        text += (f"; {coverage['unavailable']} historical messages without cache fields left out "
+                 f"[extra, uncached input only] median {t['fresh_input_per_message_median_extra_uncached_only']}")
+    return text
 
 
 def render(summary: dict) -> str:
@@ -181,7 +206,7 @@ def render(summary: dict) -> str:
                   f"  engine error codes: {t['engine_error_codes'] or 'none'}",
                   f"  context tokens (fresh input + cache creation + cache read): total "
                   f"{t['context_tokens_total']}, per goal (median) {t['context_tokens_per_goal_median']}, "
-                  f"per message (median) {t['context_tokens_per_message_median']}",
+                  f"per message (median) {_per_message_text(t)}",
                   f"  output tokens (thinking included): total {t['output_tokens_total']}, per goal "
                   f"(median) {t['output_tokens_per_goal_median']}; cost USD (the CLI's): "
                   f"{t['cost_usd_total']}; figures from: {t['token_sources']}",

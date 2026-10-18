@@ -225,8 +225,10 @@ class RealS4HelpersTests(unittest.TestCase):
         with mock.patch.object(self.dossier, "new_run_id", return_value="ag02-G07-fixed"):
             run = rg.EditorRun("G07", self.dossier)
             path = run.create()
-            with self.assertRaises(self.dossier.Abort):
-                rg.EditorRun("G07", self.dossier).create()  # a folder it did not create is never adopted
+            second = rg.EditorRun("G07", self.dossier)
+            with self.assertRaises(rg.EditorRunRefused):  # a folder it did not create is never adopted
+                second.create()
+            self.assertEqual(second.cleanup(), {"left": [], "not_ours": True})
         (path / "nota.txt").write_bytes(b"nota")
         (path / "ajeno.txt").write_bytes(b"x")
         outcome = run.cleanup()

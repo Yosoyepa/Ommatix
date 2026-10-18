@@ -55,6 +55,7 @@ import importlib.util
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import threading
@@ -1096,10 +1097,42 @@ def windows_dossier():
     return module
 
 
+def reparse_problem(path) -> str | None:
+    """Whether `path` itself is a symbolic link, a junction or any other reparse point (Windows file
+    attribute 0x400). An absent path has nothing to be redirected; one that cannot be read is refused."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "unreadable"
+    if stat.S_ISLNK(st.st_mode) or getattr(st, "st_file_attributes", 0) & 0x400:
+        return "reparse point"
+    return None
+
+
+def reparse_chain_problem(path) -> str | None:
+    """Fail closed on a reparse point at `path` or at any of its ancestors."""
+    path = Path(path)
+    for part in (path, *path.parents):
+        if (problem := reparse_problem(part)) is not None:
+            return f"{problem} in the path"
+    return None
+
+
+def _same_parts(a: tuple, b: tuple) -> bool:
+    """Component-wise equality as Rust's ``Path::strip_prefix`` sees canonical paths: exact for every
+    name, the drive prefix (the first component of a Windows path) aside."""
+    return len(a) == len(b) and a[:1] and a[0].casefold() == b[0].casefold() and a[1:] == b[1:]
+
+
 def editor_folder_problem(folder, temp_root) -> str | None:
-    """Why the editor would refuse `folder` (exit code 2, no window): it must be, once resolved,
-    exactly ``<temp_root>/ommatix-e2e/<run id>``, an existing directory, with a valid run id. The
-    same rule as the editor's ``SaveFolder::new``."""
+    """Why the editor would refuse `folder` (exit code 2, no window), judged as the editor's
+    ``SaveFolder::new`` judges it: both paths canonicalised (links and junctions resolved to the
+    stored names), the folder a directory below the temporary directory, and its components below it
+    EXACTLY ``ommatix-e2e`` - compared case-sensitively, so a parent stored as ``OMMATIX-E2E`` is a
+    refusal here as it is there - and a valid run id. Anything that could make the two disagree is
+    refused: an unresolvable path, a reparse point anywhere in the chain."""
     if folder is None or temp_root is None:
         return "no folder or no temporary directory"
     folder = Path(folder)
@@ -1107,37 +1140,97 @@ def editor_folder_problem(folder, temp_root) -> str | None:
         return "not absolute"
     if not folder.is_dir():
         return "not an existing directory"
-    resolved = Path(os.path.normcase(os.path.realpath(folder)))
-    root = Path(os.path.normcase(os.path.realpath(temp_root)))
     try:
-        relative = resolved.relative_to(root)
-    except ValueError:
+        resolved = Path(os.path.realpath(folder, strict=True))
+        root = Path(os.path.realpath(temp_root, strict=True))
+    except OSError:
+        return "cannot be resolved"
+    if (problem := reparse_chain_problem(folder) or reparse_chain_problem(temp_root)) is not None:
+        return problem
+    rp, tp = resolved.parts, root.parts
+    if len(rp) < len(tp) or not _same_parts(rp[:len(tp)], tp):
         return "outside the temporary directory"
-    parts = relative.parts
-    if len(parts) != 2 or parts[0] != os.path.normcase(EDITOR_RUN_ROOT):
+    parts = rp[len(tp):]
+    if len(parts) != 2 or parts[0] != EDITOR_RUN_ROOT:
         return f"not <temporary directory>/{EDITOR_RUN_ROOT}/<run id>"
     if not RUN_ID_RULE.match(parts[1]) or set(parts[1]) == {"."}:
         return "not a valid run id"
     return None
 
 
+class EditorRunRefused(ValueError):
+    """The run folder was not made, or not made safely. ``reason`` is a closed token."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 class EditorRun:
     """The editor's run folder, made by the S4 clients' own helpers: ``RunTree`` creates
     ``<temp>/ommatix-e2e/<run id>`` exclusively (refusing one that exists), ``new_run_id`` names it,
-    ``windows_temp_dir`` is the directory the editor itself resolves. ``cleanup`` removes exactly what
-    the tree recorded plus the note the editor wrote, and nothing else."""
+    ``windows_temp_dir`` is the directory the editor itself resolves.
+
+    Ownership comes first. Before anything is created the temporary directory and the shared parent are
+    checked (no reparse point in the path, the parent stored under exactly the name the editor
+    requires, never renamed or adopted); the folder is the run's only once ``RunTree.create`` has
+    succeeded; ``cleanup`` removes nothing at all unless this run owns the folder, adopts the editor's
+    note only if the folder still resolves to what was created, and otherwise leaves everything
+    where it is and says so."""
 
     def __init__(self, goal_id: str, dossier=None):
         self.dossier = dossier if dossier is not None else windows_dossier()
-        self.temp_root = Path(self.dossier.windows_temp_dir())
-        self.tree = self.dossier.RunTree(self.temp_root, self.dossier.new_run_id(f"ag02-{goal_id}"))
+        self.owned = False
         self.path: Path | None = None
+        self.resolved: str | None = None
+        try:
+            self.temp_root = Path(self.dossier.windows_temp_dir())
+            self.tree = self.dossier.RunTree(self.temp_root, self.dossier.new_run_id(f"ag02-{goal_id}"))
+        except self.dossier.Abort:
+            raise EditorRunRefused("temporary_directory_or_run_id_refused") from None
+
+    def _before_creating(self) -> str | None:
+        if not self.temp_root.is_dir():
+            return "temporary_directory_missing"
+        if reparse_chain_problem(self.temp_root) is not None:
+            return "temporary_directory_redirected"
+        base = self.temp_root / EDITOR_RUN_ROOT
+        try:
+            stored = os.listdir(self.temp_root)
+        except OSError:
+            return "temporary_directory_unreadable"
+        if any(name != EDITOR_RUN_ROOT and name.casefold() == EDITOR_RUN_ROOT.casefold() for name in stored):
+            return "shared_parent_stored_under_another_case"
+        if os.path.lexists(base):
+            if reparse_problem(base) is not None:
+                return "shared_parent_redirected"
+            if not base.is_dir():
+                return "shared_parent_not_a_directory"
+        return None
 
     def create(self) -> Path:
-        self.path = self.tree.create()
+        if (reason := self._before_creating()) is not None:
+            raise EditorRunRefused(reason)
+        try:
+            self.path = self.tree.create()
+        except self.dossier.Abort:
+            self.path = None
+            raise EditorRunRefused("run_folder_already_exists") from None
+        except OSError:
+            self.path = None
+            raise EditorRunRefused("run_folder_not_created") from None
+        self.owned = True  # from here on, and only from here on, the folder is this run's
+        self.resolved = os.path.normcase(os.path.realpath(self.path))
+        if (problem := reparse_chain_problem(self.path)) is not None:
+            raise EditorRunRefused("run_folder_redirected")
         return self.path
 
     def cleanup(self) -> dict:
+        if not self.owned:
+            return {"left": [], "not_ours": True}  # nothing created, nothing to adopt, nothing removed
+        if (reparse_chain_problem(self.path) is not None
+                or os.path.normcase(os.path.realpath(self.path)) != self.resolved):
+            return {"left": ["run folder (it no longer resolves to what this run created)"]}
         return self.tree.cleanup(adopt=(NOTE_NAME,))
 
 
@@ -1358,8 +1451,13 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
     try:
         initial = goals["initial_states"][goal["app"]]
         if goal["app"] in EDITOR_APPS:
-            folder = deps.make_folder(goal["id"])
-            folder.create()
+            try:
+                folder = deps.make_folder(goal["id"])
+                folder.create()
+            except EditorRunRefused as refused:
+                # A folder this run could not make safely is an aborted attempt; nothing is adopted.
+                result["aborted"] = f"the editor's run folder was refused: {refused.reason}"
+                return result
         exe = args.testapp_exe if goal["app"] == "testapp" else args.editor_exe
         try:
             app = deps.make_app(goal, exe, folder.path if folder else None, driver,
