@@ -1032,6 +1032,7 @@ class FullRunnerTests(unittest.TestCase):
                     proxy_records=with_end([]))
         provenance = h.run()["provenance"]
         self.assertEqual(provenance, {"claude_code_version": "2.1.302", "model": "claude-haiku-5-5",
+                                      "cli": "claude-code", "provider": "anthropic",
                                       "requested_model": "claude-haiku-5-5", "proof_version": "2.1.302",
                                       "proof_date_utc": PROOF["date_utc"]})
 

@@ -18,6 +18,8 @@ SECRET_LABEL = "ETIQUETA-SECRETA"
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--received", required=True)
+    parser.add_argument("--extra-tool", default=None,
+                        help="list this fourth tool in tools/list (a server that offers more than three)")
     parser.add_argument("--delay-action-ms", type=int, default=0,
                         help="answer execute_action this late (tests of in-flight ids)")
     args = parser.parse_args()
@@ -33,7 +35,13 @@ def main() -> int:
             continue
         rid = message["id"]
         params = message.get("params") or {}
-        if message.get("method") != "tools/call":
+        if message.get("method") == "tools/list":
+            reply = {"jsonrpc": "2.0", "id": rid, "result": {"tools": [
+                {"name": name, "description": f"fake {name}",
+                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": True}}
+                for name in ("observe_screen", "execute_action", "get_engine_metrics",
+                             *([args.extra_tool] if args.extra_tool else []))]}}
+        elif message.get("method") != "tools/call":
             reply = {"jsonrpc": "2.0", "id": rid, "result": {"ok": True}}
         elif params.get("name") == "observe_screen":
             reply = {"jsonrpc": "2.0", "id": rid, "result": {"isError": False, "structuredContent": {

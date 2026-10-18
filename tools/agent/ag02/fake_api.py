@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""A local stand-in for the Anthropic Messages API, for the AG-02 isolation preflight.
+"""A local stand-in for the model APIs the AG-02 agents speak, for the isolation preflights.
 
-It listens on 127.0.0.1 only, records the raw body of every request in memory (the preflight
-searches them for canary sentinels; nothing is written to disk by this module) and answers
-``POST /v1/messages`` with a one-sentence assistant message that ends in ``VERDICT: DONE``,
-streamed (server-sent events) or not, as the client asked. Every other path answers 404.
-The bodies it records are the synthetic canary session's, never a real one.
+Three wire formats, all on 127.0.0.1 and none reaching anything else: the Anthropic Messages API
+(``/v1/messages``, Claude Code), the OpenAI-compatible Chat Completions API (``.../chat/completions``,
+the minimal agent and OpenCode) and the OpenAI Responses API (``.../responses``, Codex). For the
+last two, ``script`` lists what the model "says" to a request that offers tools - ``{"tool": name,
+"args": {...}}`` or ``{"text": "..."}`` - and a request with no tools (a title, say) gets plain text.
+Every recognised POST is kept: ``bodies`` (raw bytes) and ``requests`` (path, lower-cased header
+names and values, the body), so a preflight can inspect the real request, its headers and its tool
+list. Only the preflight's own dummy key and synthetic canary text ever reach it.
+
+Records are in memory only; nothing is written to disk by this module. Every other path answers 404
+(``gets`` and ``paths`` keep what was asked, so a preflight can see what an agent tried to reach).
 """
 
 from __future__ import annotations
@@ -41,12 +47,64 @@ def _sse(model: str) -> bytes:
     return b"".join(f"event: {name}\ndata: {json.dumps(data)}\n\n".encode() for name, data in events)
 
 
-class FakeApi:
-    """``with FakeApi() as api:`` then ``api.url`` and, afterwards, ``api.bodies``."""
+def _chat_reply(model: str, step: dict, n: int, stream: bool) -> tuple[bytes, str]:
+    """A Chat Completions reply: the scripted text or one function call, with cache-aware usage."""
+    message = {"role": "assistant", "content": step.get("text")}
+    if "reasoning" in step:  # a thinking model's reasoning_content, which the next request must carry back
+        message["reasoning_content"] = step["reasoning"]
+    finish = "stop"
+    if "tool" in step:
+        message["content"] = None
+        message["tool_calls"] = [{"id": f"call_{n}", "type": "function", "function": {
+            "name": step["tool"], "arguments": json.dumps(step.get("args", {}))}}]
+        finish = "tool_calls"
+    usage = {"prompt_tokens": 100 + n, "completion_tokens": 5, "total_tokens": 105 + n,
+             "prompt_tokens_details": {"cached_tokens": 0}}
+    if not stream:
+        return json.dumps({"id": f"chatcmpl-{n}", "object": "chat.completion", "created": 1, "model": model,
+                           "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+                           "usage": usage}).encode(), "application/json"
+    base = {"id": f"chatcmpl-{n}", "object": "chat.completion.chunk", "created": 1, "model": model}
+    delta = {"role": "assistant", "content": message.get("content") or ""}
+    if "tool_calls" in message:
+        delta["tool_calls"] = [dict(message["tool_calls"][0], index=0)]
+    chunks = [base | {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+              base | {"choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
+              base | {"choices": [], "usage": usage}]
+    return (b"".join(f"data: {json.dumps(c)}\n\n".encode() for c in chunks) + b"data: [DONE]\n\n",
+            "text/event-stream")
 
-    def __init__(self):
+
+def _responses_reply(model: str) -> bytes:
+    """A Responses API stream: one assistant message (the Codex probe only needs a request)."""
+    item = {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": ANSWER, "annotations": []}]}
+    events = [
+        ("response.created", {"type": "response.created", "response": {
+            "id": "resp_1", "object": "response", "model": model, "status": "in_progress", "output": []}}),
+        ("response.output_item.added", {"type": "response.output_item.added", "output_index": 0,
+                                         "item": item | {"status": "in_progress", "content": []}}),
+        ("response.output_text.delta", {"type": "response.output_text.delta", "item_id": "msg_1",
+                                         "output_index": 0, "content_index": 0, "delta": ANSWER}),
+        ("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": item}),
+        ("response.completed", {"type": "response.completed", "response": {
+            "id": "resp_1", "object": "response", "model": model, "status": "completed", "output": [item],
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": 5,
+                      "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": 15}}}),
+    ]
+    return b"".join(f"event: {n}\ndata: {json.dumps(d)}\n\n".encode() for n, d in events)
+
+
+class FakeApi:
+    """``with FakeApi() as api:`` then ``api.url`` and, afterwards, ``api.bodies`` / ``api.requests``."""
+
+    def __init__(self, script: list[dict] | None = None):
         self.bodies: list[bytes] = []
         self.paths: list[str] = []
+        self.requests: list[dict] = []
+        self.gets: list[str] = []
+        self.script = list(script or [])
+        self._steps = 0
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -63,8 +121,31 @@ class FakeApi:
             def do_POST(self):
                 length = int(self.headers.get("Content-Length") or 0)
                 body = self.rfile.read(length) if length else b""
-                outer.paths.append(self.path.split("?")[0])
-                if self.path.split("?")[0] != "/v1/messages":
+                path = self.path.split("?")[0]
+                outer.paths.append(path)
+                if path.endswith("/chat/completions") or path.endswith("/responses"):
+                    outer.bodies.append(body)
+                    outer.requests.append({"path": path, "headers": {k.lower(): v for k, v in self.headers.items()},
+                                           "body": body})
+                    try:
+                        request = json.loads(body)
+                    except ValueError:
+                        request = {}
+                    request = request if isinstance(request, dict) else {}
+                    model = str(request.get("model", "m"))
+                    if path.endswith("/responses"):
+                        self._reply(200, _responses_reply(model), "text/event-stream")
+                        return
+                    if request.get("tools"):
+                        step = (outer.script[outer._steps] if outer._steps < len(outer.script)
+                                else {"text": ANSWER})
+                        outer._steps += 1
+                    else:
+                        step = {"text": "title"}
+                    data, kind = _chat_reply(model, step, outer._steps, bool(request.get("stream")))
+                    self._reply(200, data, kind)
+                    return
+                if path != "/v1/messages":
                     self._reply(404, b"{}", "application/json")
                     return
                 outer.bodies.append(body)
@@ -79,6 +160,7 @@ class FakeApi:
                     self._reply(200, json.dumps(_message(model)).encode(), "application/json")
 
             def do_GET(self):
+                outer.gets.append(self.path.split("?")[0])
                 self._reply(404, b"{}", "application/json")
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
