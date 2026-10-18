@@ -1,5 +1,9 @@
 # Historial documental
 
+## 1.0.98 — 2026-10-18: metas del editor de la fase 1 de AG-02 y fase 1 completa (sólo documentación)
+
+Se añade a [9.11.1](09_EVALUACION_EXPERIMENTAL.md) la adición «Metas del editor (18 de octubre de 2026, tarde)»: G07, G08, G09 y G11 se ejecutaron en `dry_run` con el responsable presente, y la fase 1 queda con sus once metas. Según la puntuación de la fase 1, diez metas tienen éxito y G07 falla, porque repitió escritura y guardado tras una primera pasada y la elección no coincide con la esperada; esa puntuación da cero afirmaciones falsas, cero acciones en vivo, cero entregas y cero eventos de seguridad. La adición registra que el `DONE` de G09, una meta esperada imposible, no se puntúa en la fase 1, y que el punto 4 de 9.11 lo definiría como afirmación falsa: esa contradicción queda pendiente de decisión del responsable. Se actualizan la descripción de 9.11 y la de la fila AG-02 de `matrices/plan_pruebas.csv` (sólo descripción; la columna de aceptación no cambia, `PENDIENTE_PRODUCTO`). La fase 2 no se ha ejecutado. Ningún requisito cambia de estado, no se marca ninguna casilla de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) y no hay cambios en el motor ni en el contrato MCP.
+
 ## 1.0.96 — 2026-10-18: resultados parciales de la fase 1 de AG-02 (sólo documentación)
 
 Se añade a [9.11](09_EVALUACION_EXPERIMENTAL.md) el apartado 9.11.1 con los resultados parciales de la fase 1 de AG-02, ejecutada el 18 de octubre de 2026 con el responsable presente: siete de las once metas fijas completadas, todas sobre `ommatix-testapp.exe` (G01 a G06 y G10), sin ninguna acción en vivo ni entrega. G07 se abortó por un defecto del ejecutor, corregido en la PR #88 (fusionada); G08, G09 y G11 no se ejecutaron, y la fase 2 no se ha ejecutado.
