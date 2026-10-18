@@ -94,7 +94,7 @@ class FakeHost(soak.Host):
     def counters(self, pid):
         assert pid == ENGINE
         return {"rss": (300 + self.t / 60) * soak.MIB, "private": (250 + self.t / 30) * soak.MIB,
-                "handles": 500}
+                "handles": 500, "threads": 40}
 
     def gpu(self, pid):
         return FakeGpu()
@@ -120,6 +120,22 @@ class GrowingHandles(FakeHost):
     def counters(self, pid):
         return {"rss": 300 * soak.MIB, "private": 250 * soak.MIB,
                 "handles": 500 + int(self.t // 60)}
+
+
+class ThreadsAndHandles(FakeHost):
+    """At minute 30 one handle and one thread appear, and nothing else moves."""
+
+    def counters(self, pid):
+        stepped = self.t >= 30 * 60
+        return {"rss": 300 * soak.MIB, "private": 250 * soak.MIB,
+                "handles": 501 if stepped else 500, "threads": 41 if stepped else 40}
+
+
+class ThreadsUnreadable(FakeHost):
+    """The thread count cannot be read on this machine: the soak must go on anyway."""
+
+    def counters(self, pid):
+        return {"rss": 300 * soak.MIB, "private": 250 * soak.MIB, "handles": 500, "threads": None}
 
 
 class Case(unittest.TestCase):
@@ -353,6 +369,67 @@ class Command(unittest.TestCase):
         source = Path(soak.__file__).read_text(encoding="utf-8")
         self.assertNotIn("execute_action", source)
         self.assertNotIn("SendInput", source)
+
+
+class Diagnostics(Case):
+    def test_the_threads_are_sampled_and_summarised_like_the_handles(self):
+        report, _ = self.run_soak(ThreadsAndHandles(), minutes=60.0)
+        self.assertEqual(report["samples"][0]["threads"], 40)
+        threads = report["resources"]["threads"]
+        self.assertEqual((threads["min"], threads["max"]), (40, 41))
+        self.assertEqual(set(threads), set(report["resources"]["handles"]))
+
+    def test_a_handle_step_after_the_warm_up_is_listed_with_the_threads_around_it(self):
+        report, _ = self.run_soak(ThreadsAndHandles(), minutes=60.0)
+        self.assertEqual(report["handle_steps"], [
+            {"t_s": 1800.0, "handles_before": 500, "handles_after": 501,
+             "threads_before": 40, "threads_after": 41}])
+
+    def test_the_threads_and_the_steps_add_no_criterion(self):
+        report, _ = self.run_soak(ThreadsAndHandles(), minutes=60.0)
+        self.assertEqual(set(report["criteria"]),
+                         {"working_set_growth_mib_per_hour", "handle_growth_per_hour"})
+
+    def test_an_unreadable_thread_count_is_none_and_never_stops_the_soak(self):
+        report, code = self.run_soak(ThreadsUnreadable(), minutes=2.0)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertIsNone(report["samples"][0]["threads"])
+        self.assertEqual(report["resources"]["threads"], {"n": 0})
+        self.assertEqual(report["handle_steps"], [])
+
+
+class HandleSteps(unittest.TestCase):
+    @staticmethod
+    def sample(t, handles, threads=40):
+        return {"t_s": t, "handles": handles, "threads": threads}
+
+    def test_a_flat_count_has_no_steps(self):
+        samples = [self.sample(t, 500) for t in range(0, 100, 10)]
+        self.assertEqual(soak.handle_steps(samples, warmup_s=0), [])
+
+    def test_a_change_before_the_warm_up_is_not_a_step(self):
+        samples = [self.sample(0, 499), self.sample(10, 500), self.sample(20, 500)]
+        self.assertEqual(soak.handle_steps(samples, warmup_s=15), [])
+
+    def test_each_change_after_the_warm_up_is_listed_with_the_threads_around_it(self):
+        samples = [self.sample(20, 500, 40), self.sample(30, 501, 41), self.sample(40, 501, 41),
+                   self.sample(50, 500, 40)]
+        self.assertEqual(soak.handle_steps(samples, warmup_s=15), [
+            {"t_s": 30, "handles_before": 500, "handles_after": 501,
+             "threads_before": 40, "threads_after": 41},
+            {"t_s": 50, "handles_before": 501, "handles_after": 500,
+             "threads_before": 41, "threads_after": 40}])
+
+    def test_a_sample_without_a_handle_count_is_skipped_and_the_last_known_count_is_kept(self):
+        samples = [self.sample(20, 500), {"t_s": 25, "handles": None, "threads": None},
+                   self.sample(30, 501)]
+        steps = soak.handle_steps(samples, warmup_s=15)
+        self.assertEqual([(s["t_s"], s["handles_before"]) for s in steps], [(30, 500)])
+
+    def test_an_unreadable_thread_count_is_none_on_its_side_of_the_step(self):
+        samples = [self.sample(20, 500, None), self.sample(30, 501, 41)]
+        step = soak.handle_steps(samples, warmup_s=15)[0]
+        self.assertEqual((step["threads_before"], step["threads_after"]), (None, 41))
 
 
 if __name__ == "__main__":

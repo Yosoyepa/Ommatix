@@ -7,7 +7,7 @@ that regions keep changing by themselves, starts ``ommatix serve --source dxgi``
 operator's configuration (models loaded: the weights count, ADR-0010) and, every ``--interval``
 seconds for ``--minutes`` (default 120, the soak of RNF-06), samples:
 
-* the working set, the private bytes and the handle count of the ``ommatix`` process;
+* the working set, the private bytes, the handle and thread counts of the ``ommatix`` process;
 * the dedicated GPU memory of that process, when the Windows performance counters give it
   (read only; recorded as unavailable, with the reason, when they do not);
 * ``get_engine_metrics``: observations, ``pending_regions`` (the queue), rejected and delivered
@@ -16,7 +16,9 @@ seconds for ``--minutes`` (default 120, the soak of RNF-06), samples:
 
 The report is JSON with no screen data: no frame, no element label, no coordinates. It carries
 the raw samples, the latency percentiles per window of time, and for each resource the first
-and last medians and the least-squares slope per hour after the warm-up. Its ``criteria`` judge
+and last medians and the least-squares slope per hour after the warm-up. ``handle_steps`` lists
+each change of the handle count after the warm-up with the thread count before and after it, a
+diagnostic for a later run: it has no criterion. Its ``criteria`` judge
 the working-set slope and the handle slope against the owner's thresholds of 15 October 2026
 (dossier chapter 09, section 9.7: 10 MiB per hour, and no growth), which are the defaults of
 ``--max-rss-growth-mib-per-hour`` and ``--max-handle-growth-per-hour``. The queue has the
@@ -109,6 +111,25 @@ def growth(samples: list[dict], key: str, warmup_s: float, scale: float = 1.0) -
         "last_median": last,
         "slope_per_hour": None if slope is None else round(slope, 4),
     }
+
+
+def handle_steps(samples: list[dict], warmup_s: float) -> list[dict]:
+    """Every change of the handle count after the warm-up, with the thread count before and
+    after it. A diagnostic: it carries no criterion. A sample without a handle count is
+    skipped, and a change is measured from the last count that was read."""
+    steps = []
+    previous = None
+    for s in samples:
+        if s.get("handles") is None or s["t_s"] < warmup_s:
+            continue
+        if previous is not None and s["handles"] != previous["handles"]:
+            steps.append({"t_s": s["t_s"],
+                          "handles_before": previous["handles"],
+                          "handles_after": s["handles"],
+                          "threads_before": previous.get("threads"),
+                          "threads_after": s.get("threads")})
+        previous = s
+    return steps
 
 
 def latency_windows(points: list[tuple[float, float]], window_s: float) -> list[dict]:
@@ -335,6 +356,7 @@ class Soak:
             "working_set_mib": growth(samples, "rss", warmup, MIB),
             "private_mib": growth(samples, "private", warmup, MIB),
             "handles": growth(samples, "handles", warmup),
+            "threads": growth(samples, "threads", warmup),
             "gpu_dedicated_mib": growth(samples, "gpu_dedicated", warmup, MIB),
         }
         observed = [s for s in samples if s.get("observed")]
@@ -346,6 +368,7 @@ class Soak:
                            zero_samples=sum(1 for v in pending_values if v == 0))
         report["resources"] = resources
         report["pending_regions"] = pending
+        report["handle_steps"] = handle_steps(samples, warmup)
         report["delivered_actions_max"] = max(
             (s["delivered_actions"] for s in observed if s.get("delivered_actions") is not None),
             default=None)
