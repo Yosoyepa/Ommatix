@@ -311,7 +311,8 @@ def run(args) -> dict:
         manifest = {}
         problems.append(f"context_manifest_refused_{refused}")
     return {
-        "schema": rg.PROOF_SCHEMA, "passed": not problems, "problems": problems,
+        "schema": rg.PROOF_SCHEMA, "verifier_revision": rg.VERIFIER_REVISION,
+        "passed": not problems, "problems": problems,
         "date_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "claude_code_version": att_b.get("claude_code_version"), "model": att_b.get("model"),
         "requested_model": args.model, "tools": att_b.get("tools") or [],

@@ -32,7 +32,8 @@ def clean_init(**changes):
 
 def make_proof(**changes):
     att = rg.init_attestation(clean_init())
-    proof = {"schema": rg.PROOF_SCHEMA, "passed": True, "claude_code_version": "2.1.302",
+    proof = {"schema": rg.PROOF_SCHEMA, "verifier_revision": rg.VERIFIER_REVISION, "passed": True,
+             "claude_code_version": "2.1.302",
              "model": "claude-haiku-5-5", "requested_model": "claude-haiku-5-5", "tools": TOOLS3,
              "plugins": att["plugins"], "agents": att["agents"], "plugin_hashes": att["plugin_hashes"],
              "agent_hashes": att["agent_hashes"], "init_keys_sha256": att["init_keys_sha256"],

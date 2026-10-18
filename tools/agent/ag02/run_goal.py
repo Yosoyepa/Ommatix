@@ -96,7 +96,15 @@ PHASE_LINES = {
         "mean to deliver now; a call with dry_run true is a rehearsal that changes nothing."),
 }
 SCRATCH_ROOT_NAME = "ommatix-ag02"
-PROOF_SCHEMA = "ag02-isolation-proof-2"
+PROOF_SCHEMA = "ag02-isolation-proof-3"
+# The revision of the rules the preflight verifies by. A proof records the revision that issued it and
+# the loader requires exactly this value: whenever the verifier is made stricter this number goes up,
+# and every proof issued under the weaker rules is refused, even if the Claude Code version, the model,
+# the configuration directory and its manifest are all unchanged.
+#   2: first review round (isolation canary, stage B, scrubbed environment)
+#   3: decoded-request matching, untestable-file failure, manifest cap as a refusal, managed-policy
+#      drop-ins and unreadable roots/keys (third review)
+VERIFIER_REVISION = 3
 VERSION = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,80}$")
 
@@ -615,7 +623,9 @@ def load_isolation_proof(path: Path) -> dict:
     except (OSError, ValueError):
         raise SystemExit("the isolation proof is unreadable") from None
     lists = ("plugins", "agents", "plugin_hashes", "agent_hashes", "canary_kinds", "control_leaked_kinds")
+    revision = proof.get("verifier_revision") if isinstance(proof, dict) else None
     ok = (isinstance(proof, dict) and proof.get("schema") == PROOF_SCHEMA and proof.get("passed") is True
+          and type(revision) is int and revision == VERIFIER_REVISION
           and isinstance(proof.get("claude_code_version"), str)
           and VERSION.match(proof["claude_code_version"])
           and isinstance(proof.get("model"), str) and MODEL_NAME.match(proof["model"])
@@ -628,7 +638,10 @@ def load_isolation_proof(path: Path) -> dict:
           and isinstance(proof.get("context_manifest"), dict)
           and isinstance(proof.get("date_utc"), str))
     if not ok:
-        raise SystemExit("the isolation proof is not a passing ag02-isolation-proof-2 file")
+        raise SystemExit(f"the isolation proof is not a passing {PROOF_SCHEMA} file with verifier "
+                         f"revision {VERIFIER_REVISION}: it was issued by an older or different verifier "
+                         "(or is not a proof); run preflight.py again, even if Claude Code, the model and "
+                         "the configuration directory are unchanged")
     return proof
 
 

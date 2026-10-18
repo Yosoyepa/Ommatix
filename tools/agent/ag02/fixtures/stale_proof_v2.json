@@ -1,0 +1,71 @@
+{
+  "agent_hashes": [
+    "e4973d8f15475ab9be4cd6b122a940299335dd27de97038665f1cfa176dc2e88"
+  ],
+  "agents": [
+    "a1"
+  ],
+  "bodies": 1,
+  "body_bytes": 1267,
+  "canary_kinds": [
+    "user_claude_md",
+    "user_rules",
+    "auto_memory",
+    "skill",
+    "command",
+    "agent",
+    "hook_context",
+    "ancestor_claude_md",
+    "project_claude_md",
+    "project_local_md",
+    "project_command",
+    "parent_claude_md"
+  ],
+  "claude_code_version": "2.1.302",
+  "config_identity": "44c12946f590f04833538e82b7e0ef86f0b67a9456edb2178ce3c55a3f274b29",
+  "context_manifest": {
+    "CLAUDE.md": "5c3cc6b21b5cbad2c5f14041d9fe33a3cda20cf500484edf40750aeaf91fa17f"
+  },
+  "control_leaked_kinds": [
+    "ancestor_claude_md",
+    "auto_memory",
+    "parent_claude_md",
+    "project_claude_md",
+    "project_local_md",
+    "user_claude_md",
+    "user_rules"
+  ],
+  "date_utc": "2026-10-18T04:40:31Z",
+  "differences_from_production": [
+    "stage A uses the canary's own configuration directory",
+    "ANTHROPIC_BASE_URL is a local stand-in",
+    "ANTHROPIC_API_KEY is a dummy"
+  ],
+  "egress_controls": [
+    "child environment is a minimal allowlist: no provider selector, endpoint, credential, profile or telemetry variable of the operator's reaches it",
+    "error reporting and auto-update are switched off; telemetry switches and an outgoing-proxy block were tried and rejected because each removed `execute_action` from the CLI's tool list",
+    "refused to run with provider-routing variables set or a managed configuration found (best effort: policy delivered another way is not detected)"
+  ],
+  "init_keys_sha256": "4df37a9db5ba5a54682f7d5745319fb4395af0778b30da55f7c5d4fe66dfcfd5",
+  "markers_after_control": [],
+  "markers_after_production": [],
+  "model": "claude-haiku-5-5",
+  "passed": true,
+  "plugin_hashes": [
+    "cb84895d09da5cc23777d896d57d9bdf193aa81a5c6f7649fecd02cacf482f55"
+  ],
+  "plugins": [
+    "p1"
+  ],
+  "problems": [],
+  "production_dir_context_lines_checked": 1,
+  "production_dir_context_lines_in_request": 0,
+  "production_leaked_kinds": [],
+  "requested_model": "claude-haiku-5-5",
+  "schema": "ag02-isolation-proof-2",
+  "tools": [
+    "mcp__ommatix__execute_action",
+    "mcp__ommatix__get_engine_metrics",
+    "mcp__ommatix__observe_screen"
+  ]
+}

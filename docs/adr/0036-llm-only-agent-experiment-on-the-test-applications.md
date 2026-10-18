@@ -163,6 +163,14 @@ The implementation follows from those choices:
     over 5000 files or an unreadable file: a cap is never a complete-looking manifest. A control
     character (U+0000-U+001F, U+007F) anywhere in a path written in the engine's configuration is
     refused, in both phases, for both safety paths.
+14. **A stricter verifier invalidates older proofs.** A proof records the schema
+    (`ag02-isolation-proof-3`) and the `verifier_revision` of the preflight that issued it, and the
+    runner requires exactly the current revision, checked before any application or agent starts. When
+    the preflight is made stricter the revision goes up and every proof issued under the weaker rules
+    is refused, **even if the Claude Code version, the model, the configuration directory and its
+    manifest are all unchanged**: the operator runs the preflight again. (The fourth review showed an
+    older proof, issued while a leak was invisible to the previous verifier, still being accepted.)
+    No signatures or new trust infrastructure: the artifact is the operator's own.
 12. **Metadata only, everywhere.** Besides the proxy's closed vocabularies, the runner stores a tool
     only as one of the three short names or `unknown`, a server only as `ommatix` or `unknown`, a
     status or error code only if it is a member of the contract's enums, and an event kind and
@@ -222,6 +230,10 @@ The implementation follows from those choices:
 - `tools/agent/ag02/test_rehearsal.py`: the proxy and a fake agent script against a fake engine
   and, when a binary is available, against `ommatix serve --source sim` (the simulated desktop),
   proving the same three behaviours end to end.
+- `tools/agent/ag02/test_fourthreview.py` (Q1: a genuine proof issued by the previous verifier during
+  a leak, kept as `fixtures/stale_proof_v2.json`, is refused by the loader and by `main` before
+  anything starts; the current verifier fails the same scenario; wrong, missing and future revisions
+  are refused; a fresh proof passes and the run proceeds).
 - `tools/agent/ag02/test_thirdreview.py` (the third review's five findings: managed policy
   discovery including the drop-in directory and unreadable roots and keys, with no session started;
   stage B against a request with escaped text, quotes and backslashes while stage A stays valid,
