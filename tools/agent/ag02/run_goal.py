@@ -57,7 +57,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import tomllib
@@ -95,7 +94,11 @@ PHASE_LINES = {
     2: ("PHASE 2 (live): set dry_run to false on an execute_action call only for an action you "
         "mean to deliver now; a call with dry_run true is a rehearsal that changes nothing."),
 }
-SCRATCH_ROOT_NAME = "ommatix-ag02"
+# The editor writes only into <temporary directory>/ommatix-e2e/<run id> (tools/s4/testeditor
+# SaveFolder: RUN_ROOT and the run id rule); anything else makes it exit with code 2 before any
+# window. The folder is made by the S4 clients' own RunTree (tools/s4/e2e_dossier.py).
+EDITOR_RUN_ROOT = "ommatix-e2e"
+RUN_ID_RULE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 PROOF_SCHEMA = "ag02-isolation-proof-3"
 # The revision of the rules the preflight verifies by. A proof records the revision that issued it and
 # the loader requires exactly this value: whenever the verifier is made stricter this number goes up,
@@ -973,7 +976,9 @@ class StreamMetrics:
             "tool_calls": dict(sorted(self.tool_calls.items())),
             "tokens": self.usage_totals(),
             "tokens_per_message": [
-                {"input": u.get("input_tokens"), "output": u.get("output_tokens")}
+                {"input": u.get("input_tokens"), "output": u.get("output_tokens"),
+                 "cache_creation": u.get("cache_creation_input_tokens"),
+                 "cache_read": u.get("cache_read_input_tokens")}
                 for u in self.usage_by_message.values()],
             "cli_usage": result.get("usage") if isinstance(result.get("usage"), dict) else None,
             "cost_usd": result.get("total_cost_usd"),
@@ -1082,15 +1087,73 @@ def windows_driver():
     return module
 
 
+def windows_dossier():
+    """tools/s4/e2e_dossier.py (RunTree, new_run_id, windows_temp_dir), loaded like the driver."""
+    spec = importlib.util.spec_from_file_location(
+        "s4_e2e_dossier", HERE.parent.parent / "s4" / "e2e_dossier.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def editor_folder_problem(folder, temp_root) -> str | None:
+    """Why the editor would refuse `folder` (exit code 2, no window): it must be, once resolved,
+    exactly ``<temp_root>/ommatix-e2e/<run id>``, an existing directory, with a valid run id. The
+    same rule as the editor's ``SaveFolder::new``."""
+    if folder is None or temp_root is None:
+        return "no folder or no temporary directory"
+    folder = Path(folder)
+    if not folder.is_absolute():
+        return "not absolute"
+    if not folder.is_dir():
+        return "not an existing directory"
+    resolved = Path(os.path.normcase(os.path.realpath(folder)))
+    root = Path(os.path.normcase(os.path.realpath(temp_root)))
+    try:
+        relative = resolved.relative_to(root)
+    except ValueError:
+        return "outside the temporary directory"
+    parts = relative.parts
+    if len(parts) != 2 or parts[0] != os.path.normcase(EDITOR_RUN_ROOT):
+        return f"not <temporary directory>/{EDITOR_RUN_ROOT}/<run id>"
+    if not RUN_ID_RULE.match(parts[1]) or set(parts[1]) == {"."}:
+        return "not a valid run id"
+    return None
+
+
+class EditorRun:
+    """The editor's run folder, made by the S4 clients' own helpers: ``RunTree`` creates
+    ``<temp>/ommatix-e2e/<run id>`` exclusively (refusing one that exists), ``new_run_id`` names it,
+    ``windows_temp_dir`` is the directory the editor itself resolves. ``cleanup`` removes exactly what
+    the tree recorded plus the note the editor wrote, and nothing else."""
+
+    def __init__(self, goal_id: str, dossier=None):
+        self.dossier = dossier if dossier is not None else windows_dossier()
+        self.temp_root = Path(self.dossier.windows_temp_dir())
+        self.tree = self.dossier.RunTree(self.temp_root, self.dossier.new_run_id(f"ag02-{goal_id}"))
+        self.path: Path | None = None
+
+    def create(self) -> Path:
+        self.path = self.tree.create()
+        return self.path
+
+    def cleanup(self) -> dict:
+        return self.tree.cleanup(adopt=(NOTE_NAME,))
+
+
 class AppUnderTest:
     """One test application this script started: its window is found by pid, the operator
     brings it to the front by hand, and only this process is closed."""
 
-    def __init__(self, goal: dict, exe: Path, folder: Path | None, driver):
+    def __init__(self, goal: dict, exe: Path, folder: Path | None, driver, temp_root: Path | None = None):
         self.goal, self.driver = goal, driver
         self.expected_text = goal["choice"]["type_text"]
+        self.exit_code: int | None = None
         argv = [str(exe)]
         if goal["app"] != "testapp":
+            if (problem := editor_folder_problem(folder, temp_root)) is not None:
+                # Fail closed before a process exists: the editor would exit at once with code 2.
+                raise ValueError(f"the editor's folder {problem}")
             argv += ["--folder", str(folder)]
             if goal["app"] == "decoy-editor":
                 argv += ["--decoy-focus", "--field-digest"]
@@ -1112,6 +1175,9 @@ class AppUnderTest:
                  f"waiting up to {seconds:.0f} s; nothing is sent before that")
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
+            if self.proc.poll() is not None:  # the application is gone: no window will ever come
+                self.exit_code = self.proc.returncode
+                return False
             fg = self.driver.foreground()
             if (fg["exe"] == self.exe_name and fg["pid"] == self.proc.pid
                     and fg["maximized_primary"] and not self.driver.is_helper_class(fg.get("class", ""))):
@@ -1123,39 +1189,6 @@ class AppUnderTest:
         if self.proc.poll() is None:
             self.proc.kill()
             self.proc.wait(timeout=10)
-
-
-class RunFolder:
-    """The editor's folder, created by this run (exclusive) and removed by it: only ``nota.txt``
-    and the folder itself, never recursively."""
-
-    def __init__(self, base: Path, name: str):
-        self.base = base
-        self.path = base / name
-        self.created_base = False
-
-    def create(self) -> Path:
-        if not self.base.is_dir():
-            self.base.mkdir()
-            self.created_base = True
-        self.path.mkdir()
-        return self.path
-
-    def cleanup(self) -> dict:
-        left = []
-        target = self.path / NOTE_NAME
-        if target.is_file() and not target.is_symlink():
-            target.unlink()
-        try:
-            self.path.rmdir()
-        except OSError:
-            left.append("run folder")
-        if self.created_base:
-            try:
-                self.base.rmdir()
-            except OSError:
-                left.append("base")
-        return {"left": left}
 
 
 class TitleSampler(threading.Thread):
@@ -1225,15 +1258,11 @@ def default_output_root() -> Path:
     return Path(base) / "Ommatix" / "runs" / "ag02"
 
 
-def temp_root() -> Path:
-    return Path(tempfile.gettempdir())
-
-
 class RealDeps:
     """The collaborators of ``run_goal``; the tests replace them with fakes."""
     make_app = staticmethod(AppUnderTest)
     make_sampler = staticmethod(TitleSampler)
-    make_folder = staticmethod(RunFolder)
+    make_folder = staticmethod(EditorRun)
     run_claude = staticmethod(run_claude)
     sleep = staticmethod(time.sleep)
     announce = staticmethod(lambda text: print(text, file=sys.stderr, flush=True))
@@ -1329,12 +1358,19 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
     try:
         initial = goals["initial_states"][goal["app"]]
         if goal["app"] in EDITOR_APPS:
-            folder = deps.make_folder(temp_root() / SCRATCH_ROOT_NAME, f"{goal['id']}-{os.getpid()}")
+            folder = deps.make_folder(goal["id"])
             folder.create()
         exe = args.testapp_exe if goal["app"] == "testapp" else args.editor_exe
-        app = deps.make_app(goal, exe, folder.path if folder else None, driver)
+        try:
+            app = deps.make_app(goal, exe, folder.path if folder else None, driver,
+                                folder.temp_root if folder else None)
+        except ValueError as refused:
+            result["aborted"] = str(refused)
+            return result
         if not app.wait_foreground(args.foreground_wait, deps.announce):
-            result["aborted"] = "the application never reached the front"
+            code = getattr(app, "exit_code", None)
+            result["aborted"] = ("the application never reached the front" if code is None else
+                                 f"the application exited before reaching the front (code {code})")
             return result
         deps.sleep(1.0)
         if core(app.state(), initial) != initial:
