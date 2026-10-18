@@ -215,6 +215,52 @@ class FreshnessProbeTest(unittest.TestCase):
             del saved["summary"]
             self.assertEqual(saved, report)
 
+    def descriptive_args(self, pairs):
+        args = self.args(Path(tempfile.gettempdir()), descriptive=True)
+        args.pairs = pairs
+        return args
+
+    @staticmethod
+    def as_descriptive(report):
+        report = copy.deepcopy(report)
+        report.pop("min_outside_pairs", None)
+        report.pop("criterion_met", None)
+        report["descriptive"] = True
+        return report
+
+    def test_whole_frame_coverage_must_keep_every_changed_tile(self):
+        """PB1: a group that covers the whole frame cannot exclude a changed tile, for the
+        ADR-0032 group and the amended one, and such a report is never saved."""
+        covering = dict(group_frame_fraction=1.0, group_covers_whole_frame=True)
+        # Valid: whole-frame coverage with every changed tile inside the group.
+        good = self.paired_report()
+        for pair in good["pairs"]:
+            pair.update(covering, group_tiles=3)
+        good["pairs"][0]["occluder_group"].update(covering, group_tiles=3)
+        good["outside_pairs"] = 0
+        good["occluder_outside_pairs"] = 0
+        probe.validate_report(self.as_descriptive(good), self.descriptive_args(2))
+        # The ADR-0032 group claims whole-frame coverage with fewer group tiles than changed.
+        old_group = self.paired_report()
+        old_group["pairs"][0].update(covering)
+        legacy = self.report()
+        legacy["pairs"][0].update(covering)
+        # The amended group does the same.
+        new_group = self.paired_report()
+        new_group["pairs"][0]["occluder_group"].update(covering)
+        for broken, pairs in ((old_group, 2), (legacy, 1), (new_group, 2)):
+            broken = self.as_descriptive(broken)
+            with self.assertRaises(ValueError):
+                probe.validate_report(broken, self.descriptive_args(pairs))
+            # The save path refuses all of them: nothing is persisted.
+            with tempfile.TemporaryDirectory() as tmp:
+                run_args = self.args(Path(tmp), descriptive=True)
+                run_args.pairs = pairs
+                child = SimpleNamespace(returncode=0, stdout="", stderr=json.dumps(broken))
+                with self.assertRaises(ValueError):
+                    probe.run(run_args, lambda *a, **kw: child)
+                self.assertFalse(run_args.out.exists())
+
     def test_repository_output_is_refused_before_launch(self):
         args = self.args(HERE)
 

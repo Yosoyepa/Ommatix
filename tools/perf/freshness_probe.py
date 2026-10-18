@@ -93,6 +93,9 @@ def validate_occluder(record, total_tiles):
             raise ValueError("invalid occluder coverage")
         if type(covers) is not bool or covers != (fraction == 1):
             raise ValueError("inconsistent occluder coverage")
+        # A group that covers the whole frame keeps every changed tile.
+        if covers and tiles != total_tiles:
+            raise ValueError("inconsistent occluder coverage")
     if record["scoped"] and not record["opacity_attested"]:
         raise ValueError("inconsistent occluder opacity")
     if fallback == "no_opacity" and record["opacity_attested"]:
@@ -130,6 +133,8 @@ def validate_report(report, args):
                 raise ValueError("invalid measurement")
         if not 0 <= pair["group_frame_fraction"] <= 1:
             raise ValueError("invalid coverage")
+        if pair["group_covers_whole_frame"] and pair["group_tiles"] != pair["total_tiles"]:
+            raise ValueError("inconsistent coverage")
         for key in ("touches_target", "group_covers_whole_frame"):
             if type(pair[key]) is not bool:
                 raise ValueError("invalid flags")
