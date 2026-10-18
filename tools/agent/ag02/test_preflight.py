@@ -43,7 +43,8 @@ class PreflightBase(unittest.TestCase):
         for name, text in (files or {}).items():
             (self.production / name).write_text(text, encoding="utf-8")
         extra = {"FAKE_CLAUDE_MODE": mode, "FAKE_CLAUDE_ARGV_FILE": str(self.argv_file),
-                 "FAKE_CLAUDE_ENV_FILE": str(self.env_file), "FAKE_CLAUDE_PROVIDER_FILE": str(self.provider_file)}
+                 "FAKE_CLAUDE_ENV_FILE": str(self.env_file), "FAKE_CLAUDE_PROVIDER_FILE": str(self.provider_file),
+                 "FAKE_CLAUDE_LEAK_DIR": str(self.production)}
         args = argparse.Namespace(exe=Path(sys.executable), model="claude-haiku-5-5",
                                   claude=[sys.executable, str(HERE / "fake_claude.py")], timeout=60,
                                   claude_config_dir=self.production, extra_env=extra)

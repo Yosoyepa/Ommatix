@@ -150,10 +150,24 @@ The implementation follows from those choices:
     emulated, because Rust's `Path::join` and the operating system give them a meaning that depends on
     each drive's current directory. A Windows test compares the accepted forms with the engine's own
     resolver. No command-line flag can be abbreviated.
+13. **Third-review corrections to decisions 9 and 11.** Policy discovery covers, in each system
+    policy root, `managed-settings.json`, any entry of the `managed-settings.d` drop-in directory,
+    `managed-mcp.json` and a managed `CLAUDE.md`, and on Windows the `Policies\ClaudeCode` registry
+    key; a root or key that cannot be read refuses rather than passes; policy delivered by a server
+    or by another local mechanism is not covered, and the documents say so. Stage B of the preflight
+    compares the production directory's context with the request as the recipient reads it (every
+    string of the request's JSON, decoded - escapes, quotes and backslashes cannot hide a leak), an
+    unreadable request cannot be certified, and a non-empty context file that yields nothing
+    testable is reported and fails the proof (a short file is tested by its whole text). A
+    manifest hashes every file of every tree and refuses, at proof time and at run time, a tree
+    over 5000 files or an unreadable file: a cap is never a complete-looking manifest. A control
+    character (U+0000-U+001F, U+007F) anywhere in a path written in the engine's configuration is
+    refused, in both phases, for both safety paths.
 12. **Metadata only, everywhere.** Besides the proxy's closed vocabularies, the runner stores a tool
     only as one of the three short names or `unknown`, a server only as `ommatix` or `unknown`, a
-    status, error code or subtype only if it is a member of the contract's enums (or a plain
-    lower-case identifier), and an observation counts as evidence only when its result arrived
+    status or error code only if it is a member of the contract's enums, and an event kind and
+    subtype only if they are in the reviewed list of the CLI's stream (anything else is `other`;
+    a pattern of allowed spellings is not a vocabulary), and an observation counts as evidence only when its result arrived
     without error: a failed or unreadable newer observation invalidates the earlier one.
 
 ## Alternatives considered
@@ -208,6 +222,12 @@ The implementation follows from those choices:
 - `tools/agent/ag02/test_rehearsal.py`: the proxy and a fake agent script against a fake engine
   and, when a binary is available, against `ommatix serve --source sim` (the simulated desktop),
   proving the same three behaviours end to end.
+- `tools/agent/ag02/test_thirdreview.py` (the third review's five findings: managed policy
+  discovery including the drop-in directory and unreadable roots and keys, with no session started;
+  stage B against a request with escaped text, quotes and backslashes while stage A stays valid,
+  unreadable requests and untestable files; the manifest cap as a refusal at proof and run time;
+  closed event kinds and subtypes with lowercase canaries through the whole serialised result;
+  control characters in both safety paths through `main`).
 - `tools/agent/ag02/test_rereview.py` (the second review's six findings: raw path forms, including a
   Windows comparison with the engine's Rust resolver; provider routing; the proof's binding to the
   configuration, model and context; failed observations; no abbreviated flags; closed names) and

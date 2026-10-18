@@ -143,23 +143,79 @@ def build_world(root: Path) -> dict:
     return {"sentinels": sent, "markers": markers, "home": home, "cwd": cwd}
 
 
+def decoded_text(body: bytes) -> str | None:
+    """Every string of a captured request, decoded - keys and values, at any depth - joined by
+    newlines: what the recipient reads, whatever escaping the serialisation used (Unicode escapes,
+    escaped quotes and backslashes). ``None`` when the body is not JSON: an unreadable request
+    cannot be certified clean."""
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    out: list[str] = []
+
+    def walk(node):
+        if isinstance(node, str):
+            out.append(node)
+        elif isinstance(node, dict):
+            for key, item in node.items():
+                out.append(str(key))
+                walk(item)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+    walk(value)
+    return "\n".join(out)
+
+
+def request_texts(bodies: list[bytes]) -> tuple[str, int]:
+    """(the decoded text of all the requests, how many could not be read)."""
+    texts, unreadable = [], 0
+    for body in bodies:
+        text = decoded_text(body)
+        if text is None:
+            unreadable += 1
+        else:
+            texts.append(text)
+    return "\n".join(texts), unreadable
+
+
 def leaked(bodies: list[bytes], sentinels: dict) -> list[str]:
-    blob = b"".join(bodies)
-    return sorted(kind for kind, text in sentinels.items() if text.encode("ascii") in blob)
+    raw = b"".join(bodies)
+    decoded, _ = request_texts(bodies)
+    return sorted(kind for kind, text in sentinels.items()
+                  if text.encode("ascii") in raw or text in decoded)
 
 
-def context_snippets(config_dir: Path) -> list[bytes]:
-    """Distinctive lines of the context items in a configuration directory (CLAUDE.md, rules,
-    memory), held in memory only, to look for in a request body."""
+USABLE_LINE = 16
+SNIPPET_LINES = 50
+MIN_WHOLE_FILE = 6
+
+
+def context_snippets(config_dir: Path) -> tuple[list[str], list[str]]:
+    """(distinctive lines of the context items in a configuration directory - CLAUDE.md, rules,
+    memory - held in memory only, to look for in the decoded requests; the names of non-empty
+    files that yield nothing testable). A file with no line of ``USABLE_LINE`` characters is
+    tested by its whole stripped text when that has at least ``MIN_WHOLE_FILE`` characters;
+    shorter than that it is reported, never counted as tested absence."""
     files = [config_dir / "CLAUDE.md", *sorted((config_dir / "rules").rglob("*.md")),
              *sorted(config_dir.glob("projects/*/memory/**/*.md"))]
-    snippets: list[bytes] = []
+    snippets: list[str] = []
+    untestable: list[str] = []
     for file in files:
         if not file.is_file():
             continue
-        lines = [ln.strip() for ln in file.read_text(encoding="utf-8", errors="replace").splitlines()]
-        snippets += [ln.encode("utf-8") for ln in lines if len(ln) >= 16][:8]
-    return snippets
+        text = file.read_text(encoding="utf-8", errors="replace")
+        if not text.strip():
+            continue
+        lines = [ln.strip() for ln in text.splitlines() if len(ln.strip()) >= USABLE_LINE]
+        if lines:
+            snippets += lines[:SNIPPET_LINES]
+        elif len(text.strip()) >= MIN_WHOLE_FILE:
+            snippets.append(text.strip())
+        else:
+            untestable.append(file.name)
+    return snippets, untestable
 
 
 def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path,
@@ -219,9 +275,10 @@ def run(args) -> dict:
         scratch_b.mkdir(parents=True)
         b = one_session(args, production_dir, scratch_b, control=False, log=root / "b.jsonl",
                         scratch_name="b", memory_dir=production_dir)
-        b_snippets = context_snippets(production_dir)
-        b_blob = b"".join(b["bodies"])
-        b_leaked_lines = sum(1 for snippet in b_snippets if snippet in b_blob)
+        b_snippets, b_untestable = context_snippets(production_dir)
+        b_text, b_unreadable = request_texts(b["bodies"])
+        b_leaked_lines = sum(1 for snippet in b_snippets if snippet in b_text)
+        a_unreadable = request_texts(a["bodies"])[1]
         ancestors = rg.ancestor_context(scratch_b, production_dir)
     att_a, att_b = a["attestation"] or {}, b["attestation"] or {}
     for name, run_ in (("canary_session", a), ("production_dir_session", b)):
@@ -237,6 +294,10 @@ def run(args) -> dict:
     problems += [f"production_dir_init_{p}" for p in rg.init_problems(b["attestation"], None, production_dir)]
     if b_leaked_lines:
         problems.append("production_dir_context_in_request")
+    if b_untestable:
+        problems.append("production_dir_context_file_untestable")
+    if b_unreadable or a_unreadable:
+        problems.append("request_unreadable")
     if ancestors:
         problems.append("ancestor_context_present")
     if not control_leaks:
@@ -244,6 +305,11 @@ def run(args) -> dict:
     for key in ("claude_code_version", "model", "tools", "plugin_hashes", "agent_hashes", "init_keys_sha256"):
         if att_a.get(key) != att_b.get(key):
             problems.append(f"canary_and_production_dir_differ_in_{key}")
+    try:
+        manifest = rg.config_manifest(production_dir)
+    except rg.ManifestRefused as refused:
+        manifest = {}
+        problems.append(f"context_manifest_refused_{refused}")
     return {
         "schema": rg.PROOF_SCHEMA, "passed": not problems, "problems": problems,
         "date_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -253,11 +319,12 @@ def run(args) -> dict:
         "plugin_hashes": att_b.get("plugin_hashes") or [], "agent_hashes": att_b.get("agent_hashes") or [],
         "init_keys_sha256": att_b.get("init_keys_sha256") or "",
         "config_identity": rg.config_identity(production_dir),
-        "context_manifest": rg.config_manifest(production_dir),
+        "context_manifest": manifest,
         "canary_kinds": list(KINDS), "production_leaked_kinds": a_leaks,
         "control_leaked_kinds": control_leaks, "bodies": len(a["bodies"]),
         "body_bytes": sum(len(x) for x in a["bodies"]),
         "production_dir_context_lines_checked": len(b_snippets),
+        "production_dir_context_files_untestable": len(b_untestable),
         "production_dir_context_lines_in_request": b_leaked_lines,
         "markers_after_production": markers_production, "markers_after_control": markers_seen,
         "egress_controls": EGRESS_CONTROLS,

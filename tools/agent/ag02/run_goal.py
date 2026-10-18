@@ -162,8 +162,10 @@ def raw_path_problem(value) -> str | None:
     extended-length and device forms, alternate data streams, ``..``, device names, characters
     Windows rewrites. Rust's ``Path::join`` and the operating system give these forms a meaning
     that depends on the current directory of each drive, which a Python join does not share."""
-    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+    if not isinstance(value, str) or not value.strip():
         return "empty or malformed"
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        return "control characters are not accepted"
     if value.startswith(("\\\\", "//")):
         return "UNC, extended-length and device forms are not accepted"
     if re.match(r"^[A-Za-z]:", value) and not WINDOWS_ABSOLUTE.match(value):
@@ -381,30 +383,62 @@ def scrubbed_env(extra: dict) -> dict:
     return env | extra
 
 
-def managed_config_found(paths=None) -> list[str]:
-    """Closed tokens for any managed (policy) configuration present: it can set providers, hooks
-    and endpoints above everything the operator controls, so the preflight refuses to claim a
-    local run under it. Best effort: the file locations and, on Windows, the policy key."""
+POSIX_POLICY_ROOTS = (Path("/etc/claude-code"), Path("/Library/Application Support/ClaudeCode"))
+POLICY_ARTEFACTS = ("managed-settings.json", "managed-settings.d", "managed-mcp.json", "CLAUDE.md")
+
+
+def policy_roots() -> list[Path]:
+    """The system directories where Claude Code looks for managed (policy) files."""
+    roots = list(POSIX_POLICY_ROOTS)
+    for var in ("PROGRAMFILES", "PROGRAMDATA"):
+        if os.environ.get(var):
+            roots.append(Path(os.environ[var]) / "ClaudeCode")
+    return roots
+
+
+def managed_config_found(roots=None) -> list[str]:
+    r"""Closed tokens for any managed (policy) configuration present or not excludable: it can set
+    providers, hooks, MCP servers, endpoints and instructions above everything the operator
+    controls, so the preflight refuses to claim a local run under it. Looked for, in each system
+    policy root: ``managed-settings.json``, the ``managed-settings.d`` drop-in directory (any
+    entry), ``managed-mcp.json`` and a managed ``CLAUDE.md``; and, on Windows, the
+    ``SOFTWARE\Policies\ClaudeCode`` key, where a key that cannot be read is a refusal, not a pass.
+    A root that exists but cannot be listed is a refusal too. Not covered, and said so: policy
+    delivered by a server or by another local mechanism."""
     found = []
-    real = paths is None
-    if real:
-        paths = [Path("/etc/claude-code/managed-settings.json"),
-                 Path("/Library/Application Support/ClaudeCode/managed-settings.json")]
-        for var in ("PROGRAMFILES", "PROGRAMDATA"):
-            if os.environ.get(var):
-                paths.append(Path(os.environ[var]) / "ClaudeCode" / "managed-settings.json")
-    found += [f"managed_settings_file_{i}" for i, path in enumerate(paths) if path.exists()]
+    real = roots is None
+    for index, root in enumerate(policy_roots() if real else roots):
+        try:
+            present = root.exists()
+        except OSError:
+            found.append(f"managed_root_{index}_unreadable")
+            continue
+        if not present:
+            continue
+        for name in POLICY_ARTEFACTS:
+            item = root / name
+            try:
+                if item.is_dir():
+                    if any(item.iterdir()):
+                        found.append(f"managed_root_{index}_{name}")
+                elif item.exists():
+                    found.append(f"managed_root_{index}_{name}")
+            except OSError:
+                found.append(f"managed_root_{index}_{name}_unreadable")
     if real and os.name == "nt":
         try:
             import winreg
-            for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        except ImportError:
+            winreg = None
+        if winreg is not None:
+            for hive_name, hive in (("machine", winreg.HKEY_LOCAL_MACHINE), ("user", winreg.HKEY_CURRENT_USER)):
                 try:
                     winreg.CloseKey(winreg.OpenKey(hive, r"SOFTWARE\Policies\ClaudeCode"))
-                    found.append("managed_policy_registry_key")
+                    found.append(f"managed_policy_registry_key_{hive_name}")
+                except FileNotFoundError:
+                    pass  # the key is absent: nothing to exclude
                 except OSError:
-                    pass
-        except ImportError:
-            pass
+                    found.append(f"managed_policy_registry_{hive_name}_unreadable")
     return found
 
 
@@ -412,6 +446,11 @@ CONTEXT_FILES = ("CLAUDE.md", "settings.json", "settings.local.json")
 CONTEXT_DIRS = ("rules", "skills", "commands", "agents", "hooks")
 CLAUDE_JSON_KEYS = ("mcpServers", "hooks", "env", "apiKeyHelper", "enabledPlugins")
 MANIFEST_FILE_CAP = 5000
+
+
+class ManifestRefused(Exception):
+    """The configuration directory cannot be bound to a proof completely: a tree has more files
+    than the cap, or a file cannot be read. A cap is never a successful, complete manifest."""
 
 
 def _sha(data: bytes) -> str:
@@ -428,19 +467,22 @@ def config_manifest(config_dir: Path) -> dict:
     CLAUDE.md, settings, rules, skills, commands, agents, hooks, the memory directories under
     ``projects``, and the parts of ``.claude.json`` that name servers, hooks, environment or
     plugins. Contents are hashed and dropped; credentials and session files are ignored. A new,
-    removed or edited item changes the manifest."""
+    removed or edited item changes the manifest. Every file of every tree is hashed; a tree over
+    ``MANIFEST_FILE_CAP`` files, or a file that cannot be read, raises ``ManifestRefused``."""
     manifest: dict[str, str] = {}
 
     def tree(root: Path) -> str:
         digest, count = hashlib.sha256(), 0
-        for file in sorted(root.rglob("*")):
-            if file.is_file():
-                count += 1
-                if count > MANIFEST_FILE_CAP:
-                    digest.update(b"cap")
-                    break
-                digest.update(file.relative_to(root).as_posix().encode("utf-8") + b"\0")
-                digest.update(_sha(file.read_bytes()).encode() + b"\0")
+        try:
+            for file in sorted(root.rglob("*")):
+                if file.is_file():
+                    count += 1
+                    if count > MANIFEST_FILE_CAP:
+                        raise ManifestRefused("too_many_files")
+                    digest.update(file.relative_to(root).as_posix().encode("utf-8") + b"\0")
+                    digest.update(_sha(file.read_bytes()).encode() + b"\0")
+        except OSError:
+            raise ManifestRefused("unreadable") from None
         return digest.hexdigest()
     for name in CONTEXT_FILES:
         file = config_dir / name
@@ -697,15 +739,22 @@ def proof_problems(proof: dict, args, config_dir: Path | None) -> list[str]:
         return problems
     if config_identity(config_dir) != proof["config_identity"]:
         problems.append("configuration_directory_differs_from_proof")
-    if config_manifest(config_dir) != proof["context_manifest"]:
-        problems.append("configuration_manifest_differs_from_proof")
+    try:
+        if config_manifest(config_dir) != proof["context_manifest"]:
+            problems.append("configuration_manifest_differs_from_proof")
+    except ManifestRefused as refused:
+        problems.append(f"configuration_manifest_refused_{refused}")
     return problems
 
 
 # ---- the stream ----------------------------------------------------------------------------
 
 UNKNOWN = "unknown"
-SUBTYPE = re.compile(r"^[a-z][a-z_]{0,39}$")
+# The CLI's stream-json event kinds and subtypes that were reviewed; anything else is "other".
+EVENT_KINDS = {"system": ("init", "hook_started", "hook_response", "compact_boundary", "status", "api_retry"),
+               "assistant": (), "user": (), "rate_limit_event": (), "stream_event": (),
+               "result": ("success", "error_max_turns", "error_during_execution", "error_max_budget_usd")}
+OTHER = "other"
 
 
 def tool_short_name(name: str) -> str:
@@ -782,10 +831,10 @@ class StreamMetrics:
             return
         now = self.clock()
         kind = event.get("type")
-        safe_kind = kind if isinstance(kind, str) and SUBTYPE.match(kind) else "other"
+        safe_kind = kind if isinstance(kind, str) and kind in EVENT_KINDS else OTHER
         subtype = event.get("subtype")
-        label = (f"{safe_kind}/{subtype if isinstance(subtype, str) and SUBTYPE.match(subtype) else 'other'}"
-                 if subtype else safe_kind)
+        label = (f"{safe_kind}/{subtype if safe_kind != OTHER and subtype in EVENT_KINDS[safe_kind] else OTHER}"
+                 if subtype is not None else safe_kind)
         self.event_types[label] = self.event_types.get(label, 0) + 1
         if kind == "system" and event.get("subtype") == "init":
             self.attestation = init_attestation(event)
@@ -919,8 +968,8 @@ class StreamMetrics:
             "wall_s": round(self.clock() - self.t0, 2),
             "verdict": self.verdict(),
             "cli_is_error": result.get("is_error"),
-            "cli_subtype": (result.get("subtype") if isinstance(result.get("subtype"), str)
-                            and SUBTYPE.match(result["subtype"]) else None),
+            "cli_subtype": (None if result.get("subtype") is None else
+                            result["subtype"] if result["subtype"] in EVENT_KINDS["result"] else OTHER),
             "mcp_status": {(name if name == SERVER_NAME else UNKNOWN): (
                 status if status in ("connected", "pending", "failed", "needs-auth") else UNKNOWN)
                 for name, status in (att.get("mcp_servers") or [])},

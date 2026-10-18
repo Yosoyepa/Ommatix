@@ -9,7 +9,10 @@ directory and its ancestors, and the configuration directory's rules. ``FAKE_CLA
 
 ``normal`` loads nothing in the production flags; ``leak`` loads context regardless;
 ``blind`` loads nothing even in the control; ``hooks`` runs the configuration directory's hook
-commands; ``extra_tool`` lists an extra tool at init; ``silent`` sends no request.
+commands; ``extra_tool`` lists an extra tool at init; ``silent`` sends no request; ``garbled`` sends
+a body that is not JSON; ``leak_dir`` loads context only when the configuration directory is
+``FAKE_CLAUDE_LEAK_DIR`` (the leak of stage B alone). Bodies are serialised with ordinary JSON
+escaping, as a real client's are.
 ``FAKE_CLAUDE_ARGV_FILE`` receives one JSON line with the argv. ``FAKE_CLAUDE_ENV_FILE`` receives the
 names of every environment variable it got and the two values a stand-in run needs. Like the real
 CLI, it honours provider-selection variables: with ``CLAUDE_CODE_USE_BEDROCK`` or a Bedrock/Vertex/
@@ -51,7 +54,9 @@ def main() -> int:
     prompt = sys.stdin.read()
     sources = flag(argv, "--setting-sources")
     home = Path(os.environ.get("CLAUDE_CONFIG_DIR", ""))
-    loads = mode != "blind" and (mode == "leak" or sources not in ("", None))
+    leak_dir = os.environ.get("FAKE_CLAUDE_LEAK_DIR")
+    loads = mode != "blind" and (mode == "leak" or sources not in ("", None)
+                                 or (mode == "leak_dir" and leak_dir and str(home) == leak_dir))
     context = ""
     if loads:
         files = [home / "CLAUDE.md", *sorted((home / "rules").glob("*.md")),
@@ -78,6 +83,8 @@ def main() -> int:
         body = json.dumps({"model": flag(argv, "--model"), "stream": False,
                            "system": flag(argv, "--system-prompt"),
                            "messages": [{"role": "user", "content": prompt + "\n" + context}]}).encode()
+        if mode == "garbled":
+            body = b"this is not json {"
         request = urllib.request.Request(os.environ["ANTHROPIC_BASE_URL"] + "/v1/messages", data=body,
                                          headers={"content-type": "application/json"})
         with urllib.request.urlopen(request, timeout=30) as reply:

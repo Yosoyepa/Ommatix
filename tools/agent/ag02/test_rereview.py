@@ -178,13 +178,13 @@ class ProviderRoutingTests(unittest.TestCase):
             self.assertIn("CLAUDE_CODE_USE_BEDROCK", str(caught.exception))
             self.assertFalse((tmp / "out").exists())
 
-    def test_managed_configuration_files_are_reported_with_closed_tokens(self):
+    def test_managed_configuration_in_a_root_is_reported_with_closed_tokens(self):
         with tempfile.TemporaryDirectory() as tmp:
-            present = Path(tmp) / "managed-settings.json"
-            present.write_text("{}", encoding="utf-8")
-            self.assertEqual(rg.managed_config_found([present, Path(tmp) / "absent.json"]),
-                             ["managed_settings_file_0"])
-            self.assertEqual(rg.managed_config_found([Path(tmp) / "absent.json"]), [])
+            root = Path(tmp) / "ClaudeCode"
+            root.mkdir()
+            self.assertEqual(rg.managed_config_found([root, Path(tmp) / "absent"]), [])
+            (root / "managed-settings.json").write_text("{}", encoding="utf-8")
+            self.assertEqual(rg.managed_config_found([root]), ["managed_root_0_managed-settings.json"])
 
 
 class ProofIsBoundToTheProductionContextTests(unittest.TestCase):
