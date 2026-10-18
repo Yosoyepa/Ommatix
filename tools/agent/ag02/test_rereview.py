@@ -21,9 +21,11 @@ from test_run_goal import (BY_ID, GOALS, Harness, act, action_result, clean_init
                            make_proof, observation)
 
 CANARY = "PRIVATE-SCREEN-CANARY"
-REFUSED_FORMS = ["C:STOP", "c:stop.flag", "\\STOP", "/STOP", "\\\\srv\\share\\stop", "//srv/share/stop",
+REFUSED_FORMS = ["C:STOP", "c:stop.flag", "\\STOP", "\\\\srv\\share\\stop", "//srv/share/stop",
                  "\\\\?\\C:\\stop", "C:\\x\\..\\stop", "C:\\x\\\\stop", "STOP.", "NUL", "stop:stream", "a b",
                  "", "  ", "./stop", "../stop", "sub/../stop", "C:\\x\\NUL.txt"]
+if os.name == "nt":
+    REFUSED_FORMS.append("/STOP")  # root-relative on Windows; an absolute path elsewhere
 ACCEPTED_FORMS = ["STOP", "stop.flag", "sub/stop.flag", "sub\\stop.flag", "C:\\STOP", "C:/ops/stop",
                   "C:\\Users\\a b\\stop.flag"]
 
@@ -38,6 +40,18 @@ class DriveRelativePathTests(unittest.TestCase):
                 rg.engine_path(Path("C:/operator/config"), form)
         for form in ACCEPTED_FORMS:
             self.assertIsNone(rg.raw_path_problem(form), form)
+
+    def test_the_rules_do_not_depend_on_the_platform_the_check_runs_on(self):
+        for name in ("nt", "posix"):
+            with mock.patch.object(rg.os, "name", name):
+                for form in ("C:STOP", "\\STOP", "\\\\srv\\s", "//srv/s", "..", "a b", "stop:x"):
+                    self.assertIsNotNone(rg.raw_path_problem(form), (name, form))
+                self.assertIsNone(rg.raw_path_problem("STOP"), name)
+                self.assertIsNone(rg.raw_path_problem("C:\\STOP"), name)
+        with mock.patch.object(rg.os, "name", "nt"):
+            self.assertIsNotNone(rg.raw_path_problem("/STOP"))
+        with mock.patch.object(rg.os, "name", "posix"):
+            self.assertIsNone(rg.raw_path_problem("/var/ops/stop"))
 
     def test_a_drive_relative_stop_file_is_refused_in_every_phase_before_anything_starts(self):
         base = Path(tempfile.gettempdir())

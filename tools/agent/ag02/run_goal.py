@@ -171,7 +171,7 @@ def raw_path_problem(value) -> str | None:
     if WINDOWS_ABSOLUTE.match(value):
         rest = value[3:]
     elif value[0] in "\\/":
-        if os.name == "nt" or value.startswith("//"):
+        if value[0] == "\\" or os.name == "nt" or value.startswith("//"):
             return "root-relative form is not accepted"
         rest = value[1:]
     else:
