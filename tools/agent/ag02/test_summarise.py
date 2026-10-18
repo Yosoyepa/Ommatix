@@ -34,6 +34,17 @@ def result(goal, phase, *, success, false_success=False, expected="done", delive
 
 
 class SummariseTests(unittest.TestCase):
+    def test_an_abstention_not_scored_in_the_phase_is_not_in_the_denominator(self):
+        # G09 in phase 1: expected "impossible", but its phase-1 verdict is null, so the score has
+        # no abstention verdict (None); only G10 is scored. It must read 1/1, not 1/2.
+        results = [
+            result("G09", 1, success=True, expected="impossible", abstention=None),
+            result("G10", 1, success=True, expected="impossible", abstention=True),
+        ]
+        phase1 = summarise.summarise(results)["phases"]["1"]
+        self.assertEqual((phase1["abstention_cases"], phase1["abstention_correct"]), (1, 1))
+        self.assertIn("abstention correct 1/1", summarise.render(summarise.summarise(results)))
+
     def test_success_false_claims_abstention_and_refusals_are_counted_by_phase(self):
         results = [
             result("G01", 2, success=True, spent=2, delivered=2,
