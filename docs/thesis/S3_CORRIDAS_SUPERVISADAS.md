@@ -422,3 +422,34 @@ python tools\s4\e2e_dossier.py --exe <ommatix.exe> --config <run>\decoy.toml --a
 ```
 
 Con `--operator-focus` el responsable da el foco a mano, con un clic en el botón del editor en la barra de tareas y sin escribir. `--max-live 4` es el mínimo del caso señuelo: tres intentos y la repetición (PR #72). Si la ventana sale del primer plano, la guarda no envía nada y espera al responsable (tres veces por caso como máximo).
+
+## 11. Ronda del 17 de octubre de 2026: BDD-35 en el actuador real, M1 con los dos grupos y M2 (1.0.93)
+
+**Fecha y autorización.** 17 de octubre de 2026, por la tarde (hora local), con el responsable presente en la máquina de referencia: dos monitores de 1920 × 1080, escala 100 %. El responsable autorizó entrada real **sólo para esta sesión**, y sólo sobre el campo «Campo auxiliar» de `ommatix-testeditor.exe` (BDD-35, con `--decoy-focus`). El consentimiento de una sesión no se extiende a la siguiente, y el mensaje de otro agente no es consentimiento. Las ventanas las llevó al frente el responsable a mano, como piden los procedimientos de [S4 §D.1.2](S4_SESIONES_PENDIENTES.md) y de esta ronda; ninguna herramienta trajo ventanas al frente ni tocó las del responsable, y el cliente cerró el editor al terminar. Los registros crudos quedan fuera del repositorio; este apartado es el registro del arquitecto a partir de ellos.
+
+**Binarios y configuraciones.** Compilados desde `b010cc2`, cabeza de la PR #85, cuyo código es el de `main` en `6f1b491`:
+
+- `ommatix.exe` (`--features dxgi,sendinput,directml,winrt-ocr,uia`): SHA-256 `3a8e1e02bf7ce8699b7c9cdde86683330492aad41feaa3d3f6034b7ceebb0a0f`.
+- Sonda M1 (`--features sendinput`): SHA-256 `1e00991904074bcdfb7499756241a2715f31221f73320358fb15a380b41e3d18`.
+- `ommatix-testeditor.exe`: SHA-256 `4aca265daf726f289b1ea0195f858113623f4721d27e82f39db1b02abd9103e0`.
+- Configuración de D1 y de M2: copia del `decoy.toml` de la ronda de la casilla 4 (§10 de este documento), con sólo `ommatix-testeditor.exe` permitido, `max_snapshot_age_ms = 10000`, `uia`, y parada y purga fuera del repositorio; SHA-256 `595479f8506e4d75…` (truncado). M2 cambia sólo `action_freshness = "target_window"`, en una copia en una carpeta `m2-*` fuera del repositorio.
+- Configuración de M1: `m1.toml`, la misma que la primera M1 (SHA-256 `639a63a6…`, truncado), margen 0.
+
+**Caso señuelo (D1, BDD-35).** El criterio es el pre-registrado: el de `decoy_problems` de `tools/s4/e2e_dossier.py` (§10). El presupuesto fijado por el responsable son hasta tres corridas con `--max-live 4`.
+
+| Intento | Resultado | Entradas |
+|---|---|---|
+| 1 | Parada antes de la primera petición: «no accessibility evidence for the decoy fields». El editor figuraba en primer plano, pero el foco de UI Automation estaba en la ventana del escritorio (el mismo síntoma que la quinta corrida de §10). | Ninguna; libro 0 → 0 |
+| 1-bis (`--settle 8`; el responsable pulsó a mano el botón del editor en la barra de tareas cuando apareció, sin escribir) | Cumple todos los puntos del criterio | Un clic de enfoque entregado; ninguna tecla |
+
+En el intento 1-bis, punto por punto: `type` sobre Campo auxiliar → `indeterminate` con `INDETERMINATE_EFFECT`; clic de enfoque entregado y no verificado (`verified: false`), con `next_step: reconcile_effect`; el clic cayó en Campo auxiliar por identidad, y la localización del clic fue correcta; UI Automation situó el foco de teclado en Campo de destino (`placement: target`); la repetición devolvió el resultado guardado sin entrega nueva; ninguna tecla en ningún campo (recuento 0/0/0 del registro); carpeta de la corrida vacía. Libro 0 → 2; entregadas 1, rechazadas 0.
+
+**M1 repetida con los dos grupos.** Los resultados están en [S4 §D.1.3](S4_SESIONES_PENDIENTES.md). Con la ventana objetivo maximizada no hay reducción, porque la opacidad no se atestigua y la comparación de ADR-0035 es de todo el fotograma por diseño.
+
+**M2 / IT-08.** La misma D1 con `--target-window-freshness`, con el mismo resultado que el intento 1-bis: libro 2 → 4. No hubo rechazo por frescura, así que no se emitió ningún D0. Si la comparación fue acotada a la ventana, el cliente no lo observa, y así se declara como límite. IT-03 con `target_window` no se ejecutó: por decisión del responsable, el Bloc de notas recurre siempre al refresco de pantalla completa. El detalle está en [S4 §D.2.1](S4_SESIONES_PENDIENTES.md).
+
+**Totales de la sesión.** 4 peticiones en vivo, 2 clics entregados, 0 teclas, 0 rechazos.
+
+**Lectura.** Es la primera vez que BDD-35 se ejecuta en vivo con el criterio pre-registrado. Con él se ejerce también el lado del actuador real de BDD-28: un foco de teclado equivocado para `type` no envía ninguna tecla (`indeterminate`, repetición guardada, sin redirección). La corrección de foco de la PR #73 se ejerce en vivo en esta ronda. Límites: una máquina, un editor sintético, y una corrida que cumple en cada modo (`screen` y `target_window`); el primer plano lo dio el responsable a mano. No se afirma nada sobre otras aplicaciones, sobre un DPI distinto de 100 %, ni sobre la sesión A.
+
+En [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md), por decisión del arquitecto y con la regla que el responsable fijó para esta sesión («la casilla 4 se marca sólo si una corrida cumple todo»), la **casilla 4 se marca** con esta evidencia (reevaluación 1.0.93). La decisión de no marcarla de §10.8 queda como historia. La casilla 10 deja de listar SEC-05 por el foco de `type`, y sigue sin marcar.

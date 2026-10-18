@@ -1,5 +1,15 @@
 # Historial documental
 
+## 1.0.93 — 2026-10-17: criterio de manejadores del responsable, ronda en vivo de la tarde (BDD-35 en el actuador real, M1 con los dos grupos, M2 / IT-08) y casillas 4 y 7 marcadas por el arquitecto
+
+El responsable fijó el 17 de octubre de 2026 el criterio de manejadores de RNF-06 (decisión 10 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md)): después de los primeros 10 minutos, a lo sumo un cambio del recuento de manejadores, de exactamente +1, y el recuento constante durante los últimos 60 minutos de la corrida. `tools/perf/soak.py` lo juzga en `criteria.handle_count`, con pruebas sobre dobles: el paso de [S0 §18](S0_RESULTADOS.md) cumple y el de [§15](S0_RESULTADOS.md) no. El criterio de no crecimiento queda como opción (`--max-handle-growth-per-hour`, sin valor por defecto). El umbral del conjunto de trabajo y la cota de la cola no cambian. La relectura de [S0 §18](S0_RESULTADOS.md) cumple en manejadores, conjunto de trabajo y cola. El criterio se fijó después de conocer esas corridas, así que no es preregistrado, y la regla de [capítulo 09 §9.7](09_EVALUACION_EXPERIMENTAL.md) contra los cambios retrospectivos de umbral se aplica a la decisión.
+
+La ronda en vivo de la tarde ([S3 §11](S3_CORRIDAS_SUPERVISADAS.md)) ejerce BDD-35 y el lado del actuador real de BDD-28 con el criterio pre-registrado del responsable: el intento 1-bis cumple todos los puntos, sin ninguna tecla. [S4 §D.1.3](S4_SESIONES_PENDIENTES.md) publica la repetición de M1 con los dos grupos (sin reducción para un objetivo maximizado) y [S4 §D.2.1](S4_SESIONES_PENDIENTES.md) el resultado de M2 / IT-08, ejecutado de forma descriptiva.
+
+El arquitecto marca las casillas 4 y 7 de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) con esa evidencia; la casilla 10 deja de listar SEC-05 por el foco de `type`, y la cuenta pasa a siete de diez. Ningún estado de requisito cambia: RF-11 y RF-13 sólo ganan evidencia. En `matrices/plan_pruebas.csv`, IT-08 pasa a ejecutado de forma supervisada en la columna de ejecución. BDD-35 conserva su estado de escenario, porque el vocabulario de `validar_paquete.py` no tiene un valor para la ejecución en vivo (decisión pendiente). El número 1.0.93 va después del 1.0.92 de `main` (ADR-0035, PR #85).
+
+Sin cambios en el motor, en el contrato MCP ni en el estado de los requisitos.
+
 ## 1.0.92 — 2026-10-17: ADR-0035 aceptada por el responsable, con el interruptor apagado por defecto
 
 **Decisión del responsable (17 de octubre de 2026).** Se acepta [ADR-0035](../adr/0035-freshness-group-limited-to-occluders.md): con `target_window`, el grupo de frescura de una acción viva es la ventana objetivo más las ventanas que están por encima de ella y cuyo rectángulo solapa el suyo ampliado por el margen; las ventanas por debajo quedan fuera. El responsable acepta a sabiendas el límite residual: el adaptador no puede atestiguar el desenfoque heredado («blur-behind») ni la política de acento, que no tienen lectura documentada. La comparación exacta del rectángulo del objetivo rechaza los cambios de píxeles que esos materiales dejen ver; no cubre un caso sin ningún cambio de píxeles.
