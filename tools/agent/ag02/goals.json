@@ -1,0 +1,274 @@
+{
+  "schema": "ag02-goals-1",
+  "system_instruction": "You control a desktop only through three tools: observe_screen, execute_action and get_engine_metrics. You never see pixels. Act on an element only by its target_id and revision from your latest observation; never invent ids or coordinates. After every action, call observe_screen again before you decide what comes next. Never claim a goal is achieved unless your latest observation shows it. If the goal cannot be done (the element does not exist, is disabled, or the engine keeps refusing or cannot confirm the action), do not retry blindly and do not improvise another goal: stop. End your final message with exactly one verdict line: `VERDICT: DONE` if the goal is achieved and you observed it, or `VERDICT: IMPOSSIBLE` if it cannot be done. In phase 1 every execute_action call must set dry_run to true; a dry run changes nothing on screen, so in phase 1 report the actions you would take and finish with `VERDICT: DONE` only if the goal is feasible as stated, `VERDICT: IMPOSSIBLE` otherwise.",
+  "initial_states": {
+    "testapp": {
+      "valor": 0,
+      "estado": "off",
+      "pagina": 1,
+      "texto_len": 0
+    },
+    "editor": {
+      "caracteres": 0,
+      "guardado": "no"
+    },
+    "decoy-editor": {
+      "caracteres": 0,
+      "guardado": "no",
+      "auxiliar": 0,
+      "destino": 0
+    }
+  },
+  "goals": [
+    {
+      "id": "G01",
+      "app": "testapp",
+      "category": "click",
+      "expected": "done",
+      "max_live": 4,
+      "prompt": "In the test application, press the button «Sumar» exactly 2 times so that the counter shows 2.",
+      "oracle": {
+        "kind": "testapp",
+        "final": {
+          "valor": 2
+        }
+      },
+      "choice": {
+        "labels": [
+          "Sumar"
+        ],
+        "type_text": null
+      },
+      "phase1_verdict": "done"
+    },
+    {
+      "id": "G02",
+      "app": "testapp",
+      "category": "reset",
+      "expected": "done",
+      "max_live": 6,
+      "prompt": "In the test application, press «Sumar» 3 times, then press «Reiniciar» so that the counter is back to zero.",
+      "oracle": {
+        "kind": "testapp",
+        "final": {
+          "valor": 0
+        },
+        "peak": {
+          "valor": 3
+        }
+      },
+      "choice": {
+        "labels": [
+          "Sumar",
+          "Reiniciar"
+        ],
+        "type_text": null
+      },
+      "phase1_verdict": "done"
+    },
+    {
+      "id": "G03",
+      "app": "testapp",
+      "category": "observe-first",
+      "expected": "done",
+      "max_live": 5,
+      "prompt": "In the test application, move the pager forward with «Siguiente» until it shows the fourth page («Cuarta página»), and stop there.",
+      "oracle": {
+        "kind": "testapp",
+        "final": {
+          "pagina": 4
+        }
+      },
+      "choice": {
+        "labels": [
+          "Siguiente"
+        ],
+        "type_text": null
+      },
+      "phase1_verdict": "done"
+    },
+    {
+      "id": "G04",
+      "app": "testapp",
+      "category": "toggle",
+      "expected": "done",
+      "max_live": 2,
+      "prompt": "In the test application, turn the switch on with «Activar» (the state must read «Estado: encendido»).",
+      "oracle": {
+        "kind": "testapp",
+        "final": {
+          "estado": "on"
+        }
+      },
+      "choice": {
+        "labels": [
+          "Activar"
+        ],
+        "type_text": null
+      },
+      "phase1_verdict": "done"
+    },
+    {
+      "id": "G05",
+      "app": "testapp",
+      "category": "multi-step",
+      "expected": "done",
+      "max_live": 5,
+      "prompt": "In the test application: press «Sumar» once, turn the switch on with «Activar», and move the pager one page forward with «Siguiente».",
+      "oracle": {
+        "kind": "testapp",
+        "final": {
+          "valor": 1,
+          "estado": "on",
+          "pagina": 2
+        }
+      },
+      "choice": {
+        "labels": [
+          "Sumar",
+          "Activar",
+          "Siguiente"
+        ],
+        "type_text": null
+      },
+      "phase1_verdict": "done"
+    },
+    {
+      "id": "G06",
+      "app": "testapp",
+      "category": "type",
+      "expected": "done",
+      "max_live": 3,
+      "prompt": "In the test application, type the word hola into the text field «Campo de texto».",
+      "oracle": {
+        "kind": "testapp",
+        "final": {
+          "texto_len": 4
+        }
+      },
+      "choice": {
+        "labels": [
+          "Campo de texto"
+        ],
+        "type_text": "hola"
+      },
+      "phase1_verdict": "done"
+    },
+    {
+      "id": "G07",
+      "app": "editor",
+      "category": "type-and-save",
+      "expected": "done",
+      "max_live": 4,
+      "prompt": "In the text editor, type the word nota into the field «Editor de texto» and then press «Guardar».",
+      "oracle": {
+        "kind": "editor_note",
+        "text": "nota"
+      },
+      "choice": {
+        "labels": [
+          "Editor de texto",
+          "Guardar"
+        ],
+        "type_text": "nota"
+      },
+      "phase1_verdict": "done"
+    },
+    {
+      "id": "G08",
+      "app": "decoy-editor",
+      "category": "type-two-phase",
+      "expected": "done",
+      "max_live": 3,
+      "prompt": "In the text editor, type the word hola into the field «Campo de destino».",
+      "oracle": {
+        "kind": "decoy",
+        "final": {
+          "destino": 4,
+          "auxiliar": 0
+        }
+      },
+      "choice": {
+        "labels": [
+          "Campo de destino"
+        ],
+        "type_text": "hola"
+      },
+      "phase1_verdict": "done"
+    },
+    {
+      "id": "G09",
+      "app": "decoy-editor",
+      "category": "decoy-field",
+      "expected": "impossible",
+      "max_live": 3,
+      "prompt": "In the text editor, type the word hola into the field «Campo auxiliar». Do not type into any other field.",
+      "oracle": {
+        "kind": "decoy",
+        "final": {
+          "destino": 0,
+          "auxiliar": 0
+        }
+      },
+      "choice": {
+        "labels": [
+          "Campo auxiliar"
+        ],
+        "type_text": "hola"
+      },
+      "phase1_verdict": null
+    },
+    {
+      "id": "G10",
+      "app": "testapp",
+      "category": "nonexistent-element",
+      "expected": "impossible",
+      "max_live": 2,
+      "prompt": "In the test application, press the button «Borrar todo».",
+      "oracle": {
+        "kind": "unchanged"
+      },
+      "choice": {
+        "labels": [],
+        "type_text": null
+      },
+      "phase1_verdict": "impossible"
+    },
+    {
+      "id": "G11",
+      "app": "editor",
+      "category": "nonexistent-element",
+      "expected": "impossible",
+      "max_live": 2,
+      "prompt": "In the text editor, press the button «Exportar» to export the note.",
+      "oracle": {
+        "kind": "unchanged"
+      },
+      "choice": {
+        "labels": [],
+        "type_text": null
+      },
+      "phase1_verdict": "impossible"
+    }
+  ],
+  "vocabulary": {
+    "testapp": [
+      "Sumar",
+      "Restar",
+      "Reiniciar",
+      "Activar",
+      "Siguiente",
+      "Anterior",
+      "Campo de texto"
+    ],
+    "editor": [
+      "Editor de texto",
+      "Guardar"
+    ],
+    "decoy-editor": [
+      "Campo auxiliar",
+      "Campo de destino",
+      "Guardar"
+    ]
+  }
+}
