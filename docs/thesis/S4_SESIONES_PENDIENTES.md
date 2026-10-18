@@ -139,12 +139,12 @@ PC de referencia, monitor principal 1920×1080 con origen (0, 0), motor con las 
 
 **Qué no cubre.** Un solo monitor, la aplicación de prueba propia, ninguna acción en vivo a 125 o 150 % y un solo tema. La fila IT-07 de `plan_pruebas.csv` y el estado de RNF-07 no cambian: los decide el responsable.
 
-## D. Mediciones de frescura M1 y M2 / IT-08 (ADR-0032): M1 ejecutada, M2 e IT-08 pendientes
+## D. Mediciones de frescura M1 y M2 / IT-08 (ADR-0032): M1 ejecutada; M1 con los dos grupos y M2 / IT-08 ejecutadas de forma descriptiva el 17 de octubre de 2026 (§D.1.3 y §D.2.1); pendientes: IT-03 con `target_window`, un objetivo no maximizado con opacidad atestiguada, y un D0
 
-**Preparación de herramientas (1.0.47).** M1 se ejecutó el 17 de octubre de 2026 (§D.1.1), sin entrada ni actuación. M2 e IT-08 no se han ejecutado.
+**Preparación de herramientas (1.0.47).** M1 se ejecutó el 17 de octubre de 2026 (§D.1.1), sin entrada ni actuación. Al escribirse esto (1.0.47), M2 e IT-08 no se habían ejecutado; se ejecutaron de forma descriptiva el 17 de octubre de 2026 (§D.2.1).
 El responsable registra antes de cada sesión el commit, configuración, N, aplicaciones,
 estado del menú y protocolo descriptivo (M1) o criterio de aceptación (M2), fuera del
-repositorio. IT-08 sigue planificado;
+repositorio. IT-08 estaba planificado entonces;
 ningún estado de requisito ni casilla de §6.7 cambia. El valor por defecto sigue siendo
 `action_freshness = "screen"`.
 
@@ -224,7 +224,7 @@ que atestigua actualmente el motor y no afirma resolver aquella medición.
 
 ### D.1.1 Resultados de M1 (17 de octubre de 2026)
 
-**Qué es.** La primera ejecución de M1, con el responsable presente y en su escritorio tal como estaba. Es descriptiva: no hay umbral de aprobación y no decide nada. No activa `action_freshness = "target_window"`, no acredita IT-08 y no cambia ningún estado de requisito ni casilla de §6.7. M2 e IT-08 no se han ejecutado.
+**Qué es.** La primera ejecución de M1, con el responsable presente y en su escritorio tal como estaba. Es descriptiva: no hay umbral de aprobación y no decide nada. No activa `action_freshness = "target_window"`, no acredita IT-08 y no cambia ningún estado de requisito ni casilla de §6.7. Al escribirse esta sección, M2 e IT-08 no se habían ejecutado; se ejecutaron de forma descriptiva el 17 de octubre de 2026, después de M1 (§D.2.1).
 
 **Binario y configuración.** Compilado desde el commit `8587f4e` de `main` con `--features sendinput`; el SHA-256 empieza por `1D363C36A9637F33`. Herramienta `tools/perf/freshness_probe.py`, en modo descriptivo, con N = 60 pares (30 con el menú cerrado y 30 con el menú abierto), intervalo de 150 ms y margen 0.
 
@@ -243,9 +243,9 @@ que atestigua actualmente el motor y no afirma resolver aquella medición.
 
 **Lectura.** En este escritorio, el grupo de ADR-0032 cubre toda la salida en cada par, así que `target_window` no puede reducir el área comparada. La salida no identifica las ventanas que forman esa cobertura. El propio ADR-0032 advierte que un fondo que cubre la salida puede extender el grupo a toda la pantalla; M1 confirma el efecto sin establecer la causa. La pantalla estuvo quieta, así que tampoco se observó ningún cambio: M1 no dice nada sobre los rechazos de S3 §9.6 y §10. El 16 de octubre de 2026 el responsable fijó M1 como medición descriptiva, sin umbral de aprobación, y acordó que, si M1 mostraba el grupo cubriendo siempre toda la salida, el arquitecto propondría enmendar ADR-0032 y el responsable decidiría. Es ese caso. **Decisión del responsable (17 de octubre de 2026): proponer la enmienda**, [ADR-0035](../adr/0035-freshness-group-limited-to-occluders.md), en estado *Proposed*. No se implementa. Antes de cualquier uso en vivo, la enmienda necesita repetir M1 en el escritorio del responsable.
 
-### D.1.2 Repetición de M1 con los dos grupos (ADR-0035, aceptada; repetición pendiente)
+### D.1.2 Preparación de la repetición de M1 con los dos grupos (ADR-0035, aceptada; histórico: la repetición se ejecutó después, en §D.1.3)
 
-**Estado: preparada, no ejecutada.** Es la repetición que pide la validación de [ADR-0035](../adr/0035-freshness-group-limited-to-occluders.md) (estado *Accepted*) antes de cualquier uso en vivo. No se ha hecho ninguna corrida; nada de lo que sigue marca una casilla de §6.7, cambia un estado de requisito ni activa `action_freshness = "target_window"`. M2 e IT-08 siguen pendientes.
+**Estado histórico: preparada y no ejecutada al escribirse; la repetición se ejecutó el 17 de octubre de 2026, con su resultado en §D.1.3.** Es la repetición que pide la validación de [ADR-0035](../adr/0035-freshness-group-limited-to-occluders.md) (estado *Accepted*) antes de cualquier uso en vivo. No se había hecho ninguna corrida al escribirse esto; nada de lo que sigue marca una casilla de §6.7, cambia un estado de requisito ni activa `action_freshness = "target_window"`. M2 e IT-08 estaban pendientes al escribirse esto (ejecutados el 17 de octubre de 2026, §D.2.1).
 
 **Qué mide de más.** La sonda sigue registrando, por par, los campos de ADR-0032 sin cambios (§D.1) y añade, bajo la clave `occluder_group`, el grupo enmendado calculado con el **mismo código de selección del motor** sobre las mismas lecturas, capturas y margen: la ventana bajo la caja más las ventanas por encima que solapan su rectángulo ampliado por el margen. Así la reducción se mide sobre los mismos pares y no se infiere. Por par, `occluder_group` lleva `group_tiles`, `group_window_count`, `group_frame_fraction`, `group_covers_whole_frame` (nulos si el grupo no se pudo atestiguar), `opacity_attested`, `scoped` (si la comparación acotada se aplicaría) y `fallback`, una cadena de un conjunto cerrado que dice por qué se compararía la pantalla entera: `no_opacity`, `corner`, `reads_differ`, `unattested_rect`, `box_outside_target` o `walk_failed` (las tres últimas están reservadas: la lectura completa de ventanas y las guardas de ADR-0032 ya exigen esos rectángulos y esa caja, así que la sonda aborta antes el par que las produciría; que no aparezcan en el histograma no mide esos casos). El margen de selección del grupo enmendado es el de la propia lectura: los recuentos no pueden calcularse con otro. Un grupo que cubre todo el fotograma conserva todos los tiles cambiados (`group_tiles = total_tiles`), para los dos grupos, y el controlador rechaza el informe que lo contradiga. El informe añade `occluder_scoped_pairs` y `occluder_outside_pairs` (pares acotados con `total_tiles` mayor que `group_tiles`), y el archivo guardado lleva un `summary` descriptivo de ambos grupos. Sólo números, banderas y esas cadenas: ni títulos, ni clases, ni handles, ni coordenadas (ADR-0012). Los informes anteriores, sin esas claves, se siguen aceptando.
 
@@ -277,6 +277,8 @@ La mediana del intervalo de captura fue de unos 166 ms con el menú cerrado y de
 **Lectura del arquitecto** (a partir de una lista de ventanas de sólo lectura, sin nada guardado). El Bloc de notas estaba maximizado, así que la ventana objetivo sola cubre la salida; por encima sólo estaban la barra de tareas y, con el menú abierto, el menú emergente. La opacidad de la ventana del Bloc de notas en Windows 11 no se atestigua (`no_opacity`), lo que es coherente con un material de fondo del sistema distinto de NONE/AUTO; por diseño, la comparación es entonces de todo el fotograma. ADR-0035 no reduce nada para este objetivo. Una reducción sólo puede aparecer con un objetivo no maximizado cuya opacidad se atestigüe, y esta repetición no lo ejercita.
 
 ### D.2 M2 supervisada, IT-08: copia de configuración y diagnóstico D0
+
+Protocolo previo a la ejecución descriptiva del 17 de octubre de 2026, que está en §D.2.1.
 
 **Sólo en una sesión con consentimiento explícito del responsable**, con criterios y
 presupuesto escritos antes de ejecutarla. Se mantienen las aplicaciones, las puertas,
@@ -362,7 +364,7 @@ Ejecutada en la misma ronda que [S3 §11](S3_CORRIDAS_SUPERVISADAS.md): la D1 co
 - **Resultado:** el mismo que el intento 1-bis de D1: `indeterminate` con `INDETERMINATE_EFFECT`; clic de enfoque sobre Campo auxiliar; foco de teclado en Campo de destino; repetición con el resultado guardado; ninguna tecla; carpeta vacía. Libro 2 → 4.
 - **Límite:** no hubo rechazo por frescura, así que no se emitió ningún D0 (el diagnóstico de §D.2). Si la comparación fue acotada a la ventana, el cliente no lo observa, y se declara así.
 - **IT-03 con `target_window`:** no se ejecutó. Por decisión del responsable, el Bloc de notas recurre siempre al refresco de pantalla completa (§D.1.3).
-- **Estado:** IT-08 pasa a ejecutado de forma supervisada y descriptiva en la columna de ejecución de [`matrices/plan_pruebas.csv`](matrices/plan_pruebas.csv). Su estado de aceptación de producto sigue `PENDIENTE_PRODUCTO`, por decisión del responsable.
+- **Estado:** IT-08 queda ejecutado de forma supervisada y descriptiva, según la descripción de su fila en [`matrices/plan_pruebas.csv`](matrices/plan_pruebas.csv); el esquema de la matriz no cambia, y el campo de referencia de oráculo de esa fila sigue `NO_EJECUTADO`. Su estado de aceptación de producto sigue `PENDIENTE_PRODUCTO`, por decisión del responsable.
 
 ## Lo que no entra en estas tres sesiones
 
