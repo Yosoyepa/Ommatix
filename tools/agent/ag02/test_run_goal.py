@@ -752,20 +752,29 @@ class ProxyLogSummaryTests(unittest.TestCase):
             self.assertFalse(rg.proxy_summary(Path(tmp) / "no-such.jsonl")["complete"])
 
 
-class RunFolderTests(unittest.TestCase):
-    def test_the_folder_is_created_exclusively_and_only_its_note_is_removed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            run = rg.RunFolder(Path(tmp) / "ommatix-ag02", "G07-1")
-            path = run.create()
-            (path / "nota.txt").write_bytes(b"nota")
-            with self.assertRaises(FileExistsError):
-                rg.RunFolder(Path(tmp) / "ommatix-ag02", "G07-1").create()
-            (path / "ajeno.txt").write_bytes(b"x")  # not ours: left alone, folder stays
-            self.assertEqual(run.cleanup()["left"], ["run folder", "base"])
-            self.assertTrue((path / "ajeno.txt").exists())
-            (path / "ajeno.txt").unlink()
-            path.rmdir()
-            (Path(tmp) / "ommatix-ag02").rmdir()
+class FakeEditorRun:
+    """The shape of ``rg.EditorRun`` for the fake-runner tests (the real one needs Windows): the folder
+    is ``<temp_root>/ommatix-e2e/<run id>``, created exclusively and removed with its note."""
+
+    def __init__(self, temp_root: Path, goal_id: str):
+        self.temp_root = Path(temp_root)
+        self.path = self.temp_root / rg.EDITOR_RUN_ROOT / f"ag02-{goal_id}-20261018-000000"
+
+    def create(self):
+        self.path.mkdir(parents=True)
+        return self.path
+
+    def cleanup(self):
+        note = self.path / "nota.txt"
+        if note.is_file():
+            note.unlink()
+        left = []
+        try:
+            self.path.rmdir()
+            self.path.parent.rmdir()
+        except OSError:
+            left.append("run folder")
+        return {"left": left}
 
 
 # ---- the whole runner, with fakes ----------------------------------------------------------
@@ -835,8 +844,8 @@ class Harness:
             sleep = staticmethod(lambda seconds: None)
 
             @staticmethod
-            def make_app(goal, exe, folder, driver):
-                harness.folder = folder
+            def make_app(goal, exe, folder, driver, temp_root=None):
+                harness.folder, harness.temp_root = folder, temp_root
                 return harness.app
 
             @staticmethod
@@ -844,8 +853,8 @@ class Harness:
                 return FakeSampler(harness.history)
 
             @staticmethod
-            def make_folder(base, name):
-                return rg.RunFolder(harness.tmp / "folders", name)
+            def make_folder(goal_id):
+                return FakeEditorRun(harness.tmp / "folders", goal_id)
 
             @staticmethod
             def run_claude(argv_, prompt, cwd, metrics, timeout, *a, **k):
@@ -869,8 +878,7 @@ class Harness:
 
     def run(self, stop_file=None, ancestors=()):
         (self.tmp / "folders").mkdir(exist_ok=True)
-        with mock.patch.object(rg, "temp_root", return_value=self.tmp / "folders"), \
-                mock.patch.object(rg, "ancestor_context", return_value=list(ancestors)):
+        with mock.patch.object(rg, "ancestor_context", return_value=list(ancestors)):
             return rg.run_goal(self.args, GOALS, self.goal, self.out,
                                self.ledger if self.phase == 2 else None, stop_file, self.proof, self.deps)
 
