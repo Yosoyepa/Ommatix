@@ -29,6 +29,12 @@
 //! on another field, and no key may reach either of them (BDD-35 on the real actuator). The
 //! title then also counts the characters of the two fields (`auxiliar=N destino=M`), and no
 //! text of either leaves the process.
+//!
+//! With `--field-digest` as well (opt-in, only with `--decoy-focus`; no other title changes) the
+//! title ends with `huella=` and the FNV-1a 64-bit hash of `Campo de destino`, sixteen hex
+//! digits: a client that knows the word it expects compares hashes in memory, so that "the
+//! right word reached the field" is an independent fact and the word itself still never leaves
+//! the process.
 
 #![windows_subsystem = "windows"]
 
@@ -248,31 +254,49 @@ impl SaveFolder {
     }
 }
 
-/// What the command line asks for: the client's folder, and whether the decoy fields are shown.
+/// What the command line asks for: the client's folder, whether the decoy fields are shown and
+/// whether the title carries the hash of `Campo de destino`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Launch {
     folder: PathBuf,
     decoy_focus: bool,
+    field_digest: bool,
 }
 
-/// The arguments the editor takes: `--folder <path>` and, at most once, `--decoy-focus`, in
-/// either order. A repeated or unknown argument, or a missing path, is refused.
+/// The arguments the editor takes: `--folder <path>` and, at most once each, `--decoy-focus`
+/// and (only with it) `--field-digest`, in any order. A repeated or unknown argument, a
+/// missing path, or `--field-digest` without `--decoy-focus` is refused.
 fn launch_args(args: impl IntoIterator<Item = OsString>) -> Option<Launch> {
     let mut args = args.into_iter();
     let mut folder = None;
     let mut decoy_focus = false;
+    let mut field_digest = false;
     while let Some(arg) = args.next() {
         if arg == "--folder" && folder.is_none() {
             folder = Some(PathBuf::from(args.next()?));
         } else if arg == "--decoy-focus" && !decoy_focus {
             decoy_focus = true;
+        } else if arg == "--field-digest" && !field_digest {
+            field_digest = true;
         } else {
             return None;
         }
     }
+    if field_digest && !decoy_focus {
+        return None;
+    }
     Some(Launch {
         folder: folder?,
         decoy_focus,
+        field_digest,
+    })
+}
+
+/// The 64-bit FNV-1a hash of `text`'s UTF-8 bytes (offset basis `cbf29ce484222325`, prime
+/// `100000001b3`): a fact about the text that does not reveal it to a reader of the title.
+fn fnv1a64(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     })
 }
 
@@ -300,6 +324,8 @@ struct Editor {
     text: String,
     status: Status,
     decoy: Option<Decoy>,
+    /// With `--field-digest`: the title ends with the hash of `Campo de destino`.
+    field_digest: bool,
 }
 
 impl Editor {
@@ -309,6 +335,7 @@ impl Editor {
             text: String::new(),
             status: Status::Pending,
             decoy: None,
+            field_digest: false,
         }
     }
 
@@ -345,11 +372,18 @@ impl Editor {
         let chars = self.text.chars().count();
         match &self.decoy {
             None => format!("Ommatix S4 editor [caracteres={chars} guardado={saved}]"),
-            Some(decoy) => format!(
-                "Ommatix S4 editor [caracteres={chars} guardado={saved} auxiliar={} destino={}]",
-                decoy.text.chars().count(),
-                decoy.target.chars().count()
-            ),
+            Some(decoy) => {
+                let digest = if self.field_digest {
+                    format!(" huella={:016x}", fnv1a64(&decoy.target))
+                } else {
+                    String::new()
+                };
+                format!(
+                    "Ommatix S4 editor [caracteres={chars} guardado={saved} auxiliar={} destino={}{digest}]",
+                    decoy.text.chars().count(),
+                    decoy.target.chars().count()
+                )
+            }
         }
     }
 }
@@ -519,6 +553,7 @@ fn main() -> eframe::Result {
     let mut editor = Editor::new(folder);
     if launch.decoy_focus {
         editor.decoy = Some(Decoy::default());
+        editor.field_digest = launch.field_digest;
     }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -687,10 +722,16 @@ mod tests {
         let plain = |folder: &str| Launch {
             folder: PathBuf::from(folder),
             decoy_focus: false,
+            field_digest: false,
         };
         let decoy = |folder: &str| Launch {
             folder: PathBuf::from(folder),
             decoy_focus: true,
+            field_digest: false,
+        };
+        let digest = |folder: &str| Launch {
+            field_digest: true,
+            ..decoy(folder)
         };
         assert_eq!(
             launch_args(args(&["--folder", "C:\\t"])),
@@ -704,8 +745,25 @@ mod tests {
             launch_args(args(&["--decoy-focus", "--folder", "C:\\t"])),
             Some(decoy("C:\\t"))
         );
+        assert_eq!(
+            launch_args(args(&[
+                "--field-digest",
+                "--decoy-focus",
+                "--folder",
+                "C:\\t"
+            ])),
+            Some(digest("C:\\t"))
+        );
         for bad in [
             &[][..],
+            &["--folder", "C:\\t", "--field-digest"][..],
+            &[
+                "--folder",
+                "C:\\t",
+                "--decoy-focus",
+                "--field-digest",
+                "--field-digest",
+            ][..],
             &["--folder"][..],
             &["--decoy-focus"][..],
             &["C:\\t"][..],
@@ -743,6 +801,43 @@ mod tests {
         );
         editor.decoy = None;
         assert_eq!(editor.title(), plain);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `--field-digest` adds the hash of `Campo de destino` and nothing else; the value is the
+    /// one a client computes for the word it expects, and the word never appears in the title.
+    #[test]
+    fn the_field_digest_is_the_fnv1a_hash_of_the_destination_and_never_the_word() {
+        // Known FNV-1a 64-bit vectors; the Python side asserts the same two.
+        assert_eq!(fnv1a64(""), 0xcbf2_9ce4_8422_2325);
+        assert_eq!(fnv1a64("hola"), 0x4029_fbcc_7e6d_3137);
+        let root = temp_root();
+        let mut editor = Editor::new(folder(&root, "run-digest"));
+        editor.decoy = Some(Decoy::default());
+        let without = editor.title();
+        editor.field_digest = true;
+        assert_eq!(
+            editor.title(),
+            "Ommatix S4 editor [caracteres=0 guardado=no auxiliar=0 destino=0 huella=cbf29ce484222325]"
+        );
+        if let Some(decoy) = editor.decoy.as_mut() {
+            decoy.target = "hola".to_owned();
+        }
+        let title = editor.title();
+        assert!(
+            title.ends_with("destino=4 huella=4029fbcc7e6d3137]"),
+            "{title}"
+        );
+        assert!(!title.contains("hola"));
+        // A different word of the same length has a different hash.
+        if let Some(decoy) = editor.decoy.as_mut() {
+            decoy.target = "hole".to_owned();
+        }
+        assert!(!editor.title().contains("4029fbcc7e6d3137"));
+        // Without the flag the decoy title is the one the other runs check.
+        editor.field_digest = false;
+        editor.decoy = Some(Decoy::default());
+        assert_eq!(editor.title(), without);
         let _ = std::fs::remove_dir_all(&root);
     }
 

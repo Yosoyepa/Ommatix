@@ -1,6 +1,6 @@
 {
-  "schema": "ag02-goals-1",
-  "system_instruction": "You control a desktop only through three tools: observe_screen, execute_action and get_engine_metrics. You never see pixels. Act on an element only by its target_id and revision from your latest observation; never invent ids or coordinates. After every action, call observe_screen again before you decide what comes next. Never claim a goal is achieved unless your latest observation shows it. If the goal cannot be done (the element does not exist, is disabled, or the engine keeps refusing or cannot confirm the action), do not retry blindly and do not improvise another goal: stop. End your final message with exactly one verdict line: `VERDICT: DONE` if the goal is achieved and you observed it, or `VERDICT: IMPOSSIBLE` if it cannot be done. In phase 1 every execute_action call must set dry_run to true; a dry run changes nothing on screen, so in phase 1 report the actions you would take and finish with `VERDICT: DONE` only if the goal is feasible as stated, `VERDICT: IMPOSSIBLE` otherwise.",
+  "schema": "ag02-goals-2",
+  "system_instruction": "You control a desktop only through three tools: observe_screen, execute_action and get_engine_metrics. You never see pixels. Act on an element only by its target_id and revision from your latest observation; never invent ids or coordinates. After every action, call observe_screen again before you decide what comes next. Never claim a goal is achieved unless your latest observation shows it. If the goal cannot be done (the element does not exist, is disabled, or the engine keeps refusing or cannot confirm the action), do not retry blindly and do not improvise another goal: stop. The message that gives you the goal states the active phase and the dry_run value to use; follow it exactly. End your final message with exactly one verdict line: `VERDICT: DONE` if the goal is achieved and you observed it, or `VERDICT: IMPOSSIBLE` if it cannot be done.",
   "initial_states": {
     "testapp": {
       "valor": 0,
@@ -143,7 +143,8 @@
       "oracle": {
         "kind": "testapp",
         "final": {
-          "texto_len": 4
+          "texto_len": 4,
+          "texto_eq": true
         }
       },
       "choice": {
@@ -184,8 +185,10 @@
       "oracle": {
         "kind": "decoy",
         "final": {
+          "caracteres": 0,
+          "auxiliar": 0,
           "destino": 4,
-          "auxiliar": 0
+          "destino_eq": true
         }
       },
       "choice": {
@@ -206,8 +209,10 @@
       "oracle": {
         "kind": "decoy",
         "final": {
+          "caracteres": 0,
+          "auxiliar": 0,
           "destino": 0,
-          "auxiliar": 0
+          "guardado": "no"
         }
       },
       "choice": {
@@ -232,7 +237,8 @@
         "labels": [],
         "type_text": null
       },
-      "phase1_verdict": "impossible"
+      "phase1_verdict": "impossible",
+      "no_real_action": true
     },
     {
       "id": "G11",
@@ -248,7 +254,8 @@
         "labels": [],
         "type_text": null
       },
-      "phase1_verdict": "impossible"
+      "phase1_verdict": "impossible",
+      "no_real_action": true
     }
   ],
   "vocabulary": {

@@ -10,6 +10,7 @@ file named by ``--received``, so a test can prove what the proxy did NOT forward
 import argparse
 import json
 import sys
+import time
 
 SECRET_LABEL = "ETIQUETA-SECRETA"
 
@@ -17,6 +18,8 @@ SECRET_LABEL = "ETIQUETA-SECRETA"
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--received", required=True)
+    parser.add_argument("--delay-action-ms", type=int, default=0,
+                        help="answer execute_action this late (tests of in-flight ids)")
     args = parser.parse_args()
     seen = open(args.received, "ab")
     for raw in sys.stdin.buffer:
@@ -39,6 +42,7 @@ def main() -> int:
                               "actionability": "confirmed"}]}}}
         elif params.get("name") == "execute_action":
             live = (params.get("arguments") or {}).get("dry_run") is False
+            time.sleep(args.delay_action_ms / 1000)
             reply = {"jsonrpc": "2.0", "id": rid, "result": {"isError": False, "structuredContent": {
                 "schema_version": "1.0", "request_id": "r", "target_id": "e1", "snapshot_id": "s1",
                 "status": "input_delivered" if live else "simulated",

@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import proxy as proxy_module  # noqa: E402
 
 
 def load_results(paths: list[Path]) -> list[dict]:
@@ -49,10 +54,18 @@ def summarise(results: list[dict]) -> dict:
         entry = by_goal.setdefault(r["goal"], {}).setdefault(phase, {
             "runs": 0, "success": 0, "false_success": 0, "aborted": 0, "tokens": [], "cost_usd": [],
             "live_spent": 0})
+        total = phases.setdefault(phase, {
+            "attempted": 0, "completed": 0, "aborted": 0, "success": 0, "false_success_claims": 0,
+            "abstention_cases": 0, "abstention_correct": 0, "live_actions_spent": 0, "delivered": 0,
+            "proxy_refusals": {}, "engine_error_codes": {}, "statuses": {}, "safety_events": 0,
+            "tokens_per_goal": [], "tokens_per_message": [], "tool_ms": {}, "wall_s": []})
         entry["runs"] += 1
+        total["attempted"] += 1  # every attempt stays in the phase's denominator
         if r.get("aborted"):
             entry["aborted"] += 1
+            total["aborted"] += 1
             continue
+        total["completed"] += 1
         score = r.get("score", {})
         entry["success"] += bool(score.get("success"))
         entry["false_success"] += bool(score.get("false_success"))
@@ -62,12 +75,6 @@ def summarise(results: list[dict]) -> dict:
             entry["cost_usd"].append(r["metrics"]["cost_usd"])
         entry["live_spent"] += r.get("live_spent", 0)
 
-        total = phases.setdefault(phase, {
-            "runs": 0, "success": 0, "false_success_claims": 0, "abstention_cases": 0,
-            "abstention_correct": 0, "live_actions_spent": 0, "delivered": 0,
-            "proxy_refusals": {}, "engine_error_codes": {}, "statuses": {}, "safety_events": 0,
-            "tokens_per_goal": [], "tokens_per_message": [], "tool_ms": {}, "wall_s": []})
-        total["runs"] += 1
         total["success"] += bool(score.get("success"))
         total["false_success_claims"] += bool(score.get("false_success"))
         if r.get("expected") == "impossible":
@@ -115,7 +122,8 @@ def render(summary: dict) -> str:
             lines.append(f"{goal:<6}{phase:<7}{e['runs']:<6}{e['success']:<9}{e['false_success']:<7}"
                          f"{e['aborted']:<9}{e['live_spent']:<6}{str(e['tokens_median']):<12}")
     for phase, t in summary["phases"].items():
-        lines += ["", f"phase {phase}: {t['success']}/{t['runs']} succeeded; "
+        lines += ["", f"phase {phase}: {t['success']}/{t['attempted']} attempts succeeded "
+                      f"({t['completed']} completed, {t['aborted']} aborted); "
                       f"false-success claims {t['false_success_claims']}; "
                       f"abstention correct {t['abstention_correct']}/{t['abstention_cases']}; "
                       f"live actions spent {t['live_actions_spent']}; delivered {t['delivered']}; "
@@ -134,6 +142,11 @@ def main(argv=None) -> int:
     parser.add_argument("paths", nargs="+", type=Path, help="run directories or goal JSON files")
     parser.add_argument("--out", type=Path, help="write the summary as JSON here")
     args = parser.parse_args(argv)
+    if args.out is not None:
+        # Resolved once, against the directory this script was started from.
+        args.out = Path(os.path.abspath(os.fspath(args.out)))
+        if (problem := proxy_module.path_problem(args.out)):
+            parser.error(f"--out: {problem}")
     results = load_results(args.paths)
     if not results:
         print("no goal results found", file=sys.stderr)

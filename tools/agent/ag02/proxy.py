@@ -7,21 +7,32 @@ except for ``tools/call`` of ``execute_action``, which it checks first (fail clo
 
 * ``--dry-run-only`` (phase 1): a call whose ``dry_run`` is not ``true`` (or absent, the
   contract's default) is answered with a JSON-RPC error and never forwarded.
-* ``--max-live N`` (phase 2): each call with ``dry_run: false`` is counted in the ledger file
-  *before* it is forwarded; once the ledger holds N, the call is answered with a JSON-RPC
-  error and never forwarded. ``--max-live-per-run K`` bounds this process alone. The ledger
-  only accumulates across goals; an unreadable ledger refuses every live call.
+* ``--max-live N --ledger FILE --goal-id ID --max-live-goal K`` (phase 2): each call with
+  ``dry_run: false`` is reserved in the ledger *before* it is forwarded, under an
+  inter-process lock around the whole read/check/write, and the reservation is committed
+  (flushed) to disk first. Once the session total reaches N, or the goal's own count reaches
+  K, the call is answered with a JSON-RPC error and never forwarded. The goal's count lives
+  in the ledger, under the goal id, so restarting the proxy for the same goal does not reset
+  it. The ledger only accumulates; an unreadable, malformed or locked-out ledger refuses
+  every live call. A crash between the reservation and the forward conservatively spends one
+  request that was never delivered.
 * Live calls are also limited to the actions in ``--live-actions`` (default ``click,type``)
   and a ``type`` text must be 1..``--max-text-len`` printable ASCII characters.
+* A request whose JSON-RPC id is still outstanding is refused before any reservation, so a
+  reply can never be attributed to the wrong call.
 
 Anything the proxy cannot read the way the engine would (duplicate keys, ``NaN``, a JSON
 batch, a non-boolean ``dry_run``, a ``tools/call`` notification) is refused, not forwarded.
+``--log`` and ``--ledger`` must be absolute paths outside any repository checkout: a relative
+path would mean different files to the agent's client, this script and the engine.
 
-Privacy (AGENTS.md rule 7, ADR-0012): the JSONL log (outside the repository) holds, per
-message, only the time, direction, kind, method or tool, byte size, result status or error
-code, ``input_delivered``, ``observed_effect``, the element id and revision of an action, the
-length (never the text) of a ``type`` and the element count of an observation. Never a label,
-a value, an error message or a typed text. The proxy never touches the operator's stop file.
+Privacy (AGENTS.md rule 7, ADR-0012): the JSONL log holds, per message, only closed
+vocabularies and numbers: the time, direction, kind, a method and tool from a fixed list
+(``other``/``unknown`` otherwise), byte size, the result status, error code and effect from the
+contract's enums, ``input_delivered``, the element id only when the engine itself issued it in
+an observation (``unknown`` otherwise), the revision, the length (never the text) of a ``type``
+and the element count of an observation. Never a label, a value, an error message, a typed text
+or any string the agent chose. The proxy never touches the operator's stop file.
 """
 
 from __future__ import annotations
@@ -29,8 +40,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -40,6 +53,24 @@ INVALID_REQUEST = -32600
 LIVE_ACTIONS_DEFAULT = ("click", "type")
 MAX_TEXT_LEN_DEFAULT = 16
 PRINTABLE_ASCII = frozenset(chr(c) for c in range(0x20, 0x7F))
+GOAL_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+LOCK_WAIT_S = 10.0
+KNOWN_IDS_LIMIT = 5000
+
+# Closed vocabularies: the only strings of the agent's or the engine's that the log may carry.
+METHODS = frozenset({"initialize", "notifications/initialized", "notifications/cancelled", "ping",
+                     "tools/list", "tools/call", "server/discover", "resources/list",
+                     "prompts/list"})
+TOOLS = frozenset({"observe_screen", "execute_action", "get_engine_metrics"})
+ACTIONS = frozenset({"click", "type", "scroll"})
+STATUSES = frozenset({"simulated", "rejected", "input_delivered", "effect_observed", "indeterminate"})
+EFFECTS = frozenset({"none", "focus_changed", "value_updated", "scroll_moved", "visual_change",
+                     "unknown"})
+ERROR_CODES = frozenset({
+    "STALE_SNAPSHOT", "STALE_TARGET", "TARGET_NOT_FOUND", "AMBIGUOUS_TARGET", "NOT_ACTIONABLE",
+    "POLICY_DENIED", "PERMISSION_DENIED", "CAPTURE_UNAVAILABLE", "INFERENCE_FAILED",
+    "UNSUPPORTED_GEOMETRY", "INDETERMINATE_EFFECT", "REQUEST_CONFLICT", "CANCELLED",
+    "LIMIT_EXCEEDED", "SESSION_MISMATCH", "EPOCH_MISMATCH"})
 
 
 class Refusal(Exception):
@@ -80,46 +111,150 @@ def parse_line(raw: bytes):
         return None
 
 
+# ---- paths ---------------------------------------------------------------------------------
+
 def inside_git_checkout(path: Path) -> bool:
-    """Whether `path` lies in a directory tree with a ``.git`` entry (a repository checkout)."""
-    here = Path(os.path.abspath(path))
+    """Whether `path` (resolved: symlinks and junctions followed) lies in a directory tree with
+    a ``.git`` entry (a repository checkout)."""
+    here = Path(os.path.realpath(path))
     return any((parent / ".git").exists() for parent in [here, *here.parents])
 
 
-def read_ledger(path: Path) -> int:
-    """The ledger's total; 0 if the file does not exist. Raises ``ValueError`` if corrupt."""
+def path_problem(value) -> str | None:
+    """Why `value` is not an acceptable operator path, or None: it must be an absolute path in
+    plain form (no drive-relative form, no extended-length or device prefix, no alternate data
+    stream) and, once resolved, outside any repository checkout."""
+    text = str(value)
+    path = Path(text)
+    if not path.is_absolute():
+        return "must be an absolute path"
+    if text.startswith(("\\\\?\\", "\\\\.\\", "//?/", "//./")):
+        return "extended-length and device paths are not accepted"
+    if ":" in text[2:] or ".." in path.parts:
+        return "ambiguous path form"
+    if inside_git_checkout(path):
+        return "must be outside the repository checkout"
+    return None
+
+
+# ---- the ledger ----------------------------------------------------------------------------
+
+class InterprocessLock:
+    """An exclusive lock on ``<ledger>.lock`` held across the whole read/check/write."""
+
+    def __init__(self, path: Path, wait_s: float = LOCK_WAIT_S):
+        self.path, self.wait_s, self.handle = path, wait_s, None
+
+    def __enter__(self):
+        self.handle = open(self.path, "a+b")
+        deadline = time.monotonic() + self.wait_s
+        while True:
+            try:
+                self._lock()
+                return self
+            except OSError:
+                if time.monotonic() >= deadline:
+                    self.handle.close()
+                    raise Refusal("LEDGER_LOCKED") from None
+                time.sleep(0.02)
+
+    def _lock(self):
+        if os.name == "nt":
+            import msvcrt
+            self.handle.seek(0)
+            msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def __exit__(self, *exc):
+        try:
+            if os.name == "nt":
+                import msvcrt
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.handle.close()
+
+
+def read_ledger(path: Path) -> dict:
+    """The ledger ``{"total": n, "goals": {id: n}}``; empty if the file does not exist. Raises
+    ``ValueError`` if it is not exactly that shape."""
     try:
-        text = path.read_text(encoding="ascii").strip()
+        text = path.read_text(encoding="ascii")
     except FileNotFoundError:
-        return 0
-    if not text.isascii() or not text.isdigit() or len(text) > 9:
+        return {"total": 0, "goals": {}}
+    except UnicodeDecodeError:
+        raise ValueError("corrupt ledger") from None
+    data = json.loads(text)
+    if (not isinstance(data, dict) or set(data) != {"v", "total", "goals"} or data["v"] != 1
+            or not isinstance(data["total"], int) or isinstance(data["total"], bool)
+            or data["total"] < 0 or not isinstance(data["goals"], dict)):
         raise ValueError("corrupt ledger")
-    return int(text)
+    for key, value in data["goals"].items():
+        if (not GOAL_ID.match(key) or not isinstance(value, int) or isinstance(value, bool)
+                or value < 0):
+            raise ValueError("corrupt ledger")
+    return {"total": data["total"], "goals": dict(data["goals"])}
 
 
-def write_ledger(path: Path, total: int) -> None:
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(str(total), encoding="ascii")
-    os.replace(tmp, path)
+def write_ledger(path: Path, ledger: dict) -> None:
+    """Writes through a uniquely named temporary file in the same directory, flushed to disk
+    before the atomic replacement, so a crash leaves the old or the new ledger, never a mix."""
+    body = json.dumps({"v": 1, "total": ledger["total"], "goals": ledger["goals"]},
+                      sort_keys=True).encode("ascii")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def reserve(ledger_path: Path, goal_id: str, max_live: int, max_goal: int | None) -> None:
+    """The whole transaction: lock, read, check both bounds, write, release. Raises ``Refusal``."""
+    with InterprocessLock(ledger_path.with_name(ledger_path.name + ".lock")):
+        try:
+            ledger = read_ledger(ledger_path)
+        except (OSError, ValueError):
+            raise Refusal("LEDGER_UNREADABLE") from None
+        spent_goal = ledger["goals"].get(goal_id, 0)
+        if ledger["total"] >= max_live or (max_goal is not None and spent_goal >= max_goal):
+            raise Refusal("LIVE_BUDGET_EXHAUSTED")
+        ledger["total"] += 1
+        ledger["goals"][goal_id] = spent_goal + 1
+        try:
+            write_ledger(ledger_path, ledger)
+        except OSError:
+            raise Refusal("LEDGER_UNWRITABLE") from None
 
 
 class Policy:
-    """What a ``tools/call`` of ``execute_action`` may do; the only state is the ledger."""
+    """What a ``tools/call`` of ``execute_action`` may do; the only state is the ledger file."""
 
-    def __init__(self, *, dry_run_only: bool, max_live: int | None, per_run: int | None,
-                 ledger: Path | None, live_actions=LIVE_ACTIONS_DEFAULT,
+    def __init__(self, *, dry_run_only: bool, max_live: int | None, goal_id: str | None,
+                 max_goal: int | None, ledger: Path | None, live_actions=LIVE_ACTIONS_DEFAULT,
                  max_text_len: int = MAX_TEXT_LEN_DEFAULT):
         self.dry_run_only = dry_run_only
         self.max_live = max_live
-        self.per_run = per_run
+        self.goal_id = goal_id
+        self.max_goal = max_goal
         self.ledger = ledger
         self.live_actions = tuple(live_actions)
         self.max_text_len = max_text_len
-        self.spent_here = 0
-        self.lock = threading.Lock()
 
     def check(self, arguments) -> bool:
-        """Decide one ``execute_action``. Returns whether it is a live call that was counted;
+        """Decide one ``execute_action``. Returns whether it is a live call that was reserved;
         raises ``Refusal`` when it must not be forwarded."""
         if not isinstance(arguments, dict):
             raise Refusal("ARGUMENTS_NOT_AN_OBJECT")
@@ -129,7 +264,7 @@ class Policy:
             raise Refusal("DRY_RUN_NOT_BOOLEAN")
         if self.dry_run_only:
             raise Refusal("DRY_RUN_ONLY")
-        if self.max_live is None or self.ledger is None:
+        if self.max_live is None or self.ledger is None or self.goal_id is None:
             raise Refusal("NO_LIVE_BUDGET")
         action = arguments.get("action")
         if action not in self.live_actions:
@@ -139,21 +274,11 @@ class Policy:
             if (not isinstance(text, str) or not 1 <= len(text) <= self.max_text_len
                     or not set(text) <= PRINTABLE_ASCII):
                 raise Refusal("TEXT_NOT_ALLOWED_LIVE")
-        with self.lock:
-            try:
-                total = read_ledger(self.ledger)
-            except (OSError, ValueError):
-                raise Refusal("LEDGER_UNREADABLE") from None
-            if total >= self.max_live or (self.per_run is not None
-                                          and self.spent_here >= self.per_run):
-                raise Refusal("LIVE_BUDGET_EXHAUSTED")
-            try:
-                write_ledger(self.ledger, total + 1)
-            except OSError:
-                raise Refusal("LEDGER_UNWRITABLE") from None
-            self.spent_here += 1
+        reserve(self.ledger, self.goal_id, self.max_live, self.max_goal)
         return True
 
+
+# ---- messages ------------------------------------------------------------------------------
 
 def refusal_message(request_id, code: int, reason: str) -> bytes:
     body = {"jsonrpc": "2.0", "id": request_id,
@@ -172,30 +297,43 @@ def _tool_call_of(message):
     return None
 
 
-def request_meta(message) -> dict:
-    """The loggable facts of an agent message: never labels, values or typed text."""
+def id_key(request_id):
+    """A hashable key that keeps ``1`` and ``"1"`` apart; None if `request_id` is not an id."""
+    if isinstance(request_id, bool) or not isinstance(request_id, (int, str)):
+        return None
+    return (type(request_id).__name__, request_id)
+
+
+def _bounded_int(value, low=1, high=10**9):
+    return value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else None
+
+
+def request_meta(message, known_ids=frozenset()) -> dict:
+    """The loggable facts of an agent message: closed vocabularies and numbers only."""
     meta: dict = {"kind": "other"}
     if not isinstance(message, dict):
         return meta
     method = message.get("method")
     meta["kind"] = "request" if "id" in message and method else "notification" if method else "other"
     if isinstance(method, str):
-        meta["method"] = method[:64]
+        meta["method"] = method if method in METHODS else "other"
     call = _tool_call_of(message)
-    if call is not None and isinstance(call[0], str):
-        meta["tool"] = call[0][:64]
+    if call is not None:
+        name = call[0]
+        meta["tool"] = name if isinstance(name, str) and name in TOOLS else "unknown"
         args = call[1] if isinstance(call[1], dict) else {}
-        if call[0] == "execute_action":
-            meta["action"] = args.get("action") if args.get("action") in (
-                "click", "type", "scroll") else "invalid"
-            meta["dry_run"] = args.get("dry_run", True) if isinstance(
-                args.get("dry_run", True), bool) else "invalid"
-            if isinstance(args.get("target_id"), str):
-                meta["element_id"] = args["target_id"][:64]
-            if isinstance(args.get("expected_revision"), int):
-                meta["revision"] = args["expected_revision"]
+        if name == "execute_action":
+            meta["action"] = args.get("action") if args.get("action") in ACTIONS else "invalid"
+            dry_run = args.get("dry_run", True)
+            meta["dry_run"] = dry_run if isinstance(dry_run, bool) else "invalid"
+            target = args.get("target_id")
+            meta["element_id"] = target if isinstance(target, str) and target in known_ids \
+                else "unknown"
+            revision = _bounded_int(args.get("expected_revision"))
+            if revision is not None:
+                meta["revision"] = revision
             if isinstance(args.get("text"), str):
-                meta["text_len"] = len(args["text"])
+                meta["text_len"] = min(len(args["text"]), 100_000)
     return meta
 
 
@@ -203,9 +341,9 @@ def response_meta(message, tool: str | None) -> dict:
     meta: dict = {"kind": "response"}
     if not isinstance(message, dict):
         return meta
-    if "error" in message and isinstance(message["error"], dict):
-        meta["rpc_error_code"] = message["error"].get("code") if isinstance(
-            message["error"].get("code"), int) else None
+    if isinstance(message.get("error"), dict):
+        code = message["error"].get("code")
+        meta["rpc_error_code"] = code if isinstance(code, int) and not isinstance(code, bool) else None
         return meta
     result = message.get("result")
     if not isinstance(result, dict):
@@ -214,20 +352,31 @@ def response_meta(message, tool: str | None) -> dict:
     structured = result.get("structuredContent")
     if isinstance(structured, dict):
         status = structured.get("status")
-        if isinstance(status, str):
-            meta["status"] = status[:32]
+        if isinstance(status, str) and status in STATUSES:
+            meta["status"] = status
         error = structured.get("error")
-        if isinstance(error, dict) and isinstance(error.get("code"), str):
-            meta["error_code"] = error["code"][:32]
-        if isinstance(structured.get("input_delivered"), bool):
-            meta["input_delivered"] = structured["input_delivered"]
-        if isinstance(structured.get("verified"), bool):
-            meta["verified"] = structured["verified"]
-        if isinstance(structured.get("observed_effect"), str):
-            meta["observed_effect"] = structured["observed_effect"][:32]
+        if isinstance(error, dict) and isinstance(error.get("code"), str) \
+                and error["code"] in ERROR_CODES:
+            meta["error_code"] = error["code"]
+        for flag in ("input_delivered", "verified"):
+            if isinstance(structured.get(flag), bool):
+                meta[flag] = structured[flag]
+        effect = structured.get("observed_effect")
+        if isinstance(effect, str) and effect in EFFECTS:
+            meta["observed_effect"] = effect
         if tool == "observe_screen" and isinstance(structured.get("elements"), list):
             meta["elements"] = len(structured["elements"])
     return meta
+
+
+def element_ids_of(message) -> set:
+    """The ids the engine itself issued in an observation result."""
+    try:
+        elements = message["result"]["structuredContent"]["elements"]
+    except (KeyError, TypeError):
+        return set()
+    return {e["target_id"] for e in elements if isinstance(e, dict)
+            and isinstance(e.get("target_id"), str) and 0 < len(e["target_id"]) <= 64}
 
 
 class Proxy:
@@ -239,7 +388,10 @@ class Proxy:
         self.stdout = stdout if stdout is not None else sys.stdout.buffer
         self.out_lock = threading.Lock()
         self.log_lock = threading.Lock()
-        self.pending: dict = {}  # id -> (tool, monotonic time sent)
+        self.state_lock = threading.Lock()  # pending ids and the engine-issued ids
+        self.pending: dict = {}  # id_key -> (tool or None, monotonic time sent)
+        self.known_ids: set = set()
+        self.live_spent_here = 0
         self.t0 = time.monotonic()
         self.log_file = None
 
@@ -270,27 +422,38 @@ class Proxy:
         if isinstance(message, list):
             self.refuse(None, "BATCH_NOT_ALLOWED", INVALID_REQUEST)
             return
-        meta = request_meta(message)
+        with self.state_lock:
+            known = frozenset(self.known_ids)
+        meta = request_meta(message, known)
         call = _tool_call_of(message)
         request_id = message.get("id") if isinstance(message, dict) else None
-        live = False
-        if call is not None:
-            if request_id is None or isinstance(request_id, bool) or not isinstance(
-                    request_id, (int, str)):
+        key = id_key(request_id)
+        is_request = isinstance(message, dict) and "method" in message and key is not None
+        if call is not None and key is None:
+            self.log("agent->proxy", size, **meta)
+            self.refuse(None, "TOOL_CALL_WITHOUT_ID", INVALID_REQUEST)
+            return
+        if is_request:
+            with self.state_lock:
+                outstanding = key in self.pending
+            if outstanding:
                 self.log("agent->proxy", size, **meta)
-                self.refuse(None, "TOOL_CALL_WITHOUT_ID", INVALID_REQUEST)
+                self.refuse(request_id, "DUPLICATE_ID", INVALID_REQUEST)
                 return
-            if call[0] == "execute_action":
-                try:
-                    live = self.policy.check(call[1])
-                except Refusal as refusal:
-                    self.log("agent->proxy", size, **meta)
-                    self.refuse(request_id, refusal.reason, **{"tool": "execute_action"})
-                    return
+        live = False
+        if call is not None and call[0] == "execute_action":
+            try:
+                live = self.policy.check(call[1])
+            except Refusal as refusal:
+                self.log("agent->proxy", size, **meta)
+                self.refuse(request_id, refusal.reason, tool="execute_action")
+                return
         self.log("agent->engine", size, live_counted=live, **meta)
-        if request_id is not None and isinstance(request_id, (int, str)) and not isinstance(
-                request_id, bool) and isinstance(message, dict) and "method" in message:
-            self.pending[request_id] = (meta.get("tool"), time.monotonic())
+        if live:
+            self.live_spent_here += 1
+        if is_request:
+            with self.state_lock:
+                self.pending[key] = (meta.get("tool"), time.monotonic())
         engine_in.write(raw if raw.endswith(b"\n") else raw + b"\n")
         engine_in.flush()
 
@@ -303,9 +466,15 @@ class Proxy:
                 message = None
             tool, started = None, None
             if isinstance(message, dict) and "id" in message and "method" not in message:
-                rid = message["id"]
-                if isinstance(rid, (int, str)) and not isinstance(rid, bool):
-                    tool, started = self.pending.pop(rid, (None, None))
+                key = id_key(message["id"])
+                if key is not None:
+                    with self.state_lock:
+                        tool, started = self.pending.pop(key, (None, None))
+            if tool == "observe_screen":
+                issued = element_ids_of(message)
+                with self.state_lock:
+                    if len(self.known_ids) + len(issued) <= KNOWN_IDS_LIMIT:
+                        self.known_ids |= issued
             meta = response_meta(message, tool)
             if tool:
                 meta["tool"] = tool
@@ -341,7 +510,8 @@ class Proxy:
                 engine.kill()
                 code = engine.wait()
             pump.join(timeout=5)
-            self.log("proxy", 0, kind="end", engine_exit=code, live_spent_here=self.policy.spent_here)
+            self.log("proxy", 0, kind="end", engine_exit=code,
+                     live_spent_here=self.live_spent_here)
             self.log_file.close()
         return code
 
@@ -352,12 +522,13 @@ def parse_args(argv):
     mode.add_argument("--dry-run-only", action="store_true",
                       help="phase 1: refuse any call whose dry_run is not true")
     mode.add_argument("--max-live", type=int, metavar="N",
-                      help="phase 2: the ledger's total may not exceed N live calls")
-    parser.add_argument("--max-live-per-run", type=int, metavar="K",
-                        help="also bound the live calls of this process alone")
+                      help="phase 2: the ledger's session total may not exceed N live calls")
+    parser.add_argument("--goal-id", help="the goal's id in the ledger (required with --max-live)")
+    parser.add_argument("--max-live-goal", type=int, metavar="K",
+                        help="also bound this goal's live calls across restarts, in the ledger")
     parser.add_argument("--ledger", type=Path, help="ledger file (required with --max-live)")
     parser.add_argument("--log", type=Path, required=True,
-                        help="metadata JSONL, outside the repository checkout")
+                        help="metadata JSONL, an absolute path outside the repository checkout")
     parser.add_argument("--live-actions", default=",".join(LIVE_ACTIONS_DEFAULT))
     parser.add_argument("--max-text-len", type=int, default=MAX_TEXT_LEN_DEFAULT)
     parser.add_argument("engine", nargs=argparse.REMAINDER, help="-- ENGINE_COMMAND ...")
@@ -367,20 +538,22 @@ def parse_args(argv):
         parser.error("the engine command is missing (after --)")
     args.engine = engine
     if args.max_live is not None:
-        if args.max_live < 0 or args.ledger is None:
-            parser.error("--max-live needs N >= 0 and --ledger")
-    if args.max_live_per_run is not None and args.max_live_per_run < 0:
-        parser.error("--max-live-per-run must be >= 0")
-    for path in (args.log, args.ledger):
-        if path is not None and inside_git_checkout(path):
-            parser.error("log and ledger must be outside the repository checkout")
+        if args.max_live < 0 or args.ledger is None or not args.goal_id \
+                or not GOAL_ID.match(args.goal_id):
+            parser.error("--max-live needs N >= 0, --ledger and a --goal-id of 1-32 plain characters")
+        if args.max_live_goal is not None and args.max_live_goal < 0:
+            parser.error("--max-live-goal must be >= 0")
+    for name in ("log", "ledger"):
+        value = getattr(args, name)
+        if value is not None and (problem := path_problem(value)):
+            parser.error(f"--{name}: {problem}")
     return args
 
 
 def main(argv=None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    policy = Policy(dry_run_only=args.dry_run_only, max_live=args.max_live,
-                    per_run=args.max_live_per_run, ledger=args.ledger,
+    policy = Policy(dry_run_only=args.dry_run_only, max_live=args.max_live, goal_id=args.goal_id,
+                    max_goal=args.max_live_goal, ledger=args.ledger,
                     live_actions=tuple(a for a in args.live_actions.split(",") if a),
                     max_text_len=args.max_text_len)
     return Proxy(args.engine, policy, args.log).run()

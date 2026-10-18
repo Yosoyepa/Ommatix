@@ -16,6 +16,10 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+import proxy  # noqa: E402
+
 REPO = HERE.parents[2]
 
 
@@ -63,12 +67,12 @@ class RehearsalBase:
 
     def check_budget_refusal(self):
         engine_argv, cleanup = self.engine()
-        result = rehearse(self, engine_argv, ["--max-live", "2", "--ledger", "{ledger}"], self.profile)
+        result = rehearse(self, engine_argv, ["--max-live", "2", "--ledger", "{ledger}", "--goal-id", "G01"], self.profile)
         self.assertEqual(result["agent_code"], 0)
         live = result["report"]["live"]
         self.assertEqual([("rpc_error" in o) for o in live], [False, False, True])
         self.assertEqual(live[2]["rpc_error"], "LIVE_BUDGET_EXHAUSTED")
-        self.assertEqual(result["ledger"].read_text(), "2")
+        self.assertEqual(proxy.read_ledger(result["ledger"])["total"], 2)
         forwarded_live = [r for r in result["records"] if r["dir"] == "agent->engine" and r.get("live_counted")]
         self.assertEqual(len(forwarded_live), 2)
         self.assertEqual(result["report"]["dry"].get("rpc_error"), None)

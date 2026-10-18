@@ -2,10 +2,11 @@
 
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -46,7 +47,7 @@ class SummariseTests(unittest.TestCase):
         ]
         summary = summarise.summarise(results)
         phase2 = summary["phases"]["2"]
-        self.assertEqual((phase2["runs"], phase2["success"], phase2["false_success_claims"]), (4, 2, 2))
+        self.assertEqual((phase2["completed"], phase2["success"], phase2["false_success_claims"]), (4, 2, 2))
         self.assertEqual((phase2["abstention_cases"], phase2["abstention_correct"]), (2, 1))
         self.assertEqual((phase2["live_actions_spent"], phase2["delivered"]), (5, 5))
         self.assertEqual(phase2["proxy_refusals"], {"LIVE_BUDGET_EXHAUSTED": 2})
@@ -54,7 +55,7 @@ class SummariseTests(unittest.TestCase):
         self.assertEqual(phase2["tool_latency_ms"]["observe_screen"]["n"], 2)
         self.assertEqual(phase2["tokens_per_goal_median"], 110)
         self.assertEqual(summary["goals"]["G03"]["2"]["aborted"], 1)
-        self.assertEqual(summary["phases"]["1"]["runs"], 1)
+        self.assertEqual(summary["phases"]["1"]["attempted"], 1)
 
     def test_load_and_render_from_a_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -65,11 +66,37 @@ class SummariseTests(unittest.TestCase):
             loaded = summarise.load_results([run])
             self.assertEqual(len(loaded), 1)
             text = summarise.render(summarise.summarise(loaded))
-            self.assertIn("phase 1: 1/1 succeeded", text)
+            self.assertIn("phase 1: 1/1 attempts succeeded", text)
             out = run / "summary.json"
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(summarise.main([str(run), "--out", str(out)]), 0)
             self.assertIn("phases", json.loads(out.read_text(encoding="utf-8")))
+
+    def test_an_aborted_attempt_stays_in_the_phase_denominator(self):
+        results = [result("G01", 2, success=True), result("G02", 2, success=False, aborted="never in front")]
+        phase = summarise.summarise(results)["phases"]["2"]
+        self.assertEqual((phase["attempted"], phase["completed"], phase["aborted"], phase["success"]),
+                         (2, 1, 1, 1))
+        text = summarise.render(summarise.summarise(results))
+        self.assertIn("phase 2: 1/2 attempts succeeded (1 completed, 1 aborted)", text)
+        self.assertNotIn("1/1", text)
+
+    def test_the_summary_is_never_written_inside_the_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            run.mkdir()
+            (run / "G01.json").write_text(json.dumps(result("G01", 1, success=True)), encoding="utf-8")
+            repo = Path(tmp) / "repo"
+            (repo / ".git").mkdir(parents=True)
+            before = os.getcwd()
+            os.chdir(repo)  # a relative --out would land in the checkout
+            try:
+                with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        summarise.main([str(run), "--out", "resumen.json"])
+            finally:
+                os.chdir(before)
+            self.assertFalse((repo / "resumen.json").exists())
 
     def test_an_empty_directory_is_an_error(self):
         with tempfile.TemporaryDirectory() as tmp:
