@@ -205,7 +205,9 @@ pub enum OccluderFallback {
     /// The window walk failed. Reserved: the probe aborts a pair whose walk fails (the
     /// ADR-0032 path) before this could be recorded.
     WalkFailed,
-    /// The window under the target, or its rectangle, is not attested.
+    /// The window under the target, or its rectangle, is not attested. Reserved, like
+    /// `WalkFailed`: after a successful read the complete window read and the ADR-0032
+    /// guards already require those rectangles, so the probe aborts such a pair first.
     UnattestedRect,
     /// The reads around the captures disagree on the amended group or its attestation.
     RepeatedReadsDiffer,
@@ -236,6 +238,9 @@ impl OccluderFallback {
 /// the scope would apply (the engine's own `attest`).
 #[derive(Debug, Clone, PartialEq)]
 struct OccluderRead {
+    /// The margin the group was selected with; the counts use the same one (no second
+    /// margin exists), and two reads at different margins are different reads.
+    margin: u32,
     group: Option<WindowGroup>,
     attested: Result<(), OccluderFallback>,
     opacity_attested: bool,
@@ -316,6 +321,7 @@ impl FreshnessProbeGroup {
             group,
             target,
             occluder: OccluderRead {
+                margin,
                 group: occluders,
                 attested,
                 opacity_attested,
@@ -330,15 +336,18 @@ impl FreshnessProbeGroup {
 
     /// The ADR-0035 counts of one pair, next to [`measure`](Self::measure): what the amended
     /// group would compare, and why the scope would fall back to the whole frame, if it
-    /// would. `reads_stable` is false when the attestations around the captures disagreed.
-    /// Changed geometry/epoch or a target outside the frame has no valid measurement.
+    /// would. The margin is the one the group was selected with in
+    /// [`read_with_margin`](Self::read_with_margin) (zero after [`read`](Self::read)): it
+    /// cannot differ between selection and measurement. `reads_stable` is false when the
+    /// attestations around the captures disagreed. Changed geometry/epoch or a target outside
+    /// the frame has no valid measurement.
     pub fn measure_occluder(
         &self,
         base: &BgraFrame,
         current: &BgraFrame,
-        margin: u32,
         reads_stable: bool,
     ) -> Option<OccluderProbeCounts> {
+        let margin = self.occluder.margin;
         let bounds = current.bounds();
         if !bounds.contains(&self.target) {
             return None;
@@ -897,7 +906,7 @@ mod probe_tests {
             .measure(&frame(1, None), &frame(1, Some((80, 90))), 0)
             .unwrap();
         let occluder = group
-            .measure_occluder(&frame(1, None), &frame(1, Some((80, 90))), 0, true)
+            .measure_occluder(&frame(1, None), &frame(1, Some((80, 90))), true)
             .unwrap();
         assert_eq!(
             (
@@ -915,7 +924,7 @@ mod probe_tests {
         assert_eq!(occluder.fallback, None);
         // A change in the window above T: both count it.
         let occluder = group
-            .measure_occluder(&frame(1, None), &frame(1, Some((100, 10))), 0, true)
+            .measure_occluder(&frame(1, None), &frame(1, Some((100, 10))), true)
             .unwrap();
         assert_eq!(occluder.group_tiles, Some(1));
         assert!(occluder.group_frame_fraction.unwrap() < 1.0);
@@ -926,7 +935,7 @@ mod probe_tests {
     fn probe_names_why_the_amended_scope_would_compare_the_whole_frame() {
         let pair = |reader: &Reader, stable: bool| {
             read_stack(reader, 0)
-                .measure_occluder(&frame(1, None), &frame(1, None), 0, stable)
+                .measure_occluder(&frame(1, None), &frame(1, None), stable)
                 .unwrap()
         };
         let none = pair(&Reader::new(stack()).at(1), true);
@@ -1008,5 +1017,49 @@ mod probe_tests {
         assert_eq!(a, b, "the ADR-0032 group and target are unchanged");
         assert!(!a.same_occluders(&b));
         assert!(a.same_occluders(&a.clone()));
+    }
+
+    /// PB2 (review): the selection margin is part of the measurement object, so counts cannot
+    /// be taken at another margin than the group was selected with.
+    #[test]
+    fn probe_measures_at_the_margin_it_selected_with() {
+        let windows = || {
+            vec![
+                at_z(2, 0, box_at(68.0, 0.0, 256.0, 32.0)),
+                at_z(1, 1, box_at(0.0, 0.0, 64.0, 64.0)),
+            ]
+        };
+        let changed = frame(1, Some((200, 0)));
+        let read = |margin| read_stack(&Reader::new(windows()).at(1).opaque(0), margin);
+        // Margin 5: the window 4 px away is in the group and its tile is compared.
+        let five = read(5)
+            .measure_occluder(&frame(1, None), &changed, true)
+            .unwrap();
+        assert_eq!(
+            (five.group_window_count, five.group_tiles),
+            (Some(2), Some(1))
+        );
+        assert!(five.scoped());
+        // Margin 0 (also what `read` selects): the window is not in the group, consistently.
+        let zero = read(0)
+            .measure_occluder(&frame(1, None), &changed, true)
+            .unwrap();
+        assert_eq!(
+            (zero.group_window_count, zero.group_tiles),
+            (Some(1), Some(0))
+        );
+        let compat = FreshnessProbeGroup::read(
+            &Reader::new(windows()).at(1).opaque(0),
+            box_at(8.0, 8.0, 16.0, 16.0),
+        )
+        .unwrap();
+        assert_eq!(
+            compat.measure_occluder(&frame(1, None), &changed, true),
+            Some(zero)
+        );
+        // Reads at different margins are different reads of the amended group; the legacy
+        // ADR-0032 equality is untouched.
+        assert!(!read(5).same_occluders(&read(0)));
+        assert_eq!(read(5), read(0));
     }
 }

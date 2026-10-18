@@ -82,7 +82,6 @@ pub fn run(args: &FreshnessProbeArgs) -> Result<()> {
             .measure_occluder(
                 &base.frame,
                 &frame.frame,
-                margin,
                 first_stable && second_stable && first.same_occluders(&second),
             )
             .context("M1 geometry or target changed; no valid pair")?;
