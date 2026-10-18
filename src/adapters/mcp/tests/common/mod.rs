@@ -235,6 +235,15 @@ impl OsActuator for NullActuator {
         Some(vec![window])
     }
 
+    fn window_opacity(
+        &self,
+        _: &ommatix_application::TopLevelWindow,
+    ) -> Option<ommatix_application::WindowOpacity> {
+        Some(ommatix_application::WindowOpacity {
+            corner_exclusion_px: 0,
+        })
+    }
+
     fn deliver(&mut self, _: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
         *self
             .delivered

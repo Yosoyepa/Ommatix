@@ -432,6 +432,13 @@ impl OsActuator for FixtureActuator {
             .then_some(window)
     }
 
+    /// The simulated windows are opaque and square by construction.
+    fn window_opacity(&self, _: &TopLevelWindow) -> Option<ommatix_application::WindowOpacity> {
+        Some(ommatix_application::WindowOpacity {
+            corner_exclusion_px: 0,
+        })
+    }
+
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
         self.0.lock().handed.push(action.clone());
         // A simulation hands nothing to the OS and never claims it did.

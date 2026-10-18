@@ -57,3 +57,7 @@ BDD-55,RF-11,UT-55,features/06_accion_segura.feature,Un cambio fuera de la venta
 BDD-56,RF-11,UT-56,features/06_accion_segura.feature,Un cambio dentro de la ventana objetivo sí rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-57,RF-11,UT-57,features/06_accion_segura.feature,Una ventana emergente sobre el objetivo rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-58,RF-11,UT-60,features/06_accion_segura.feature,Un cambio de geometría rechaza la acción con cualquier alcance,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-59,RF-11,UT-65,features/06_accion_segura.feature,Un cambio en una ventana por debajo del objetivo no rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-60,RF-11,UT-68,features/06_accion_segura.feature,Una ventana que sube sobre el objetivo rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-61,RF-11,UT-69,features/06_accion_segura.feature,Un cambio de la ventana de primer plano rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-62,RF-11,UT-70,features/06_accion_segura.feature,Un objetivo no atestiguado como opaco compara la pantalla entera,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE

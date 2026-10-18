@@ -41,7 +41,10 @@ use crate::ports::{
     VisionDetector,
 };
 
-pub use freshness::{ActionFreshness, FreshnessProbeCounts, FreshnessProbeGroup};
+pub use freshness::{
+    ActionFreshness, FreshnessProbeCounts, FreshnessProbeGroup, OccluderFallback,
+    OccluderProbeCounts,
+};
 pub use icons::IconResolverConfig;
 pub use journal::JOURNAL_CAPACITY;
 

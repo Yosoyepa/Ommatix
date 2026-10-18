@@ -14,6 +14,7 @@
     allow(dead_code, reason = "only the Windows module calls these helpers")
 )]
 
+use ommatix_application::WindowOpacity;
 use ommatix_application::contract::{ActionKind, ScrollDirection};
 
 #[cfg(windows)]
@@ -41,6 +42,101 @@ pub(crate) struct WindowWalk(std::collections::BTreeSet<u64>);
 impl WindowWalk {
     pub fn visit(&mut self, handle: u64) -> bool {
         handle != 0 && self.0.len() < 4096 && self.0.insert(handle)
+    }
+}
+
+/// ADR-0035: DWM draws the corners of a window transparently, so a target box within this many
+/// physical pixels of two adjacent edges of the window (it meets the square of this size at a
+/// corner) is not attested opaque. The radius DWM uses is 8 px at 100 % scaling; 32 px covers
+/// scaling up to 400 %. It applies whatever corner preference the window reports.
+pub(crate) const CORNER_EXCLUSION_PX: u32 = 32;
+
+/// `WS_EX_LAYERED`: the window is composed through an alpha or colour key.
+const WS_EX_LAYERED: u32 = 0x0008_0000;
+/// `WS_EX_TRANSPARENT`: hit testing passes through the window.
+const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
+/// `WS_EX_NOREDIRECTIONBITMAP`: the window has no redirection surface, so it can be composed
+/// with per-pixel alpha by DirectComposition without being layered. Nothing else reliably
+/// attests that such a window is opaque, so it never is.
+const WS_EX_NOREDIRECTIONBITMAP: u32 = 0x0020_0000;
+
+/// The extended style a `GetWindowLongPtrW(GWL_EXSTYLE)` call returned, given the thread's
+/// last error read right after it. The call returns 0 both for a failure and for a
+/// legitimate empty style: only a zero with a nonzero error is a failed query (`None`).
+pub(crate) fn extended_style_of(value: isize, last_error: u32) -> Option<u32> {
+    if value == 0 && last_error != 0 {
+        return None;
+    }
+    // The style bits are the low 32 bits of the pointer-sized value.
+    Some(u32::try_from(value & 0xFFFF_FFFF).unwrap_or_default())
+}
+
+/// What the actuator may attest about a window's opacity from the two facts it reads
+/// (ADR-0035): its extended style (`None` when the query failed), and
+/// `DWMWA_SYSTEMBACKDROP_TYPE` (`None` when the query failed). Layered, click-through and
+/// no-redirection-bitmap windows, and any backdrop material other than `AUTO` (0, the default
+/// of a window that never opted in) or `NONE` (1), are not attested. Legacy blur-behind has no
+/// documented getter, so its absence is not attested (ADR-0035, implementation notes).
+pub(crate) fn window_opacity_of(
+    ex_style: Option<u32>,
+    backdrop: Option<u32>,
+) -> Option<WindowOpacity> {
+    let opaque_style =
+        ex_style? & (WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOREDIRECTIONBITMAP) == 0;
+    let no_backdrop = matches!(backdrop, Some(0 | 1));
+    (opaque_style && no_backdrop).then_some(WindowOpacity {
+        corner_exclusion_px: CORNER_EXCLUSION_PX,
+    })
+}
+
+/// What asking for the next top-level sibling of a window answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Sibling<H> {
+    Found(H),
+    /// The window is the last one: the call returned no window and no error.
+    End,
+    /// The call returned no window with an error: the enumeration is not complete.
+    Failed,
+}
+
+/// Classifies the answer of `GetWindow(GW_HWNDNEXT)` from its result and the thread's last
+/// error, which the caller cleared before the call and reads right after it.
+pub(crate) fn sibling<H>(found: Option<H>, last_error: u32) -> Sibling<H> {
+    match (found, last_error) {
+        (Some(next), _) => Sibling::Found(next),
+        (None, 0) => Sibling::End,
+        (None, _) => Sibling::Failed,
+    }
+}
+
+/// Walks the top-level windows front to back from `first`: bounded, cycle-checked, and
+/// complete or nothing. `visit` collects one window (`None` aborts), `next` asks for its
+/// sibling, and `exists` tells whether the cursor is still a window after that query. A failed
+/// enumeration, a destroyed cursor, a null or repeated handle and an overlong walk all return
+/// `None`; only the normal end returns `Some`.
+pub(crate) fn walk_windows<H: Copy>(
+    first: H,
+    handle_of: impl Fn(H) -> Option<u64>,
+    mut visit: impl FnMut(H) -> Option<()>,
+    mut next: impl FnMut(H) -> Sibling<H>,
+    exists: impl Fn(H) -> bool,
+) -> Option<()> {
+    let mut walk = WindowWalk::default();
+    let mut cursor = first;
+    loop {
+        if !walk.visit(handle_of(cursor)?) {
+            return None;
+        }
+        visit(cursor)?;
+        let following = next(cursor);
+        if !exists(cursor) {
+            return None;
+        }
+        match following {
+            Sibling::Found(found) => cursor = found,
+            Sibling::End => return Some(()),
+            Sibling::Failed => return None,
+        }
     }
 }
 
@@ -640,6 +736,102 @@ mod tests {
 mod window_tests {
     use super::*;
     use ommatix_domain::{DisplayMapping, bbox::BBox};
+
+    /// UT-75 (review 2, F2): a window without a redirection bitmap can be composed with
+    /// per-pixel alpha by DirectComposition with neither layered bit, so it is never attested.
+    #[test]
+    fn ut_75_a_window_without_a_redirection_bitmap_is_never_attested_opaque() {
+        const NO_REDIRECTION_BITMAP: u32 = WS_EX_NOREDIRECTIONBITMAP;
+        for backdrop in [Some(0), Some(1)] {
+            for extra in [0, 0x0004_0000, WS_EX_LAYERED, WS_EX_TRANSPARENT] {
+                assert_eq!(
+                    window_opacity_of(Some(NO_REDIRECTION_BITMAP | extra), backdrop),
+                    None,
+                    "{extra:#x} {backdrop:?}"
+                );
+            }
+        }
+    }
+
+    /// UT-75: only a plain window with no backdrop is attested opaque.
+    #[test]
+    fn ut_75_only_an_unlayered_window_without_a_backdrop_is_attested_opaque() {
+        let opaque = Some(WindowOpacity {
+            corner_exclusion_px: 32,
+        });
+        assert_eq!(CORNER_EXCLUSION_PX, 32);
+        // AUTO and NONE.
+        assert_eq!(window_opacity_of(Some(0), Some(0)), opaque);
+        assert_eq!(window_opacity_of(Some(0x0004_0000), Some(1)), opaque);
+        // Layered, click-through, or both.
+        for style in [
+            WS_EX_LAYERED,
+            WS_EX_TRANSPARENT,
+            WS_EX_LAYERED | WS_EX_TRANSPARENT,
+        ] {
+            assert_eq!(window_opacity_of(Some(style), Some(1)), None, "{style:#x}");
+        }
+        // MAINWINDOW (Mica), TRANSIENTWINDOW (Acrylic), TABBEDWINDOW (Mica Alt), unknown
+        // values, and a query that failed.
+        for backdrop in [Some(2), Some(3), Some(4), Some(5), Some(u32::MAX), None] {
+            assert_eq!(window_opacity_of(Some(0), backdrop), None, "{backdrop:?}");
+        }
+    }
+
+    /// UT-75 (review 2, F1): a zero style with a nonzero error is a failed query, not an empty
+    /// style; a zero with no error is a legitimate style; no style attests nothing.
+    #[test]
+    fn ut_75_a_failed_style_query_is_not_an_empty_style() {
+        assert_eq!(extended_style_of(0, 0), Some(0));
+        assert_eq!(extended_style_of(0, 5), None);
+        assert_eq!(extended_style_of(0x0004_0100, 5), Some(0x0004_0100));
+        assert_eq!(extended_style_of(0x1_0000_0020, 0), Some(0x20));
+        let from_a_failed_query = extended_style_of(0, 1400);
+        assert_eq!(window_opacity_of(from_a_failed_query, Some(1)), None);
+        assert!(window_opacity_of(extended_style_of(0, 0), Some(1)).is_some());
+    }
+
+    /// Review 2, inherited gap: a normal end of the enumeration is complete; an error with
+    /// the cursor still a window is not.
+    #[test]
+    fn a_failed_enumeration_is_not_a_complete_walk() {
+        // Handles 1 -> 2 -> 3, then the scripted answer after 3.
+        let run = |after_last: Sibling<u64>, exists: bool| {
+            let mut visited = Vec::new();
+            let done = walk_windows(
+                1u64,
+                Some,
+                |h| {
+                    visited.push(h);
+                    Some(())
+                },
+                |h| match h {
+                    1 => Sibling::Found(2),
+                    2 => Sibling::Found(3),
+                    _ => after_last,
+                },
+                |_| exists,
+            );
+            (done, visited)
+        };
+        assert_eq!(run(Sibling::End, true), (Some(()), vec![1, 2, 3]));
+        // The cursor is still a window, but the enumeration failed: nothing is attested.
+        assert_eq!(run(Sibling::Failed, true).0, None);
+        // A destroyed cursor does not end the walk either.
+        assert_eq!(run(Sibling::End, false).0, None);
+        // A repeated handle (a cycle) and a null one abort.
+        let looping = walk_windows(1u64, Some, |_| Some(()), |_| Sibling::Found(1), |_| true);
+        assert_eq!(looping, None);
+        assert_eq!(
+            walk_windows(0u64, Some, |_| Some(()), |_| Sibling::End, |_| true),
+            None
+        );
+        // The classification of the call's result and last error.
+        assert_eq!(sibling(Some(7u64), 0), Sibling::Found(7));
+        assert_eq!(sibling(Some(7u64), 5), Sibling::Found(7));
+        assert_eq!(sibling::<u64>(None, 0), Sibling::End);
+        assert_eq!(sibling::<u64>(None, 1400), Sibling::Failed);
+    }
 
     #[test]
     fn a_window_walk_rejects_null_cycles_and_an_incomplete_list() {

@@ -94,6 +94,173 @@ class FreshnessProbeTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 probe.validate_report(report, args)
 
+    # ---- ADR-0035: the amended group beside the ADR-0032 one (paired M1 repeat) ----
+
+    def occluder(self, **changes):
+        record = {"group_tiles": 0, "group_window_count": 2, "group_frame_fraction": 0.2,
+                  "group_covers_whole_frame": False, "opacity_attested": True,
+                  "scoped": True, "fallback": None}
+        record.update(changes)
+        return record
+
+    def paired_report(self, records=None):
+        """Two pairs: one scoped with a reduction, one that falls back (no opacity)."""
+        pairs = []
+        for record in records or [self.occluder(),
+                                  self.occluder(opacity_attested=False, scoped=False,
+                                                fallback="no_opacity")]:
+            pair = dict(self.report()["pairs"][0], occluder_group=record)
+            pairs.append(pair)
+        report = self.report()
+        report["pairs"] = pairs
+        report["outside_pairs"] = len(pairs)
+        report["occluder_scoped_pairs"] = sum(p["occluder_group"]["scoped"] for p in pairs)
+        report["occluder_outside_pairs"] = sum(
+            p["occluder_group"]["scoped"] and p["total_tiles"] > p["occluder_group"]["group_tiles"]
+            for p in pairs)
+        return report
+
+    def pair_args(self, pairs=2):
+        args = self.args(Path(tempfile.gettempdir()))
+        args.pairs = pairs
+        return args
+
+    def test_the_old_report_still_parses_and_the_new_one_carries_the_amended_group(self):
+        args = self.pair_args(1)
+        probe.validate_report(self.report(), args)
+        args = self.pair_args(2)
+        report = probe.validate_report(self.paired_report(), args)
+        self.assertEqual(report["occluder_scoped_pairs"], 1)
+        # The old fields are unchanged and still validated in the new format.
+        report = self.paired_report()
+        report["pairs"][0]["group_tiles"] = 99
+        with self.assertRaises(ValueError):
+            probe.validate_report(report, args)
+
+    def test_a_partial_or_inconsistent_amended_group_is_refused(self):
+        args = self.pair_args(2)
+        bad_records = [
+            {"scoped": False},                       # scoped must equal 'no fallback'
+            {"fallback": "bogus", "scoped": False},   # closed set of reasons
+            {"group_tiles": -1},
+            {"group_tiles": True},
+            {"group_window_count": 0},
+            {"group_frame_fraction": 1.5},
+            {"group_covers_whole_frame": True},       # fraction 0.2
+            {"opacity_attested": "yes"},
+            {"fallback": "no_opacity", "scoped": False},   # opacity is attested here
+            {"fallback": "corner", "scoped": False, "opacity_attested": False},
+            {"group_tiles": None},                    # counts are all-or-none
+            {"fallback": "unattested_rect", "scoped": False},  # that reason has no counts
+            {"scoped": True, "opacity_attested": False},
+            {"title": "private screen text"},
+        ]
+        for change in bad_records:
+            report = self.paired_report()
+            report["pairs"][0]["occluder_group"].update(change)
+            with self.assertRaises(ValueError, msg=str(change)):
+                probe.validate_report(report, args)
+        # Missing on one pair only, or a summary count that disagrees.
+        report = self.paired_report()
+        del report["pairs"][1]["occluder_group"]
+        with self.assertRaises(ValueError):
+            probe.validate_report(report, args)
+        for key, value in [("occluder_scoped_pairs", 2), ("occluder_outside_pairs", 0)]:
+            report = self.paired_report()
+            report[key] = value
+            with self.assertRaises(ValueError, msg=key):
+                probe.validate_report(report, args)
+        report = self.paired_report()
+        del report["occluder_outside_pairs"]
+        with self.assertRaises(ValueError):
+            probe.validate_report(report, args)
+
+    def test_a_group_that_is_not_attested_reports_no_counts_and_a_reason(self):
+        args = self.pair_args(2)
+        records = [self.occluder(),
+                   self.occluder(group_tiles=None, group_window_count=None,
+                                 group_frame_fraction=None, group_covers_whole_frame=None,
+                                 opacity_attested=False, scoped=False,
+                                 fallback="unattested_rect")]
+        probe.validate_report(self.paired_report(records), args)
+
+    def test_the_summary_is_descriptive_for_both_groups_and_old_reports(self):
+        args = self.pair_args(2)
+        summary = probe.summarise(probe.validate_report(self.paired_report(), args))
+        self.assertEqual(summary["pairs"], 2)
+        self.assertEqual(summary["adr_0032"]["outside_pairs"], 2)
+        self.assertEqual(summary["adr_0035"]["scoped_pairs"], 1)
+        self.assertEqual(summary["adr_0035"]["fallbacks"], {"no_opacity": 1})
+        self.assertEqual(summary["adr_0035"]["opacity_attested_pairs"], 1)
+        # No threshold, verdict or criterion anywhere in it.
+        text = json.dumps(summary)
+        for word in ("criterion", "verdict", "pass", "threshold"):
+            self.assertNotIn(word, text)
+        old = probe.summarise(self.report())
+        self.assertEqual(old["pairs"], 1)
+        self.assertNotIn("adr_0035", old)
+
+    def test_a_paired_report_is_saved_with_its_summary_and_an_old_one_as_it_was(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.args(Path(tmp), descriptive=True)
+            args.pairs = 2
+            report = self.paired_report()
+            report.pop("min_outside_pairs")
+            report.pop("criterion_met")
+            report["descriptive"] = True
+            child = SimpleNamespace(returncode=0, stdout="", stderr=json.dumps(report))
+            self.assertEqual(probe.run(args, lambda *a, **kw: child), 0)
+            saved = json.loads(args.out.read_text())
+            self.assertEqual(saved["summary"]["adr_0035"]["scoped_pairs"], 1)
+            del saved["summary"]
+            self.assertEqual(saved, report)
+
+    def descriptive_args(self, pairs):
+        args = self.args(Path(tempfile.gettempdir()), descriptive=True)
+        args.pairs = pairs
+        return args
+
+    @staticmethod
+    def as_descriptive(report):
+        report = copy.deepcopy(report)
+        report.pop("min_outside_pairs", None)
+        report.pop("criterion_met", None)
+        report["descriptive"] = True
+        return report
+
+    def test_whole_frame_coverage_must_keep_every_changed_tile(self):
+        """PB1: a group that covers the whole frame cannot exclude a changed tile, for the
+        ADR-0032 group and the amended one, and such a report is never saved."""
+        covering = dict(group_frame_fraction=1.0, group_covers_whole_frame=True)
+        # Valid: whole-frame coverage with every changed tile inside the group.
+        good = self.paired_report()
+        for pair in good["pairs"]:
+            pair.update(covering, group_tiles=3)
+        good["pairs"][0]["occluder_group"].update(covering, group_tiles=3)
+        good["outside_pairs"] = 0
+        good["occluder_outside_pairs"] = 0
+        probe.validate_report(self.as_descriptive(good), self.descriptive_args(2))
+        # The ADR-0032 group claims whole-frame coverage with fewer group tiles than changed.
+        old_group = self.paired_report()
+        old_group["pairs"][0].update(covering)
+        legacy = self.report()
+        legacy["pairs"][0].update(covering)
+        # The amended group does the same.
+        new_group = self.paired_report()
+        new_group["pairs"][0]["occluder_group"].update(covering)
+        for broken, pairs in ((old_group, 2), (legacy, 1), (new_group, 2)):
+            broken = self.as_descriptive(broken)
+            with self.assertRaises(ValueError):
+                probe.validate_report(broken, self.descriptive_args(pairs))
+            # The save path refuses all of them: nothing is persisted.
+            with tempfile.TemporaryDirectory() as tmp:
+                run_args = self.args(Path(tmp), descriptive=True)
+                run_args.pairs = pairs
+                child = SimpleNamespace(returncode=0, stdout="", stderr=json.dumps(broken))
+                with self.assertRaises(ValueError):
+                    probe.run(run_args, lambda *a, **kw: child)
+                self.assertFalse(run_args.out.exists())
+
     def test_repository_output_is_refused_before_launch(self):
         args = self.args(HERE)
 

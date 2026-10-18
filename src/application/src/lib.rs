@@ -25,12 +25,14 @@ mod window_scope;
 pub use clock::ManualClock;
 pub use engine::{
     ActionFreshness, Engine, EngineConfig, FreshnessProbeCounts, FreshnessProbeGroup,
-    IconResolverConfig, JOURNAL_CAPACITY, Ports, VerifyParams,
+    IconResolverConfig, JOURNAL_CAPACITY, OccluderFallback, OccluderProbeCounts, Ports,
+    VerifyParams,
 };
 pub use error::{PortError, error_chain};
 pub use ports::{
     AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame,
     Clock, DeliveryReceipt, FrameCapturer, LocalPolicy, NativeIdentity, NoAccessibility,
-    OsActuator, PolicyStore, TextRecognizer, TopLevelWindow, VisionDetector, WindowPin,
+    OsActuator, PolicyStore, TextRecognizer, TopLevelWindow, VisionDetector, WindowOpacity,
+    WindowPin,
 };
 pub use window_scope::{window_scope_applies, window_scope_problem};
