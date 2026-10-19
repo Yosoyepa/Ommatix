@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-19
-- **Approval:** The project owner, 2026-10-19 (O1, O2, O5, O7; O3-O12 per the architect's defaults stated to the owner; the owner may revise those defaults). The owner asked for both experiments to be **prepared, not run**: running either is a separate, later decision with the owner present and his consent for each session. Acceptance changes no test status or checkbox of chapter 06 §6.7.
+- **Approval:** The project owner, 2026-10-19 (O1, O2, O5, O7; O7 revised from n = 5 to n = 6 later the same day; O3-O12 per the architect's defaults stated to the owner; the owner may revise those defaults). The owner asked for both experiments to be **prepared, not run**: running either is a separate, later decision with the owner present and his consent for each session. Acceptance changes no test status or checkbox of chapter 06 §6.7.
 
 ## Context
 
@@ -21,7 +21,7 @@ claim beyond a preprint:
    from a timeout, which are the kind of thing that varies from run to run.
 
 The owner decided on 2026-10-19 to prepare both: **AG-03**, a VLM baseline on the same goals and
-applications, and **AG-02R**, at least five repetitions of AG-02 per model. This ADR is the design.
+applications, and **AG-02R**, repetitions of AG-02 per model (n = 5 at first, n = 6 after the owner's revision of O7). This ADR is the design.
 Running either is a separate, later decision with the owner present.
 The owner then decided the points recorded under "Owner decisions" below (2026-10-19).
 
@@ -41,7 +41,7 @@ provider accepts image tool results; a model that fails its gate is **excluded a
 recorded** (decision 2). Codex with GPT-6 Luna **stays refused**: its `view_image` reads local files,
 its tool surface is wider than the experiment allows and it reads skills from the real home (ADR-0037
 decision 6). The pixel exception therefore extends to exactly three recipients: **Anthropic, DeepSeek and
-Xiaomi**. **O5** screenshots are held in memory only. **O7** n = 5 per model.
+Xiaomi**. **O5** screenshots are held in memory only. **O7** n = 6 per model (first decided as 5, revised to 6 the same day).
 
 Defaults of the architect, stated to the owner and recorded here as such (the owner may revise them):
 **O3** is subsumed by O2; **O4** a Python `ctypes` actuator with its own review before any live run;
@@ -129,22 +129,24 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
    phase 2, because even a dry run must show the agent a screen. The exception covers exactly those three
    recipients and a recipient only after its model passes the gate. It is bounded to:
    - the **attested target window only, enforced by the capture backend itself**: the returned buffer must
-     contain only pixels the target application rendered. Backend (a): `PrintWindow` of the window's handle
-     into an app-owned bitmap, which leaves out compositor and underlay pixels (other windows, the desktop,
-     a translucent or backdrop area). It is admitted for the campaign only after the Step 2 test passes on
-     synthetic windows, including translucent, system-backdrop and rounded-corner targets and an occluder
-     introduced during the capture; the backend that ran is part of each series' fingerprint. Backend (b), a
-     screen copy of the window's rectangle, is admissible only if **every** one of these is attested at
-     capture time, before **and** after the copy, and the buffer is discarded if any differs: the window is
-     opaque over the whole copied rectangle (no layered or per-pixel-alpha attribute, no system backdrop or
-     blur-behind: the opacity attestation of ADR-0035); the copied rectangle is the client rectangle of a
-     window in the attested state (maximised on the primary monitor, so no rounded corner or shadow lies in
-     it, with the geometry the DPI profile expects); and a complete z-order enumeration shows no visible
-     window of any process above it, a notification included. If any condition cannot be proved (an API
-     fails, the enumeration is incomplete, the state is not the attested one) the capture is **refused**
-     with `CAPTURE_REFUSED` and the buffer is dropped. There is **no silent fallback** from (a) to (b) or to
-     ordinary desktop pixels; a refusal is a recorded outcome, not something to retry around. The taskbar,
-     the desktop and the cursor are never captured;
+     contain only pixels the target application rendered. **The only admitted backend is an app-rendered
+     one**: `PrintWindow` of the window's handle into an app-owned bitmap, where the window renders itself into
+     the destination device context (Microsoft's `PrintWindow` contract), so compositor and underlay pixels
+     (other windows, the desktop, a translucent or backdrop area) are not copied. It is admitted for the
+     campaign only after the Step 2 **fidelity and isolation tests** pass on synthetic windows: an opaque,
+     a translucent, a system-backdrop and a rounded-corner target, and a **foreign window that overlaps the
+     target only while the buffer is being acquired** (no foreign pixel may appear). The backend that ran is
+     part of each series' fingerprint. **A screen copy of the window's rectangle is not admitted, in any form
+     and not as a fallback.** A desktop-source copy transfers the source rectangle's pixels and does not make
+     a target-owned surface, and endpoint attestations (opacity, z-order and geometry before and after the
+     copy) cannot prove what was on screen *during* the copy: a foreign window that appears after the first
+     enumeration and hides before the second leaves both reads identical while its pixels are in the buffer.
+     If `PrintWindow` is not faithful or not isolated in the Step 2 tests, fails at run time or returns a
+     result of the wrong size, the capture is **refused** with `CAPTURE_REFUSED` and **no image is
+     returned**; if no admitted backend exists, AG-03 cannot capture and stops. A runtime check cannot prove
+     the isolation of an admitted backend, so none is claimed: the guarantee rests on the backend's documented
+     behaviour as established by the Step 2 tests. The taskbar, the desktop and the cursor are never
+     captured;
    - the two synthetic test applications on the primary monitor, with every other window minimised by the
      owner by hand before a session (as in ADR-0036). This reduces what could appear; it is not the
      guarantee, which is the capture backend above;
@@ -160,20 +162,49 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
        data-usage page says the user chooses whether data is used to improve future models; with the
        setting on, retention is 5 years, with it off, 30 days; the setting is changed at
        claude.ai/settings/data-privacy-controls. Commercial and API terms differ (30 days, no training
-       by default) and are not the owner's account type as far as is known. **The owner's plan and current
-       setting are not known to this ADR and are an owner item (OI-1)**: until the owner states them,
+       by default) and are not the owner's account type as far as is known. **The owner does not yet know his plan or
+       the current setting and will check them; they are an open owner item (OI-1), recorded as unknown, and
+       must be recorded before the Claude gate smoke**: until the owner states them,
        remote retention (30 days or 5 years) and training use are explicitly **unknown** for this recipient.
-     - *DeepSeek*, API key. The privacy policy (last update 2026-02-10) says inputs may be used to train its
-       models, with a right to opt out by e-mail, and that data is stored in the People's Republic of
-       China; it makes no API-specific statement and puts end-user data of apps built on the open platform
-       outside its scope. The Open Platform terms were **not read**, and no API retention period was found.
-       Remote retention and training use of API inputs are **unknown**.
-     - *Xiaomi*, MiMo Token Plan key. The MiMo platform privacy policy (effective 2026-10-10) says text
-       content is not used for model training or other purposes without prior consent, gives no retention
-       period beyond "the period necessary", and says data is stored in mainland China. It describes the
-       API open platform and does not name the Token Plan. A separate policy for the MiMo desktop product
-       (updated 2026-09-16) says inputs and outputs may be used for training, with an in-app opt-out. Which
-       applies to a Token Plan key is **unknown**.
+     - *DeepSeek*, API key. Read on 2026-10-19 (public pages, no key, no model call). The **Open Platform
+       Terms of Service**
+       (https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html; released
+       2026-04-22, effective 2026-04-29) say the customer keeps its rights in Inputs, assign Outputs to the
+       customer and allow using Inputs and Outputs to train other models. They are **silent** on whether
+       DeepSeek trains on API inputs, give **no retention period or deletion process** and **no processing
+       location**, and refer to the DeepSeek Privacy Policy
+       (https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html; last update 2026-02-10), which
+       says personal data including inputs may be used to train its models, with a right to opt out by
+       e-mail (privacy@deepseek.com), keeps account data while the account exists, stores data in the
+       People's Republic of China, and does not address API inputs specifically. Recorded as: **training
+       use of API inputs not stated by the terms and possible under the privacy policy (treated as
+       possible); retention period not stated (unknown); location the PRC per the privacy policy.**
+     - *Xiaomi*, MiMo Token Plan key. Read on 2026-10-19 (public pages, no key, no model call). The **Token
+       Plan page** (https://mimo.mi.com/docs/en-US/tokenplan/Token%20Plan/subscription) says nothing about
+       data handling, retention, training or location; it links the Terms of Service (User Agreement) and
+       the Privacy Policy and limits the plan quota to programming tools. The **Open Platform Service
+       Agreement** (https://mimo.mi.com/docs/terms/user-agreement; updated 2026-07-07 as the retrieved
+       excerpts report) is a page rendered in the browser whose full text could not be fetched, so only
+       excerpts found by search are recorded: Xiaomi is the processor and the developer the controller,
+       data processed through the services is the customer's business data, Xiaomi must stop processing or
+       delete personal information within a "reasonable period" (no day count) after the service ends, the
+       purpose is complete or the customer asks, and for services outside mainland China data is stored on
+       servers in Europe and Singapore; **whether inputs are used for training was not found (unknown)**.
+       The **MiMo platform privacy policy** (https://privacy.mi.com/XiaomiMiMoPlatform/en_GB/; effective
+       2026-10-10) says Xiaomi will not use the text content provided for model training or any other
+       purpose without prior consent, gives no retention period beyond "the period necessary", and says
+       personal information is stored within the People's Republic of China; it does not name the Token
+       Plan. The agreement and the privacy policy **disagree on location** (Europe and Singapore against the
+       PRC), and which governs the Singapore Token Plan host is **unknown**. A separate policy for the MiMo
+       desktop product (https://mimo.xiaomi.com/legal/privacy-policy; updated 2026-09-16) says inputs and
+       outputs may be used for training with an in-app opt-out and storage in Singapore; it covers the
+       desktop product, not the API. Recorded as: **training: no use without consent per the platform
+       privacy policy, not found in the agreement excerpts; retention period not stated (unknown); location
+       Europe and Singapore (agreement) or the PRC (privacy policy), unresolved.**
+
+     These readings, with their URLs and the date read, are a **precondition of each provider's gate
+     smoke**, and are repeated if a page's date changes before the smoke; the Claude gate smoke also needs
+     OI-1 recorded. Where a page is silent the entry stays *unknown*, inside the scope accepted under O1.
 
      The inputs are the test applications' own windows (large Spanish labels, no personal data), which is
      the only reason the exception is acceptable whatever a recipient retains.
@@ -250,7 +281,7 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
 |---|---|---|
 | 0 | **Offline probe** of Claude Code against the loopback stand-in: does it forward an MCP `image` content block in a tool result to the model, at what size, is it re-encoded or downscaled? No provider, no capture | Verdict recorded; if "no", AG-03 on Claude Code is infeasible for every model and the owner is asked again |
 | 1 | `pixel_server.py` with the guards as pure functions and the synthetic mode; tests with a fake window snapshot, no input | `tools/agent/ag03/test_*.py`, `python -m unittest discover -s tools/agent/ag03` |
-| 2 | Capture-backend test (decision 5) against **synthetic** windows: opaque, translucent, system-backdrop, rounded-corner, and an occluder introduced during the capture; admit backend (a), or (b) only if every condition is provable; otherwise AG-03 cannot capture and stops | Recorded; no real application captured |
+| 2 | Fidelity and isolation tests of the app-rendered backend (decision 5) against **synthetic** windows: opaque, translucent, system-backdrop, rounded-corner, and a foreign window present only during acquisition with identical states before and after; admit `PrintWindow` only if all pass, otherwise AG-03 cannot capture and stops | Recorded; no real application captured |
 | 3 | Preflight and proof (decision 6) for the native route and for each provider route, with positive controls (a request with an extra tool, with an image outside `screenshot`, with a sentinel) | Preflight fails on each broken copy |
 | 3b | **Gate smoke** per model (decision 6): one real session on a synthetic image, with the owner's go-ahead for the provider call | Passed or excluded-and-recorded, per model; no screen, no input |
 | 4 | Runner: `run_goal.py` with an `AgentCLI` for pixels, the AG-02 oracle and scoring unchanged, hit test for phase 1 | AG-02 tests still pass; new tests with a fake window and sampler |
@@ -261,8 +292,8 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
 
 12. **What is repeated, and the blocks.** Phase 1 and phase 2 of AG-02, with the **same three agents** (Haiku
     5.5 on Anthropic, DeepSeek `deepseek-flash`, MiMo `mimo-v2.6-flash`, all through the confined Claude Code
-    harness), **n = 5 series per model per phase** (the owner's decision O7), and **one AG-03 arm per model
-    that passed its gate** (up to three), with the same n = 5. One series is the 11 goals once. The unit of
+    harness), **n = 6 series per model per phase** (the owner's decision O7, superseding n = 5), and **one AG-03 arm per model
+    that passed its gate** (up to three), with the same n = 6. One series is the 11 goals once. The unit of
     randomisation is a **block**: repetition `r` of model `m`, containing its **two arms**, the AG-02R
     series and the AG-03 series of that model (the second only if the model passed its gate). Blocks are
     what the contrasts of decision 17 pair on.
@@ -281,17 +312,17 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
 14. **Order and randomisation, pre-registered.** Within a repetition `r`, the goals run in the order of
     the SHA-256 of `AG-02R/rep{r}/{goal}` ascending (no random-number generator whose algorithm could
     change), the **same order for the three models** (so order does not confound the model comparison)
-    and different between repetitions. The orders for r = 1..5 are in chapter 09 §9.12.2 (r = 6..10 are
-    reproducible from the rule). Blocks are **interleaved** by repetition: all blocks of repetition 1, then
+    and different between repetitions. The orders for r = 1..6 are in chapter 09 §9.12.2 (any further
+    repetition is reproducible from the rule). Blocks are **interleaved** by repetition: all blocks of repetition 1, then
     repetition 2, and so on. Within a repetition the order of the models, and within a block the order of its two
     arms (run back to back), is ascending SHA-256 of `AG-02R/order/rep{r}/{model}` and
     `AG-02R/arm/rep{r}/{model}/{arm}`, pre-registered with the goal orders in chapter 09 §9.12.2. It is a
     randomisation scheme and not a rotation because the exact tests of decision 17 need one. Repetitions are spread over **at least two
     days** and the start time is recorded, because provider load and aliases drift.
 15. **Budgets (per series and in total).** Per series, the caps of decision 11 and AG-02's. Live actions:
-    at most 39 per series (the sum of the goal caps); AG-02 spent 25 to 32. Totals for n = 5 over three
-    models: for AG-02R **at most 585** live inputs in phase 2 (expected about 430 from the recorded 25, 29,
-    32 per series), 15 phase-2 series, 15 phase-1 series; AG-03 adds up to the same again (**at most 1 170**
+    at most 39 per series (the sum of the goal caps); AG-02 spent 25 to 32. Totals for n = 6 over three
+    models: for AG-02R **at most 702** live inputs in phase 2 (expected about 516 from the recorded 25, 29,
+    32 per series), 18 phase-2 series, 18 phase-1 series; AG-03 adds up to the same again (**at most 1 404**
     in all) if all three models pass their gates. Stop rules: the operator's stop file; a safety event ends the **campaign** until the
     owner decides, not just the series. Retries, aborts and what a stopped campaign leaves unattempted are
     decision 19's.
@@ -307,16 +338,16 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
     | Phase 1, DeepSeek | 691 268 | 34 167 | 290 s |
     | Phase 1, MiMo | 811 410 | 16 914 for 10 goals | 992 s |
 
-    For n = 5, three models: phase 2 about **19.0 M** context tokens, **0.47 M** output tokens and
-    **2.7 h** of agent wall time; phase 1 about **9.5 M**, **0.32 M** and **2.0 h**; together about
-    28.5 M context tokens and 4.7 h. Haiku's CLI figures (0.052 USD per phase-2
-    series, 0.031 per phase-1 series) give about **0.42 USD** for its ten series under the CLI's own
+    For n = 6, three models: phase 2 about **22.8 M** context tokens, **0.56 M** output tokens and
+    **3.2 h** of agent wall time; phase 1 about **11.4 M**, **0.39 M** and **2.4 h**; together about
+    34.2 M context tokens and 5.7 h. Haiku's CLI figures (0.052 USD per phase-2
+    series, 0.031 per phase-1 series) give about **0.50 USD** for its twelve series under the CLI's own
     arithmetic (a subscription uses quota, not dollars). DeepSeek and MiMo are quoted in tokens only: the
-    owner multiplies by their price lists, which this ADR did not verify. AG-03 (n = 5, both phases, up to three
-    models) is planned at **0.8 to 2.5 times** the context tokens of each model's own AG-02 series
+    owner multiplies by their price lists, which this ADR did not verify. AG-03 (n = 6, both phases, up to
+    three models) is planned at **0.8 to 2.5 times** the context tokens of each model's own AG-02 series
     (assuming about 2 screenshots per action at about 1.2 k estimated tokens each, 1280 by 720 pixels): for
-    Haiku 1.0 to 3.0 M per phase-2 series, in all about **15 to 48 M** context tokens for phase 2 over three
-    models, and about 1.4 to 3 times the wall time of the model's AG-02 series (about 4 to 8 h for five
+    Haiku 1.0 to 3.0 M per phase-2 series, in all about **18 to 57 M** context tokens for phase 2 over three
+    models, and about 1.4 to 3 times the wall time of the model's AG-02 series (about 4.5 to 9.7 h for six
     phase-2 series of the three models, each goal capped at 300 s). These AG-03 figures are replaced by
     measured ones after Step 6's phase 1.
 17. **How variance is reported.** Goals are fixed and repetitions are the sample. Every interval and test
@@ -324,47 +355,59 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
     - **Per goal, model and arm: k of n** (n is the number of primary slots attempted, decision 19) with the
       **Wilson 95% interval** for that goal's success probability, *assuming the repetitions of a goal are
       independent runs of one process*; provider and day drift threaten that assumption, so the interval is
-      descriptive. For n = 5: 5/5 is 0.57 to 1.00, 4/5 is 0.38 to 0.96, 3/5 is 0.23 to 0.88, 2/5 is 0.12 to
-      0.77, 1/5 is 0.04 to 0.62, 0/5 is 0 to 0.43. The plan states in advance that **n = 5 cannot separate
-      a goal passed 3 of 5 from one passed 5 of 5**.
-    - **Per model and arm: the series score (0 to 11)** as the list of the five values, their mean and
-      range, and a 95% *t* interval of the mean (df 4, so wide, and labelled as such; descriptive).
+      descriptive. For n = 6: 6/6 is 0.61 to 1.00, 5/6 is 0.44 to 0.97, 4/6 is 0.30 to 0.90, 3/6 is 0.19 to
+      0.81, 2/6 is 0.10 to 0.70, 1/6 is 0.03 to 0.56, 0/6 is 0 to 0.39. The plan states in advance that
+      **n = 6 cannot separate a goal passed 2 of 6 from one passed 6 of 6**.
+    - **Per model and arm: the series score (0 to 11)** as the list of the six values, their mean and
+      range, and a 95% *t* interval of the mean (df 5, so wide, and labelled as such; descriptive).
     - **Contrasts and exact tests, on the pre-registered blocks.** Contrast (i), *arm within a model*:
-      `d_r = score(AG-03, r) - score(AG-02R, r)` for the five blocks of one model. Contrast (ii), *model
+      `d_r = score(AG-03, r) - score(AG-02R, r)` for the six blocks of one model. Contrast (ii), *model
       within an arm*: Haiku against each other model, `d_r` from the two models' series of repetition `r`
       (their blocks share the repetition's goal order and day window). The estimand is the mean over
       repetitions of the within-block difference. The test is a **paired sign-flip randomisation test**:
       under the null that the two labels are exchangeable inside each block, which the randomised order of
-      decision 14 is there to justify, the 2^5 = 32 sign assignments are equally likely, and **the smallest
-      attainable two-sided p is 2/32 = 0.0625** (absent ties). So with n = 5 **no contrast can reach
-      p < 0.05** (six blocks would give 2/64 = 0.031); the plan states this up front as a consequence of O7.
-      Contrasts are reported as paired differences with the exact distribution and the *t* interval of the
-      mean difference, as descriptive evidence. The unpaired 5-against-5 test (252 arrangements) is **not**
-      used, because it ignores the pairing the design builds in.
-    - **Events (false successes, safety events).** The primary statement is **series-level**: the number
-      of series with at least one event out of the series run, with the exact Clopper-Pearson bound for a
-      series-level event probability: **0 of 5 series gives an upper bound of 52.2%**, 0 of 15 series
-      (three models) gives 21.8%. The goal-attempt bound (0 of 55 gives 6.5%, 0 of 165 gives 2.2%) assumes
-      independent goal-attempts and is reported only **labelled as that independent-trial model**. It is not
-      unconditional: with five independent series in which all eleven goals share one event of
-      probability 20%, zero events over the 55 goal-attempts has probability 0.8^5 = 32.8%, so 6.5% is not a
-      95% bound under that dependence.
+      decision 14 is there to justify, the 2^6 = 64 sign assignments are equally likely, and **the smallest
+      attainable two-sided p is 2/64 = 0.03125** (absent ties). So with n = 6 **p < 0.05 is attainable
+      only if all six within-block differences have the same sign** (the next most extreme outcome gives
+      4/64 = 0.0625); the plan states this up front. Contrasts are reported as paired differences with the
+      exact distribution and the *t* interval of the mean difference, as descriptive evidence. The unpaired
+      6-against-6 test (924 arrangements) is **not** used, because it ignores the pairing the design builds
+      in.
+    - **Events (false successes, safety events): counts first, bounds only as conditional models.** The
+      event estimand is stated each time. The primary statement is **repetition-level**: the number of the
+      six repetitions in which **at least one event occurred in any series run in that repetition** (all
+      models and arms), which lets the models and arms of a repetition share dependence (goal order, day
+      window, provider load). The exact (Clopper-Pearson, two-sided 95%) upper endpoint for the probability
+      that a repetition contains an event is **45.9% for 0 of 6 repetitions**; it is conditional on the
+      repetitions being independent draws, which day-to-day drift can violate, and it is a statement about
+      "a repetition", not about a model. Per model and arm the counts are reported with the same 0-of-6
+      calculation (45.9%) only as a **conditional model illustration**: it assumes that model's six series
+      are independent. **The three models are not pooled as 18 independent draws**: 18 series are not 18
+      independent trials, so no 0-of-18 bound (18.5%) is claimed. The goal-attempt bound (0 of 66 per
+      model and arm gives 5.4%) assumes independent goal-attempts and is reported only **labelled as that
+      independent-trial model**. None is unconditional. Two countermodels, exact arithmetic and not results:
+      (i) six independent series in which all eleven goals share one event of probability 20% give zero
+      events over the 66 goal-attempts with probability 0.8^6 = 26.2%, so 5.4% is not a 95% bound under
+      that dependence; (ii) six independent repetitions in which the three models' series of a repetition
+      share one event of probability 30% give zero pooled events with probability 0.7^6 = 11.8%, and then
+      a pooled 18.5% endpoint would exclude the true 30%.
     - **Tokens, wall time and steps:** median and range over the repetitions per goal and per series, not
       the sum of a single run.
     - The strict-verdict reading of G09 is reported next to the implemented one. Slots, aborts and
       unattempted goals are counted by decision 19.
 18. **Consent.** The consent of ADR-0036 is per session and does not carry over. The conservative reading,
-    used here, is that **one session is one series of one model**: 15 live consents for AG-02R phase 2
-    and up to 15 for AG-03 phase 2 (O8, architect default: a block of series sharing one consent is the
-    owner's to allow, not assumed). The owner is present, brings each application to the foreground by hand, and
-    minimises every other window before each session. Phase 1 needs the owner's consent for the data that
-    leaves the machine, not for input.
-
+    used here, is that **one session is one series of one model**: 18 live consents for AG-02R phase 2
+    and up to 18 for AG-03 phase 2 (O8, architect default: a block of series sharing one consent is the
+    owner's to allow, not assumed). The owner is present, brings each application to the foreground by hand,
+    and minimises every other window before each session. Phase 1 needs the owner's consent for the data
+    that leaves the machine, not for input.
 19. **The primary slot, retries and stopped campaigns** (fixed before data collection, the same in both
-    arms). A **slot** is (model, arm, phase, repetition, goal): 11 per series, 5 series per (model, arm,
-    phase). A slot's **primary outcome** is that of its **first valid attempt**. An attempt is *invalid* only
+    arms). A **slot** is (model, arm, phase, repetition, goal): 11 per series, 6 series per (model, arm, phase). A slot's **primary outcome** is that of its **first valid attempt**. An attempt is *invalid* only
     if it ended through a harness fault **before the agent's first model call** (an application that did
-    not open, a proof or gate refusal, a capture refused at setup). An invalid attempt is **retried once,
+    not open, a proof that did not load). A capture refusal (`CAPTURE_REFUSED`), a gate refusal or a
+    model-gate exclusion is **not** a fault to retry around: it is recorded as it happened (after the first
+    model call it is that slot's outcome; a model excluded at its gate removes its slots), and the retry
+    grants no bypass of any of them. An invalid attempt is **retried once,
     inside the same slot** (the retry is part of the slot, not a diagnostic run); both records are kept. A
     second invalid attempt makes the slot a *technical failure*. After the agent's first model call nothing
     is retried: a provider error, a timeout, a budget stop or a refusal is that slot's outcome, a failure (as
@@ -374,7 +417,7 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
     valid or not) and technical failures are reported separately in every table, beside the primary counts.
     **Campaign stop:** the slots not yet attempted are reported as *not attempted*, are not failures and are
     not in n; a series with any not-attempted slot is *incomplete*, is excluded from the series-score
-    contrasts and drops its block from them (the contrast then has fewer than five blocks and says so), and is
+    contrasts and drops its block from them (the contrast then has fewer than six blocks and says so), and is
     shown separately.
 
 ## Alternatives considered
@@ -397,15 +440,12 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
   available model, each gated.
 - **J. Tune the baseline's prompt on phase 1.** Would give the baseline a fairer shot; not done (O12), and
   the results state the weak-baseline risk.
-- **G. Fewer than five repetitions, or none and a larger goal set.** The owner asked for n of at least 5;
+- **G. Fewer than six repetitions, or none and a larger goal set.** The owner decided n = 6 (first 5);
   a larger goal set is a different experiment (EV-02, deferred).
-- **K. Keep a rectangle copy as a quiet fallback when `PrintWindow` is not faithful.** Rejected (review of
-  PR 97): a rectangle can contain desktop pixels through a translucent, backdrop or rounded area, or an
-  occluder that appears during the copy. Backend (b) survives only under the attested conditions of
-  decision 5, and otherwise the capture is refused.
-- **L. Test the 5-against-5 contrast with the unpaired permutation test (252 arrangements).** Rejected
+- **K. Keep a rectangle screen copy as a fallback, or as a conditionally admitted backend.** Rejected (reviews of PR 97): a rectangle can contain desktop pixels through a translucent, backdrop or rounded area, or through a foreign window present only during the copy, and endpoint attestations cannot rule that out. No rectangle backend is admitted.
+- **L. Test the 6-against-6 contrast with the unpaired permutation test (924 arrangements).** Rejected
   (review of PR 97): the design pairs by block, so the exchangeable unit is the within-block label and the
-  reference distribution has 32 sign assignments (decision 17).
+  reference distribution has 64 sign assignments (decision 17).
 - **H. Pool the existing single series with the repetitions.** Their configuration differs (budget,
   Claude Code version). Rejected (decision 13).
 
@@ -416,10 +456,10 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
   may be visible, which the owner arranges by hand.
 - New input-injection code in `tools/` that must be reviewed before any live run. It cannot change the
   product: no crate, no engine path and no wire format is touched.
-- About 4.7 h of agent wall time and 28.5 M context tokens for AG-02R at n = 5, plus AG-03 (about
-  4 to 8 h more); up to 30 live sessions and 30 dry sessions with the owner present under the conservative
+- About 5.7 h of agent wall time and 34.2 M context tokens for AG-02R at n = 6, plus AG-03 (about
+  4.5 to 9.7 h more); up to 36 live sessions and 36 dry sessions with the owner present under the conservative
   consent reading. A model excluded at its gate removes its series.
-- Even at n = 5 the intervals are wide. The deliverable is honest variance, not a significance claim.
+- Even at n = 6 the intervals are wide. The deliverable is honest variance, not a significance claim.
 - AG-02's rule of "never a pixel" is untouched: AG-03 is a separate arm with a separate harness, proof
   and runner.
 
@@ -435,11 +475,13 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
   9.9 s, ledger wait to 11.9 s, stop engaged at 10 s) must end in a refusal with no input; a modifier
   pressed, a foreground change or a focus window outside the attested one between the initial guard and
   delivery must refuse for `click` and for `type_text`; and in every refusal the reservation is kept.
-- `tools/agent/ag03/test_capture.py`: against fake windows, a translucent target, a system-backdrop
-  target, a rounded-corner (non-maximised) target, an incomplete z-order enumeration, a failing attestation
-  call and an **occluder introduced between the pre-check and the post-check of the copy** each give
-  `CAPTURE_REFUSED` and no retained buffer; an opaque, maximised, unoccluded target gives a buffer; backend
-  (a) never falls back to (b) silently. No real screen is needed.
+- `tools/agent/ag03/test_capture.py`: against fake windows and fake backends, a translucent target, a
+  system-backdrop target, a rounded-corner target, a failing `PrintWindow`, a result of the wrong size and
+  the **sequence in which the states before and after the capture are identical and a foreign window exists
+  only during acquisition** each give `CAPTURE_REFUSED` and no image from a desktop-source fake backend
+  (which is never admitted); the admission test rejects any backend whose output contains the foreign
+  pixels; an app-rendered fake with an isolated output gives the buffer; there is no fallback between
+  backends. No real screen is needed.
 - `tools/agent/ag03/test_preflight.py`: the proof for the native route and for each provider route, with
   positive controls for an extra tool, an image outside `screenshot`, an oversized image and a sentinel in
   a request; a regression test that a real capture never happens in synthetic mode; the gate smoke's
@@ -450,10 +492,13 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
 - `tools/agent/ag03/test_plan.py`: the goal, model and arm orders of §9.12.2 reproduce from their rules;
   the campaign refuses to pool a series whose fingerprint differs.
 - `tools/agent/ag03/test_stats.py`: the interval helpers reproduce decision 17's numbers; the paired
-  sign-flip reference distribution has 32 assignments and a minimum two-sided p of 0.0625; the series-level
-  bounds are 52.2% (0 of 5) and 21.8% (0 of 15); and a **correlated-series counterexample** (five series
-  in which the eleven goals share one event of probability 0.2) shows the goal-attempt bound failing: zero
-  events over 55 goal-attempts has probability 0.8^5.
+  sign-flip reference distribution has 64 assignments and a minimum two-sided p of 0.03125 (and 0.0625 for the
+  next most extreme outcome); the repetition-level endpoint for 0 of 6 is 45.9% and the helper refuses to
+  produce a pooled 0-of-18 bound; and two **counterexamples** show why: a **correlated-series** one (six
+  series in which the eleven goals share one event of probability 0.2: zero events over 66 goal-attempts
+  has probability 0.8^6) and a **cross-model correlated-repetition** one (six repetitions in which the
+  three models' series share one event of probability 0.3: zero pooled events has probability 0.7^6, and a
+  pooled 18.5% endpoint would exclude the true 0.3).
 - `tools/agent/ag03/test_slots.py`: a fake runner with one pre-call abort and its retry in one slot and a
   later campaign stop asserts the primary denominator (the slot counts once, with the retry's outcome),
   the separate raw-attempt and technical-failure counts, the not-attempted slots and the incomplete series
@@ -486,34 +531,35 @@ It does not supersede them.
 | O4 | Coordinate actuator | Python `ctypes` helper with pure guards, with its own review before any live run | Architect default |
 | O5 | Screenshots | **Memory only** | Owner |
 | O6 | G09 in AG-03 | Scored failure, not a safety event | Architect default |
-| O7 | n per model | **5** | Owner |
+| O7 | n per model | **6** (owner, 2026-10-19; supersedes n = 5) | Owner |
 | O8 | Consent | One per series | Architect default |
 | O9 | Per-goal cap | Dollar cap on the native Claude route; the 550 000 context-token cap (PR 96) on the provider routes, not the 0.50 USD cap of run 0 | Architect default |
 | O10 | Earlier single series | Run 0, reported next to the repetitions, not pooled | Architect default |
 | O11 | Automatic update of the agent | Disabled for the campaign, through the agent's controlled environment only | Architect default |
 | O12 | Baseline prompt | No tuning | Architect default |
 
-Owner items opened by the review of PR 97 (none changes a decision above):
+Owner items opened by the review of PR 97 and their answers (2026-10-19):
 
 - **OI-1** Tell us the Claude account's plan and its model-improvement setting
-  (claude.ai/settings/data-privacy-controls), so that remote retention for Anthropic is recorded as 30 days
-  or 5 years instead of unknown.
-- **OI-2** Say whether the DeepSeek Open Platform terms and the Xiaomi Token Plan terms should be read in
-  full before the gate smoke, which is the first provider call with an image. Until then their remote
-  retention and training use stay recorded as unknown, inside the scope accepted under O1.
-- **OI-3** Note the consequence of O7: with five blocks no paired contrast can reach p < 0.05 (smallest
-  two-sided p 0.0625); six blocks would give 0.031. The plan reports descriptive paired differences.
+  (claude.ai/settings/data-privacy-controls). **Open:** the owner does not know them yet and will check;
+  recorded as unknown, and it must be recorded before the Claude vision gate smoke.
+- **OI-2** Read the public DeepSeek Open Platform terms and privacy policy and the Xiaomi MiMo Token Plan
+  and API platform terms. **Answered yes and done** on 2026-10-19 (public pages only, no key, no model
+  call): what they say, with URL and date, is in decision 5, with *unknown* kept where they are silent.
+  The reading is a precondition of each provider's gate smoke.
+- **OI-3** The consequence of n = 5 (no paired contrast could reach p < 0.05). **Answered:** the owner
+  changed O7 to n = 6, which this ADR now uses (smallest two-sided p 0.03125).
 
 ## Resumen (ES)
 
-**Aceptada el 19 de octubre de 2026 (responsable: O1, O2, O5 y O7; O3 a O12 por los valores por defecto
-del arquitecto, declarados al responsable, que puede revisarlos). No se ejecuta nada.** El responsable pidió
-preparar dos experimentos que harían publicables los resultados más allá de un preprint: **AG-03**, una
-línea base con un agente de visión sobre las mismas metas y aplicaciones, y **AG-02R**, cinco repeticiones
-de AG-02 por modelo para informar la varianza (hoy hay una sola serie por modelo: 6/11, 7/11 y 7/11 no
-distinguen a los modelos). No se ha llamado a ningún proveedor, capturado ninguna pantalla ni enviado
-ninguna entrada. Correr cualquiera de los dos es una decisión posterior, con el responsable presente y su
-consentimiento por sesión.
+**Aceptada el 19 de octubre de 2026 (responsable: O1, O2, O5 y O7, con O7 revisada de n = 5 a n = 6 más
+tarde el mismo día; O3 a O12 por los valores por defecto del arquitecto, declarados al responsable, que puede
+revisarlos). No se ejecuta nada.** El responsable pidió preparar dos experimentos que harían publicables los
+resultados más allá de un preprint: **AG-03**, una línea base con un agente de visión sobre las mismas metas y
+aplicaciones, y **AG-02R**, repeticiones de AG-02 por modelo (n = 6) para informar la varianza (hoy hay una
+sola serie por modelo: 6/11, 7/11 y 7/11 no distinguen a los modelos). No se ha llamado a ningún proveedor,
+capturado ninguna pantalla ni enviado ninguna entrada. Correr cualquiera de los dos es una decisión
+posterior, con el responsable presente y su consentimiento por sesión.
 
 **Decisiones del responsable.** **O1** se acepta la excepción de píxeles a la ADR-0012, acotada a la
 ventana atestiguada y en memoria. **O2** el brazo de visión son **todos los modelos disponibles**: Claude
@@ -522,13 +568,13 @@ ADR-0037, **cada uno con una puerta** (el preflight de su ruta y **una prueba re
 sintéticas** que demuestre que el proveedor acepta resultados de herramienta con imagen); el que falle se
 excluye y se registra. Codex con GPT-6 Luna sigue rechazado (su `view_image` lee archivos locales, su
 superficie de herramientas es mayor y lee habilidades del directorio personal real). La excepción de
-píxeles alcanza así a Anthropic, DeepSeek y Xiaomi. **O5** las capturas sólo en memoria. **O7** n = 5 por
-modelo. **Valores por defecto del arquitecto:** O3 queda subsumida en O2; O4 actuador de Python con
-`ctypes` y revisión propia antes de cualquier corrida en vivo; O6 el texto del señuelo G09 es un fallo
-puntuado, no un evento de seguridad; O8 un consentimiento por serie; O9 tope en dólares en la ruta nativa
-de Claude y tope de tokens de contexto en las rutas de proveedor; O10 las corridas de hoy son la corrida 0,
-sin agrupar; O11 la actualización automática del agente se desactiva para la campaña sólo en el entorno
-controlado del agente; O12 sin ajuste del aviso de la línea base.
+píxeles alcanza así a Anthropic, DeepSeek y Xiaomi. **O5** las capturas sólo en memoria. **O7** n = 6 por
+modelo (decidida como 5 y revisada a 6 el mismo día). **Valores por defecto del arquitecto:** O3 queda
+subsumida en O2; O4 actuador de Python con `ctypes` y revisión propia antes de cualquier corrida en vivo; O6
+el texto del señuelo G09 es un fallo puntuado, no un evento de seguridad; O8 un consentimiento por serie; O9
+tope en dólares en la ruta nativa de Claude y tope de tokens de contexto en las rutas de proveedor; O10 las
+corridas de hoy son la corrida 0, sin agrupar; O11 la actualización automática del agente se desactiva para
+la campaña sólo en el entorno controlado del agente; O12 sin ajuste del aviso de la línea base.
 
 **AG-03.** Compara **dos interfaces completas**, no un único factor: la observación, las primitivas de
 acción (el `type` de Ommatix es el clic de enfoque más las teclas en una acción reservada; el brazo de
@@ -541,64 +587,93 @@ herramientas (`screenshot`, `click`, `type_text`), sujeto a una sonda previa sin
 Claude Code reenvía imágenes de resultados MCP. La herramienta de uso del ordenador de la API figura hoy en
 la documentación pública con Haiku 5.5 y Sonnet 5.5, pero necesita una clave de Anthropic que el
 responsable no tiene; el uso del ordenador de la aplicación de escritorio de Claude no se puede confinar.
-**Frontera de píxeles (revisión del PR 97, R1):** la garantía es del propio motor de captura. Se admite
-`PrintWindow` de la ventana (superficie propia de la aplicación, sin píxeles del compositor ni de debajo),
-tras una prueba con ventanas sintéticas translúcidas, con fondo del sistema, de esquinas redondeadas y con
-un oclusor que aparece durante la captura; una copia del rectángulo de pantalla sólo si se prueba, antes y
-después de la copia, que la ventana es opaca, que está maximizada en el monitor primario y que ninguna
-ventana visible está por encima. Si no se puede probar, **se rechaza la captura** (`CAPTURE_REFUSED`); no
-hay retroceso silencioso a píxeles de escritorio. **Entrega (R2):** tras la reserva y cualquier espera, justo
-antes de cada lote de entrada se vuelven a comprobar la parada del operador, la edad de la captura (10 s),
-los modificadores y la evidencia de ventana y primer plano; para `type_text`, que no tiene punto, la
-ventana con el foco del teclado debe pertenecer a la ventana atestiguada. La reserva ya hecha se conserva
-si rechaza. El resto de guardas del actuador por coordenadas son las del diseño original (parada, fase,
-libro antes de cualquier llamada, primer plano del proceso lanzado, sin elevación, punto dentro de la
-ventana, sin modificadores). **Privacidad (R3):** el almacenamiento local (en memoria, nada en disco) se
-separa de la retención y el entrenamiento del proveedor, que esta máquina no controla y nada borra a
-distancia, y que forman parte del alcance de uso de datos que el responsable aceptó en O1. Anthropic (Claude
-Code con suscripción, planes de consumo): con la mejora de modelos activada, retención de 5 años; sin ella,
-30 días; el plan y el ajuste del responsable **no se conocen** (tarea OI-1 del responsable). DeepSeek: la
-política (10 de febrero de 2026) permite entrenar con entradas con exclusión por correo, almacena en China
-y no dice nada específico sobre la API; los términos de la plataforma abierta no se leyeron; retención
-**desconocida**. Xiaomi: la política de la plataforma MiMo (vigente desde el 10 de octubre de 2026) dice que
-no usa el texto para entrenar sin consentimiento previo, no fija plazo de retención y almacena en China
-continental, sin nombrar el Token Plan; **cuál se aplica a la clave del Token Plan es desconocido**. Métricas:
-éxito por oráculo, falsos éxitos, pasos y primitivas de entrada, tokens (contexto como en AG-02) con el
-reparto de imágenes sólo estimado (cuenta cada aparición de la imagen en el historial retenido; fórmula de
-Anthropic ceil(ancho/28) por ceil(alto/28), 1 196 para 1280 por 720; no disponible para un proveedor sin
-fórmula documentada), latencia y coste cuando es medible. Qué muestra y qué no: hasta tres modelos, once
-metas sintéticas, sin aviso ajustado; nada de aplicaciones reales ni de «mejor que» en general. La prueba
-real de la puerta usa varias imágenes sintéticas contrastadas: prueba el transporte y unas pocas respuestas
-que dependen de la imagen, no competencia en tareas de interfaz.
+**Frontera de píxeles (revisión del PR 97, R1):** la garantía es del propio motor de captura y **el único
+motor admitido es uno que dibuja la aplicación**: `PrintWindow` de la ventana, que se dibuja a sí misma en el
+contexto de destino, sin píxeles del compositor ni de debajo. Se admite para la campaña sólo tras unas
+pruebas de fidelidad y aislamiento con ventanas sintéticas (opaca, translúcida, con fondo del sistema, de
+esquinas redondeadas y una ventana ajena que solapa el objetivo **sólo mientras se adquiere el buffer**, sin
+que aparezca ningún píxel ajeno). **No se admite ninguna copia de pantalla del rectángulo de la ventana, ni
+como alternativa:** una copia del escritorio transfiere los píxeles del origen y las atestaciones de los
+extremos no prueban lo que había en pantalla *durante* la copia (una ventana ajena que aparece tras la primera
+enumeración y se oculta antes de la segunda deja idénticos los dos extremos con sus píxeles dentro del
+buffer). Si `PrintWindow` no es fiel o no está aislado, falla en ejecución o devuelve un tamaño inesperado,
+**se rechaza la captura** (`CAPTURE_REFUSED`) y no se devuelve ninguna imagen; si no hay motor admitido,
+AG-03 no puede capturar y se detiene. Una comprobación en ejecución no puede probar el aislamiento de un
+motor admitido, y no se afirma ninguna: la garantía descansa en lo que las pruebas establecen. **Entrega
+(R2):** tras la reserva y cualquier espera, justo antes de cada lote de entrada se vuelven a comprobar la
+parada del operador, la edad de la captura (10 s), los modificadores y la evidencia de ventana y primer
+plano; para `type_text`, que no tiene punto, la ventana con el foco del teclado debe pertenecer a la ventana
+atestiguada. La reserva ya hecha se conserva si rechaza. El resto de guardas del actuador por coordenadas
+son las del diseño original (parada, fase, libro antes de cualquier llamada, primer plano del proceso
+lanzado, sin elevación, punto dentro de la ventana, sin modificadores). **Privacidad (R3):** el
+almacenamiento local (en memoria, nada en disco) se separa de la retención y el entrenamiento del
+proveedor, que esta máquina no controla y nada borra a distancia, y que forman parte del alcance de uso de
+datos que el responsable aceptó en O1. Anthropic (Claude Code con suscripción, planes de consumo): con la
+mejora de modelos activada, retención de 5 años; sin ella, 30 días; el responsable aún no conoce su plan ni
+su ajuste y los comprobará (tarea OI-1, abierta): queda como desconocido y debe registrarse antes de la
+prueba real de la puerta de Claude. DeepSeek (leído el 19 de octubre de 2026): los términos de la
+plataforma abierta (vigentes desde el 29 de abril de 2026) dejan al cliente sus derechos sobre las entradas y
+permiten entrenar otros modelos con ellas, pero callan si DeepSeek entrena con las entradas de la API y no
+dan plazo de retención ni lugar de tratamiento; su política de privacidad (10 de febrero de 2026) permite
+entrenar con datos personales, incluidas entradas, con exclusión por correo, y almacena en China sin tratar
+la API: entrenamiento posible, retención desconocida, lugar China según la política. Xiaomi (leído el 19
+de octubre de 2026): la página del Token Plan no dice nada de datos; el acuerdo de la plataforma abierta
+(actualizado el 7 de julio de 2026; sólo se pudieron obtener extractos porque la página se dibuja en el
+navegador) hace a Xiaomi encargada y al desarrollador responsable, trata los datos como datos de negocio
+del cliente, exige borrar o dejar de tratar en un «plazo razonable» sin días y, fuera de China continental,
+almacena en servidores de Europa y Singapur, sin que se haya hallado si se entrena con las entradas; la
+política de privacidad de la plataforma (vigente desde el 10 de octubre de 2026) dice que no usa el texto
+para entrenar sin consentimiento previo, no fija retención y almacena en China continental, sin nombrar el
+Token Plan: los dos documentos discrepan en el lugar y cuál rige el servidor de Singapur del Token Plan es
+desconocido. Estas lecturas, con su URL y fecha, son una precondición de la prueba real de la puerta de cada
+proveedor y se repiten si cambia la fecha de una página. Métricas: éxito por oráculo, falsos éxitos, pasos y
+primitivas de entrada, tokens (contexto como en AG-02) con el reparto de imágenes sólo estimado (cuenta cada
+aparición de la imagen en el historial retenido; fórmula de Anthropic ceil(ancho/28) por ceil(alto/28),
+1 196 para 1280 por 720; no disponible para un proveedor sin fórmula documentada), latencia y coste cuando
+es medible. Qué muestra y qué no: hasta tres modelos, once metas sintéticas, sin aviso ajustado; nada de
+aplicaciones reales ni de «mejor que» en general. La prueba real de la puerta usa varias imágenes
+sintéticas contrastadas: prueba el transporte y unas pocas respuestas que dependen de la imagen, no
+competencia en tareas de interfaz.
 
-**AG-02R.** Cinco series por modelo y fase, con los mismos tres agentes y un brazo AG-03 por cada modelo que
+**AG-02R.** Seis series por modelo y fase, con los mismos tres agentes y un brazo AG-03 por cada modelo que
 pase su puerta; no cambia nada salvo la corrida (huella fija de binarios, metas, configuración, versión de
 Claude Code, modelo y motor de captura; una serie con otra huella no se agrupa; las series únicas anteriores
 se informan aparte como «corrida 0»). **Bloques (R4):** una repetición de un modelo, con sus dos brazos; el
 orden de las metas, de los modelos dentro de la repetición y de los brazos dentro del bloque sale del
 SHA-256 de reglas preinscritas, igual para los tres modelos en las metas. Presupuesto: como máximo 39
-acciones en vivo por serie (585 en AG-02R con n = 5; hasta 1 170 con AG-03). Con las cifras registradas:
-unos 28,5 M de tokens de contexto y 4,7 h de agente en AG-02R, y de 0,8 a 2,5 veces los tokens de cada
-modelo en AG-03; Haiku unos 0,42 USD según la CLI en AG-02R; DeepSeek y MiMo sólo en tokens. **Varianza
+acciones en vivo por serie (702 en AG-02R con n = 6; hasta 1 404 con AG-03). Con las cifras registradas:
+unos 34,2 M de tokens de contexto y 5,7 h de agente en AG-02R, y de 0,8 a 2,5 veces los tokens de cada
+modelo en AG-03; Haiku unos 0,50 USD según la CLI en AG-02R; DeepSeek y MiMo sólo en tokens. **Varianza
 (R4):** k de n por meta con intervalo de Wilson (supone repeticiones independientes y es descriptivo),
-puntuación de serie con media, rango e intervalo *t*; los contrastes (brazo dentro de un modelo; modelo dentro
-de un brazo, Haiku frente a los otros) se emparejan por bloque con una prueba de aleatorización de cambio de
-signo con 2^5 = 32 asignaciones, de modo que **el menor p bilateral alcanzable es 0,0625 y con n = 5
-ningún contraste llega a p < 0,05** (con seis bloques, 0,031); se informan diferencias pareadas y su
-distribución exacta como evidencia descriptiva, no la prueba no pareada de 252 disposiciones. Los sucesos
-(falsos éxitos, eventos de seguridad) se declaran **por serie**: 0 de 5 series da una cota superior exacta
-de 52,2 % (0 de 15, 21,8 %); la cota por intento de meta (0 de 55: 6,5 %) supone ensayos independientes, se
-rotula así y no es incondicional (contraejemplo: cinco series en las que las once metas comparten un suceso
-de probabilidad 0,2 dan cero sucesos en 55 intentos con probabilidad 0,8^5 = 32,8 %). **Casilla de
-resultado (R5):** una casilla es (modelo, brazo, fase, repetición, meta); su resultado primario es el del
-primer intento válido (un intento es inválido sólo si el arnés falló antes de la primera llamada al
-modelo); un intento inválido se repite una vez dentro de la misma casilla y un segundo fallo es un fallo
-técnico, que cuenta como no éxito en el denominador y se informa aparte; tras la primera llamada al modelo
-nada se repite. Los intentos brutos y los fallos técnicos se informan por separado; las casillas no
-intentadas tras una parada de la campaña no son fallos ni entran en n, y la serie incompleta sale de los
-contrastes de puntuación de serie.
+puntuación de serie con media, rango e intervalo *t*; los contrastes (brazo dentro de un modelo; modelo
+dentro de un brazo, Haiku frente a los otros) se emparejan por bloque con una prueba de aleatorización de
+cambio de signo con 2^6 = 64 asignaciones, de modo que **el menor p bilateral alcanzable es 0,03125 y con
+n = 6 sólo llega a p < 0,05 si las seis diferencias dentro del bloque tienen el mismo signo** (el siguiente
+resultado más extremo da 0,0625); se informan diferencias pareadas y su distribución exacta como evidencia
+descriptiva, no la prueba no pareada de 924 disposiciones. **Sucesos (falsos éxitos, eventos de seguridad):**
+primero los recuentos; la declaración primaria es **por repetición** (cuántas de las seis repeticiones
+tuvieron algún suceso en cualquier serie corrida en ella, todos los modelos y brazos), que admite la
+dependencia compartida dentro de una repetición: 0 de 6 repeticiones da una cota superior exacta de
+Clopper-Pearson al 95 % bilateral de 45,9 % para la probabilidad de que una repetición contenga un suceso,
+**condicionada a que las repeticiones sean independientes** (la deriva entre días puede violarlo). Por
+modelo y brazo, el mismo cálculo 0 de 6 (45,9 %) es sólo una **ilustración condicional** que supone
+independientes las seis series de ese modelo; **no se agrupan los tres modelos como 18 sorteos
+independientes** y no se afirma ninguna cota 0 de 18. La cota por intento de meta (0 de 66 por modelo y
+brazo: 5,4 %) supone ensayos independientes y se rotula así; ninguna es incondicional. Contraejemplos
+(aritmética exacta): seis series independientes en las que las once metas comparten un suceso de
+probabilidad 0,2 dan cero sucesos en 66 intentos con probabilidad 0,8^6 = 26,2 %; seis repeticiones
+independientes en las que las series de los tres modelos de una repetición comparten un suceso de
+probabilidad 0,3 dan cero sucesos agrupados con probabilidad 0,7^6 = 11,8 %, y entonces una cota agrupada de
+18,5 % excluiría el 30 % verdadero. **Casilla de resultado (R5):** una casilla es (modelo, brazo, fase,
+repetición, meta); su resultado primario es el del primer intento válido (un intento es inválido sólo si el
+arnés falló antes de la primera llamada al modelo); un intento inválido se repite una vez dentro de la misma
+casilla y un segundo fallo es un fallo técnico, que cuenta como no éxito en el denominador y se informa
+aparte; tras la primera llamada al modelo nada se repite, y un rechazo de captura, un rechazo de la puerta o
+la exclusión de un modelo no son fallos que reintentar. Los intentos brutos y los fallos técnicos se
+informan por separado; las casillas no intentadas tras una parada de la campaña no son fallos ni entran en
+n, y la serie incompleta sale de los contrastes de puntuación de serie.
 
-**Tareas del responsable abiertas por la revisión del PR 97.** OI-1 decir el plan de la cuenta de Claude y su
-ajuste de mejora de modelos; OI-2 decir si se leen los términos de la plataforma abierta de DeepSeek y del
-Token Plan de Xiaomi antes de la prueba real de la puerta; OI-3 tomar nota de que con n = 5 ningún contraste
-pareado alcanza p < 0,05.
+**Tareas del responsable (PR 97).** OI-1, abierta: decir el plan de la cuenta de Claude y su ajuste de mejora
+de modelos (el responsable lo comprobará; debe registrarse antes de la prueba real de la puerta de Claude).
+OI-2, respondida sí y hecha el 19 de octubre de 2026: los términos y políticas públicos de DeepSeek y de
+Xiaomi están leídos y registrados arriba. OI-3, respondida: el responsable cambió O7 a n = 6.
