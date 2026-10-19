@@ -1454,8 +1454,9 @@ def parse_args(argv=None):
             p.error("--agent-cli minimal needs --provider")
         if args.base_url is not None and (not args.base_url.startswith("http://127.0.0.1:")):
             p.error("--base-url is for a loopback stand-in only; the provider decides the real endpoint")
-        if not args.plan and not args.smoke and (args.isolation_proof is None or args.key_file is None):
-            p.error("--isolation-proof and --key-file are required (run preflight_cli.py first)")
+        if not args.plan and (args.key_file is None or (not args.smoke and args.isolation_proof is None)):
+            p.error("--key-file and --isolation-proof are required (run preflight_cli.py first); "
+                    "--smoke needs the key file only")
     elif not args.plan:
         p.error(f"--agent-cli {args.agent_cli} cannot be confined to the three tools (ADR-0037): "
                 "it only has a probe, see preflight_cli.py")

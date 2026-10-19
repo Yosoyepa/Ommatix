@@ -518,6 +518,8 @@ class RunnerIntegrationTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             rg.parse_args(["--plan", "--agent-cli", "minimal", "--provider", "mimo",
                            "--base-url", "https://elsewhere.example/v1"])
+        with self.assertRaises(SystemExit):  # a smoke would reach the provider: it needs the key file too
+            rg.parse_args(["--smoke", "--agent-cli", "minimal", "--provider", "mimo", "--exe", "x"])
         args = rg.parse_args(["--plan", "--agent-cli", "minimal", "--provider", "mimo"])
         self.assertEqual(args.model, "mimo-v2.6-flash")
 
