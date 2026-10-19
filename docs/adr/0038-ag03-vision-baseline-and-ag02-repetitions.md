@@ -171,36 +171,59 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
        (https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html; released
        2026-04-22, effective 2026-04-29) say the customer keeps its rights in Inputs, assign Outputs to the
        customer and allow using Inputs and Outputs to train other models. They are **silent** on whether
-       DeepSeek trains on API inputs, give **no retention period or deletion process** and **no processing
-       location**, and refer to the DeepSeek Privacy Policy
+       DeepSeek trains on API inputs, give **no retention period and no deletion period** for API inputs and outputs (section 3.3 only requires
+       the developer to answer end-user requests such as erasure and points to a DeepSeek contact under
+       section 11) and **no processing location**, and refer to the DeepSeek Privacy Policy
        (https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html; last update 2026-02-10), which
        says personal data including inputs may be used to train its models, with a right to opt out by
        e-mail (privacy@deepseek.com), keeps account data while the account exists, stores data in the
        People's Republic of China, and does not address API inputs specifically. Recorded as: **training
        use of API inputs not stated by the terms and possible under the privacy policy (treated as
        possible); retention period not stated (unknown); location the PRC per the privacy policy.**
-     - *Xiaomi*, MiMo Token Plan key. Read on 2026-10-19 (public pages, no key, no model call). The **Token
-       Plan page** (https://mimo.mi.com/docs/en-US/tokenplan/Token%20Plan/subscription) says nothing about
-       data handling, retention, training or location; it links the Terms of Service (User Agreement) and
-       the Privacy Policy and limits the plan quota to programming tools. The **Open Platform Service
+     - *Xiaomi*, MiMo Token Plan key. Read on 2026-10-19 (public pages, no key, no model call). Xiaomi
+       publishes **two platform privacy policies with different scopes**. The **mainland-China** policy
+       (https://privacy.mi.com/XiaomiMiMoPlatform/en_GB/; effective 2026-10-10) says personal information is
+       stored within the People's Republic of China, but that statement applies to use within the PRC, and
+       the policy says use outside the PRC is governed by the privacy terms published for services outside
+       it; it says Xiaomi will not use the text content provided for model training or any other purpose
+       without prior consent and gives no retention period beyond "the period necessary" (the English
+       locale does not make it the overseas policy). The **overseas** policy
+       (https://privacy.mi.com/XiaomiMiMoPlatformos/en_GB/; updated 2026-06-25), issued by Xiaomi Technology
+       Netherlands B.V. and Xiaomi Technologies Singapore Pte. Ltd. with their affiliates for the MiMo API
+       open platform and tools such as MiMo Code, says the content the user provides, images included, is
+       used to process requests and generate output and that **Xiaomi will not use it for model training or
+       any other purposes**; it gives **no retention day count** (personal information is kept for the period
+       needed for the stated purposes or required by law and is deleted or anonymised once the purpose is
+       fulfilled); and it says data is hosted in the Netherlands and Singapore (for users in the EEA, the
+       UK and Switzerland, stored in the Netherlands with possible transfer to Singapore; for other users,
+       stored in Singapore with possible transfer to the Netherlands). **Onward transfers are therefore
+       possible, and no promise that none occurs is recorded.** It also lists sharing with a payment
+       partner (Waffo Hong Kong Limited) for recharge and refunds and with Google for online search (the
+       query and the IP address). The platform's own privacy entry (https://mimo.mi.com/docs/terms/privacy-policy)
+       is reported by the independent review of PR 97 to route international users to the overseas policy
+       and mainland users to the mainland one; this author could not retrieve that page, which is rendered
+       in the browser. **Neither policy names the Token Plan.** The **Token Plan page**
+       (https://mimo.mi.com/docs/en-US/tokenplan/Token%20Plan/subscription) says nothing about data
+       handling, retention, training or location; it links the Terms of Service (User Agreement) and the
+       Privacy Policy and limits the plan quota to programming tools. The **Open Platform Service
        Agreement** (https://mimo.mi.com/docs/terms/user-agreement; updated 2026-07-07 as the retrieved
        excerpts report) is a page rendered in the browser whose full text could not be fetched, so only
        excerpts found by search are recorded: Xiaomi is the processor and the developer the controller,
        data processed through the services is the customer's business data, Xiaomi must stop processing or
        delete personal information within a "reasonable period" (no day count) after the service ends, the
        purpose is complete or the customer asks, and for services outside mainland China data is stored on
-       servers in Europe and Singapore; **whether inputs are used for training was not found (unknown)**.
-       The **MiMo platform privacy policy** (https://privacy.mi.com/XiaomiMiMoPlatform/en_GB/; effective
-       2026-10-10) says Xiaomi will not use the text content provided for model training or any other
-       purpose without prior consent, gives no retention period beyond "the period necessary", and says
-       personal information is stored within the People's Republic of China; it does not name the Token
-       Plan. The agreement and the privacy policy **disagree on location** (Europe and Singapore against the
-       PRC), and which governs the Singapore Token Plan host is **unknown**. A separate policy for the MiMo
-       desktop product (https://mimo.xiaomi.com/legal/privacy-policy; updated 2026-09-16) says inputs and
-       outputs may be used for training with an in-app opt-out and storage in Singapore; it covers the
-       desktop product, not the API. Recorded as: **training: no use without consent per the platform
-       privacy policy, not found in the agreement excerpts; retention period not stated (unknown); location
-       Europe and Singapore (agreement) or the PRC (privacy policy), unresolved.**
+       servers in Europe and Singapore; the excerpts do not address training. A separate policy for the
+       MiMo desktop product (https://mimo.xiaomi.com/legal/privacy-policy; updated 2026-09-16) says inputs
+       and outputs may be used for training with an in-app opt-out and storage in Singapore; it covers the
+       desktop product, not the API. The three API-platform documents (overseas policy, mainland policy,
+       agreement excerpts) are consistent once their scopes are read: overseas use is hosted in the
+       Netherlands and Singapore, the PRC storage statement is for use within the PRC. Recorded as:
+       **training: Xiaomi states it does not use submitted content for model training (overseas policy; the
+       mainland policy requires prior consent); retention: purpose- and law-based, no day count (the
+       number of days is unknown); location: Netherlands and Singapore with possible onward transfers
+       (overseas policy and agreement excerpts); applicability to this owner's Token Plan account (which
+       region the account is under and which policy the platform applies to a Token Plan key) is not
+       established: unknown.**
 
      These readings, with their URLs and the date read, are a **precondition of each provider's gate
      smoke**, and are repeated if a page's date changes before the smoke; the Claude gate smoke also needs
@@ -338,8 +361,8 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
     | Phase 1, DeepSeek | 691 268 | 34 167 | 290 s |
     | Phase 1, MiMo | 811 410 | 16 914 for 10 goals | 992 s |
 
-    For n = 6, three models: phase 2 about **22.8 M** context tokens, **0.56 M** output tokens and
-    **3.2 h** of agent wall time; phase 1 about **11.4 M**, **0.39 M** and **2.4 h**; together about
+    For n = 6, three models: phase 2 about **22.8 M** context tokens, **0.58 M** output tokens (MiMo's full-series figure of about 28 000 used) and
+    **3.2 h** of agent wall time; phase 1 about **11.4 M**, **0.39 M** (MiMo with 10 of 11 goals) and **2.4 h**; together about
     34.2 M context tokens and 5.7 h. Haiku's CLI figures (0.052 USD per phase-2
     series, 0.031 per phase-1 series) give about **0.50 USD** for its twelve series under the CLI's own
     arithmetic (a subscription uses quota, not dollars). DeepSeek and MiMo are quoted in tokens only: the
@@ -545,7 +568,7 @@ Owner items opened by the review of PR 97 and their answers (2026-10-19):
   recorded as unknown, and it must be recorded before the Claude vision gate smoke.
 - **OI-2** Read the public DeepSeek Open Platform terms and privacy policy and the Xiaomi MiMo Token Plan
   and API platform terms. **Answered yes and done** on 2026-10-19 (public pages only, no key, no model
-  call): what they say, with URL and date, is in decision 5, with *unknown* kept where they are silent.
+  call): what they say, with URL and date, is in decision 5, with *unknown* kept where they are silent (the Xiaomi account was corrected after the third review, R6: the mainland and overseas policies have different scopes and do not contradict each other).
   The reading is a precondition of each provider's gate smoke.
 - **OI-3** The consequence of n = 5 (no paired contrast could reach p < 0.05). **Answered:** the owner
   changed O7 to n = 6, which this ADR now uses (smallest two-sided p 0.03125).
@@ -613,19 +636,9 @@ mejora de modelos activada, retención de 5 años; sin ella, 30 días; el respon
 su ajuste y los comprobará (tarea OI-1, abierta): queda como desconocido y debe registrarse antes de la
 prueba real de la puerta de Claude. DeepSeek (leído el 19 de octubre de 2026): los términos de la
 plataforma abierta (vigentes desde el 29 de abril de 2026) dejan al cliente sus derechos sobre las entradas y
-permiten entrenar otros modelos con ellas, pero callan si DeepSeek entrena con las entradas de la API y no
-dan plazo de retención ni lugar de tratamiento; su política de privacidad (10 de febrero de 2026) permite
+permiten entrenar otros modelos con ellas, pero callan si DeepSeek entrena con las entradas de la API y no dan plazo de retención ni de borrado para las entradas de la API (la sección 3.3 sólo obliga al desarrollador a atender las solicitudes de los usuarios finales, como la de borrado, y remite a un contacto de DeepSeek) ni lugar de tratamiento; su política de privacidad (10 de febrero de 2026) permite
 entrenar con datos personales, incluidas entradas, con exclusión por correo, y almacena en China sin tratar
-la API: entrenamiento posible, retención desconocida, lugar China según la política. Xiaomi (leído el 19
-de octubre de 2026): la página del Token Plan no dice nada de datos; el acuerdo de la plataforma abierta
-(actualizado el 7 de julio de 2026; sólo se pudieron obtener extractos porque la página se dibuja en el
-navegador) hace a Xiaomi encargada y al desarrollador responsable, trata los datos como datos de negocio
-del cliente, exige borrar o dejar de tratar en un «plazo razonable» sin días y, fuera de China continental,
-almacena en servidores de Europa y Singapur, sin que se haya hallado si se entrena con las entradas; la
-política de privacidad de la plataforma (vigente desde el 10 de octubre de 2026) dice que no usa el texto
-para entrenar sin consentimiento previo, no fija retención y almacena en China continental, sin nombrar el
-Token Plan: los dos documentos discrepan en el lugar y cuál rige el servidor de Singapur del Token Plan es
-desconocido. Estas lecturas, con su URL y fecha, son una precondición de la prueba real de la puerta de cada
+la API: entrenamiento posible, retención desconocida, lugar China según la política. Xiaomi (leído el 19 de octubre de 2026) publica **dos políticas de privacidad de la plataforma con alcances distintos**: la de **China continental** (vigente desde el 10 de octubre de 2026), cuyo almacenamiento en la República Popular China se aplica al uso dentro de China y que remite el uso fuera de China a las condiciones publicadas para los servicios fuera de ella, y la **internacional** (https://privacy.mi.com/XiaomiMiMoPlatformos/en_GB/, actualizada el 25 de junio de 2026), que cubre la plataforma de API y herramientas como MiMo Code, dice que el contenido proporcionado, imágenes incluidas, se usa para procesar la petición y generar la salida y que **Xiaomi no lo usará para entrenar modelos ni para otros fines**, no fija un número de días de retención (se conserva el tiempo que exigen las finalidades o la ley y se borra o anonimiza al cumplirse la finalidad) y aloja los datos en Países Bajos y Singapur (Países Bajos para usuarios del EEE, el Reino Unido y Suiza, con posible transferencia a Singapur; Singapur para los demás, con posible transferencia a los Países Bajos): **las transferencias posteriores son posibles y no se registra ninguna promesa de que no ocurran**. La política de continente exige consentimiento previo para entrenar y no fija retención. Ninguna de las dos nombra el Token Plan, cuya página no dice nada de datos. Del acuerdo de la plataforma abierta (actualizado el 7 de julio de 2026) sólo se obtuvieron extractos (la página se dibuja en el navegador): Xiaomi encargada y desarrollador responsable, datos de negocio del cliente, borrado en un «plazo razonable» sin días y, fuera de China continental, servidores de Europa y Singapur; no tratan el entrenamiento. Leídas con su alcance, las tres no se contradicen. Se registra: **entrenamiento: Xiaomi declara que no usa el contenido para entrenar; retención por finalidad y ley, sin número de días (desconocido); lugar: Países Bajos y Singapur con posibles transferencias; la aplicabilidad a la cuenta del Token Plan del responsable (región de la cuenta y política que la plataforma le aplica) no está establecida: desconocida.** Estas lecturas, con su URL y fecha, son una precondición de la prueba real de la puerta de cada
 proveedor y se repiten si cambia la fecha de una página. Métricas: éxito por oráculo, falsos éxitos, pasos y
 primitivas de entrada, tokens (contexto como en AG-02) con el reparto de imágenes sólo estimado (cuenta cada
 aparición de la imagen en el historial retenido; fórmula de Anthropic ceil(ancho/28) por ceil(alto/28),
