@@ -567,11 +567,18 @@ class TokenPlanKeyTests(unittest.TestCase):
             self.assertEqual((run.requests, run.forwarded), ([], []))
             self.assertNotIn(key, stored_text(run))
 
-    def test_other_providers_and_ordinary_mimo_keys_are_not_caught_by_that_rule(self):
-        self.assertEqual(AgentRun(self, EndToEndTests.SCRIPT, provider="deepseek", key="tp-whatever").result["subtype"],
-                         "success")
-        self.assertEqual(AgentRun(self, EndToEndTests.SCRIPT, provider="mimo", key="sk-ordinary").result["subtype"],
-                         "success")
+    def test_a_token_plan_key_is_refused_whatever_provider_label_the_agent_is_started_with(self):
+        for provider in ("deepseek", "mimo"):
+            for key in ("tp-whatever", "ttp-whatever"):
+                with self.subTest(provider=provider, key=key[:3]):
+                    run = AgentRun(self, EndToEndTests.SCRIPT, provider=provider, key=key)
+                    self.assertEqual(run.result["result"], "token_plan_key_not_for_scripts")
+                    self.assertEqual((run.requests, run.forwarded), ([], []))
+
+    def test_ordinary_keys_are_not_caught_by_that_rule(self):
+        for provider in ("deepseek", "mimo"):
+            self.assertEqual(AgentRun(self, EndToEndTests.SCRIPT, provider=provider, key="sk-ordinary").result["subtype"],
+                             "success")
 
     def test_the_runner_refuses_before_starting_and_names_the_route_instead(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -584,6 +591,12 @@ class TokenPlanKeyTests(unittest.TestCase):
             key.write_text("sk-ordinary\n", encoding="utf-8")
             self.assertIsNone(cli.key_problem())
             self.assertIsNone(agentcli.MinimalCLI(argparse.Namespace(provider="deepseek", key_file=key)).key_problem())
+            for provider in ("deepseek", "mimo", "whatever"):
+                for prefix in ("tp-", "ttp-"):
+                    key.write_text(prefix + "secret-value\n", encoding="utf-8")
+                    problem = agentcli.MinimalCLI(argparse.Namespace(provider=provider, key_file=key)).key_problem()
+                    self.assertIn("--route mimo", problem, (provider, prefix))
+                    self.assertNotIn("secret-value", problem)
 
 
 # ---- the Claude Code route ------------------------------------------------------------------------------------------------
@@ -634,7 +647,13 @@ class RouteEnvironmentTests(unittest.TestCase):
         self.assertIn("pay-as-you-go", agentcli.route_key_problem("mimo", "https://api.xiaomimimo.com/anthropic", "tp-x"))
         self.assertIn("Token Plan key", agentcli.route_key_problem("mimo", MIMO_URL, "sk-x"))
         self.assertIsNone(agentcli.route_key_problem("deepseek", DEEPSEEK_URL, "sk-x"))
-        self.assertIsNone(agentcli.route_key_problem("deepseek", DEEPSEEK_URL, "tp-looks-like-a-plan-key"))
+        # a Token Plan key belongs to the MiMo route only: a wrong key file must not reach another provider
+        for key in ("tp-looks-like-a-plan-key", "ttp-team-key"):
+            problem = agentcli.route_key_problem("deepseek", DEEPSEEK_URL, key)
+            self.assertIn("MiMo Token Plan route only", problem, key)
+            self.assertNotIn(key, problem)
+        self.assertIn("MiMo Token Plan route only", agentcli.route_key_problem(
+            "deepseek", "https://token-plan-sgp.xiaomimimo.com/anthropic", "tp-x"))
 
     def test_the_routes_are_pinned_to_the_owners_models_and_endpoints(self):
         self.assertEqual(agentcli.CLAUDE_ROUTES["mimo"]["model"], "mimo-v2.6-flash")
@@ -709,6 +728,11 @@ class RouteRunnerTests(unittest.TestCase):
         deepseek.model = "deepseek-flash"
         self.key.write_text("sk-deepseek\n", encoding="utf-8")
         self.assertIsNone(agentcli.make(deepseek).key_problem())
+        for key in ("tp-secret-route-key", "ttp-team-secret"):  # the MiMo key file given to the DeepSeek route
+            self.key.write_text(key + "\n", encoding="utf-8")
+            cli = agentcli.make(deepseek)
+            self.assertIn("MiMo Token Plan route only", cli.key_problem())
+        self.key.write_text("sk-deepseek\n", encoding="utf-8")
         mimo = self.parse(plan=False)
         self.assertIn("Token Plan key", agentcli.make(mimo).key_problem())  # an ordinary key on a Token Plan host
         self.key.unlink()
@@ -752,7 +776,8 @@ class RouteRunnerTests(unittest.TestCase):
         self.assertIn("route_differs_from_proof", cli.proof_problems(proof, args, self.cfg, "i"))
         native = agentcli.ClaudeCLI(rg.parse_args(["--plan"]))
         self.assertIn("route_proof_for_a_native_run", native.proof_problems(proof, args, self.cfg, "i"))
-        for broken in ({"route_verifier_revision": 0}, {"request_tools": THREE[:2]}, {"route": None}):
+        for broken in ({"route_verifier_revision": 0}, {"route_verifier_revision": 1}, {"request_tools": THREE[:2]},
+                       {"route": None}):
             path.write_text(json.dumps(self.route_proof(**broken)), encoding="utf-8")
             with self.assertRaises(SystemExit):
                 cli.load_proof(path)
@@ -793,10 +818,26 @@ class RouteRequestVerdictTests(unittest.TestCase):
         expected = {"extra_tool": "tools_not_the_three", "dropped_tool": "tools_not_the_three",
                     "other_model": "request_model_differs", "image_block": "image_in_request",
                     "x_api_key_other_value": "x_api_key_header_differs", "other_effort": "effort_differs",
-                    "token_in_body": "key_in_body", "token_in_header": "key_in_another_header"}
+                    "token_in_body": "key_in_body", "token_in_header": "key_in_another_header",
+                    "cookie": "header_not_expected", "proxy_authorization": "header_not_expected",
+                    "other_api_key_header": "header_not_expected", "extra_auth_token_header": "header_not_expected"}
         self.assertEqual(sorted(mutations), sorted(expected))
         for name, request in mutations.items():
             self.assertIn(expected[name], self.check([request])[0], name)
+
+    def test_only_the_reviewed_header_names_pass_whatever_their_values(self):
+        request = route_requests()[0]
+        for name, value in (("cookie", "a=b"), ("proxy-authorization", "Basic eHg6eXk="), ("x-other-api-key", "k"),
+                            ("x-auth-token", "t"), ("x-goog-api-key", "k"), ("api-key", "k"), ("x-extra", "v")):
+            with self.subTest(name=name):
+                copy = request | {"headers": request["headers"] | {name: value}}
+                self.assertIn("header_not_expected", self.check([copy])[0])
+        problems, facts = self.check([request])
+        self.assertEqual(problems, [])
+        self.assertTrue(set(facts["request_header_names"]) <= preflight.ROUTE_ALLOWED_HEADERS)
+        for name in ("authorization", "x-api-key", "x-stainless-os", "x-claude-code-session-id"):
+            self.assertIn(name, preflight.ROUTE_ALLOWED_HEADERS)
+        self.assertTrue(not any("cookie" in n or "proxy" in n for n in preflight.ROUTE_ALLOWED_HEADERS))
 
     def test_no_request_no_tools_and_a_wrong_credential_are_failures(self):
         self.assertEqual(self.check([])[0], ["no_request_captured"])
@@ -814,6 +855,78 @@ class RouteRequestVerdictTests(unittest.TestCase):
         text = request["body"].decode().replace('"hello"', '"tp-\\u0063anary"')
         self.assertNotIn(b"tp-canary", text.encode())
         self.assertIn("key_in_body", self.check([request | {"body": text.encode()}])[0])
+
+
+class RouteVerifierRevisionTests(unittest.TestCase):
+    def test_a_stricter_route_verifier_invalidates_the_route_proofs_of_the_weaker_one(self):
+        self.assertGreaterEqual(agentcli.ROUTE_VERIFIER_REVISION, 2)
+        self.assertEqual(rg.VERIFIER_REVISION, 3, "the native ADR-0036 verifier revision is not touched")
+        self.assertEqual(rg.PROOF_SCHEMA, "ag02-isolation-proof-3")
+
+
+class RouteSmokeStderrTests(unittest.TestCase):
+    """N1: a route smoke never persists the child's stderr, which can echo the credential or a response."""
+    TOKEN = "tp-dummy-secret-route-token-0001"
+    MARKER = "SYNTHETIC-RESPONSE-MARKER-7"
+
+    FAKE_CLI = """import json, os, sys
+sys.stdin.read()
+print(open(sys.argv[1], encoding="utf-8").read(), flush=True)
+sys.stderr.write("provider error: bad credential " + os.environ["ANTHROPIC_AUTH_TOKEN"] + " " + sys.argv[2] + "\\n")
+sys.stderr.flush()
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "VERDICT: DONE",
+                  "num_turns": 1}), flush=True)
+"""
+
+    def test_a_failing_provider_that_echoes_the_credential_leaves_it_in_no_file(self):
+        tmp = tempfile.TemporaryDirectory(prefix="ag02-smoke-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        cfg, out = root / "cfg", root / "out"
+        cfg.mkdir()
+        key = root / "mimo.key"
+        key.write_text(self.TOKEN + "\n", encoding="utf-8")
+        init = {"type": "system", "subtype": "init", "claude_code_version": "2.1.303", "model": "mimo-v2.6-flash",
+                "tools": list(rg.ALLOWED_TOOL_NAMES), "mcp_servers": [{"name": "ommatix", "status": "connected"}],
+                "skills": [], "slash_commands": [], "plugins": [], "agents": [], "memory_paths": {},
+                "additional_directories": []}
+        (root / "init.json").write_text(json.dumps(init), encoding="utf-8")
+        (root / "fake_cli.py").write_text(self.FAKE_CLI, encoding="utf-8")
+        att = rg.init_attestation(init)
+        proof = {"schema": rg.PROOF_SCHEMA, "verifier_revision": rg.VERIFIER_REVISION, "passed": True,
+                 "claude_code_version": "2.1.303", "model": "mimo-v2.6-flash", "requested_model": "mimo-v2.6-flash",
+                 "tools": THREE, "plugins": [], "agents": [], "plugin_hashes": [], "agent_hashes": [],
+                 "init_keys_sha256": att["init_keys_sha256"], "config_identity": rg.config_identity(cfg),
+                 "context_manifest": rg.config_manifest(cfg), "canary_kinds": ["user_claude_md"],
+                 "control_leaked_kinds": ["user_claude_md"], "date_utc": "2026-10-18T00:00:00Z",
+                 "route": {"provider": "mimo", "base_url": MIMO_URL, "model": "mimo-v2.6-flash", "effort": "max",
+                           "auth": "bearer"},
+                 "route_verifier_revision": agentcli.ROUTE_VERIFIER_REVISION, "request_tools": THREE}
+        (root / "proof.json").write_text(json.dumps(proof), encoding="utf-8")
+        fake = [sys.executable, str(root / "fake_cli.py"), str(root / "init.json"), self.MARKER]
+        stdout = io.StringIO()
+        with mock.patch.object(rg, "build_claude_argv", return_value=fake), contextlib.redirect_stdout(stdout):
+            code = rg.main(["--smoke", "--agent-cli", "claude", "--route", "mimo", "--route-base-url", MIMO_URL,
+                            "--key-file", str(key), "--claude-config-dir", str(cfg),
+                            "--isolation-proof", str(root / "proof.json"), "--model", "mimo-v2.6-flash",
+                            "--exe", str(root / "ommatix.exe"), "--out", str(out)])
+        self.assertEqual(code, 0)
+        files = [f for f in root.rglob("*") if f.is_file() and f != key]
+        self.assertTrue(files)
+        for f in files:
+            data = f.read_bytes()
+            self.assertNotIn(self.TOKEN.encode(), data, f.name)
+            self.assertNotIn(self.MARKER.encode(), data, f.name)
+        self.assertEqual([f.name for f in files if "stderr" in f.name], [])
+        smoke = json.loads(next(out.rglob("smoke.json")).read_text(encoding="utf-8"))
+        self.assertEqual((smoke["metrics"]["verdict"], smoke["metrics"]["init_problems"], smoke["cli"]["exit_code"]),
+                         ("DONE", [], 0))
+        self.assertEqual(smoke["provenance"]["provider"], "mimo")
+        self.assertNotIn(self.TOKEN, stdout.getvalue())
+
+    def test_the_production_runner_never_asks_for_a_stderr_file(self):
+        source = (HERE / "run_goal.py").read_text(encoding="utf-8")
+        self.assertNotIn("smoke.stderr", source)
 
 
 class RoutePreflightTests(unittest.TestCase):
@@ -843,7 +956,8 @@ class RoutePreflightTests(unittest.TestCase):
                                               "auth": "bearer"})
             self.assertEqual(proof["request_tools"], THREE)
             self.assertEqual(proof["route_control_blind"], [])
-            self.assertEqual(len(proof["route_control_detected"]), 8)
+            self.assertEqual(len(proof["route_control_detected"]), 12)
+            self.assertTrue(set(proof["request_header_names"]) <= preflight.ROUTE_ALLOWED_HEADERS)
             self.assertEqual(proof["route_verifier_revision"], agentcli.ROUTE_VERIFIER_REVISION)
             self.assertNotIn("tp-canary", json.dumps({k: v for k, v in proof.items() if k != "differences_from_production"}))
 
@@ -851,6 +965,7 @@ class RoutePreflightTests(unittest.TestCase):
         expected = {"route_extra_tool": "route_tools_not_the_three", "route_other_model": "route_request_model_differs",
                     "route_image": "route_image_in_request", "route_key_in_body": "route_key_in_body",
                     "route_bad_effort": "route_effort_differs", "route_x_api_key": "route_x_api_key_header_differs",
+                    "route_proxy_authorization": "route_header_not_expected", "route_cookie": "route_header_not_expected",
                     "extra_tool": "init_tools_differ"}
         for mode, token in expected.items():
             with self.subTest(mode=mode):

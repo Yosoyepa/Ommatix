@@ -15,8 +15,9 @@ a body that is not JSON; ``leak_dir`` loads context only when the configuration 
 escaping, as a real client's are.
 With ``ANTHROPIC_AUTH_TOKEN`` in its environment (a route, ADR-0037) the request also carries the tools, the
 effort, the model and both credential headers a real Claude Code sends; the modes ``route_extra_tool``,
-``route_other_model``, ``route_image``, ``route_key_in_body``, ``route_bad_effort`` and ``route_x_api_key``
-break exactly one of those.
+``route_other_model``, ``route_image``, ``route_key_in_body``, ``route_bad_effort``, ``route_x_api_key``,
+``route_proxy_authorization`` and ``route_cookie`` break exactly one of those (the last two add a header
+with a credential different from the token).
 ``FAKE_CLAUDE_ARGV_FILE`` receives one JSON line with the argv. ``FAKE_CLAUDE_ENV_FILE`` receives the
 names of every environment variable it got and the two values a stand-in run needs. Like the real
 CLI, it honours provider-selection variables: with ``CLAUDE_CODE_USE_BEDROCK`` or a Bedrock/Vertex/
@@ -102,6 +103,10 @@ def main() -> int:
                 payload["messages"].append({"role": "user", "content": token})
             headers |= {"authorization": f"Bearer {token}",
                         "x-api-key": "other-" + token if mode == "route_x_api_key" else token}
+            if mode == "route_proxy_authorization":
+                headers["proxy-authorization"] = "Bearer a-different-credential-1"
+            if mode == "route_cookie":
+                headers["cookie"] = "session=a-different-credential-2"
         body = json.dumps(payload).encode()
         if mode == "garbled":
             body = b"this is not json {"

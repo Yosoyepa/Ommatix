@@ -40,7 +40,10 @@ review are both answered here.
    - **Xiaomi MiMo V2.6 Flash**, effort max: model `mimo-v2.6-flash`, endpoint one of the Token Plan
      hosts `https://token-plan-{sgp,cn,ams}.xiaomimimo.com/anthropic`, **named explicitly by the
      operator** (`--route-base-url`; no default, and `api.xiaomimimo.com` is not in the list). A Token
-     Plan key (`tp-`/`ttp-`) is refused with any other URL and a Token Plan URL with any other key.
+     Plan key (`tp-`/`ttp-`) is judged **on the key**, whatever provider or label it is offered under: it is
+     accepted only on this route with one of these hosts, refused on the DeepSeek route and by the minimal
+     agent for every label (a wrong key file would send it to another provider); and a Token Plan URL is
+     refused with any other key.
    - **OpenAI GPT-6 Luna** is **authorised but not runnable**: it exists for the owner only through the
      Codex subscription, and Codex cannot be confined (decision 6). It is recorded in the code
      (`AUTHORISED_NOT_RUNNABLE`) and runs only if Codex ever passes its probe.
@@ -86,15 +89,21 @@ review are both answered here.
      on the route's environment and adds a verdict on the **real Messages requests**: every request that
      offers tools offers exactly the three Ommatix ones; every request names the route's model and no
      other; none carries an image block; the credential headers are `Authorization: Bearer <token>` and,
-     when sent, `x-api-key: <token>` only, and the token is in no other header and no body (decoded
-     strings, so a JSON escape hides nothing); the effort is the route's. A positive control feeds that
-     verdict eight broken copies of a real request and fails the preflight if any goes unseen. The proof
+     when sent, `x-api-key: <token>` only, **and the request's header names are exactly the reviewed set of
+     this Claude Code version** (twenty-two names, `ROUTE_ALLOWED_HEADERS`: a Cookie, a Proxy-Authorization
+     or any other credential-bearing header is refused whatever its value, because a different secret
+     would not match the token), the token is in no other header and no body (decoded strings, so a JSON
+     escape hides nothing); the effort is the route's. A positive control feeds that verdict twelve broken
+     copies of a real request and fails the preflight if any goes unseen. The proof
      carries the route (provider, production endpoint, model, effort), the request facts and
-     `route_verifier_revision`; the runner refuses a route run whose proof is native, lacks the route, or
-     binds another endpoint or model, and a native run with a route proof. The native Claude proof and
+     `route_verifier_revision` (now 2: a stricter verdict invalidates the route proofs of the weaker one); the
+     runner refuses a route run whose proof is native, lacks the route, or binds another endpoint or model,
+     and a native run with a route proof. The native Claude proof and
      its `verifier_revision` are untouched, so existing ADR-0036 proofs stay valid.
    - **Smoke.** `run_goal.py --smoke --route …` runs one trivial dry-run session against `ommatix serve
-     --source sim` (no screen, no input) and only under the route's passing proof.
+     --source sim` (no screen, no input) and only under the route's passing proof. **The child's stderr is
+     discarded** (as for every goal): a provider error or a CLI diagnostic can echo the credential, a
+     response or a label and nothing filters it, so no run stores it.
 4. **An `AgentCLI` interface** (`tools/agent/ag02/agentcli.py`) gives `run_goal.py` the agent's
    command, environment, proof and provenance, so the runner is not forked: `--agent-cli claude`
    (default; with `--route` the routes above), `minimal`, `codex` and `opencode` (probes only).
@@ -168,8 +177,12 @@ review are both answered here.
 8. **Keys.** Plain files outside the repository, one key per file, first line, no other content, e.g.
    `%LOCALAPPDATA%\Ommatix\keys\deepseek.key` and `mimo.key`; the path is a command-line argument
    (`--key-file`), the content is read only to build the child's environment (or the minimal agent's
-   header). The owner's files exist; nothing printed, logged or stored contains them (checked on the
-   smoke outputs and the configuration directories).
+   header). The owner's files exist. Nothing the runner writes contains them, and the invariant is
+   enforced rather than observed: no run persists the child's stderr (the first two smokes had written
+   one each, 81 and 82 bytes; both were scanned, held no key, and were removed), a regression test makes a
+   fake CLI echo a dummy credential and a marker to stderr and finds neither in any file, and the earlier
+   scan of the smoke outputs and configuration directories (zero hits) is a historical check, not the
+   guarantee.
 9. **Phases and consent are those of ADR-0036**: the multi-model runs start in dry run (phase 1) after
    the review of this change; phase 2 needs the owner present and a consent for that session, per
    model; a consent never carries over. AG-02 stays `NO_EJECUTADO`; this ADR ticks no box.
@@ -217,8 +230,8 @@ AG-02 makes no claim of "better than".
 - Codex and OpenCode stay refused, and GPT-6 Luna stays unrunnable, until a version passes.
 - Runs on 2026-10-18 on the author's PC (Claude Code 2.1.303; Codex 0.163.0; OpenCode 2.0.12): the
   probe verdicts above; the route preflights for MiMo (Singapore host) and DeepSeek against the stand-in,
-  with the real Claude Code and the real `ommatix serve --source sim` (passed; eight of eight control
-  mutations seen); the minimal agent's preflights (passed); and **one real smoke session per provider**
+  with the real Claude Code and the real `ommatix serve --source sim` (passed; twelve of twelve control
+  mutations seen; renewed after the re-review below); the minimal agent's preflights (passed); and **one real smoke session per provider**
   after its preflight passed, against `ommatix serve --source sim` (no screen, no input): each ended
   `DONE` with the three tools listed, `ommatix` connected, one `observe_screen` and one dry-run
   `execute_action` (`simulated`), no proxy refusal and no unexpected tool. These are wiring checks, not
@@ -227,15 +240,17 @@ AG-02 makes no claim of "better than".
 
 ## Required validation
 
-- `tools/agent/ag02/test_prreview93.py` (written to fail on the reviewed head 65a83c9: against it the 78
-  tests give 48 failures and 42 errors, with the new fakes): R1 decoded matching and the full preflight
+- `tools/agent/ag02/test_prreview93.py` (written to fail on the reviewed heads: against 65a83c9 the first 78
+  tests give 48 failures and 42 errors, and against b0fe3a9 the 27 tests of the re-review's three findings and
+  the route give 17 failures and 4 errors, with the new test doubles): R1 decoded matching and the full preflight
   with an escaping, context-reading copy of the agent; R2 exact-boundary, final-reply, missing-usage and
   dollar-cap budgets; R3 every malformed, duplicate, parallel and schema-violating call with zero bridge
   calls and one-to-one metrics, and the dry-run-only phase; R4 oversized declared, undeclared and
   streamed bodies, oversized arguments and text, nesting and call lists, with no response text stored;
   R5 changed and mistyped values and the full preflight with a lower effort; R6 the agent's own CLI,
-  links and junctions; the Token Plan key rules; and the route (environment, endpoints, keys, proofs,
-  the request verdict and its controls, the preflight end to end with the scripted Claude, smoke
+  links and junctions; the Token Plan key rules (both prefixes, both routes, every minimal-agent label); the
+  route (environment, endpoints, keys, proofs and their revision, the request verdict with its header
+  allow-list and controls, a smoke that must leave a dummy credential in no file, the preflight end to end with the scripted Claude, smoke
   conditions, no key in any plan or provenance).
 - `tools/agent/ag02/test_multimodel.py`: the agent end to end, the verifier, the preflight and proof of
   the minimal agent, the Codex and OpenCode verdicts on request bodies shaped like the installed
@@ -259,7 +274,8 @@ Claude Code, no guiones ni servicios; por eso **ambos proveedores se ejecutan co
 Claude Code apuntado al punto de acceso compatible con Anthropic de cada uno** (DeepSeek:
 `https://api.deepseek.com/anthropic`; MiMo: un servidor regional del Token Plan, que el operador nombra
 explícitamente, sin valor por defecto y sin `api.xiaomimimo.com`). Una clave `tp-` se rechaza con
-cualquier otra URL. La excepción de privacidad de la ADR-0036 (las observaciones de las aplicaciones de
+cualquier otra URL, y se rechaza por la clave: en la ruta de DeepSeek y en el agente mínimo con cualquier
+etiqueta de proveedor. La excepción de privacidad de la ADR-0036 (las observaciones de las aplicaciones de
 prueba son etiquetas sintéticas) se extiende exactamente a DeepSeek y Xiaomi; la documentación de ninguno
 declara el uso de los datos (sin verificar): sólo es aceptable porque las entradas son sintéticas. SubQ
 sigue bajo la ADR-0033.
@@ -273,11 +289,13 @@ ese entorno. Los controles de la ADR-0036 no cambian. Claude Code 2.1.303 envía
 `thinking: {"type": "adaptive"}`; que los proveedores lo acepten o piensen es **sin verificar**. El
 preflight de la ruta ejecuta el Claude Code real contra el servidor local y verifica en las peticiones
 reales: exactamente las tres herramientas, sólo el modelo de la ruta, ninguna imagen, sólo las cabeceras
-de credencial esperadas y el esfuerzo; con un control positivo de ocho copias rotas. La prueba lleva la
+de credencial esperadas y exactamente el conjunto revisado de nombres de cabecera (una `Cookie` o una
+`Proxy-Authorization` se rechazan sea cual sea su valor), y el esfuerzo; con un control positivo de doce copias rotas. La prueba lleva la
 ruta y el ejecutor la compara; la prueba nativa de la ADR-0036 no cambia. Se hizo **una sesión real de
 humo por proveedor**, tras su preflight, contra `ommatix serve --source sim` (sin pantalla ni entrada):
 ambas terminaron con `DONE`, las tres herramientas y ninguna incidencia; son comprobaciones de cableado,
-no resultados.
+no resultados. El stderr del hijo se descarta siempre (puede repetir la credencial o una respuesta y nada
+lo filtra): ninguna corrida lo guarda.
 
 **Sondeos de Codex y OpenCode.** Codex 0.163.0, con la configuración más estricta que existe, sigue
 ofreciendo `view_image`, herramientas de recursos MCP y un `tool_search` tras el que quedan diferidas las

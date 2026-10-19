@@ -276,6 +276,19 @@ def _has_image(value) -> bool:
     return False
 
 
+# The request header names Claude Code 2.1.303 sends to a custom endpoint, as seen on the stand-in, with
+# the transport ones its HTTP client adds. Nothing else is accepted, whatever its value: a Cookie, a
+# Proxy-Authorization or any other credential-bearing header would carry a second secret to the provider
+# (the re-review of PR 93, N3). A new Claude Code version that sends another header fails the preflight and
+# this list is reviewed, not widened silently.
+ROUTE_ALLOWED_HEADERS = frozenset({
+    "accept", "accept-encoding", "anthropic-beta", "anthropic-dangerous-direct-browser-access",
+    "anthropic-version", "authorization", "connection", "content-length", "content-type", "host",
+    "user-agent", "x-api-key", "x-app", "x-claude-code-session-id", "x-stainless-arch", "x-stainless-lang",
+    "x-stainless-os", "x-stainless-package-version", "x-stainless-retry-count", "x-stainless-runtime",
+    "x-stainless-runtime-version", "x-stainless-timeout"})
+
+
 def check_route_requests(requests: list[dict], *, model: str, token: str, effort: str) -> tuple[list[str], dict]:
     """(closed problem tokens, facts) for the Messages requests Claude Code sent on a route."""
     problems: list[str] = []
@@ -283,8 +296,12 @@ def check_route_requests(requests: list[dict], *, model: str, token: str, effort
         return ["no_request_captured"], {"requests": 0}
     wanted = sorted(rg.ALLOWED_TOOL_NAMES)
     models, thinking, efforts, offered = set(), set(), set(), False
+    header_names: set = set()
     for request in requests:
         headers = request["headers"]
+        header_names |= set(headers)
+        if set(headers) - ROUTE_ALLOWED_HEADERS:
+            problems.append("header_not_expected")
         if request["path"] != "/v1/messages":
             problems.append("request_path_differs")
         if headers.get("authorization") != f"Bearer {token}":
@@ -322,6 +339,7 @@ def check_route_requests(requests: list[dict], *, model: str, token: str, effort
     if efforts != {effort}:
         problems.append("effort_differs")
     return sorted(set(problems)), {"requests": len(requests), "request_tools": wanted if offered else [],
+                                   "request_header_names": sorted(header_names),
                                    "request_models": sorted(models), "request_thinking": sorted(thinking),
                                    "request_effort": sorted(efforts)}
 
@@ -347,6 +365,12 @@ def route_control_mutations(request: dict, token: str) -> dict[str, dict]:
         "other_effort": variant(lambda b: b.update(output_config={"effort": "low"})),
         "token_in_body": variant(lambda b: b["messages"].append({"role": "user", "content": token})),
         "token_in_header": variant(lambda b: None, lambda h: h.update({"x-extra": token})),
+        # A different credential in an additional header: not the token, so no value check could see it.
+        "cookie": variant(lambda b: None, lambda h: h.update({"cookie": "session=another-secret-1"})),
+        "proxy_authorization": variant(lambda b: None, lambda h: h.update(
+            {"proxy-authorization": "Bearer another-secret-2"})),
+        "other_api_key_header": variant(lambda b: None, lambda h: h.update({"x-other-api-key": "another-secret-3"})),
+        "extra_auth_token_header": variant(lambda b: None, lambda h: h.update({"x-auth-token": "another-secret-4"})),
     }
 
 

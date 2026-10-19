@@ -1325,7 +1325,8 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
                timeout: float, stderr_path: Path | None = None, env: dict | None = None) -> dict:
     """Runs the command; feeds every stdout line to `metrics`; kills it on a timeout, when the
     first event shows a session other than the proven one, or when the tool surface is wider
-    than the three Ommatix tools."""
+    than the three Ommatix tools. The child's stderr is discarded unless a test passes `stderr_path`:
+    production never stores it (it can echo a credential or a response, and nothing filters it)."""
     flags = 0x08000000 if os.name == "nt" else 0
     stderr = open(stderr_path, "wb") if stderr_path else subprocess.DEVNULL
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -1626,7 +1627,9 @@ def run_smoke(args, out: Path, goals: dict, deps=RealDeps, proof: dict | None = 
         agent.build_argv(model=args.model, mcp_config=mcp_path,
                          system_instruction=goals["system_instruction"],
                          max_budget_usd=args.max_budget_usd),
-        SMOKE_PROMPT, scratch, metrics, args.goal_timeout, out / "smoke.stderr.txt", env=agent.env())
+        # The child's stderr is discarded here as it is for every goal: a provider error or a CLI diagnostic
+        # may echo the credential, a response or a label, and nothing filters it (the re-review of PR 93, N1).
+        SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env())
     return {"smoke": True, "cli": cli, "provenance": metrics.provenance(args.model) | agent.provenance(),
             "metrics": metrics.summary(), "proxy": proxy_summary(log)}
 

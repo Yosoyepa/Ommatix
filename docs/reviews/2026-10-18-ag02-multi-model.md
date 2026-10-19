@@ -245,15 +245,17 @@ decision 3). Findings while building it, all measured on the 127.0.0.1 stand-in 
   `ANTHROPIC_*`/`CLAUDE_*` name); the operator's own routing variables are still refused. Regression:
   `RouteEnvironmentTests` (three tests), `RouteRunnerTests.test_the_operators_own_routing_variables_are_still_refused_for_a_route_run`.
 - **G3 (P1). The key may only live in the child's environment.** It is read from `--key-file` through the
-  path-checked `load_key`; plans, provenance, results, proofs and arguments never contain it; verified on
-  the smoke outputs and the configuration directories (zero files contain it). Regression:
+  path-checked `load_key`; plans, provenance, results, proofs and arguments never contain it. The scan of the
+  first smokes' outputs and configuration directories (zero hits) was a historical check, not the invariant:
+  the re-review (N1 below) found that the smoke stored the child's raw stderr, which can echo the credential. Regression:
   `RouteRunnerTests` (key tests), `test_a_plan_shows_the_command_and_never_the_key`.
 - **G4 (P2). Every request names the route's model and no other.** Claude Code's side requests would name
   Claude's small models; `route_env` sets all the model variables, and the verdict fails on any other
   model name. Regression: `RouteRequestVerdictTests`, `RoutePreflightTests` (`route_other_model`).
 - **G5 (P2). MiMo endpoints are regional and a Token Plan key is not for the pay-as-you-go URL.** The URL is
   required, from a closed list; `route_key_problem` refuses a `tp-` key with a non-Token-Plan host and the
-  reverse. Regression: `RouteEnvironmentTests.test_a_token_plan_key_goes_only_with_a_token_plan_host_and_the_other_way_round`,
+  reverse. The first version judged the key by the route's own prefix list, so the DeepSeek route had none
+  (N2 below). Regression: `RouteEnvironmentTests.test_a_token_plan_key_goes_only_with_a_token_plan_host_and_the_other_way_round`,
   `RouteRunnerTests.test_the_base_url_is_required_explicit_and_from_the_closed_list`.
 - **G6 (P2). The minimal agent must not be used with a Token Plan key.** Refused by the runner before
   anything starts and by the agent. Regression: `TokenPlanKeyTests` (three tests).
@@ -264,12 +266,64 @@ decision 3). Findings while building it, all measured on the 127.0.0.1 stand-in 
   route and carries its own `route_verifier_revision`; ADR-0036's `verifier_revision` (3) and its proofs
   stay valid, so the owner's existing native proof is not invalidated by this PR.
 
-Runs (2026-10-18, Claude Code 2.1.303): route preflights for MiMo (Singapore host) and DeepSeek with the
-real Claude Code against the stand-in and the real `ommatix serve --source sim`: passed, 8/8 route controls
+Runs (2026-10-18, Claude Code 2.1.303; the route proofs were renewed after the re-review): route preflights for
+MiMo (Singapore host) and DeepSeek with the real Claude Code against the stand-in and the real
+`ommatix serve --source sim`: passed, 12/12 route controls
 and 7/7 canary kinds seen; the minimal agent's preflights for both providers: passed, 9/9 controls (11/11
 with DeepSeek's two configured parameters); one real smoke session per provider (dry run, simulated
 desktop, no screen, no input) after its preflight passed: both `DONE`, three tools, one `observe_screen`
 and one simulated `execute_action`, no refusal.
+
+## Re-review of PR 93 at b0fe3a9 (Codex, CHANGES REQUIRED: 1 P1, 2 P2 in the route)
+
+R1-R6 were confirmed fixed. Three findings concerned the Claude Code route. **Failing first:** the 27 tests
+of the route classes plus the new ones were run against b0fe3a9 with only the new test doubles
+(`fake_claude.py`): 17 failures and 4 errors; all pass on the fixed tree. The route verifier revision goes
+from 1 to 2 (old route proofs are refused; the native ADR-0036 proof and revision 3 are untouched), the route
+proofs and the minimal agent's proofs were regenerated on the stand-in (no new real call).
+
+### N1 (P1). A route smoke persisted the child's raw stderr
+
+Finding: `run_smoke` passed `smoke.stderr.txt` to `run_claude`, which connected the child's stderr to it, so
+a provider failure or CLI diagnostic that echoes the authentication value, a response or a label was written
+unfiltered. Goals already discarded stderr; the smoke was the gap.
+Resolution: the smoke discards stderr too (`run_claude` stores it only if a test passes a path; production
+never does); the structured result keeps the metadata that matters (exit code, kill reason, verdict, init
+problems, MCP status, proxy receipts). The two stderr files the first smokes wrote (81 and 82 bytes) were
+scanned for the owner's keys by name and length only (neither held one) and deleted; the earlier "zero
+files contain the key" check is now described as historical, the invariant being the code.
+Regression: `RouteSmokeStderrTests.test_a_failing_provider_that_echoes_the_credential_leaves_it_in_no_file`
+(the real `run_goal.main` smoke path with a matching proof and a fake CLI that writes a dummy token and a
+response marker to stderr: neither is in any file, no stderr file exists, the verdict and provenance remain)
+and `test_the_production_runner_never_asks_for_a_stderr_file`.
+
+### N2 (P2). A MiMo Token Plan key passed the DeepSeek route gate
+
+Finding: the DeepSeek route had no Token Plan prefixes, so a `tp-`/`ttp-` key file given to
+`--route deepseek` passed `refusal()` and `key_problem()` and entered the child environment for
+`api.deepseek.com`; the minimal agent only refused the prefix under the label `mimo`.
+Resolution: the prefixes are one constant (`TOKEN_PLAN_PREFIXES`) judged on the key before the provider is
+looked at: accepted only on the MiMo route with one of its Token Plan hosts, refused on the DeepSeek route
+and by the minimal agent (runner and agent) under every label; the reverse check (Token Plan URL needs a
+Token Plan key) stays. The tests that had accepted cross-provider use were replaced.
+Regression: `RouteEnvironmentTests.test_a_token_plan_key_goes_only_with_a_token_plan_host_and_the_other_way_round`,
+`RouteRunnerTests.test_a_token_plan_key_with_a_non_token_plan_url_or_a_missing_key_file_is_refused`,
+`TokenPlanKeyTests` (both prefixes, both providers, key files given to the wrong route or label).
+
+### N3 (P2). The route preflight accepted additional credential headers with a different value
+
+Finding: `check_route_requests` checked Authorization and x-api-key and looked for the known dummy token
+elsewhere, so a `Proxy-Authorization`, `Cookie` or other key header carrying a different secret passed (the
+full preflight with such a fake CLI returned `passed: true`).
+Resolution: `ROUTE_ALLOWED_HEADERS`, the twenty-two header names Claude Code 2.1.303 really sent on the
+stand-in (read off the real run); any other name is `header_not_expected` whatever its value; the proof
+records the names seen; four controls (`cookie`, `proxy_authorization`, `other_api_key_header`,
+`extra_auth_token_header`) bring the route controls to twelve; `ROUTE_VERIFIER_REVISION` is 2. A Claude Code
+version that sends another header fails the preflight and the list is reviewed, not widened silently.
+Regression: `RouteRequestVerdictTests.test_only_the_reviewed_header_names_pass_whatever_their_values`,
+`test_every_deviation_is_seen`, `RoutePreflightTests` (full preflight with `route_proxy_authorization` and
+`route_cookie`; twelve controls; names within the list), `RouteVerifierRevisionTests`, and the route-proof
+loader test that refuses revision 1.
 
 ## Not covered
 

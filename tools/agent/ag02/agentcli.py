@@ -35,7 +35,11 @@ import run_goal as rg  # noqa: E402
 
 AGENT_CLIS = ("claude", "minimal", "codex", "opencode")
 # The revision of the route preflight's request-level rules (a Claude Code route proof carries it).
-ROUTE_VERIFIER_REVISION = 1
+#   2: re-review of PR 93 (N3) - only the reviewed request header names, whatever their values
+ROUTE_VERIFIER_REVISION = 2
+# A key with one of these prefixes is a Xiaomi MiMo Token Plan key, whatever provider label or route it
+# is offered to: coding tools only, and only with the Token Plan hosts of the MiMo route.
+TOKEN_PLAN_PREFIXES = ("tp-", "ttp-")
 MINIMAL_AGENT = HERE / "minimal_agent.py"
 MINIMAL_PROOF_SCHEMA = "ag02-isolation-proof-minimal-1"
 # Raised whenever the minimal agent's verifier is made stricter; a proof from an older revision is refused.
@@ -69,15 +73,16 @@ PROVIDERS = {
 }
 # The routes of the confined Claude Code harness (owner decision of 2026-10-18): Claude Code, with every
 # ADR-0036 control, pointed at a provider's Anthropic-compatible endpoint. ``base_urls`` is the closed
-# list of endpoints it may be pointed at; the operator must name one explicitly. ``token_plan_prefixes``
-# keys belong to a Token Plan whose hosts are regional (and whose terms allow coding tools only).
+# list of endpoints it may be pointed at; the operator must name one explicitly. A Token Plan key
+# (``TOKEN_PLAN_PREFIXES``) belongs to the MiMo route and its regional ``token_plan_host_prefix`` hosts only,
+# whatever route or provider label it is offered to (its terms allow coding tools only).
 CLAUDE_ROUTES = {
     "mimo": {
         "model": "mimo-v2.6-flash", "effort": "max",
         "base_urls": ("https://token-plan-sgp.xiaomimimo.com/anthropic",
                       "https://token-plan-cn.xiaomimimo.com/anthropic",
                       "https://token-plan-ams.xiaomimimo.com/anthropic"),
-        "token_plan_prefixes": ("tp-", "ttp-"), "token_plan_host_prefix": "token-plan-",
+        "token_plan_host_prefix": "token-plan-",
         "key_file_hint": "mimo.key",
         "caveat": ("A Token Plan key's terms allow coding tools such as Claude Code only, which is why MiMo "
                    "runs through the Claude Code harness and not through the minimal agent. Xiaomi's pages "
@@ -87,7 +92,7 @@ CLAUDE_ROUTES = {
     "deepseek": {
         "model": "deepseek-flash", "effort": "max",
         "base_urls": ("https://api.deepseek.com/anthropic",),
-        "token_plan_prefixes": (), "token_plan_host_prefix": None,
+        "token_plan_host_prefix": None,
         "key_file_hint": "deepseek.key",
         "caveat": ("DeepSeek's API documentation has no data-use statement; the terms were not read "
                    "(unverified). Inputs are synthetic test-application labels."),
@@ -109,8 +114,11 @@ def route_key_problem(route: str, base_url: str, key: str) -> str | None:
     regional Token Plan host, never with the pay-as-you-go URL; a Token Plan host only with such a key."""
     spec = CLAUDE_ROUTES[route]
     host = re.sub(r"^https?://([^/:]+).*$", r"\1", base_url)
-    plan_key = key.startswith(spec["token_plan_prefixes"]) if spec["token_plan_prefixes"] else False
+    plan_key = key.startswith(TOKEN_PLAN_PREFIXES)  # judged before the provider is looked at
     plan_host = bool(spec["token_plan_host_prefix"]) and host.startswith(spec["token_plan_host_prefix"])
+    if plan_key and route != "mimo":
+        return (f"a Token Plan key (tp-/ttp-) belongs to the MiMo Token Plan route only, never to the {route} "
+                "route: a wrong key file would send it to another provider")
     if plan_key and not plan_host:
         return "a Token Plan key (tp-) is refused with the pay-as-you-go URL: name the regional Token Plan URL"
     if plan_host and not plan_key:
@@ -315,18 +323,19 @@ class MinimalCLI(AgentCLI):
         return None
 
     def key_problem(self):
-        """A MiMo Token Plan key is for coding tools only: refused here, before anything starts."""
+        """A MiMo Token Plan key is for coding tools only: refused here, before anything starts, for every
+        provider label (changing the label does not change what the key is)."""
         key_file = getattr(self.args, "key_file", None)
-        if self.provider != "mimo" or key_file is None:
+        if key_file is None:
             return None
         import minimal_agent
         try:
             key = minimal_agent.load_key(Path(key_file))
         except minimal_agent.AgentError as error:
             return f"the key file is refused: {error.token}"
-        if key.startswith(minimal_agent.TOKEN_PLAN_PREFIXES):
-            return ("a MiMo Token Plan key (tp-) is not for scripts or application backends: use the "
-                    "Claude Code route (--agent-cli claude --route mimo)")
+        if key.startswith(TOKEN_PLAN_PREFIXES):
+            return ("a MiMo Token Plan key (tp-) is not for scripts or application backends, whatever provider "
+                    "label it is offered under: use the Claude Code route (--agent-cli claude --route mimo)")
         return None
 
     def base_url(self) -> str:

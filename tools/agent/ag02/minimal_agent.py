@@ -552,8 +552,9 @@ def choice_message(reply: dict) -> dict:
 def run(args, prompt: str, bridge_factory=McpBridge, opener=None) -> int:
     started = time.monotonic()
     key = load_key(args.key_file)
-    if args.provider == "mimo" and key.startswith(TOKEN_PLAN_PREFIXES):
-        # A Token Plan key's terms forbid scripts and application backends: only coding tools.
+    if key.startswith(TOKEN_PLAN_PREFIXES):
+        # A Token Plan key's terms forbid scripts and application backends: only coding tools. Judged on
+        # the key, not on the provider label the agent was started with.
         raise AgentError("token_plan_key_not_for_scripts")
     mcp = json.loads(Path(args.mcp_config).read_text(encoding="utf-8"))["mcpServers"][SERVER_NAME]
     headers = {"Content-Type": "application/json"}
