@@ -325,6 +325,136 @@ Regression: `RouteRequestVerdictTests.test_only_the_reviewed_header_names_pass_w
 `route_cookie`; twelve controls; names within the list), `RouteVerifierRevisionTests`, and the route-proof
 loader test that refuses revision 1.
 
+## Operational finding of the first route runs (2026-10-19): the CLI's dollar cap on a provider route
+
+### C1 (P2). `--max-budget-usd` stopped a MiMo session on a figure that is not a cost
+
+Finding: in the live phase 2 of 2026-10-19 the MiMo session of G08 ended with `error_max_budget_usd` (exit
+code 1, no verdict) although the oracle showed the goal reached. Claude Code prices a response with
+Anthropic's prices for a model it does not know, so on a provider route its `total_cost_usd` is invalid
+(already recorded for the smokes), yet the runner passed `--max-budget-usd 0.50` to the CLI on every route
+run and the CLI enforced it on that figure. A session could also be stopped by a figure unrelated to what
+the provider charges, or run on past any real limit.
+Resolution: a provider route passes the CLI **no** dollar cap (`build_claude_argv(max_budget_usd=None)` omits
+the flag, `ClaudeCLI.build_argv` passes `None` on a route, the route preflight builds the same command) and
+**refuses** one given on the command line (`ClaudeCLI.refusal`: a provider route takes no dollar cap). The
+per-goal limit is a token cap enforced by the runner from the stream: `--max-context-tokens-per-goal`
+(routes only; positive; default `ROUTE_CONTEXT_TOKENS_DEFAULT` = 550 000, twice the largest per-goal
+context of the four route series of 2026-10-19, 274 232 for MiMo phase 1 G02, a runaway guard and not a
+prediction); `run_claude` sums input + cache creation + cache read over the messages the stream reports
+(the definition of the results tables) and kills the session over the cap, `killed: "token_cap"`. The time
+cap is unchanged and the native Claude path keeps its dollar cap unchanged. The provenance of every route
+result records `max_context_tokens_per_goal` and `dollar_cap: "none"`; a plan prints the cap.
+Regression (`tools/agent/ag02/test_routecost.py`, written first: 3 failures and 7 errors of 12 against
+7e382a2): `RouteArgvTests` (no flag on either route, native flag kept, refusal and plan refusal, cap
+option rules and default, provenance, plan) and `FakeCliTests` (a fake CLI that ends with
+`error_max_budget_usd` exactly when given a dollar cap: a route smoke succeeds, the fake over the token cap
+is killed with `token_cap`, under or without a cap it is not killed).
+
+### Review of PR 96 at 72d4f83 (Codex, CHANGES REQUIRED: 1 P1, 2 P2) - the token cap itself
+
+**C1-R1 (P1). Missing or invalid usage silently disabled the replacement budget.** The cap summed the
+reporting-only accounting, which drops absent or non-integer counters, accepts negatives and booleans, ignores
+usage without a message id, replaces the usage of a repeated id (so spend could go down) and loses an event whose
+integer exceeds Python's digit limit; with the CLI dollar cap gone, time was the only working limit while the
+provenance advertised a token cap. Reproduced with the real `run_claude` and synthetic streams, cap 100: no usage,
+`"1000"`, `1000.0`, `-1000`, usage without an id, result-only usage, a decrease (60, 0, then 60 of another message),
+a 5000-digit integer and `Infinity` all ended `killed: null`, DONE.
+Resolution: `ContextGuard` (run_goal.py), explicit validated accounting that distinguishes unknown from zero.
+Protocol: every `assistant` event carries a string `message.id` (1-200 characters) and a `message.usage` whose
+`input_tokens` is a count and whose cache counters, when present, are counts (an int, not a bool, not negative, at
+most 18 digits); repeated reports of one message keep the largest value per counter; the context is the sum over
+messages of input + cache creation + cache read (output tokens are not context); a `result` event's `usage` is a
+floor for the total. Anything else an assistant event can be, and any `{`-line that cannot be parsed, is unknown
+consumption and ends the session with the closed reason `usage_invalid`; over the cap it is `token_cap`. Integers
+are parsed with a length limit (`parse_int`) and `Infinity`/`NaN` are refused (`parse_constant`), so the digit
+limit can no longer discard an event. The guard reads before the reporting side and independently of it: an event
+the metrics cannot digest (an unhashable id, a message that is not an object) used to kill the reader thread; it
+now only skips that sample.
+**C1-R2 (P2). The literal `"usage"` byte check bypassed parsed usage.** `"usage": {...}` is the same JSON
+key; the old gate searched the raw text for `usage`. Resolution: there is no raw-text gate; the guard decodes every
+line and enforces on the decoded, validated data.
+**C1-R3 (P2). The cap returned while the owned proxy and engine were still running.** `proc.kill()` ended only the
+CLI; `run_claude` returned with the budget proxy (which waits up to 30 s for its engine) and the engine alive, and
+the next goal could start before the receipts were complete. Resolution: `OwnedTree`, the session's process tree: a
+Windows job object (also `KILL_ON_JOB_CLOSE`, so a dead runner leaves nothing) or a POSIX process group.
+Every ending of a session (cap, invalid usage, timeout, init or tool-surface kill, normal exit) now kills the CLI
+alone, so the proxy sees its input close and leaves with its engine and writes its receipts, waits up to
+`PROCESS_TREE_GRACE_S` (40 s), kills what is left and returns only when the tree has exited (`tree_left` in the
+result when something could not be ended). Reservations are untouched: nothing refunds a delivered or reserved
+call. The app's cleanup is the existing `finally` of `run_goal`, which now always runs after the tree is gone.
+Regression (`tools/agent/ag02/test_routeguard.py`, written first: 9 of 10 failed against 72d4f83, the tenth is
+the valid-stream control): `UsageGuardTests` (unknown consumption; wrong types, negatives, booleans, nonfinite;
+missing or invalid ids; oversized and unreadable events; decreasing updates; the escaped key ending promptly;
+valid per-message, duplicate and output-only controls; result-only usage) and `SessionTreeTests` (a fake CLI that
+starts the real budget proxy behind a slow engine and makes one reservation: at return the proxy and the engine
+have exited, the proxy log has its `end` record and the ledger is exactly one reservation; the same for a
+timeout).
+
+### Re-review of PR 96 at 588b4c4 (Codex, CHANGES REQUIRED: 3 P2)
+
+**F1 (P2). The Windows job was assigned after the CLI had started.** `Popen` started a runnable CLI and the job
+came afterwards; a CLI that starts its MCP server during startup, before it reads stdin, could create children
+outside the job (reproduced with a scheduling barrier: the cap returned in 0.36 s with the proxy and the engine
+alive and no receipt). Resolution: on Windows the CLI is created `CREATE_SUSPENDED`, put in the job object
+(`KILL_ON_JOB_CLOSE`) and resumed (`NtResumeProcess`) only after the assignment, so it runs no instruction
+before it is owned; elsewhere the CLI leads its own process group from the fork, which has no such window.
+**F2 (P2). A job setup or status failure read as 'the tree exited'.** With `job=None`, or a failed
+`QueryInformationJobObject`, `active()` returned 0 and `shutdown` never reached its fallback (fault-injecting
+`AssignProcessToJobObject`: the cap returned in 0.23 s, both descendants alive). Resolution: ownership is
+fail-closed (`OwnedTree.owned`): if the job cannot be created, configured, assigned or the CLI resumed, the
+suspended CLI is killed unrun and `run_claude` returns `killed: "no_tree_ownership"` without running the
+session; a status that cannot be queried is `None` (unknown), never 0, so the wait runs to its deadline, the job
+is terminated and `tree_left` reports the tree as unverified. `run_goal` aborts the series on `tree_left` or
+`no_tree_ownership` ("no further goal"), and a smoke exits 2.
+**F3 (P2). Ambiguous or unsupported usage envelopes bypassed the cap.** `json.loads` keeps the last of two
+equal keys: `{"input_tokens": 1000, "input_tokens": 0}`, a duplicated `usage` member and a duplicated `type`
+(ending as `system`) were accepted as zero or skipped; an array holding an over-cap event, and a result-only
+`usage: {}`, also ended DONE with `killed: null`. Resolution: duplicate keys are refused while decoding
+(`object_pairs_hook`), a line that parses to anything but an object, or a `[`/`{` line that cannot be read, is
+`usage_invalid`, and a `result` event's `usage` needs `input_tokens` like an assistant's (an explicit zero is a
+zero; a result without `usage` gives no floor; plain text lines are still ignored).
+Regression (`test_routeguard.py`, written first: 4 failures and 3 errors of the 7 new tests against 588b4c4, the
+rest being the shared setup): `test_ambiguous_duplicate_keys_end_the_session`,
+`test_unsupported_envelopes_end_the_session_and_plain_text_is_ignored`,
+`test_a_result_without_an_input_counter_is_unknown_not_zero_and_an_explicit_zero_is_zero`, and in
+`WindowsOwnershipTests` an early-spawning fake CLI with a deterministic barrier at the job (the engine must not
+exist before the job, no survivors, receipts and one reservation), a job that cannot be assigned (the CLI never
+runs, no survivors), a failed status query (the job is terminated, `tree_left` is reported, no survivors) and
+`TreeAbortTests` (a `tree_left` or `no_tree_ownership` result aborts the goal).
+
+### Re-review of PR 96 at 588b4c4 (Codex, CHANGES REQUIRED: 3 P2)
+
+**F1 (P2). The Windows job was assigned after the CLI had started.** `Popen` started a runnable CLI and the job
+came afterwards; a CLI that starts its MCP server during startup, before it reads stdin, could create children
+outside the job (reproduced with a scheduling barrier: the cap returned in 0.36 s with the proxy and the engine
+alive and no receipt). Resolution: on Windows the CLI is created `CREATE_SUSPENDED`, put in the job object
+(`KILL_ON_JOB_CLOSE`) and resumed (`NtResumeProcess`) only after the assignment, so it runs no instruction
+before it is owned; elsewhere the CLI leads its own process group from the fork, which has no such window.
+**F2 (P2). A job setup or status failure read as 'the tree exited'.** With `job=None`, or a failed
+`QueryInformationJobObject`, `active()` returned 0 and `shutdown` never reached its fallback (fault-injecting
+`AssignProcessToJobObject`: the cap returned in 0.23 s, both descendants alive). Resolution: ownership is
+fail-closed (`OwnedTree.owned`): if the job cannot be created, configured, assigned or the CLI resumed, the
+suspended CLI is killed unrun and `run_claude` returns `killed: "no_tree_ownership"` without running the
+session; a status that cannot be queried is `None` (unknown), never 0, so the wait runs to its deadline, the job
+is terminated and `tree_left` reports the tree as unverified. `run_goal` aborts the series on `tree_left` or
+`no_tree_ownership` ("no further goal"), and a smoke exits 2.
+**F3 (P2). Ambiguous or unsupported usage envelopes bypassed the cap.** `json.loads` keeps the last of two
+equal keys: `{"input_tokens": 1000, "input_tokens": 0}`, a duplicated `usage` member and a duplicated `type`
+(ending as `system`) were accepted as zero or skipped; an array holding an over-cap event, and a result-only
+`usage: {}`, also ended DONE with `killed: null`. Resolution: duplicate keys are refused while decoding
+(`object_pairs_hook`), a line that parses to anything but an object, or a `[`/`{` line that cannot be read, is
+`usage_invalid`, and a `result` event's `usage` needs `input_tokens` like an assistant's (an explicit zero is a
+zero; a result without `usage` gives no floor; plain text lines are still ignored).
+Regression (`test_routeguard.py`, written first: 4 failures and 3 errors of the 7 new tests against 588b4c4, the
+rest being the shared setup): `test_ambiguous_duplicate_keys_end_the_session`,
+`test_unsupported_envelopes_end_the_session_and_plain_text_is_ignored`,
+`test_a_result_without_an_input_counter_is_unknown_not_zero_and_an_explicit_zero_is_zero`, and in
+`WindowsOwnershipTests` an early-spawning fake CLI with a deterministic barrier at the job (the engine must not
+exist before the job, no survivors, receipts and one reservation), a job that cannot be assigned (the CLI never
+runs, no survivors), a failed status query (the job is terminated, `tree_left` is reported, no survivors) and
+`TreeAbortTests` (a `tree_left` or `no_tree_ownership` result aborts the goal).
+
 ## Not covered
 
 - The minimal agent has only met our stand-in; the routes have met a real provider only in one trivial

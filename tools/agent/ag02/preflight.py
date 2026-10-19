@@ -244,7 +244,8 @@ def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path,
     mcp_path = log.with_name(scratch_name + ".mcp.json")
     mcp_path.write_text(json.dumps(mcp), encoding="utf-8")
     argv = rg.build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
-                                system_instruction=goals["system_instruction"], max_budget_usd=0.5)
+                                system_instruction=goals["system_instruction"],
+                                max_budget_usd=None if getattr(args, "route", None) else 0.5)
     route = getattr(args, "route", None)
     with FakeApi() as api:
         if route:

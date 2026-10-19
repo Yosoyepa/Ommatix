@@ -37,6 +37,7 @@ AGENT_CLIS = ("claude", "minimal", "codex", "opencode")
 # The revision of the route preflight's request-level rules (a Claude Code route proof carries it).
 #   2: re-review of PR 93 (N3) - only the reviewed request header names, whatever their values
 ROUTE_VERIFIER_REVISION = 2
+ROUTE_CONTEXT_TOKENS_DEFAULT = rg.ROUTE_CONTEXT_TOKENS_DEFAULT
 # A key with one of these prefixes is a Xiaomi MiMo Token Plan key, whatever provider label or route it
 # is offered to: coding tools only, and only with the Token Plan hosts of the MiMo route.
 TOKEN_PLAN_PREFIXES = ("tp-", "ttp-")
@@ -225,6 +226,10 @@ class ClaudeCLI(AgentCLI):
             return ("--route-base-url is required and must be one of: " + ", ".join(self.spec()["base_urls"]))
         if getattr(self.args, "key_file", None) is None:
             return "--key-file is required on a route (a file outside the checkout; its first line is the key)"
+        if getattr(self.args, "max_usd_explicit", False):
+            return ("a provider route takes no dollar cap: the CLI prices a response with Anthropic's prices for a "
+                    "model it does not know, so its figure is invalid; pass --max-context-tokens-per-goal (and "
+                    "--goal-timeout) instead")
         return None
 
     def read_key(self) -> str:
@@ -241,7 +246,8 @@ class ClaudeCLI(AgentCLI):
 
     def build_argv(self, *, model, mcp_config, system_instruction, max_budget_usd):
         return rg.build_claude_argv(claude=self.args.claude, model=model, mcp_config=mcp_config,
-                                    system_instruction=system_instruction, max_budget_usd=max_budget_usd)
+                                    system_instruction=system_instruction,
+                                    max_budget_usd=None if self.route else max_budget_usd)
 
     def env(self, extra=None):
         if not self.route:
@@ -279,7 +285,9 @@ class ClaudeCLI(AgentCLI):
         if not self.route:
             return {"cli": self.name, "provider": self.provider}
         return {"cli": self.name, "provider": self.provider,
-                "route_host": re.sub(r"^https?://([^/:]+).*$", r"\1", self.route_url() or "")}
+                "route_host": re.sub(r"^https?://([^/:]+).*$", r"\1", self.route_url() or ""),
+                "max_context_tokens_per_goal": getattr(self.args, "max_context_tokens_per_goal", None),
+                "dollar_cap": "none"}
 
 
 # ---- the minimal agent ---------------------------------------------------------------------
