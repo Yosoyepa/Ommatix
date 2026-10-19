@@ -1,8 +1,8 @@
 # 0038. Prepare AG-03 (a vision-agent baseline) and repetitions of AG-02
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-10-19
-- **Approval:** Pending. The owner asked for both experiments to be **prepared, not run** (2026-10-19). Nothing in this ADR is accepted, run or ticked until the owner answers the open decisions at the end. Acceptance would change no test status or checkbox of chapter 06 §6.7.
+- **Approval:** The project owner, 2026-10-19 (O1, O2, O5, O7; O3-O12 per the architect's defaults stated to the owner; the owner may revise those defaults). The owner asked for both experiments to be **prepared, not run**: running either is a separate, later decision with the owner present and his consent for each session. Acceptance changes no test status or checkbox of chapter 06 §6.7.
 
 ## Context
 
@@ -23,12 +23,32 @@ claim beyond a preprint:
 The owner decided on 2026-10-19 to prepare both: **AG-03**, a VLM baseline on the same goals and
 applications, and **AG-02R**, at least five repetitions of AG-02 per model. This ADR is the design.
 Running either is a separate, later decision with the owner present.
+The owner then decided the points recorded under "Owner decisions" below (2026-10-19).
 
 What the owner has (2026-10-18/19): API keys only for DeepSeek and MiMo, and a Claude subscription (no
 Anthropic API key). Codex and OpenCode are refused (ADR-0037 decision 6). Nothing below was run, no
 provider was reached, and no screen was captured while writing it.
 
 ## Decision
+
+### Owner decisions of 2026-10-19
+
+Decided by the owner: **O1** the pixel exception is **accepted** as bounded in decision 5 (attested target
+window only, held in memory). **O2** the vision arm is **every available model**: Claude Haiku 5.5
+(native) and DeepSeek V4.1 Flash and MiMo V2.6 Flash through the confined Claude Code routes of
+ADR-0037, **each gated** by its preflight and by **one real smoke on a synthetic image** that proves the
+provider accepts image tool results; a model that fails its gate is **excluded and the exclusion is
+recorded** (decision 2). Codex with GPT-6 Luna **stays refused**: its `view_image` reads local files,
+its tool surface is wider than the experiment allows and it reads skills from the real home (ADR-0037
+decision 6). The pixel exception therefore extends to exactly three recipients: **Anthropic, DeepSeek and
+Xiaomi**. **O5** screenshots are held in memory only. **O7** n = 5 per model.
+
+Defaults of the architect, stated to the owner and recorded here as such (the owner may revise them):
+**O3** is subsumed by O2; **O4** a Python `ctypes` actuator with its own review before any live run;
+**O6** G09 decoy text is a scored failure, not a safety event; **O8** one consent per series; **O9** the
+dollar cap on the native Claude route and the token cap on the provider routes; **O10** today's runs are
+run 0, not pooled; **O11** the agent's automatic update is disabled for the campaign through the agent's
+controlled environment only (no system setting changes); **O12** no prompt tuning of the baseline.
 
 ### A. AG-03: a vision baseline on the same goals
 
@@ -37,20 +57,20 @@ provider was reached, and no screen was captured while writing it.
    (window titles and the editor's folder, decided by the operating system), the scoring (phase 1 and
    phase 2 rules, false successes, abstentions, the strict-verdict reading of G09), the per-goal live
    budget (`max_live`), the session budget, the wall-time cap, the operator's stop file, the ledger, the
-   owner's presence and the per-session consent are those of AG-02. Where possible the **model is the
-   same** (Haiku 5.5), so the contrast is "structured contract" against "pixels", not one model against
-   another. The agent's closing line (`VERDICT: DONE|IMPOSSIBLE`) and its pinned neutral system
+   owner's presence and the per-session consent are those of AG-02. Each vision model is compared with **itself** in
+   AG-02R (Haiku 5.5, DeepSeek V4.1 Flash, MiMo V2.6 Flash; decision 2), so the contrast is "structured
+   contract" against "pixels", not one model against another. The agent's closing line (`VERDICT: DONE|IMPOSSIBLE`) and its pinned neutral system
    instruction differ only in tool names (pinned by SHA-256 in the new runner).
 2. **What is feasible and what is not** (the owner's means, checked against ADR-0036/0037; nothing here
    was probed against a provider):
 
    | Setup | Feasible? | Why |
    |---|---|---|
-   | **Claude Code (subscription) + an operator-side pixel tool server** with exactly three tools, `screenshot`, `click`, `type_text`, on Haiku 5.5 | **Yes, recommended** (subject to Step 0) | Same harness, same isolation-proof design, same model as AG-02. Open fact to probe offline first: whether Claude Code forwards an MCP tool result that carries an image block to the model, and at what size. |
-   | **The Messages API computer-use tool**, the closest standard setup (per the cached API reference, `computer_toolset_20260801` on the Claude API for Opus 5.5 and Sonnet 5.5; Haiku 5.5 support not confirmed) | **No, not today** | Needs an Anthropic API key the owner does not have, and a loop of our own (a new egress path, a new proof). Becomes an option if the owner gets a key (decision O2). |
+   | **Claude Code (subscription) + an operator-side pixel tool server** with exactly three tools, `screenshot`, `click`, `type_text`, on Haiku 5.5 (native) | **Yes** (subject to Step 0) | Same harness, same isolation-proof design, same model as AG-02. Open fact to probe offline first: whether Claude Code forwards an MCP tool result that carries an image block to the model, and at what size. |
+   | **The Messages API computer-use tool**, the closest standard setup (per the cached API reference, `computer_toolset_20260801` on the Claude API for Opus 5.5 and Sonnet 5.5; Haiku 5.5 support not confirmed) | **No, not today** | Needs an Anthropic API key the owner does not have, and a loop of our own (a new egress path, a new proof). Not part of the owner's decision O2; it becomes an option only if the owner gets a key. |
    | **The Claude desktop app's computer use** | **No** | By its description it screenshots the whole desktop and drives any app: it cannot be confined to the two test applications. Refused for the reason Codex is (the surface is wider than the experiment allows). Not probed. |
-   | **DeepSeek or MiMo as a vision agent** through the confined Claude Code route | **Unknown, optional** | Whether their Anthropic-compatible endpoints accept image blocks, and whether the models read screens, is **unverified** (no provider may be called while preparing this). The route preflight rejects any image block today, so it would need its own verdict and the provider's separate acceptance (O3). Not part of the recommended AG-03. |
-   | Codex, OpenCode (GPT-6 Luna) | **No** | ADR-0037 decision 6: not confinable to the tools the experiment allows. |
+   | **DeepSeek V4.1 Flash and MiMo V2.6 Flash** as vision agents through the confined Claude Code routes of ADR-0037 | **Yes, by the owner's decision O2, each gated** | Whether their Anthropic-compatible endpoints accept image tool results, and whether the models read a screen, is **unverified** (no provider was called while preparing this), so each model passes a gate before any series: its route preflight with the image verdict of decision 6, and **one real smoke on a synthetic image** (decision 6). A model that fails is **excluded and the exclusion recorded** (what was tried, the provider's refusal), not worked around. |
+   | Codex (GPT-6 Luna), OpenCode | **No, stays refused** | ADR-0037 decision 6: Codex's `view_image` reads local files, the tool surface is wider than the tools the experiment allows, and skills are read from the real home; OpenCode reaches the tools only through a JavaScript runtime with `fetch`. |
 
 3. **The pixel tool server** (`tools/agent/ag03/pixel_server.py`, standard library only, a stdio MCP
    server in the style of `tools/agent/ag02/proxy.py`). It is **not** the Ommatix engine and the engine is
@@ -86,10 +106,12 @@ provider was reached, and no screen was captured while writing it.
    window snapshot**, so they are unit-tested without sending any input (AGENTS.md §6: never a test that
    injects real input). Sending uses `SendInput` through `ctypes`; this is new input-injection code in
    `tools/`, so it gets its own review before any live run (see the alternative B below).
-5. **Privacy: a new, bounded exception to ADR-0012 that the owner must accept explicitly (O1).**
+5. **Privacy: a new, bounded exception to ADR-0012, accepted by the owner (O1) on these bounds.**
    AG-02's exception covers synthetic **labels**. AG-03 sends **pixels** of the two synthetic test
-   applications to the provider (Anthropic, through the owner's subscription), in phase 1 as well as in
-   phase 2, because even a dry run must show the agent a screen. The exception is bounded to:
+   applications to the provider of each vision model that passed its gate: **Anthropic** (the owner's
+   subscription), **DeepSeek** and **Xiaomi** (the route endpoints of ADR-0037), in phase 1 as well as in
+   phase 2, because even a dry run must show the agent a screen. The exception covers exactly those three
+   recipients and a recipient only after its model passes the gate. It is bounded to:
    - the **attested target window only**. The capture is a `PrintWindow` of that window's handle where it
      renders the application faithfully (so a notification or another window on top cannot enter the
      image), otherwise a screen copy of the window's rectangle **refused whenever another visible
@@ -101,10 +123,9 @@ provider was reached, and no screen was captured while writing it.
    - the image is **held in memory only** to answer the call: not written to disk, not logged, not
      hashed into any result. Results hold the number of screenshots, their pixel dimensions and byte sizes,
      the latency, and booleans. No session transcript is stored (`--no-session-persistence`).
-     Keeping the screenshots outside the repository for audit is possible (O5) but is **not** the
-     default;
-   - the provider's retention and training terms for API inputs were not verified here; they are what
-     they are. The inputs are the test applications' own windows (large Spanish labels, no personal
+     By the owner's decision (O5) screenshots are **never stored**, not even outside the repository;
+   - the providers' retention and training terms for API inputs were not verified here (as in ADR-0037
+     decision 2, and a free or plan tier may retain or train on inputs); they are what they are. The inputs are the test applications' own windows (large Spanish labels, no personal
      data), which is the only reason the exception is acceptable.
 6. **Isolation proof for the pixel agent.** The same discipline as ADR-0036 decision 9, with its own
    schema (`ag03-isolation-proof-1`) and its own `verifier_revision`, so the AG-02 proofs stay valid.
@@ -114,7 +135,14 @@ provider was reached, and no screen was captured while writing it.
    skill, command or extra server; the canary sentinels do not reach any request; and **image blocks
    appear only inside the `tool_result` of the `screenshot` tool**, as PNG, within the byte and
    dimension limits (any other image block, from any other source, fails). The route verdict of ADR-0037
-   (`image block => fail`) is unchanged for AG-02 and is not reused.
+   (`image block => fail`) is unchanged for AG-02 and is not reused. For **DeepSeek and MiMo** the route
+   preflight of ADR-0037 gets the same image verdict (images only inside the `tool_result` of `screenshot`),
+   under its own route-proof revision, so the AG-02 route proofs stay valid. **The gate of decision 2** is
+   that preflight plus **one real smoke session** of the route: the pixel server in synthetic mode serves a
+   drawn PNG (never a capture, no engine, no input) and the model must answer a question about what is
+   drawn; the check is a boolean and the session stores only the metadata of decision 5. It proves that the
+   provider accepts an image tool result and that the model reads it. A model that fails either part is
+   excluded and recorded.
 7. **Phase 1 for pixels.** The agent sees the real (static) window; `click` and `type_text` return
    `simulated`. The choice is scored by resolving the clicked point to a label of the fixed vocabulary
    with a **read-only** hit test (the UI Automation point lookup the S4 clients already use for grounding,
@@ -142,30 +170,32 @@ provider was reached, and no screen was captured while writing it.
    the model's turn time, click to visible change), wall time per goal, wrong-target clicks (hit-test
    label other than the goal's), and the CLI's cost figure for Anthropic models. Tokens, not the cost
    figure, are what is compared across providers (ADR-0037).
-10. **What AG-03 shows and does not.** It shows, for **one model family**, on **11 synthetic goals on two
-    applications built for the engine** (large, clean labels), what the same model achieves and spends
-    when it perceives through the structured contract and when it perceives through pixels, with variance
-    (section C). It does **not** show that Ommatix beats vision agents in general, anything about real
-    applications, any other model, a standard computer-use harness (the baseline's loop and tools are
+10. **What AG-03 shows and does not.** It shows, for **each model that passes its gate** (up to three, one per provider),
+    on **11 synthetic goals on two applications built for the engine** (large, clean labels), what the same
+    model achieves and spends when it perceives through the structured contract and when it perceives
+    through pixels, with variance (section C). It does **not** show that Ommatix beats vision agents in general, anything about real
+    applications, any model that is not in it, a standard computer-use harness (the baseline's loop and tools are
     ours; with the API tool of decision 2 it would be closer to standard), or the safety of coordinate
     actuation in general (the pixel guard is a safety net for the experiment, not a reimplementation of
-    the engine's gate). The baseline's prompt gets one pre-registered, bounded tuning round on phase 1
-    only and is then frozen and pinned before phase 2 (O12); otherwise a weak baseline would flatter the
-    contract. All of that goes in the results next to the numbers.
+    the engine's gate). The baseline's prompt gets **no tuning** (O12): one pre-registered instruction,
+    pinned before phase 1. A weak baseline would flatter the contract, and an untuned prompt is exactly
+    that risk; the results say so next to the numbers.
 11. **Caps (pre-registered, equal to AG-02 where AG-02 has one):** `max_live` per goal from `goals.json`
     (sum 39), session budget 40, wall time 300 s per goal, and the per-goal cap of AG-02 as it stands after PR 96: the native Claude route
-    keeps its 0.50 USD CLI cap (AG-03 uses that route), a provider route (DeepSeek, MiMo in AG-02R) has no
-    dollar cap and instead a 550 000 context-token cap per goal imposed by the runner, plus new ones
+    keeps its 0.50 USD CLI cap (Haiku in AG-02R and AG-03), a provider route (DeepSeek and MiMo in AG-02R
+    and AG-03) has no dollar cap and instead a 550 000 context-token cap per goal imposed by the runner
+    (O9), plus new ones
     that bound the cost AG-02 never had to: at most 30 screenshots and 60 tool calls per goal.
 
 ### B. Order of work (none of it is done by this change)
 
 | Step | What | Check |
 |---|---|---|
-| 0 | **Offline probe** of Claude Code against the loopback stand-in: does it forward an MCP `image` content block in a tool result to the model, at what size, is it re-encoded or downscaled? No provider, no capture | Verdict recorded; if "no", AG-03 on Claude Code is infeasible and decision 2 falls to O2 |
+| 0 | **Offline probe** of Claude Code against the loopback stand-in: does it forward an MCP `image` content block in a tool result to the model, at what size, is it re-encoded or downscaled? No provider, no capture | Verdict recorded; if "no", AG-03 on Claude Code is infeasible for every model and the owner is asked again |
 | 1 | `pixel_server.py` with the guards as pure functions and the synthetic mode; tests with a fake window snapshot, no input | `tools/agent/ag03/test_*.py`, `python -m unittest discover -s tools/agent/ag03` |
 | 2 | Capture fidelity test of `PrintWindow` against a **synthetic** drawn window; fall back to the occlusion-checked rectangle copy | Recorded; no real application captured |
-| 3 | Preflight and proof (decision 6), with positive controls (a request with an extra tool, with an image outside `screenshot`, with a sentinel) | Preflight fails on each broken copy |
+| 3 | Preflight and proof (decision 6) for the native route and for each provider route, with positive controls (a request with an extra tool, with an image outside `screenshot`, with a sentinel) | Preflight fails on each broken copy |
+| 3b | **Gate smoke** per model (decision 6): one real session on a synthetic image, with the owner's go-ahead for the provider call | Passed or excluded-and-recorded, per model; no screen, no input |
 | 4 | Runner: `run_goal.py` with an `AgentCLI` for pixels, the AG-02 oracle and scoring unchanged, hit test for phase 1 | AG-02 tests still pass; new tests with a fake window and sampler |
 | 5 | Independent review of the `SendInput` helper and the guards (a Codex review in a visible Orca terminal), before any live run | Review file in `docs/reviews/` |
 | 6 | Owner-run phase 1, then phase 2 (section C schedule) | Results as a dated addition to §9.12; the plan row stays `NO_EJECUTADO` until evidence exists |
@@ -174,8 +204,8 @@ provider was reached, and no screen was captured while writing it.
 
 12. **What is repeated.** Phase 1 and phase 2 of AG-02, with the **same three agents** (Haiku 5.5 on
     Anthropic, DeepSeek `deepseek-flash`, MiMo `mimo-v2.6-flash`, all through the confined Claude Code
-    harness), **n = 5 series per model per phase** (the owner's minimum; n = 10 is O7), and the matched
-    AG-03 arm with the same n. One series is the 11 goals once.
+    harness), **n = 5 series per model per phase** (the owner's decision O7), and **one AG-03 arm per
+    model that passed its gate** (up to three), with the same n = 5 (O7). One series is the 11 goals once.
 13. **What changes between repetitions: nothing but the run.** Fixed and recorded in each series'
     fingerprint: the three binaries' SHA-256 prefixes (`332dfa0ca093334e`, `ca6e1ec7c5c7ee1b`,
     `ea67a7aae6f5a050`), the `goals.json` SHA-256, the phase configuration file's SHA-256, the Claude Code
@@ -185,8 +215,9 @@ provider was reached, and no screen was captured while writing it.
     others' 40; Claude Code 2.1.302 and 2.1.303), so they are reported next to the repetitions as
     **run 0 and are not pooled** (O10). The repetitions use session budget 40 for every model; because
     the per-goal caps sum to 39, no session budget binds. A series whose fingerprint differs from the
-    campaign's (for instance Claude Code updated itself) is **not pooled**; the owner disables the
-    updater by hand for the campaign (O11), and a changed version starts a new pool.
+    campaign's (for instance Claude Code updated itself) is **not pooled**; the agent's automatic
+    update is disabled for the campaign through the agent's controlled child environment only, with no
+    system setting touched (O11, architect default), and a changed version starts a new pool.
 14. **Order and randomisation, pre-registered.** Within a repetition `r`, the goals run in the order of
     the SHA-256 of `AG-02R/rep{r}/{goal}` ascending (no random-number generator whose algorithm could
     change), the **same order for the three models** (so order does not confound the model comparison)
@@ -197,8 +228,9 @@ provider was reached, and no screen was captured while writing it.
     days** and the start time is recorded, because provider load and aliases drift.
 15. **Budgets (per series and in total).** Per series, the caps of decision 11 and AG-02's. Live actions:
     at most 39 per series (the sum of the goal caps); AG-02 spent 25 to 32. Totals for n = 5 over three
-    models: **at most 585** live inputs in phase 2 (expected about 430 from the recorded 25, 29, 32 per
-    series), 15 phase-2 series, 15 phase-1 series. Stop rules: the operator's stop file; a safety event
+    models: for AG-02R **at most 585** live inputs in phase 2 (expected about 430 from the recorded 25, 29,
+    32 per series), 15 phase-2 series, 15 phase-1 series; AG-03 adds up to the same again (**at most 1 170**
+    in all) if all three models pass their gates. Stop rules: the operator's stop file; a safety event
     ends the **campaign** until the owner decides, not just the series; a goal aborted by the harness
     before the agent's first call (an application that did not open) is repeated once and both attempts
     are logged; a provider error or a timeout after the first call is a failure and stays in the
@@ -220,11 +252,13 @@ provider was reached, and no screen was captured while writing it.
     28.5 M context tokens and 4.7 h, doubled for n = 10. Haiku's CLI figures (0.052 USD per phase-2
     series, 0.031 per phase-1 series) give about **0.42 USD** for its ten series under the CLI's own
     arithmetic (a subscription uses quota, not dollars). DeepSeek and MiMo are quoted in tokens only: the
-    owner multiplies by their price lists, which this ADR did not verify. AG-03 (Haiku, n = 5, both
-    phases) is planned at **1.0 to 3.0 M** context tokens per phase-2 series (0.8 to 2.5 times AG-02's
-    Haiku, assuming about 2 screenshots per action at about 1.2 k estimated tokens each, 1280 by 720
-    pixels) and 7 to 15 min of wall time per series. These AG-03 figures are replaced by measured ones
-    after Step 6's phase 1.
+    owner multiplies by their price lists, which this ADR did not verify. AG-03 (n = 5, both phases, up to three
+    models) is planned at **0.8 to 2.5 times** the context tokens of each model's own AG-02 series
+    (assuming about 2 screenshots per action at about 1.2 k estimated tokens each, 1280 by 720 pixels): for
+    Haiku 1.0 to 3.0 M per phase-2 series, in all about **15 to 48 M** context tokens for phase 2 over three
+    models, and about 1.4 to 3 times the wall time of the model's AG-02 series (about 4 to 8 h for five
+    phase-2 series of the three models, each goal capped at 300 s). These AG-03 figures are replaced by
+    measured ones after Step 6's phase 1.
 17. **How variance is reported.** The unit is the goal-attempt; goals are fixed, repetitions are the
     sample.
     - **Per goal and model: k of n**, with the **Wilson 95% interval**. For n = 5: 5/5 is 0.57 to 1.00,
@@ -237,7 +271,7 @@ provider was reached, and no screen was captured while writing it.
       (Clopper-Pearson) upper bound: 0 of 55 gives an upper bound of 6.5%, 0 of 110 gives 3.3%.
     - **Between models (and AG-02 against AG-03):** differences of per-goal proportions and of mean series
       scores with intervals, plus an exact permutation test on the series scores for the pre-registered
-      pairs (Haiku against each other model; AG-02 Haiku against AG-03 Haiku). With 5 against 5 there are
+      pairs (Haiku against each other model in AG-02R; each model's AG-02R against its own AG-03). With 5 against 5 there are
       252 arrangements and the smallest two-sided p is 0.0079. No multiplicity correction is claimed, and
       **no "better than" is concluded from an interval that overlaps**; the dossier will say so.
     - **Tokens, wall time and steps:** median and range over the repetitions per goal and per series,
@@ -246,15 +280,15 @@ provider was reached, and no screen was captured while writing it.
       implemented one.
 18. **Consent.** The consent of ADR-0036 is per session and does not carry over. The conservative reading,
     used here, is that **one session is one series of one model**: 15 live consents for AG-02R phase 2
-    and 5 for AG-03 phase 2 (O8 asks whether a block of series may share one consent, which the owner
-    alone can decide). The owner is present, brings each application to the foreground by hand, and
+    and up to 15 for AG-03 phase 2 (O8, architect default: a block of series sharing one consent is the
+    owner's to allow, not assumed). The owner is present, brings each application to the foreground by hand, and
     minimises every other window before each session. Phase 1 needs the owner's consent for the data that
     leaves the machine, not for input.
 
 ## Alternatives considered
 
 - **A. Use the API computer-use tool now.** The closest to a standard setup, but it needs an Anthropic API
-  key the owner lacks and a new loop of ours (new egress, new proof). Kept as O2 if a key appears.
+  key the owner lacks and a new loop of ours (new egress, new proof). Not chosen by the owner's O2; possible if a key appears.
 - **B. A Rust tool reusing the `SendInput` actuator of `ommatix-adapter-input`.** Maximum reuse of the
   audited foreground and elevation checks (ADR-0016), but the actuator is shaped for engine-validated
   actions, a new binary needs a crate or an ADR-0016 revision, and it brings the experiment closer to
@@ -267,6 +301,10 @@ provider was reached, and no screen was captured while writing it.
 - **E. Use the claude.ai computer use, or Codex/OpenCode.** Not confinable (decision 2).
 - **F. Run AG-03 with a bigger model for a "best VLM" baseline.** Breaks the matched-model contrast and
   needs the same model in AG-02R. Possible as a later addition, not part of this.
+- **I. Only Haiku as the vision arm (the first recommendation).** Superseded by the owner's O2: every
+  available model, each gated.
+- **J. Tune the baseline's prompt on phase 1.** Would give the baseline a fairer shot; not done (O12), and
+  the results state the weak-baseline risk.
 - **G. Fewer than five repetitions, or none and a larger goal set.** The owner asked for n of at least 5;
   a larger goal set is a different experiment (EV-02, deferred).
 - **H. Pool the existing single series with the repetitions.** Their configuration differs (budget,
@@ -274,12 +312,14 @@ provider was reached, and no screen was captured while writing it.
 
 ## Consequences and cost
 
-- A new data-leaving path: pixels of the two test applications to Anthropic, in both phases, if the owner
-  accepts O1. Nothing else on screen may be visible, which the owner arranges by hand.
+- A new data-leaving path, accepted by the owner (O1): pixels of the two test applications to Anthropic,
+  DeepSeek and Xiaomi (each only after its model passes the gate), in both phases. Nothing else on screen
+  may be visible, which the owner arranges by hand.
 - New input-injection code in `tools/` that must be reviewed before any live run. It cannot change the
   product: no crate, no engine path and no wire format is touched.
-- About 4.7 h of agent wall time and 28.5 M context tokens for AG-02R at n = 5, plus AG-03; 20 live
-  sessions and 20 dry sessions with the owner present under the conservative consent reading.
+- About 4.7 h of agent wall time and 28.5 M context tokens for AG-02R at n = 5, plus AG-03 (about
+  4 to 8 h more); up to 30 live sessions and 30 dry sessions with the owner present under the conservative
+  consent reading. A model excluded at its gate removes its series.
 - Even at n = 5 the intervals are wide. The deliverable is honest variance, not a significance claim.
 - AG-02's rule of "never a pixel" is untouched: AG-03 is a separate arm with a separate harness, proof
   and runner.
@@ -292,9 +332,10 @@ provider was reached, and no screen was captured while writing it.
   the point, a held modifier, a stale screenshot, an exhausted ledger, a present stop file, a changed
   foreground at the last look), with no input sent and a regression test that the constant of allowed
   executables has two names and neither is `explorer.exe` nor `applicationframehost.exe`.
-- `tools/agent/ag03/test_preflight.py`: the proof, with positive controls for an extra tool, an image
-  outside `screenshot`, an oversized image and a sentinel in a request; a regression test that a real
-  capture never happens in synthetic mode.
+- `tools/agent/ag03/test_preflight.py`: the proof for the native route and for each provider route, with
+  positive controls for an extra tool, an image outside `screenshot`, an oversized image and a sentinel in
+  a request; a regression test that a real capture never happens in synthetic mode; the gate smoke's
+  pass, fail and exclusion records.
 - `tools/agent/ag03/test_privacy.py`: no image bytes, hash or text in any result, log or file; no
   stderr stored.
 - The existing `tools/agent/ag02/test_*.py` still pass (the shared ledger and scoring are not forked).
@@ -313,69 +354,81 @@ exception ends when the owner stops running the experiment.
 
 ## Provenance
 
-New proposal [P]. It answers the owner's decision of 2026-10-19 and ADR-0036 decision 3. It reuses the
+New proposal [P], accepted on 2026-10-19. It answers the owner's decision of 2026-10-19 and ADR-0036 decision 3. It reuses the
 design of ADR-0033 (operator-side tool, no product dependency, no key in the repository), ADR-0036
 (budget ledger, oracle, isolation proof, metadata only), ADR-0037 (the route) and ADR-0025 (age bound).
 It does not supersede them.
 
-## Open decisions for the owner
+## Decisions on the open points
 
-| # | Decision | Recommendation |
-|---|---|---|
-| O1 | Accept the new pixel exception to ADR-0012, bounded as in decision 5 | Yes, only on those bounds |
-| O2 | Which vision arm: Claude Code plus pixel tools on Haiku 5.5 (needs Step 0's probe to pass), or the API computer-use tool (needs an Anthropic API key) | The first; the second only if a key is obtained |
-| O3 | Try DeepSeek or MiMo as vision agents (needs the owner to confirm from the providers' documentation that the models and endpoints take images; separate acceptance per provider) | Not in this round |
-| O4 | Coordinate actuator: Python `ctypes` helper with pure guards, or a Rust tool reusing the input adapter | Python, reviewed at Step 5 |
-| O5 | Screenshots: memory only, or stored outside the repository for audit | Memory only |
-| O6 | G09 in AG-03 as a scored failure, not a safety event | Yes |
-| O7 | n per model: 5 or 10 | 5, and decide on 10 after seeing the intervals |
-| O8 | One consent per series, or per block of series | Per series until the owner says otherwise |
-| O9 | DeepSeek and MiMo repetitions run under the per-goal cap that PR 96 introduced (550 000 context tokens, no dollar cap), not the 0.50 USD cap of run 0 (which stopped MiMo's G08 on a meaningless figure); Haiku and AG-03 keep the dollar cap | Yes; run 0 is already not pooled (O10) |
-| O10 | Report the earlier single series as run 0, not pooled | Yes |
-| O11 | Disable Claude Code's automatic update for the campaign (an owner system setting) | Yes |
-| O12 | Bounded phase-1 prompt tuning for the pixel baseline, then frozen | Yes, one round |
+| # | Decision | Outcome | Source |
+|---|---|---|---|
+| O1 | Pixel exception to ADR-0012, bounded as in decision 5 | **Accepted** | Owner |
+| O2 | Vision arm | **All available models:** Haiku 5.5 (native), DeepSeek V4.1 Flash and MiMo V2.6 Flash through the ADR-0037 routes, each gated by a preflight and one real smoke on a synthetic image; a model that fails is excluded and recorded. Codex/GPT-6 Luna stays refused | Owner |
+| O3 | DeepSeek or MiMo as vision agents | Subsumed by O2 (included, gated) | Architect default |
+| O4 | Coordinate actuator | Python `ctypes` helper with pure guards, with its own review before any live run | Architect default |
+| O5 | Screenshots | **Memory only** | Owner |
+| O6 | G09 in AG-03 | Scored failure, not a safety event | Architect default |
+| O7 | n per model | **5** | Owner |
+| O8 | Consent | One per series | Architect default |
+| O9 | Per-goal cap | Dollar cap on the native Claude route; the 550 000 context-token cap (PR 96) on the provider routes, not the 0.50 USD cap of run 0 | Architect default |
+| O10 | Earlier single series | Run 0, reported next to the repetitions, not pooled | Architect default |
+| O11 | Automatic update of the agent | Disabled for the campaign, through the agent's controlled environment only | Architect default |
+| O12 | Baseline prompt | No tuning | Architect default |
 
 ## Resumen (ES)
 
-**Propuesta (19 de octubre de 2026), sin ejecutar nada.** El responsable pidió preparar dos experimentos
-que harían publicables los resultados más allá de un preprint: **AG-03**, una línea base con un agente de
-visión sobre las mismas metas y aplicaciones, y **AG-02R**, al menos cinco repeticiones de AG-02 por
-modelo para informar la varianza (hoy hay una sola serie por modelo: 6/11, 7/11 y 7/11 no distinguen a los
-modelos). Esta ADR es el diseño; no se ha llamado a ningún proveedor, capturado ninguna pantalla ni
-enviado ninguna entrada.
+**Aceptada el 19 de octubre de 2026 (responsable: O1, O2, O5 y O7; O3 a O12 por los valores por defecto
+del arquitecto, declarados al responsable, que puede revisarlos). No se ejecuta nada.** El responsable pidió
+preparar dos experimentos que harían publicables los resultados más allá de un preprint: **AG-03**, una
+línea base con un agente de visión sobre las mismas metas y aplicaciones, y **AG-02R**, al menos cinco
+repeticiones de AG-02 por modelo para informar la varianza (hoy hay una sola serie por modelo: 6/11, 7/11
+y 7/11 no distinguen a los modelos). No se ha llamado a ningún proveedor, capturado ninguna pantalla ni
+enviado ninguna entrada. Correr cualquiera de los dos es una decisión posterior, con el responsable
+presente y su consentimiento por sesión.
+
+**Decisiones del responsable.** **O1** se acepta la excepción de píxeles a la ADR-0012, acotada a la
+ventana atestiguada y en memoria. **O2** el brazo de visión son **todos los modelos disponibles**: Claude
+Haiku 5.5 (nativo), DeepSeek V4.1 Flash y MiMo V2.6 Flash por las rutas confinadas de Claude Code de la
+ADR-0037, **cada uno con una puerta** (el preflight de su ruta y **una prueba real sobre una imagen
+sintética** que demuestre que el proveedor acepta resultados de herramienta con imagen); el que falle se
+excluye y se registra. Codex con GPT-6 Luna sigue rechazado (su `view_image` lee archivos locales, su
+superficie de herramientas es mayor y lee habilidades del directorio personal real). La excepción de
+píxeles alcanza así a Anthropic, DeepSeek y Xiaomi. **O5** las capturas sólo en memoria. **O7** n = 5 por
+modelo. **Valores por defecto del arquitecto:** O3 queda subsumida en O2; O4 actuador de Python con
+`ctypes` y revisión propia antes de cualquier corrida en vivo; O6 el texto del señuelo G09 es un fallo
+puntuado, no un evento de seguridad; O8 un consentimiento por serie; O9 tope en dólares en la ruta nativa
+de Claude y tope de tokens de contexto en las rutas de proveedor; O10 las corridas de hoy son la corrida 0,
+sin agrupar; O11 la actualización automática del agente se desactiva para la campaña sólo en el entorno
+controlado del agente; O12 sin ajuste del aviso de la línea base.
 
 **AG-03.** Cambia una sola cosa: cómo el agente percibe y actúa. Mismas once metas (mismo `goals.json`),
 mismo oráculo del sistema operativo, misma puntuación, mismos topes, libro, parada, presencia del
-responsable y consentimiento por sesión; el mismo modelo (Haiku 5.5) para que el contraste sea «contrato
-estructurado» frente a «píxeles». Es viable con Claude Code (suscripción) más un servidor de herramientas
-de píxeles propio con tres herramientas (`screenshot`, `click`, `type_text`), sujeto a una sonda previa sin
-proveedor que compruebe si Claude Code reenvía imágenes de resultados MCP. La herramienta de uso del
-ordenador de la API de Mensajes necesita una clave de API de Anthropic que el responsable no tiene; el uso
-del ordenador de la aplicación de escritorio de Claude no se puede confinar a dos aplicaciones; DeepSeek y
-MiMo como agentes de visión no están verificados; Codex y OpenCode siguen rechazados. El actuador por
-coordenadas lo protege el propio arnés, independiente de Ommatix y a prueba de fallos: parada del
-operador, fase, captura reciente (10 s), libro antes de cualquier llamada al sistema, primer plano del
-proceso que lanzó la corrida (dos ejecutables), sin elevación, punto dentro de la ventana y sin otra
-ventana delante, sin modificadores, y una última comprobación antes de enviar; las guardas son funciones
-puras con pruebas sin entrada real. **Privacidad:** es una excepción nueva y acotada a la ADR-0012, que el
-responsable debe aceptar de forma explícita: se envían **píxeles** (no sólo etiquetas) de las dos
-aplicaciones de prueba, sólo de la ventana atestiguada, nunca el monitor, en memoria y sin guardarse. No
-hay comprobación de frescura de contenido (no se injerta la puerta de Ommatix a la línea base) y en la meta
-señuelo G09 el texto que llega a un campo es un fallo puntuado, no un evento de seguridad. Métricas: éxito
-por oráculo, falsos éxitos, pasos, tokens de entrada y salida con el reparto de imágenes sólo estimado,
-latencia por paso y coste cuando es medible. Qué muestra y qué no: un modelo, once metas sintéticas, no
-dice nada de aplicaciones reales ni de «mejor que» en general.
+responsable y consentimiento por sesión; cada modelo se compara consigo mismo en AG-02R, de modo que el
+contraste sea «contrato estructurado» frente a «píxeles». Claude Code (suscripción) más un servidor propio
+de tres herramientas (`screenshot`, `click`, `type_text`), sujeto a una sonda previa sin proveedor que
+compruebe si Claude Code reenvía imágenes de resultados MCP. La herramienta de uso del ordenador de la API
+necesita una clave de Anthropic que el responsable no tiene y el uso del ordenador de la aplicación de
+escritorio de Claude no se puede confinar. El actuador por coordenadas lo protege el propio arnés,
+independiente de Ommatix y a prueba de fallos: parada del operador, fase, captura reciente (10 s), libro
+antes de cualquier llamada al sistema, primer plano del proceso que lanzó la corrida (dos ejecutables), sin
+elevación, punto dentro de la ventana y sin otra ventana delante, sin modificadores, y una última
+comprobación antes de enviar; las guardas son funciones puras con pruebas sin entrada real. **Privacidad:**
+se envían **píxeles** de las dos aplicaciones de prueba, sólo de la ventana atestiguada, nunca el monitor,
+en memoria y sin guardarse, a cada proveedor cuyo modelo pase su puerta. No hay comprobación de frescura de
+contenido y en G09 el texto que llega a un campo es un fallo puntuado. Métricas: éxito por oráculo, falsos
+éxitos, pasos, tokens de entrada y salida con el reparto de imágenes sólo estimado, latencia por paso y
+coste cuando es medible. Qué muestra y qué no: hasta tres modelos, once metas sintéticas, sin aviso
+ajustado; nada de aplicaciones reales ni de «mejor que» en general.
 
-**AG-02R.** Cinco series por modelo y fase (diez si el responsable lo decide), con los mismos tres
-agentes; no cambia nada salvo la corrida (huella fija de binarios, metas, configuración, versión de Claude
-Code y modelo; una serie con otra huella no se agrupa; las series únicas anteriores se informan aparte como
-«corrida 0»). Orden de metas por el SHA-256 de `AG-02R/rep{r}/{meta}`, igual para los tres modelos,
-modelos intercalados y repeticiones en al menos dos días. Presupuesto: como máximo 39 acciones en vivo por
-serie (585 en total con n = 5). Con las cifras registradas: unos 28,5 M de tokens de contexto y 4,7 h de
-agente con n = 5; Haiku unos 0,42 USD según la CLI; DeepSeek y MiMo sólo en tokens. Varianza: k de n por
-meta con intervalo de Wilson al 95 %, puntuación de serie con media, rango e intervalo *t*, límites
+**AG-02R.** Cinco series por modelo y fase, con los mismos tres agentes y un brazo AG-03 por cada modelo
+que pase su puerta; no cambia nada salvo la corrida (huella fija de binarios, metas, configuración,
+versión de Claude Code y modelo; una serie con otra huella no se agrupa; las series únicas anteriores se
+informan aparte como «corrida 0»). Orden de metas por el SHA-256 de `AG-02R/rep{r}/{meta}`, igual para los
+tres modelos, modelos intercalados y repeticiones en al menos dos días. Presupuesto: como máximo 39
+acciones en vivo por serie (585 en AG-02R con n = 5; hasta 1 170 con AG-03). Con las cifras registradas:
+unos 28,5 M de tokens de contexto y 4,7 h de agente en AG-02R, y de 0,8 a 2,5 veces los tokens de cada
+modelo en AG-03; Haiku unos 0,42 USD según la CLI en AG-02R; DeepSeek y MiMo sólo en tokens. Varianza: k de
+n por meta con intervalo de Wilson al 95 %, puntuación de serie con media, rango e intervalo *t*, límites
 exactos para los falsos éxitos (0 de 55: 6,5 %) y una prueba de permutación exacta entre pares fijados
-(5 contra 5: p mínimo 0,0079); sin conclusión de «mejor que» con intervalos solapados. Decisiones
-abiertas del responsable: O1 a O12 de la tabla (excepción de píxeles, brazo de visión, modelos de
-DeepSeek/MiMo, actuador, capturas, G09, n, consentimiento por serie, tope por meta de DeepSeek y MiMo (tokens de contexto, no dólares), corrida 0,
-actualización automática y ajuste del aviso).
+(5 contra 5: p mínimo 0,0079); sin conclusión de «mejor que» con intervalos solapados.
