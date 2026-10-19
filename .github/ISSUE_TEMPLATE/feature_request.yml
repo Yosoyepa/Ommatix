@@ -1,0 +1,28 @@
+name: Feature request
+description: Explain a problem and propose behaviour consistent with the thesis.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What task or limitation motivates the proposal? Use synthetic examples.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: Explain the result you need and any alternatives considered.
+    validations:
+      required: true
+  - type: input
+    id: thesis
+    attributes:
+      label: Requirement or thesis section
+      description: Link an RF/RNF requirement or dossier section if applicable; otherwise say none.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence and constraints
+      description: Include safety, determinism or privacy constraints; never attach real-screen data.

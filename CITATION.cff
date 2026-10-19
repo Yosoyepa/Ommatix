@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use Ommatix in your research, cite this software."
+type: software
+title: "Ommatix: Spatial Indexing and Incremental Perception for GUI Agents"
+authors:
+  - given-names: "Juan Carlos"
+    family-names: "Andrade Unigarro"
+repository-code: "https://github.com/Yosoyepa/Ommatix"
+license:
+  - MIT
+  - Apache-2.0
+abstract: >-
+  Ommatix is a thesis research prototype for local desktop perception. It turns
+  frames into GUI elements with stable session identifiers and revisions,
+  plans incremental perception against the last committed base, publishes
+  immutable snapshots, and exposes observations, actions and metrics over MCP.
+  Actuation is fail-closed and defaults to a dry run. Perception lives in the
+  engine; reasoning lives in the agent.
+keywords:
+  - incremental perception
+  - GUI agents
+  - temporal grounding
+  - spatial indexing
+  - Model Context Protocol
+  - Rust
+  - research prototype

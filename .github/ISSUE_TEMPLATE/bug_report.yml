@@ -1,0 +1,57 @@
+name: Bug report
+description: Report reproducible engine or tooling behaviour with sanitised evidence.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Report vulnerabilities through the private security form, not here.
+        Use synthetic data; never attach a real-screen screenshot or a credential.
+  - type: input
+    id: commit
+    attributes:
+      label: Commit or version
+      description: Paste the commit hash; include a version only if one exists.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: Windows 11 x64
+    validations:
+      required: true
+  - type: input
+    id: features
+    attributes:
+      label: Build features and source/input adapters
+      description: For example, default features, source sim, input dry-run; omit personal paths.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Prefer cargo run -- demo or a deterministic fixture; do not inject real input.
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: Expected and actual behaviour
+      description: Include the tool result code or affected invariant where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitised stderr diagnostics
+      description: Optional; stderr only, without screen text, personal paths, secrets or screenshots.
+      render: text
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy
+      options:
+        - label: I removed personal data and did not attach screenshots of my real screen
+          required: true
