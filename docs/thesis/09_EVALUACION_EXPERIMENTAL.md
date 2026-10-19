@@ -453,13 +453,15 @@ Ni `view_image` ni `execute`+`fetch` se toleran como «inertes»: la regla es ex
 
 #### Resultados de la fase 1 por ruta (19 de octubre de 2026)
 
-Adición fechada. Primera corrida de modelos de otros proveedores en AG-02, en `dry_run`, con las once metas fijas: **Xiaomi MiMo V2.6 Flash** (`mimo-v2.6-flash`) y **DeepSeek V4.1 Flash 1017** (`deepseek-flash`), cada uno por la ruta de Claude Code confinado descrita arriba. Según informa el arquitecto, el responsable estaba presente y dio su consentimiento para esta sesión; las observaciones de las aplicaciones de prueba se enviaron a la API de cada proveedor (MiMo: servidor del Token Plan de Singapur, `token-plan-sgp.xiaomimimo.com`; DeepSeek: `api.deepseek.com`). Esta adición **sustituye** la frase «no hay resultados de modelos» de la cabecera del apartado; el resto del apartado se mantiene como registro del diseño. Las cifras salen de los archivos de la corrida (un `.json` y un registro del proxy por meta, y un resumen por ruta) y son números del registro.
+Adición fechada. Primera corrida de modelos de otros proveedores en AG-02, en `dry_run`, con las once metas fijas: **Xiaomi MiMo V2.6 Flash** (`mimo-v2.6-flash`) y **DeepSeek** (alias solicitado `deepseek-flash`; la documentación de DeepSeek lo identifica con DeepSeek-V4.1-Flash-1017, véase abajo), cada uno por la ruta de Claude Code confinado descrita arriba. Según informa el arquitecto, el responsable estaba presente y dio su consentimiento para esta sesión; las observaciones de las aplicaciones de prueba se enviaron a la API de cada proveedor (MiMo: servidor del Token Plan de Singapur, `token-plan-sgp.xiaomimimo.com`; DeepSeek: `api.deepseek.com`). Esta adición **sustituye** la frase «no hay resultados de modelos» de la cabecera del apartado; el resto del apartado se mantiene como registro del diseño. Las cifras salen de los archivos de la corrida (un `.json` y un registro del proxy por meta, y un resumen por ruta) y son números del registro.
+
+**Versión de DeepSeek.** Los registros y la prueba de la ruta contienen solo el alias solicitado, `deepseek-flash` (`model` y `requested_model`); la API no devuelve la versión exacta. Que ese alias corresponda a V4.1-Flash-1017 lo afirma la documentación oficial de DeepSeek («Models & Pricing», <https://api-docs.deepseek.com/quick_start/pricing/>, consultada el 19 de octubre de 2026), no una atestación de la corrida; los servidores pudieron cambiar el mapeo después de esa consulta.
 
 **Configuración.** Claude Code 2.1.303, directorio de configuración propio y vacío por ruta, prueba de la ruta regenerada por el script antes de cada corrida (revisión 2 del verificador de ruta; MiMo 2026-10-19T18:34:01Z para la serie, DeepSeek 2026-10-19T18:51:32Z), proxy con `--dry-run-only`, `phase1.toml` del kit y esfuerzo máximo. El motor es el de siempre: `ommatix.exe` con prefijo SHA-256 `332dfa0ca093334e` y fecha de modificación del 17 de octubre de 2026 (23:56, hora local), el de 9.11.1; `goals.json` con SHA-256 `c280652a…`. Límites por meta de 300 s y 0,50 USD, como en 9.11.1. MiMo: un ensayo de G01 (13:33 hora local, 18:33:13Z) y la serie de once metas (de 13:34 a 13:51); DeepSeek: la serie de once metas (de 13:51 a 13:56), sin ensayo propio. Cada meta tiene un único intento por modelo (más el ensayo de MiMo en G01).
 
 **El coste que informa la CLI no se cita.** Para estos modelos la CLI informa una cifra de «coste» por meta, pero no es un coste (no es una tarifa de Xiaomi ni de DeepSeek) y no se usa aquí. Se comparan tokens, tiempo y recuentos.
 
-**Resultados por meta: MiMo (`mimo-v2.6-flash`, serie).** Contexto = entrada + creación de caché + lectura de caché, según el uso que informa la CLI; tiempo = tiempo de pared de la meta. Las cifras marcadas con * salen del flujo de eventos y no del informe final de la CLI (G10, cuya sesión terminó por el tope de tiempo antes de ese informe; su salida de 0 significa «no informada»).
+**Resultados por meta: MiMo (`mimo-v2.6-flash`, serie).** Contexto = entrada + creación de caché + lectura de caché, según el uso que informa la CLI; tiempo = tiempo de pared de la meta. Las cifras marcadas con * salen del flujo de eventos y no del informe final de la CLI (G10, cuya sesión terminó por el tope de tiempo antes de ese informe; su salida no está disponible: el flujo registra 0, que es un marcador y no una medida, y no entra en ninguna estadística de salida).
 
 | Meta | Turnos | Tiempo (s) | Contexto (tokens) | Salida (tokens) | Veredicto | Fase 1 |
 |---|---|---|---|---|---|---|
@@ -472,10 +474,10 @@ Adición fechada. Primera corrida de modelos de otros proveedores en AG-02, en `
 | G07 | 16 | 205,78 | 149 604 | 3 567 | DONE | éxito |
 | G08 | 5 | 20,51 | 21 038 | 705 | DONE | éxito |
 | G09 | 9 | 103,20 | 48 140 | 1 891 | DONE | éxito por elección (véase el límite de G09) |
-| G10 | — | 300,55 | 16 145 * | 0 * | sin veredicto | **sin éxito: tope de 300 s sin veredicto** |
+| G10 | — | 300,55 | 16 145 * | no disponible | sin veredicto | **sin éxito: tope de 300 s sin veredicto** |
 | G11 | 7 | 31,80 | 34 389 | 1 260 | IMPOSSIBLE | abstención correcta, sin acción |
 
-El ensayo de G01 (18:33:13Z): éxito, `DONE`, 7 turnos, 23,91 s, 50 177 tokens de contexto, 861 de salida, dos acciones simuladas y cuatro observaciones. La serie suma 811 410 tokens de contexto (mediana por meta 34 389), 16 914 de salida (mediana 1 141) y 992,1 s de pared (mediana 34,76 s).
+El ensayo de G01 (18:33:13Z): éxito, `DONE`, 7 turnos, 23,91 s, 50 177 tokens de contexto, 861 de salida, dos acciones simuladas y cuatro observaciones. La serie suma 811 410 tokens de contexto (mediana por meta 34 389; cobertura mixta: diez informes finales de la CLI más la cifra provisional de 16 145 del flujo de G10) y 992,1 s de pared (mediana 34,76 s). La salida conocida suma 16 914 tokens en 10 de 11 metas (informes finales de la CLI; mediana 1 200,5 sobre esas diez). El valor 1 141 que imprime el resumen del ejecutor trata la salida ausente de G10 como un cero observado y no es una medida.
 
 **Resultados por meta: DeepSeek (`deepseek-flash`, serie).** Mismas definiciones.
 
@@ -534,7 +536,7 @@ Con el ensayo de G01 (dos acciones, ambas tras y seguidas de una observación), 
 
 **Comparación con Claude Haiku 5.5 (9.11.1).** Es el mismo arnés de agente (Claude Code; 2.1.302 en las ocho primeras sesiones de Haiku, 2.1.303 en las del editor y en estas series), las mismas once metas, el mismo motor y el mismo oráculo, con **una sola corrida por modelo**: no hay varianza estimada, y una diferencia de una meta entre dos corridas únicas no distingue los modelos. Las cifras de Haiku son las de las tablas de 9.11.1; en las sumas y medianas no entra el ensayo de G01.
 
-| | Haiku 5.5 (18 oct) | MiMo V2.6 Flash (19 oct) | DeepSeek V4.1 Flash 1017 (19 oct) |
+| | Haiku 5.5 (18 oct) | MiMo V2.6 Flash (19 oct) | DeepSeek `deepseek-flash` (19 oct) |
 |---|---|---|---|
 | Éxitos de la fase 1 (implementada / estricta) | 10 de 11 / 9 de 11 | 10 de 11 / 9 de 11 | 11 de 11 / 10 de 11 |
 | Meta fallida (implementada) | G07 (secuencia repetida) | G10 (tope de 300 s) | — |
@@ -544,8 +546,8 @@ Con el ensayo de G01 (dos acciones, ambas tras y seguidas de una observación), 
 | Rechazos del motor (`STALE_SNAPSHOT`) | 1 | 13 | 5 |
 | Turnos, mediana por meta | 4 | 7,5 (10 metas con dato) | 8 |
 | Tiempo de pared, suma / mediana (s) | 169,6 / 13,6 | 992,1 / 34,76 | 289,7 / 22,12 |
-| Contexto, suma / mediana (tokens) | 395 315 / 29 403 | 811 410 / 34 389 | 691 268 / 46 635 |
-| Salida, suma / mediana (tokens) | 13 865 / 1 088 | 16 914 / 1 141 | 34 167 / 1 881 |
+| Contexto, suma / mediana (tokens) | 395 315 / 29 403 | 811 410 / 34 389 (mixto: G10 provisional) | 691 268 / 46 635 |
+| Salida, suma / mediana (tokens) | 13 865 / 1 088 (n = 11) | 16 914 / 1 200,5 (n = 10, sin G10) | 34 167 / 1 881 (n = 11) |
 | Acciones / tras / seguidas (fase 1 completa, con el ensayo de G01) | 22 / 12 / 8 | 36 / 32 / 27 | 27 / 26 / 27 (sin ensayo) |
 
 Cómo leer la tabla: las cifras de tokens no son comparables como coste ni como esfuerzo, porque cada proveedor cuenta la entrada, la caché y la salida (con su razonamiento) a su manera, y Claude Code envía el pensamiento como «adaptativo», cuya acogida por cada proveedor no se ha verificado. En G07, que Haiku falló, MiMo y DeepSeek cumplieron la elección esperada; con una sola corrida cada uno, eso no dice que ninguno resuelva G07 de manera fiable. Ni el tiempo de pared ni los turnos son una comparación limpia: incluyen la latencia de cada punto de acceso.
