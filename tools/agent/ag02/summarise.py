@@ -76,7 +76,29 @@ def _median(values):
     return statistics.median(values) if values else None
 
 
+def model_label(result: dict) -> str:
+    """The agent, provider and model a result was produced with (ADR-0037), from its provenance:
+    ``<cli>:<provider>/<model>``. A result from before the provenance carried them is Claude Code's."""
+    provenance = result.get("provenance") if isinstance(result.get("provenance"), dict) else {}
+
+    def text(key, default):
+        value = provenance.get(key)
+        return value if isinstance(value, str) and value else default
+    model = text("model", text("requested_model", "unknown"))
+    return f"{text('cli', 'claude-code')}:{text('provider', 'anthropic')}/{model}"
+
+
 def summarise(results: list[dict]) -> dict:
+    """The whole set, as before, plus ``models``: the same summary for each agent/provider/model."""
+    out = _summarise(results)
+    groups: dict[str, list[dict]] = {}
+    for r in results:
+        groups.setdefault(model_label(r), []).append(r)
+    out["models"] = {label: _summarise(group) for label, group in sorted(groups.items())}
+    return out
+
+
+def _summarise(results: list[dict]) -> dict:
     by_goal: dict = {}
     phases: dict = {}
     for r in results:
@@ -189,6 +211,14 @@ def _per_message_text(t: dict) -> str:
 
 
 def render(summary: dict) -> str:
+    if len(summary.get("models", {})) > 1:
+        # Several agents or models in one set: one block each, never one blended table.
+        blocks = [f"== {label}\n" + _render({**one, "models": {}}) for label, one in summary["models"].items()]
+        return "\n\n".join(blocks)
+    return _render(summary)
+
+
+def _render(summary: dict) -> str:
     lines = ["AG-02 summary", ""]
     lines.append(f"{'goal':<6}{'phase':<7}{'runs':<6}{'success':<9}{'false':<7}{'aborted':<9}"
                  f"{'live':<6}{'context tok(med)':<18}{'output tok(med)':<17}{'cost USD':<10}")

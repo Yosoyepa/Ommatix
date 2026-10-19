@@ -670,8 +670,13 @@ def init_attestation(init: dict) -> dict:
         return sorted(_entry_hash(x) for x in value) if isinstance(value, list) else None
     servers = init.get("mcp_servers")
     memory = init.get("memory_paths")
+    cli, provider = init.get("cli"), init.get("provider")
     return {
-        "claude_code_version": init.get("claude_code_version"),
+        # Claude Code names its version ``claude_code_version``; any other agent (ADR-0037) ``cli_version``.
+        "claude_code_version": init.get("cli_version", init.get("claude_code_version")),
+        "cli": cli if isinstance(cli, str) and cli in CLI_NAMES else ("claude-code" if cli is None else UNKNOWN),
+        "provider": (provider if isinstance(provider, str) and provider in PROVIDER_NAMES
+                     else ("anthropic" if provider is None else UNKNOWN)),
         "model": init.get("model"),
         "tools": names("tools"),
         "mcp_servers": (sorted((str(s.get("name")), str(s.get("status"))) for s in servers
@@ -719,6 +724,8 @@ def init_problems(att: dict | None, proof: dict | None, config_dir: Path | None 
         problems.append("version_missing")
     elif proof is not None and version != proof["claude_code_version"]:
         problems.append("version_differs_from_proof")
+    if proof is not None and proof.get("provider") is not None and att.get("provider") != proof["provider"]:
+        problems.append("provider_differs_from_proof")
     model = att.get("model")
     if not isinstance(model, str) or not MODEL_NAME.match(model):
         problems.append("model_missing")
@@ -767,6 +774,9 @@ def proof_problems(proof: dict, args, config_dir: Path | None) -> list[str]:
 # ---- the stream ----------------------------------------------------------------------------
 
 UNKNOWN = "unknown"
+# The agents and providers a result may name (ADR-0037); anything else is recorded as ``unknown``.
+CLI_NAMES = ("claude-code", "minimal-agent")
+PROVIDER_NAMES = ("anthropic", "deepseek", "mimo")
 # The CLI's stream-json event kinds and subtypes that were reviewed; anything else is "other".
 EVENT_KINDS = {"system": ("init", "hook_started", "hook_response", "compact_boundary", "status", "api_retry"),
                "assistant": (), "user": (), "rate_limit_event": (), "stream_event": (),
@@ -961,6 +971,7 @@ class StreamMetrics:
     def provenance(self, requested_model: str | None) -> dict:
         att = self.attestation or {}
         return {"claude_code_version": att.get("claude_code_version"),
+                "cli": att.get("cli"), "provider": att.get("provider"),
                 "model": att.get("model"), "requested_model": requested_model,
                 "proof_version": (self.proof or {}).get("claude_code_version"),
                 "proof_date_utc": (self.proof or {}).get("date_utc")}
@@ -1314,7 +1325,8 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
                timeout: float, stderr_path: Path | None = None, env: dict | None = None) -> dict:
     """Runs the command; feeds every stdout line to `metrics`; kills it on a timeout, when the
     first event shows a session other than the proven one, or when the tool surface is wider
-    than the three Ommatix tools."""
+    than the three Ommatix tools. The child's stderr is discarded unless a test passes `stderr_path`:
+    production never stores it (it can echo a credential or a response, and nothing filters it)."""
     flags = 0x08000000 if os.name == "nt" else 0
     stderr = open(stderr_path, "wb") if stderr_path else subprocess.DEVNULL
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -1344,6 +1356,12 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
     if stderr_path:
         stderr.close()
     return {"exit_code": proc.returncode, "killed": killed["reason"]}
+
+
+def agent_cli(args):
+    """The agent the goals run with (``agentcli.py``); imported late because it imports this module."""
+    import agentcli
+    return agentcli.make(args)
 
 
 def default_output_root() -> Path:
@@ -1381,12 +1399,34 @@ def parse_args(argv=None):
     p.add_argument("--testapp-exe", type=Path)
     p.add_argument("--editor-exe", type=Path)
     p.add_argument("--claude", default="claude")
+    p.add_argument("--agent-cli", choices=("claude", "minimal", "codex", "opencode"), default="claude",
+                   help="the agent (ADR-0037): claude (ADR-0036), minimal (our own loop, for --provider), "
+                        "codex and opencode (probes that fail closed)")
+    p.add_argument("--provider", choices=("deepseek", "mimo"),
+                   help="minimal agent: the OpenAI-compatible endpoint the observations go to")
+    p.add_argument("--base-url", help="minimal agent: a loopback stand-in's URL (tests); never a real endpoint")
+    p.add_argument("--key-file", type=Path, help="minimal agent: the file outside the repository holding the key")
+    p.add_argument("--effort", choices=("max",), help="minimal agent: the provider's spelling of effort max")
+    p.add_argument("--extra-param", help="minimal agent: JSON object of request parameters (reasoning_effort, ...)")
+    p.add_argument("--max-total-tokens", type=int, default=400_000,
+                   help="minimal agent: stop a goal after this many context plus output tokens")
+    p.add_argument("--price", help="minimal agent: USD per million tokens: fresh input,cached input,output")
+    p.add_argument("--completion-ceiling", type=int,
+                   help="minimal agent: max_tokens sent with every request (default 32768)")
+    p.add_argument("--route", choices=("mimo", "deepseek"),
+                   help="Claude Code harness pointed at that provider's Anthropic-compatible endpoint "
+                        "(ADR-0037): needs --route-base-url, --key-file, --claude-config-dir, --isolation-proof")
+    p.add_argument("--route-base-url",
+                   help="the Anthropic-compatible endpoint of the route; required, one of a closed list "
+                        "(MiMo's Token Plan hosts are regional)")
     p.add_argument("--claude-config-dir", type=Path,
                    help="the controlled Claude Code configuration directory the proof was made for "
                         "(an existing directory outside the repository; it holds the login)")
     p.add_argument("--isolation-proof", type=Path,
                    help="the passing file written by preflight.py for this Claude Code version")
-    p.add_argument("--max-budget-usd", type=float, default=1.0)
+    p.add_argument("--max-budget-usd", type=float, default=None,
+                   help="Claude Code: the per-goal dollar cap (default 1.0); minimal agent: enforced only "
+                        "with --price")
     p.add_argument("--goal-timeout", type=float, default=300.0)
     p.add_argument("--foreground-wait", type=float, default=180.0)
     p.add_argument("--max-live-session", type=int, default=0,
@@ -1395,27 +1435,72 @@ def parse_args(argv=None):
     p.add_argument("--out", type=Path, default=None, help="output directory (outside the repo)")
     args = p.parse_args(argv)
     for name in ("exe", "config", "testapp_exe", "editor_exe", "ledger", "out", "isolation_proof",
-                 "claude_config_dir"):
+                 "claude_config_dir", "key_file"):
         setattr(args, name, absolute_arg(getattr(args, name)))
+    args.max_usd_explicit = args.max_budget_usd is not None
+    if args.max_budget_usd is None:
+        args.max_budget_usd = 1.0
+    if args.route and args.agent_cli != "claude":
+        p.error("--route is for the Claude Code harness only (--agent-cli claude)")
+    if args.route_base_url and not args.route:
+        p.error("--route-base-url needs --route")
+    if args.extra_param is not None:
+        try:
+            args.extra_param = json.loads(args.extra_param)
+        except ValueError:
+            p.error("--extra-param is not JSON")
+        if not isinstance(args.extra_param, dict):
+            p.error("--extra-param must be a JSON object")
     if args.phase == 2 and not args.plan and not args.live:
         p.error("phase 2 needs --live (the owner present, consent for this session)")
     if args.live and args.phase != 2:
         p.error("--live is for phase 2 only")
     if args.smoke:
         args.phase, args.engine_source = 1, "sim"
+    if args.agent_cli == "minimal" and not args.model and args.provider:
+        import agentcli
+        args.model = agentcli.PROVIDERS[args.provider]["default_model"]
     if not args.plan and not args.model:
         p.error("--model is required (the owner pre-registers it)")
     if not args.plan and not args.exe:
         p.error("--exe is required")
-    if not args.plan and not args.smoke and (args.isolation_proof is None or args.claude_config_dir is None):
-        p.error("--isolation-proof and --claude-config-dir are required (run preflight.py first)")
+    if args.agent_cli == "claude":
+        if not args.plan and (not args.smoke or args.route) and (
+                args.isolation_proof is None or args.claude_config_dir is None):
+            p.error("--isolation-proof and --claude-config-dir are required (run preflight.py first)")
+        if args.route and not args.plan and (args.route_base_url is None or args.key_file is None):
+            p.error("--route needs --route-base-url and --key-file")
+    elif args.agent_cli == "minimal":
+        if args.provider is None:
+            p.error("--agent-cli minimal needs --provider")
+        if args.base_url is not None and (not args.base_url.startswith("http://127.0.0.1:")):
+            p.error("--base-url is for a loopback stand-in only; the provider decides the real endpoint")
+        if not args.plan and (args.key_file is None or (not args.smoke and args.isolation_proof is None)):
+            p.error("--key-file and --isolation-proof are required (run preflight_cli.py first); "
+                    "--smoke needs the key file only")
+    elif not args.plan:
+        p.error(f"--agent-cli {args.agent_cli} cannot be confined to the three tools (ADR-0037): "
+                "it only has a probe, see preflight_cli.py")
     if args.phase == 2 and not args.plan and (args.max_live_session < 1 or args.ledger is None):
         p.error("phase 2 needs --max-live-session >= 1 and --ledger")
-    for name in ("ledger", "out", "isolation_proof", "claude_config_dir"):
+    for name in ("ledger", "out", "isolation_proof", "claude_config_dir", "key_file"):
         value = getattr(args, name)
         if value is not None and (problem := proxy_module.path_problem(value)):
             p.error(f"--{name.replace('_', '-')}: {problem}")
     return args
+
+
+def agent_flags(args, out: Path) -> list[str]:
+    """The agent's command flags for ``--plan`` (the first element, the program, left out; the
+    key file's path and the instruction are placeholders)."""
+    cli = agent_cli(args)
+    if (why := cli.refusal()) is not None:
+        return [f"refused: {why}"]
+    if args.agent_cli == "claude":
+        return cli.build_argv(model=args.model or "<model>", mcp_config=out / "mcp.json",
+                              system_instruction="<system_instruction>", max_budget_usd=args.max_budget_usd)[1:]
+    return cli.build_argv(model=args.model or "<model>", mcp_config=out / "mcp.json",
+                          system_instruction="<system_instruction>", max_budget_usd=args.max_budget_usd)[2:]
 
 
 def plan_lines(args, goals: dict, chosen: list[dict], out: Path) -> list[dict]:
@@ -1427,9 +1512,8 @@ def plan_lines(args, goals: dict, chosen: list[dict], out: Path) -> list[dict]:
             "max_live": goal["max_live"] if args.phase == 2 else 0,
             "proxy_args": proxy_args(args, args.phase, goal, log, args.ledger),
             "engine_argv": engine_argv(args, args.phase, args.config),
-            "claude_flags": build_claude_argv(
-                claude=args.claude, model=args.model or "<model>", mcp_config=out / "mcp.json",
-                system_instruction="<system_instruction>", max_budget_usd=args.max_budget_usd)[1:],
+            "agent_cli": args.agent_cli,
+            "claude_flags": agent_flags(args, out),
             "prompt_phase_line": PHASE_LINES[args.phase][:40],
             "result": str(out / f"{goal['id']}.json"), "goals_sha256": goals_sha256()})
     return lines
@@ -1478,9 +1562,10 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
         mcp_path.write_text(json.dumps(build_mcp_config(
             sys.executable, proxy_args(args, phase, goal, log, ledger),
             engine_argv(args, phase, args.config))), encoding="utf-8")
-        config_dir = getattr(args, "claude_config_dir", None)
+        cli = agent_cli(args)
+        config_dir = getattr(args, "claude_config_dir", None) if cli.uses_claude_config_dir else None
         if proof is not None:
-            changed = proof_problems(proof, args, config_dir) + [
+            changed = cli.proof_problems(proof, args, config_dir, goals["system_instruction"]) + [
                 f"{t}" for t in ancestor_context(scratch, config_dir)]
             if changed:
                 result["aborted"] = "isolation proof does not cover this run: " + ",".join(changed)
@@ -1490,12 +1575,12 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
         sampler = deps.make_sampler(app.state)
         sampler.start()
         spent_before = proxy_module.read_ledger(ledger)["total"] if ledger else 0
-        cli = deps.run_claude(
-            build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
-                              system_instruction=goals["system_instruction"],
-                              max_budget_usd=args.max_budget_usd),
+        ran = deps.run_claude(
+            cli.build_argv(model=args.model, mcp_config=mcp_path,
+                           system_instruction=goals["system_instruction"],
+                           max_budget_usd=args.max_budget_usd),
             build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
-            env=agent_env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None))
+            env=cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None))
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)
@@ -1504,7 +1589,8 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                           goal["oracle"]["text"].encode("ascii") if goal["oracle"].get("text") else None)
         summary = metrics.summary()
         proxy = proxy_summary(log)
-        result |= {"cli": cli, "provenance": metrics.provenance(args.model), "metrics": summary,
+        result |= {"cli": ran, "provenance": metrics.provenance(args.model) | cli.provenance(),
+                   "metrics": summary,
                    "proxy": proxy, "final_state_counts": final, "note": note.split(":")[0],
                    "states_seen": len(history),
                    "live_spent": (proxy_module.read_ledger(ledger)["total"] - spent_before) if ledger else 0}
@@ -1527,7 +1613,7 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
             result["cleanup"] = folder.cleanup()
 
 
-def run_smoke(args, out: Path, goals: dict, deps=RealDeps) -> dict:
+def run_smoke(args, out: Path, goals: dict, deps=RealDeps, proof: dict | None = None) -> dict:
     log = out / "smoke.proxy.jsonl"
     scratch = out / "scratch"
     scratch.mkdir(exist_ok=True)
@@ -1535,13 +1621,16 @@ def run_smoke(args, out: Path, goals: dict, deps=RealDeps) -> dict:
     mcp_path.write_text(json.dumps(build_mcp_config(
         sys.executable, proxy_args(args, 1, None, log, None),
         engine_argv(args, 1, args.config))), encoding="utf-8")
-    metrics = StreamMetrics([], None, None)
+    agent = agent_cli(args)
+    metrics = StreamMetrics([], None, proof, config_dir=getattr(args, "claude_config_dir", None) if proof else None)
     cli = deps.run_claude(
-        build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
-                          system_instruction=goals["system_instruction"],
-                          max_budget_usd=args.max_budget_usd),
-        SMOKE_PROMPT, scratch, metrics, args.goal_timeout, out / "smoke.stderr.txt")
-    return {"smoke": True, "cli": cli, "provenance": metrics.provenance(args.model),
+        agent.build_argv(model=args.model, mcp_config=mcp_path,
+                         system_instruction=goals["system_instruction"],
+                         max_budget_usd=args.max_budget_usd),
+        # The child's stderr is discarded here as it is for every goal: a provider error or a CLI diagnostic
+        # may echo the credential, a response or a label, and nothing filters it (the re-review of PR 93, N1).
+        SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env())
+    return {"smoke": True, "cli": cli, "provenance": metrics.provenance(args.model) | agent.provenance(),
             "metrics": metrics.summary(), "proxy": proxy_summary(log)}
 
 
@@ -1565,13 +1654,23 @@ def main(argv=None, deps=RealDeps) -> int:
         problems = config_problems(args.phase, config, config_dir)
         if problems:
             raise SystemExit("configuration refused:\n- " + "\n- ".join(problems))
-    if (routing := routing_problems(os.environ)):
+    agent = agent_cli(args)
+    if (why := agent.refusal()) is not None:
+        raise SystemExit(why)
+    if agent.checks_anthropic_routing and (routing := routing_problems(os.environ)):
         raise SystemExit("provider routing variables are set (ADR-0036 covers Anthropic's direct API "
                          "only); unset: " + ", ".join(routing))
-    proof = None if args.smoke else load_isolation_proof(args.isolation_proof)
+    if (why := agent.key_problem()) is not None:
+        raise SystemExit(why)
+    proof = None if args.smoke and not args.route else agent.load_proof(args.isolation_proof)
+    if args.smoke and proof is not None:  # a route's smoke is a real session: it runs only under a proof
+        covered = agent.proof_problems(proof, args, getattr(args, "claude_config_dir", None),
+                                       goals["system_instruction"])
+        if covered:
+            raise SystemExit("the isolation proof does not cover this smoke: " + ",".join(covered))
     out.mkdir(parents=True)
     if args.smoke:
-        result = run_smoke(args, out, goals, deps)
+        result = run_smoke(args, out, goals, deps, proof)
         (out / "smoke.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(json.dumps({"smoke": out.as_posix(), "verdict": result["metrics"]["verdict"],
                           "mcp_status": result["metrics"]["mcp_status"],
