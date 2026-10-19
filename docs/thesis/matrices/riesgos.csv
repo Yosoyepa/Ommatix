@@ -6,8 +6,8 @@ R04,Alto,Modelo con licencia incompatible,"Manifiesto por artefacto, revisión d
 R05,Alto,Incrementalidad omite cambios,"Referencia exacta, dirty pendiente, full refresh",UT-01..UT-15,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
 R06,Alto,Falsos positivos del caché,"Soporte, margen y contexto; no promoción automática",UT-27..UT-31,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
 R07,Alto,Confusión de filas virtualizadas,Matcher semántico y retiro de identidad,UT-37,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
-R08,Alto,Cifras irreproducibles,Hardware/modelos/corpus/medición congelados,PERF / EV,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
-R09,Alto,Exposición de pixels o valores,"No logs crudos, redacción, no red por defecto",SEC-04,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
+R08,Alto,Cifras irreproducibles,Hardware/modelos/corpus/medición congelados,PERF / EV / AG-02R,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
+R09,Alto,Exposición de pixels o valores,"No logs crudos, redacción, no red por defecto",SEC-04 / AG-03,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
 R10,Alto,Doble ejecución tras timeout,"request_id, diario y reconciliación",IT-05,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
 R11,Medio,Cliente MCP no compatible,Perfiles explícitos y tests con cliente concreto,CT-05..CT-09 / AG-02 / AG-02M,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
 R12,Medio,Complejidad excesiva del MVP,"Una plataforma, monolito, gates S0–S4",DOC-01,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
