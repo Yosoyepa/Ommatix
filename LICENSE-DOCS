@@ -16,5 +16,7 @@ Full legal code: https://creativecommons.org/licenses/by/4.0/legalcode
 Human-readable summary: https://creativecommons.org/licenses/by/4.0/deed.en
 
 This notice does not cover the source code, which is licensed under MIT OR Apache-2.0
-(LICENSE-MIT and LICENSE-APACHE), nor third-party material, which keeps its own terms
-and is not committed to this repository (see the Licence section of README.md).
+(LICENSE-MIT and LICENSE-APACHE), nor third-party material, which keeps its own terms.
+The Contributor Covenant adaptation in .github/CODE_OF_CONDUCT.md is CC BY-SA 4.0,
+as stated in its attribution. Model weights and runtime libraries are not committed
+(see the Licence section of README.md).

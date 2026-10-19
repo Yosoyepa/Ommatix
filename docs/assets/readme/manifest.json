@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "inputs": {
+    "contract": "docs/thesis/contratos/ejemplos",
+    "results": "docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911",
+    "source_commit": "875495fad62cf69e4729a548f4e2186310f31943"
+  },
+  "runtime": {
+    "node": "22.23.1",
+    "chrome": "129.0.6668.58",
+    "hyperframes": "0.8.178",
+    "ffmpeg": "2024-04-10-git-0e4dfa4709"
+  },
+  "assets": {
+    "badge-code.svg": {
+      "bytes": 461,
+      "sha256": "ddbae2369bf13bc5f71b872d6340115c1d7cdf77c882341d810f65b0b2f43393"
+    },
+    "badge-docs.svg": {
+      "bytes": 437,
+      "sha256": "c8fe62e4002f2a3615acbc187e145f562e7f7eea57d345d4b571a882ce48f1ef"
+    },
+    "badge-mcp.svg": {
+      "bytes": 422,
+      "sha256": "2b7ec3fcf3484d40dfd2d1235b49dac0c708d61ecfbb4c63d1c5692ee558e4d6"
+    },
+    "badge-platform.svg": {
+      "bytes": 434,
+      "sha256": "aa07270c6de05a37dd3d6b3407556d2166d2d48465dc3c2ed311b1da155bbd59"
+    },
+    "badge-rust.svg": {
+      "bytes": 422,
+      "sha256": "e22928a8a30eaa0b08ae793e5f6499b8d2f12c77613a388189d088d1b445bec4"
+    },
+    "badge-status.svg": {
+      "bytes": 446,
+      "sha256": "2da70bbdbb5fcfd5f290077d0b0075c52b343d42f5ec6bf7611182d3d0767d48"
+    },
+    "gate-dark.svg": {
+      "bytes": 2368,
+      "sha256": "c0cc0d8eda8a6024c86a376ce806f8793a603cd7bba4244341513900e5c41e2d"
+    },
+    "gate-light.svg": {
+      "bytes": 2353,
+      "sha256": "7a18a34eca020f5d476c9c7136d9b41076ee695e43e2caf1b11927ae7bb0a69f"
+    },
+    "gate-mobile-dark.svg": {
+      "bytes": 2026,
+      "sha256": "d1b4dc4814e76235bf10f5740103e1f8276de2c2b37a9b91b6b4919c2369ba0c"
+    },
+    "gate-mobile-light.svg": {
+      "bytes": 2011,
+      "sha256": "7ddecef73ab45252cc4f00521926d9360389ceeeb9b6ade8ff336db65b261523"
+    },
+    "hero-dark.svg": {
+      "bytes": 2815,
+      "sha256": "399669c831cb553909342004fc3460346763da14484b5e99b18f00cfeb09ba3e"
+    },
+    "hero-light.svg": {
+      "bytes": 2758,
+      "sha256": "c3f3d3b22b78003ac227a500c7962741a1ad5510da750f5e40f604bc9cfca08e"
+    },
+    "hero-mobile-dark.svg": {
+      "bytes": 1121,
+      "sha256": "daa263abd9903d484c4697b1294b5fbb9dfbeb541ed9a513aa81c2b985643e11"
+    },
+    "hero-mobile-light.svg": {
+      "bytes": 1118,
+      "sha256": "4d9b4f2faf57b4707c25aa726e71272b863ed5249d362a266c34afdb71f543a6"
+    },
+    "pipeline-dark.svg": {
+      "bytes": 5291,
+      "sha256": "c7d9e87b2a901c8727a0c63b1c82c3e9f9035b0a81ac0358330241d935eb5d32"
+    },
+    "pipeline-light.svg": {
+      "bytes": 5258,
+      "sha256": "84c3fca09328a6d83ff1423a982d6193b326c5fd3e585c043549ce4acf804dc7"
+    },
+    "pipeline-mobile-dark.svg": {
+      "bytes": 5279,
+      "sha256": "67661956fc44692cffd4d138db052aa98f67979aa708410624bae3a6bd4c2dff"
+    },
+    "pipeline-mobile-light.svg": {
+      "bytes": 5246,
+      "sha256": "5f30d36cbdf5c6c6399b2462853d1d06cbba3f6f8296816fe0a3fd18d9e5d9a6"
+    },
+    "protocol-demo.mp4": {
+      "bytes": 291371,
+      "sha256": "46ef837c73e980210472211922ed278d82807efd28212878008cc5d2151f0822"
+    },
+    "protocol-loop-mobile.gif": {
+      "bytes": 41785,
+      "sha256": "a6c1996a82374200c117e0b4d7d1e062f4a6aee4a83618c2b2f408b7a39777f3"
+    },
+    "protocol-loop-mobile.svg": {
+      "bytes": 4435,
+      "sha256": "fb74cc4786531204c901bf90bd269968c3fab7ef51bce91a52da16df8e0a02e2"
+    },
+    "protocol-loop.gif": {
+      "bytes": 47773,
+      "sha256": "e61e04c6df1a2a50b282c9f8bf0bac350c2dfa969d7f50da889aef24fc2c7f36"
+    },
+    "protocol-loop.svg": {
+      "bytes": 4438,
+      "sha256": "bce08fd78390b8a03d1c0ce5437d2ce465ec22fc2ee3d3d1dd889605a92280b2"
+    },
+    "protocol-poster.png": {
+      "bytes": 62339,
+      "sha256": "eaace44c21d5683e3726a9ad231d0ff7096c02dd91fba2f966557ec593017c2b"
+    },
+    "protocol-still-mobile.svg": {
+      "bytes": 4486,
+      "sha256": "e9c903d4f65f4375fdd5abdc2ab9aca5dea3ea90d98b60712f8d51405e75b6c7"
+    },
+    "protocol-still.svg": {
+      "bytes": 4489,
+      "sha256": "50947127127585fc2cc8c5c750aca6b567c0020479017e14fbd75d9d46e868d2"
+    },
+    "results-dark.svg": {
+      "bytes": 3179,
+      "sha256": "62a40d1351e2ee277bebecc33e9818a4f1ded6c9d2b619480311e1680c97309e"
+    },
+    "results-light.svg": {
+      "bytes": 3161,
+      "sha256": "b4c085a895f683c27a76eecff7e6fe2061f932b7f3bff79e6abd042d66a56043"
+    },
+    "results-mobile-dark.svg": {
+      "bytes": 3158,
+      "sha256": "df573726b2502b86e0332bf0d4b50949f8327911271875a8238f01ea3a4aaa7d"
+    },
+    "results-mobile-light.svg": {
+      "bytes": 3140,
+      "sha256": "17aec56eec30949981dbdef05f94b80a463fc4aa11aafb2366fc071d85b1ed4a"
+    },
+    "social-preview.png": {
+      "bytes": 62170,
+      "sha256": "995ef19e7d54fe1d951ab9b4655a6b037262ae22554183b2a7f5030bb2ca2912"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a vulnerability privately
+    url: https://github.com/Yosoyepa/Ommatix/security/advisories/new
+    about: Report a security boundary failure without public disclosure.
+  - name: Documentation map / Mapa documental
+    url: https://github.com/Yosoyepa/Ommatix/blob/main/docs/README.md
+    about: Find setup, configuration, safety and thesis documentation in English and Spanish.

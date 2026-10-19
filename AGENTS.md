@@ -49,6 +49,8 @@ See ADR-0013.
 | Issues / PR descriptions | Either language |
 
 When you change an English doc that has a `*.es.md` twin, update the twin in the same PR.
+`README.md` and `README.es.md` describe the current state and link to the CHANGELOG;
+they never accumulate change history. Put detailed usage in the bilingual guides.
 
 ## 3. Architecture: hexagonal modular monolith
 
@@ -102,6 +104,7 @@ compiler-enforced boundary.
 | CLI flags, wiring, config defaults | `src/app/src/` (`cli.rs`, `wiring.rs`) |
 | An architectural decision | `docs/adr/NNNN-title.md` (copy `0000-template.md`) |
 | A diagram | `docs/diagrams/*.md` as Mermaid |
+| README media | Sources and reproducible build in `tools/readme-media/`; synthetic outputs in `docs/assets/readme/` |
 | A code review | `docs/reviews/YYYY-MM-DD-topic.md`: finding → resolution → regression test |
 | Executable acceptance scenarios | Thesis scenarios stay in `docs/thesis/features/` (the validator traces them there); their steps go in `src/acceptance/tests/thesis.rs`, and the PR that adds them adds the scenario to its `IMPLEMENTED` list. There is no other feature directory |
 | Unit tests | next to the code (`#[cfg(test)] mod tests`); a test that implements a planned test carries its ID (`ut_13_failed_commit_keeps_pending_dirty`) |
@@ -109,8 +112,8 @@ compiler-enforced boundary.
 | A measurement of the core (PERF-01) | `src/acceptance/examples/core_latency.rs`; its numbers go to `docs/thesis/S0_RESULTADOS.md` with the machine and the commit |
 
 Nothing MVP-related goes in the repository root except workspace configuration. The licence
-files (`LICENSE-MIT`, `LICENSE-APACHE`, `LICENSE-DOCS`) are repository metadata, not MVP
-content, and are allowed there.
+files (`LICENSE-MIT`, `LICENSE-APACHE`, `LICENSE-DOCS`) and `CITATION.cff` are repository
+metadata, not MVP content, and are allowed there. Community health files live in `.github/`.
 
 ## 5. Non-negotiable engineering rules
 

@@ -1,0 +1,25 @@
+{
+  "name": "ommatix-readme-media",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": "22.23.1"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "preview": "node preview.mjs",
+    "check": "python check.py",
+    "test": "python -m unittest discover -s . -p test_*.py"
+  },
+  "devDependencies": {
+    "@puppeteer/browsers": "3.2.5",
+    "ffprobe-static": "3.1.0",
+    "hyperframes": "0.8.178",
+    "markdown-it": "15.0.3",
+    "mermaid": "12.2.0",
+    "puppeteer-core": "25.14.0",
+    "svgo": "4.1.0"
+  }
+}

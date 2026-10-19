@@ -1,0 +1,38 @@
+name: Documentation or thesis
+description: Ask a documentation question or report a guide, translation or dossier issue.
+labels: [documentation]
+body:
+  - type: markdown
+    attributes:
+      value: English or Spanish is welcome. Do not include personal data, real screenshots or secrets.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / Área
+      options:
+        - README or usage guides / Guías
+        - Thesis dossier / Dossier
+        - Architecture or ADR / Arquitectura
+        - Translation / Traducción
+        - Setup or documentation question / Consulta
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: File and section / Archivo y sección
+      description: Link the repository file and section; include the commit if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: Question or discrepancy / Pregunta o discrepancia
+      description: Explain what is unclear or incorrect and the evidence that supports a correction.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested wording / Texto propuesto
+      description: Optional; changes to the specification also need its CHANGELOG entry.
