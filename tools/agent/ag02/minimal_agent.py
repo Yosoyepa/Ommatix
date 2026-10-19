@@ -62,6 +62,7 @@ MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_TEXT_CHARS = 200_000
 MAX_ARGUMENT_CHARS = 16_000
 MAX_CALLS = 1
+MAX_JSON_DEPTH = 64
 DEFAULT_COMPLETION_CEILING = 32_768
 CALL_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 SCHEMA_ANNOTATIONS = frozenset({"$schema", "title", "description", "default", "examples"})
@@ -106,13 +107,31 @@ def _no_constant(name):
     raise ValueError("non-JSON constant")
 
 
+def json_depth(value) -> int:
+    """The nesting depth of a decoded JSON value, found without recursion (and stopped early past the
+    limit), so the answer does not depend on the platform's decoder or recursion limit."""
+    deepest, stack = 0, [(value, 1)]
+    while stack:
+        node, depth = stack.pop()
+        deepest = max(deepest, depth)
+        if deepest > MAX_JSON_DEPTH:
+            break
+        children = node.values() if isinstance(node, dict) else node if isinstance(node, list) else ()
+        stack.extend((child, depth + 1) for child in children if isinstance(child, (dict, list)))
+    return deepest
+
+
 def strict_loads(text, token: str):
-    """``json.loads`` that refuses a duplicate object key, ``NaN`` / ``Infinity`` and a nesting deep
-    enough to exhaust the decoder; every failure is the one fixed `token`."""
+    """``json.loads`` that refuses a duplicate object key, ``NaN`` / ``Infinity``, a nesting past
+    ``MAX_JSON_DEPTH`` (whatever the decoder itself would have allowed) and a nesting deep enough to
+    exhaust the decoder; every failure is the one fixed `token`."""
     try:
-        return json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
+        value = json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
     except (ValueError, RecursionError):
         raise AgentError(token) from None
+    if json_depth(value) > MAX_JSON_DEPTH:
+        raise AgentError(token)
+    return value
 
 
 # ---- paths ----------------------------------------------------------------------------------

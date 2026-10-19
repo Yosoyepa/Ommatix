@@ -123,7 +123,8 @@ review are both answered here.
      no duplicate key, no `NaN`) matching the tool's schema, and, in the dry-run-only phase,
      `dry_run: true` stated; nothing is repaired into a default.
    - *R4* Replies and payloads were unbounded: the body is read up to a byte limit plus one (declared
-     or not), nesting is bounded by the decoder and refused with a fixed token, and text, reasoning and
+     or not), nesting is bounded by the agent itself (64 levels, measured without recursion, so it does not depend on the
+     platform's decoder) and refused with a fixed token, and text, reasoning and
      arguments have size limits, all before anything is retained.
    - *R5* The proof hashed the requested parameters, not the captured ones. The verifier now requires
      every configured value, with its type, in every request (and the ceiling), and the proof hashes the

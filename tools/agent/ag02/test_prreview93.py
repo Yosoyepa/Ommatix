@@ -398,6 +398,16 @@ class R4BoundsTests(unittest.TestCase):
         deep = b'{"a": ' + b"[" * 200_000 + b"]" * 200_000 + b"}"
         self.refused({"raw": deep}, "reply_unreadable")
         self.refused(call("observe_screen", "[" * 7_000 + "]" * 7_000), "arguments_unreadable")
+        # within the argument size limit and well inside any decoder's own recursion limit: the agent's bound decides
+        self.refused(call("observe_screen", '{"query": ' + "[" * 100 + "]" * 100 + "}"), "arguments_unreadable")
+        self.refused({"raw": b'{"a": ' + b"[" * 100 + b"]" * 100 + b"}"}, "reply_unreadable")
+
+    def test_the_depth_is_measured_without_recursion_and_the_boundary_is_exact(self):
+        ok = json.loads("[" * ma.MAX_JSON_DEPTH + "]" * ma.MAX_JSON_DEPTH)
+        self.assertEqual(ma.json_depth(ok), ma.MAX_JSON_DEPTH)
+        ma.strict_loads("[" * ma.MAX_JSON_DEPTH + "]" * ma.MAX_JSON_DEPTH, "t")
+        with self.assertRaises(ma.AgentError):
+            ma.strict_loads("[" * (ma.MAX_JSON_DEPTH + 1) + "]" * (ma.MAX_JSON_DEPTH + 1), "t")
 
     def test_a_large_call_list_is_refused_before_any_of_it_runs(self):
         message = call("get_engine_metrics", "{}")

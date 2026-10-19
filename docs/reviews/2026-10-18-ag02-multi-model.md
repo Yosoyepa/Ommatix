@@ -201,7 +201,9 @@ engine's schemas).
 ### R4 (P2). Provider bodies and call payloads were unbounded
 
 Resolution: the body is read with `read(MAX_RESPONSE_BYTES + 1)` after a declared-length check (4 MiB);
-strict JSON turns decoder recursion into `reply_unreadable`; text and reasoning are limited to 200 000
+strict JSON turns decoder recursion into `reply_unreadable` and an explicit, iterative depth bound
+(64, `MAX_JSON_DEPTH`) refuses deeper values whatever the platform's decoder allows (CI on Python 3.13 parsed
+7 000 nested brackets that Windows' 3.12 refused, which is why the bound is the agent's own); text and reasoning are limited to 200 000
 characters, arguments to 16 000, calls to one; all before retention or dispatch.
 Regression: `R4BoundsTests` (seven tests: declared, undeclared and streamed oversize, the read bound,
 oversized arguments/text/reasoning, nesting in the reply and in arguments, a thousand calls, non-text
