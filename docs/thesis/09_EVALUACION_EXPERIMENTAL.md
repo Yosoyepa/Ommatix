@@ -366,7 +366,7 @@ Límite: el recuento describe la secuencia que llegó al proxy y, como en 9.11.1
 | CLI | Con la configuración más estricta que existe | Veredicto |
 |---|---|---|
 | Codex 0.163.0 (`gpt-6-luna`) | La petición ofrece `view_image`, herramientas de recursos MCP y un `tool_search` tras el que quedan diferidas las herramientas de Ommatix; ninguna clave de configuración quita `view_image`. Lista habilidades del `~/.agents/skills` real del operador (`HOME` y `USERPROFILE` se ignoran en Windows); ninguna clave las desactiva. | `tool_surface_wider_than_three`, `skills_from_real_home` |
-| OpenCode 2.0.12 | Las herramientas MCP sólo son accesibles por `execute`, un entorno de JavaScript que expone `fetch` (HTTP); sin negarlo por nombre aparecen además un espacio `browser` de 45 herramientas y las habilidades reales del operador; la petición de título envía la meta al modelo pequeño. | `tool_surface_wider_than_three`, `skills_from_real_home` |
+| OpenCode 2.0.12 | Las herramientas MCP sólo son accesibles por `execute`, un entorno de JavaScript que expone `fetch` (HTTP); sin negar `skill` y `browser` por nombre aparecen además las habilidades reales del operador y un espacio `browser` de 45 herramientas (negadas, desaparecen); la petición de título envía la meta al modelo pequeño. | `tool_surface_wider_than_three` |
 
 Ni `view_image` ni `execute`+`fetch` se toleran como «inertes»: la regla es exactamente tres herramientas. Ambos CLI quedan rechazados por defecto y el ejecutor no los lanza (`--agent-cli codex|opencode` sólo existe para el sondeo); una versión futura que pase el sondeo aún necesitaría un lector de su flujo y una revisión de la ADR.
 

@@ -219,10 +219,10 @@ estricta que existe, sigue ofreciendo `view_image`, herramientas de recursos MCP
 tras el que quedan diferidas las herramientas de Ommatix, y lee habilidades del `~/.agents/skills` real
 (`HOME` y `USERPROFILE` se ignoran en Windows); no hay ninguna clave que quite `view_image` ni las
 habilidades. OpenCode 2.0.12 sólo llega a las herramientas MCP por `execute`, un entorno de JavaScript
-que expone `fetch` (HTTP), lista las habilidades reales del operador y, salvo que se niegue por
-nombre, un espacio `browser` de 45 herramientas. Ni `view_image` ni `execute`+`fetch` se toleran como
-«inertes»: ambos CLI quedan **rechazados por defecto** (`tool_surface_wider_than_three`,
-`skills_from_real_home`) y el ejecutor no los lanza.
+que expone `fetch` (HTTP), lista las habilidades reales del operador mientras no se niegue la acción `skill` (con ella negada
+desaparecen) y, salvo que se niegue por nombre, un espacio `browser` de 45 herramientas. Ni `view_image` ni `execute`+`fetch` se toleran como
+«inertes»: ambos CLI quedan **rechazados por defecto** (`tool_surface_wider_than_three`; Codex
+además `skills_from_real_home`) y el ejecutor no los lanza.
 
 **El agente mínimo.** `minimal_agent.py` (biblioteca estándar) habla Chat Completions con un único
 punto de acceso, ofrece exactamente las tres herramientas (las definiciones vienen del `tools/list`
