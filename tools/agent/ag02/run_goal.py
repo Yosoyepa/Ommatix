@@ -1342,6 +1342,14 @@ def _guard_constant(name: str):
     raise ValueError("nonfinite " + name)
 
 
+def _guard_object(pairs):
+    """json.loads keeps the last of two equal keys, so a duplicated key could hide a count: it is refused."""
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("duplicate key")
+    return dict(pairs)
+
+
 def valid_counter(value) -> bool:
     return type(value) is int and 0 <= value < 10 ** MAX_USAGE_DIGITS
 
@@ -1395,14 +1403,19 @@ class ContextGuard:
         """Takes one stdout line; returns the closed reason the session must end for, if any."""
         if self.reason:
             return self.reason
+        text = line.strip()
+        if not text:
+            return None
         try:
-            event = json.loads(line, parse_int=_guard_int, parse_constant=_guard_constant)
+            event = json.loads(text, parse_int=_guard_int, parse_constant=_guard_constant,
+                               object_pairs_hook=_guard_object)
         except (ValueError, RecursionError):
-            if line.lstrip().startswith("{"):  # an event that cannot be read is not evidence of low consumption
+            if text[0] in "{[":  # an event that cannot be read is not evidence of low consumption
                 self.reason = "usage_invalid"
             return self.reason
-        if not isinstance(event, dict):
-            return None
+        if not isinstance(event, dict):  # the stream's envelope is one JSON object per line
+            self.reason = "usage_invalid"
+            return self.reason
         if event.get("type") == "assistant":
             message = event.get("message")
             message_id = message.get("id") if isinstance(message, dict) else None
@@ -1414,7 +1427,7 @@ class ContextGuard:
             for key, value in counts.items():
                 seen[key] = max(seen.get(key, 0), value)
         elif event.get("type") == "result" and "usage" in event:
-            counts = self._counts(event["usage"], False)
+            counts = self._counts(event["usage"], True)
             if counts is None:
                 self.reason = "usage_invalid"
                 return self.reason
@@ -1426,16 +1439,27 @@ PROCESS_TREE_GRACE_S = 40.0  # the proxy waits up to 30 s for its engine to leav
 
 
 class OwnedTree:
-    """The session's process tree: the CLI and everything it starts (MCP proxy, engine). On Windows a job object
-    that also kills what is left if the runner dies; elsewhere a process group. ``shutdown`` returns only once
-    the tree has exited (the proxy gets ``PROCESS_TREE_GRACE_S`` to write its receipts and close its engine),
-    killing what is left after that; it never touches a process outside the tree."""
+    """The session's process tree: the CLI and everything it starts (MCP proxy, engine), owned from before the
+    CLI runs one instruction. On Windows the CLI is created suspended, put in a job object (which also kills what
+    is left if the runner dies) and only then resumed, so nothing it starts can be outside the job; elsewhere
+    the CLI leads its own process group from the fork. ``owned`` is False when that could not be established,
+    and the caller must not run the session. ``shutdown`` returns only once the tree has exited (the proxy gets
+    ``PROCESS_TREE_GRACE_S`` to write its receipts and close its engine), killing what is left after that; a
+    tree whose state cannot be queried is never taken as gone. It never touches a process outside the tree."""
 
     def __init__(self, proc):
         self.proc = proc
         self.job = None
+        self.owned = True
         if os.name == "nt":
-            self._open_job()
+            self.owned = False
+            try:
+                self._open_job()
+                self.owned = self.job is not None and self._assign() and self._resume()
+            except OSError:
+                self.owned = False
+            if not self.owned:
+                self._terminate()  # the CLI never ran an instruction: this ends it and the job
 
     def _open_job(self) -> None:
         import ctypes
@@ -1468,27 +1492,40 @@ class OwnedTree:
         k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
                                                   ctypes.c_void_p]
         k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        self._k32, self._accounting = k32, Accounting
         job = k32.CreateJobObjectW(None, None)
         if not job:
             return
         info = Extended()
         info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)) or \
-                not k32.AssignProcessToJobObject(job, int(self.proc._handle)):  # noqa: SLF001
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
             k32.CloseHandle(job)
             return
-        self.job, self._k32, self._accounting = job, k32, Accounting
+        self.job = job
 
-    def active(self) -> int:
-        """How many processes of the tree are still running."""
+    def _assign(self) -> bool:
+        return bool(self._k32.AssignProcessToJobObject(self.job, int(self.proc._handle)))  # noqa: SLF001
+
+    def _resume(self) -> bool:
+        import ctypes
+        from ctypes import wintypes
+        resume = ctypes.WinDLL("ntdll").NtResumeProcess
+        resume.argtypes = [wintypes.HANDLE]
+        return resume(int(self.proc._handle)) == 0  # noqa: SLF001
+
+    def _query_active(self):
+        """The number of running processes of the job, or None when the job cannot be queried."""
+        import ctypes
+        info = self._accounting()
+        if self.job is None or not self._k32.QueryInformationJobObject(
+                self.job, 1, ctypes.byref(info), ctypes.sizeof(info), None):
+            return None
+        return int(info.ActiveProcesses)
+
+    def active(self):
+        """How many processes of the tree are still running; None when that is unknown (never read as 0)."""
         if os.name == "nt":
-            if self.job is None:
-                return 0 if self.proc.poll() is not None else 1
-            import ctypes
-            info = self._accounting()
-            if not self._k32.QueryInformationJobObject(self.job, 1, ctypes.byref(info), ctypes.sizeof(info), None):
-                return 0
-            return int(info.ActiveProcesses)
+            return self._query_active()
         try:
             os.killpg(self.proc.pid, 0)
         except (ProcessLookupError, PermissionError):
@@ -1499,8 +1536,8 @@ class OwnedTree:
         if os.name == "nt":
             if self.job is not None:
                 self._k32.TerminateJobObject(self.job, 1)
-            else:  # the runner was itself in a job that did not allow ours: end the tree by the CLI's pid
-                subprocess.run(["taskkill", "/PID", str(self.proc.pid), "/T", "/F"], capture_output=True)
+            if self.proc.poll() is None:
+                self.proc.kill()
             return
         import signal
         try:
@@ -1508,27 +1545,33 @@ class OwnedTree:
         except (ProcessLookupError, PermissionError):
             pass
 
-    def shutdown(self, kill_cli: bool, grace: float = PROCESS_TREE_GRACE_S) -> int:
-        """Ends the tree and returns how many processes were still running at the end (0 when it is gone).
-        ``kill_cli`` first kills the CLI alone, which closes the proxy's input so the proxy and its engine leave
-        on their own; whatever is left after ``grace`` seconds is killed."""
+    def shutdown(self, kill_cli: bool, grace: float | None = None) -> int:
+        """Ends the tree and returns how many processes were still running, or unverified, at the end (0 when
+        it is gone). ``kill_cli`` first kills the CLI alone, which closes the proxy's input so the proxy and its
+        engine leave on their own; whatever is left after ``grace`` seconds is killed."""
+        grace = PROCESS_TREE_GRACE_S if grace is None else grace
         if kill_cli and self.proc.poll() is None:
             self.proc.kill()
         try:
             self.proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             pass
+
+        def running():
+            count = self.active()
+            return 1 if count is None else count  # unknown is not zero
+
         deadline = time.monotonic() + grace
-        while self.active() and time.monotonic() < deadline:
+        while running() and time.monotonic() < deadline:
             time.sleep(0.1)
-        if self.active():
+        if running():
             self._terminate()
             deadline = time.monotonic() + 5
-            while self.active() and time.monotonic() < deadline:
+            while running() and time.monotonic() < deadline:
                 time.sleep(0.1)
-        left = self.active()
+        left = running()
         if self.job is not None:
-            self._k32.CloseHandle(self.job)
+            self._k32.CloseHandle(self.job)  # KILL_ON_JOB_CLOSE: nothing outlives the handle
             self.job = None
         return left
 
@@ -1545,11 +1588,19 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
     The child's stderr is discarded unless a test passes `stderr_path`: production never stores it (it can
     echo a credential or a response, and nothing filters it)."""
     stderr = open(stderr_path, "wb") if stderr_path else subprocess.DEVNULL
+    # CREATE_NO_WINDOW | CREATE_SUSPENDED on Windows: the CLI does not run until the job owns it.
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=stderr, cwd=cwd, creationflags=0x08000000 if os.name == "nt" else 0,
+                            stderr=stderr, cwd=cwd, creationflags=0x08000004 if os.name == "nt" else 0,
                             start_new_session=os.name != "nt",
                             env=env if env is not None else agent_env())
     tree = OwnedTree(proc)
+    if not tree.owned:  # ownership of the tree could not be established: the session is not run
+        proc.wait()
+        proc.stdin.close()
+        proc.stdout.close()
+        if stderr_path:
+            stderr.close()
+        return {"exit_code": proc.returncode, "killed": "no_tree_ownership"}
     proc.stdin.write(prompt.encode("utf-8"))
     proc.stdin.close()
     killed = {"reason": None}
@@ -1845,6 +1896,10 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                    "proxy": proxy, "final_state_counts": final, "note": note.split(":")[0],
                    "states_seen": len(history),
                    "live_spent": (proxy_module.read_ledger(ledger)["total"] - spent_before) if ledger else 0}
+        if ran.get("tree_left") or ran.get("killed") == "no_tree_ownership":
+            result["aborted"] = ("the session's process tree could not be owned or was not verified gone "
+                                 f"(tree_left={ran.get('tree_left', 0)}, killed={ran.get('killed')}): no further goal")
+            return result
         if metrics.init_problems or not metrics.attestation:
             result["aborted"] = "unclean init: " + ",".join(metrics.init_problems or ["no_init_attestation"])
             return result
@@ -1926,7 +1981,7 @@ def main(argv=None, deps=RealDeps) -> int:
         print(json.dumps({"smoke": out.as_posix(), "verdict": result["metrics"]["verdict"],
                           "mcp_status": result["metrics"]["mcp_status"],
                           "init_problems": result["metrics"]["init_problems"]}))
-        return 0
+        return 2 if result["cli"].get("tree_left") or result["cli"].get("killed") == "no_tree_ownership" else 0
     stop_file = stop_path_of(config, config_dir)
     return run_series(args, goals, chosen, out, args.ledger, stop_file, proof, deps, windows_driver())
 

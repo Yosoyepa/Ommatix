@@ -201,7 +201,10 @@ dollar cap and refuses one; the per-goal limit is a token cap the runner enforce
 the provenance as `max_context_tokens_per_goal` next to `dollar_cap: "none"`) beside the time cap. The cap
 fails closed: it reads decoded, validated usage per message id (the largest report per counter, a result's
 usage as a floor) and a session whose consumption is unknown or invalid (`usage_invalid`) ends like one over the
-cap (`token_cap`); every end of a session waits for the whole process tree (CLI, proxy, engine) to exit. The native
+cap (`token_cap`); every end of a session waits for the whole process tree (CLI, proxy, engine) to exit. The tree is owned before
+the CLI runs (Windows: created suspended, put in a job object, then resumed; a session whose tree cannot be
+owned is not run, and a tree that cannot be verified gone aborts the series); duplicate keys and non-object
+lines in the stream are refused. The native
 Claude path keeps its dollar cap (the figure is valid there). See the review record, C1.
 A difference between rows can come from the model, the provider's layer or its tool-calling quirks;
 AG-02 makes no claim of "better than".
@@ -334,5 +337,8 @@ por proveedor) y el coste que informa Claude Code para un modelo que no conoce n
 límite por meta es un tope de tokens de contexto que impone el ejecutor desde el flujo
 (`--max-context-tokens-per-goal`, por defecto 550 000), registrado en la procedencia; el tope falla cerrado (lee
 el uso decodificado y validado por mensaje, y un consumo desconocido o inválido termina la sesión) y toda
-terminación espera a que salga el árbol de procesos (CLI, proxy y motor); la ruta nativa de
+terminación espera a que salga el árbol de procesos (CLI, proxy y motor), que se posee antes de que la
+CLI ejecute nada (en Windows se crea suspendida, se mete en un job y se reanuda; una sesión cuyo árbol no
+puede poseerse no se ejecuta y un árbol no verificado como terminado aborta la serie), y se rechazan claves
+duplicadas y líneas que no son objetos en el flujo; la ruta nativa de
 Claude conserva su tope en dólares. AG-02 sigue `NO_EJECUTADO`.

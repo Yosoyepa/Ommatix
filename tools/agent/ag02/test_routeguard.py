@@ -113,6 +113,40 @@ class UsageGuardTests(unittest.TestCase):
         ran, _ = self.run_stream([assistant("m1", {"input_tokens": 40, "output_tokens": 999999})], wait=False)
         self.assertIsNone(ran["killed"])  # output tokens are not context
 
+    def test_ambiguous_duplicate_keys_end_the_session(self):
+        """F3 of the re-review: json.loads keeps the last duplicate, so {"input_tokens": 1000, "input_tokens": 0}
+        was read as zero."""
+        for line in (
+                '{"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens": 1000, "input_tokens": 0}}}',
+                '{"type": "assistant", "message": {"id": "m1", "usage": {"input_tokens": 1000}, '
+                '"usage": {"input_tokens": 0}}}',
+                '{"type": "assistant", "type": "system", "message": {"id": "m1", '
+                '"usage": {"input_tokens": 1000}}}',
+                '{"type": "assistant", "message": {"id": "m1", "id": "m2", "usage": {"input_tokens": 1000}}}'):
+            self.assert_killed([line], "usage_invalid")
+
+    def test_unsupported_envelopes_end_the_session_and_plain_text_is_ignored(self):
+        over = assistant("m1", {"input_tokens": 1000})
+        self.assert_killed(["[" + over + "]"], "usage_invalid")  # an array holding an over-cap event
+        self.assert_killed(["5"], "usage_invalid")
+        self.assert_killed(['"assistant"'], "usage_invalid")
+        self.assert_killed(["[" + over], "usage_invalid")  # an array that cannot be read
+        ran, _ = self.run_stream(["a plain diagnostic line, not an event", "", assistant("m1", {"input_tokens": 5})],
+                                 wait=False)
+        self.assertIsNone(ran["killed"])
+
+    def test_a_result_without_an_input_counter_is_unknown_not_zero_and_an_explicit_zero_is_zero(self):
+        for usage in ({}, {"output_tokens": 3}, {"cache_read_input_tokens": 0}):
+            result = json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                                 "result": "VERDICT: DONE", "usage": usage})
+            ran, _ = self.run_stream([result], wait=False)
+            self.assertEqual(ran["killed"], "usage_invalid", usage)
+        for line in (json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "x",
+                                 "usage": {"input_tokens": 0}}), assistant("m1", {"input_tokens": 0}),
+                     json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "x"})):
+            ran, _ = self.run_stream([line], wait=False)
+            self.assertIsNone(ran["killed"], line)  # reported zero, or no report at all
+
     def test_a_result_that_reports_more_than_the_cap_is_flagged_even_without_message_usage(self):
         result = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "VERDICT: DONE",
                              "usage": {"input_tokens": 1000, "cache_read_input_tokens": 0}})
@@ -222,6 +256,109 @@ class SessionTreeTests(unittest.TestCase):
                            capture_output=True)
         self.assertEqual(ran["killed"], "timeout")
         self.assertEqual(survivors, [])
+
+
+# A CLI that starts its MCP server during startup, before it reads stdin (the race of F1).
+EARLY_CLI = TREE_CLI.replace("sys.stdin.read()\nprint(open(init, encoding=\"utf-8\").read(), flush=True)\n", "") \
+    .replace("p.stdout.readline()\n", "p.stdout.readline()\nsys.stdin.read()\nprint(open(init, encoding=\"utf-8\").read(), "
+             "flush=True)\n")
+
+
+class WindowsOwnershipTests(unittest.TestCase):
+    """F1 and F2 of the re-review of PR 96: the tree is owned before the CLI can run, and an ownership or status
+    failure never reads as 'the tree is gone'."""
+
+    def setUp(self):
+        if os.name != "nt":
+            self.skipTest("job objects are Windows; the POSIX group is created by the fork")
+        tmp = tempfile.TemporaryDirectory(prefix="ag02-own-")
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        (self.root / "init.json").write_text(json.dumps(init_event()), encoding="utf-8")
+        (self.root / "engine.py").write_text(TREE_ENGINE, encoding="utf-8")
+        self.pids = self.root / "pid"
+        self.log, self.ledger = self.root / "p.jsonl", self.root / "ledger.json"
+
+    def argv(self, cli_source):
+        (self.root / "cli.py").write_text(cli_source, encoding="utf-8")
+        return [sys.executable, str(self.root / "cli.py"), str(self.root / "init.json"), str(HERE / "proxy.py"),
+                str(self.log), str(self.ledger), str(self.root / "engine.py"), str(self.pids)]
+
+    def survivors(self):
+        found = []
+        for name in ("pid.proxy", "pid.engine"):
+            path = self.root / name
+            if path.exists() and path.read_text().strip() and alive(int(path.read_text())):
+                found.append(int(path.read_text()))
+        for pid in found:  # never leave a stray behind, whatever the verdict
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+        return found
+
+    def test_a_cli_that_spawns_before_reading_stdin_is_still_inside_the_owned_tree(self):
+        original = rg.OwnedTree._open_job
+        waited = {}
+
+        def barrier(tree):
+            # The old order (Popen, then the job): wait until the early child has really started its engine, so
+            # the assignment comes after the spawn. With the process created suspended the CLI cannot get that
+            # far and the wait simply times out.
+            deadline = time.monotonic() + 3
+            while not (self.root / "pid.engine").exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            waited["engine_started_before_the_job"] = (self.root / "pid.engine").exists()
+            return original(tree)
+        from unittest import mock
+        with mock.patch.object(rg.OwnedTree, "_open_job", barrier):
+            ran = rg.run_claude(self.argv(EARLY_CLI), "prompt", self.root, rg.StreamMetrics([], None, None), 30,
+                                max_context_tokens=100)
+        left = self.survivors()
+        self.assertFalse(waited["engine_started_before_the_job"], "the CLI ran before it was owned")
+        self.assertEqual(left, [])
+        self.assertEqual(ran["killed"], "token_cap")
+        records = [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
+        self.assertTrue([r for r in records if r.get("kind") == "end"])
+        self.assertEqual(json.loads(self.ledger.read_text(encoding="utf-8")),
+                         {"goals": {"G01": 1}, "total": 1, "v": 1})
+
+    def test_a_job_that_cannot_be_assigned_refuses_to_run_the_cli_at_all(self):
+        from unittest import mock
+        with mock.patch.object(rg.OwnedTree, "_assign", return_value=False):
+            ran = rg.run_claude(self.argv(TREE_CLI), "prompt", self.root, rg.StreamMetrics([], None, None), 30,
+                                max_context_tokens=100)
+        self.assertEqual(ran["killed"], "no_tree_ownership")
+        self.assertFalse((self.root / "pid.proxy").exists(), "the CLI must never have run")
+        self.assertEqual(self.survivors(), [])
+
+    def test_a_failed_status_query_is_not_a_proof_that_the_tree_exited(self):
+        from unittest import mock
+        with mock.patch.object(rg, "PROCESS_TREE_GRACE_S", 1.0), \
+                mock.patch.object(rg.OwnedTree, "_query_active", return_value=None):
+            ran = rg.run_claude(self.argv(TREE_CLI), "prompt", self.root, rg.StreamMetrics([], None, None), 30,
+                                max_context_tokens=100)
+        left = self.survivors()  # the job was terminated even though it could not be queried
+        self.assertEqual(ran["killed"], "token_cap")
+        self.assertGreaterEqual(ran.get("tree_left", 0), 1, "an unverified tree must be reported, not hidden")
+        self.assertEqual(left, [])
+
+
+class TreeAbortTests(unittest.TestCase):
+    """F2: a session whose process tree could not be owned, or is not verified gone, ends the series."""
+
+    def test_a_session_whose_tree_is_not_verified_gone_aborts_the_series(self):
+        from test_run_goal import Harness
+        init = rg.load_goals()["initial_states"]["testapp"]
+        h = Harness(self, "G01", 1, final_state=dict(init), events=[])
+        original = h.deps.run_claude
+
+        def with_survivors(*a, **k):
+            return original(*a, **k) | {"tree_left": 2}
+        h.deps.run_claude = staticmethod(with_survivors)
+        result = h.run()
+        self.assertIn("process tree", result["aborted"])
+        h2 = Harness(self, "G01", 1, final_state=dict(init), events=[])
+        original2 = h2.deps.run_claude
+        h2.deps.run_claude = staticmethod(lambda *a, **k: original2(*a, **k) | {"killed": "no_tree_ownership"})
+        self.assertIn("process tree", h2.run()["aborted"])
 
 
 if __name__ == "__main__":

@@ -391,6 +391,70 @@ starts the real budget proxy behind a slow engine and makes one reservation: at 
 have exited, the proxy log has its `end` record and the ledger is exactly one reservation; the same for a
 timeout).
 
+### Re-review of PR 96 at 588b4c4 (Codex, CHANGES REQUIRED: 3 P2)
+
+**F1 (P2). The Windows job was assigned after the CLI had started.** `Popen` started a runnable CLI and the job
+came afterwards; a CLI that starts its MCP server during startup, before it reads stdin, could create children
+outside the job (reproduced with a scheduling barrier: the cap returned in 0.36 s with the proxy and the engine
+alive and no receipt). Resolution: on Windows the CLI is created `CREATE_SUSPENDED`, put in the job object
+(`KILL_ON_JOB_CLOSE`) and resumed (`NtResumeProcess`) only after the assignment, so it runs no instruction
+before it is owned; elsewhere the CLI leads its own process group from the fork, which has no such window.
+**F2 (P2). A job setup or status failure read as 'the tree exited'.** With `job=None`, or a failed
+`QueryInformationJobObject`, `active()` returned 0 and `shutdown` never reached its fallback (fault-injecting
+`AssignProcessToJobObject`: the cap returned in 0.23 s, both descendants alive). Resolution: ownership is
+fail-closed (`OwnedTree.owned`): if the job cannot be created, configured, assigned or the CLI resumed, the
+suspended CLI is killed unrun and `run_claude` returns `killed: "no_tree_ownership"` without running the
+session; a status that cannot be queried is `None` (unknown), never 0, so the wait runs to its deadline, the job
+is terminated and `tree_left` reports the tree as unverified. `run_goal` aborts the series on `tree_left` or
+`no_tree_ownership` ("no further goal"), and a smoke exits 2.
+**F3 (P2). Ambiguous or unsupported usage envelopes bypassed the cap.** `json.loads` keeps the last of two
+equal keys: `{"input_tokens": 1000, "input_tokens": 0}`, a duplicated `usage` member and a duplicated `type`
+(ending as `system`) were accepted as zero or skipped; an array holding an over-cap event, and a result-only
+`usage: {}`, also ended DONE with `killed: null`. Resolution: duplicate keys are refused while decoding
+(`object_pairs_hook`), a line that parses to anything but an object, or a `[`/`{` line that cannot be read, is
+`usage_invalid`, and a `result` event's `usage` needs `input_tokens` like an assistant's (an explicit zero is a
+zero; a result without `usage` gives no floor; plain text lines are still ignored).
+Regression (`test_routeguard.py`, written first: 4 failures and 3 errors of the 7 new tests against 588b4c4, the
+rest being the shared setup): `test_ambiguous_duplicate_keys_end_the_session`,
+`test_unsupported_envelopes_end_the_session_and_plain_text_is_ignored`,
+`test_a_result_without_an_input_counter_is_unknown_not_zero_and_an_explicit_zero_is_zero`, and in
+`WindowsOwnershipTests` an early-spawning fake CLI with a deterministic barrier at the job (the engine must not
+exist before the job, no survivors, receipts and one reservation), a job that cannot be assigned (the CLI never
+runs, no survivors), a failed status query (the job is terminated, `tree_left` is reported, no survivors) and
+`TreeAbortTests` (a `tree_left` or `no_tree_ownership` result aborts the goal).
+
+### Re-review of PR 96 at 588b4c4 (Codex, CHANGES REQUIRED: 3 P2)
+
+**F1 (P2). The Windows job was assigned after the CLI had started.** `Popen` started a runnable CLI and the job
+came afterwards; a CLI that starts its MCP server during startup, before it reads stdin, could create children
+outside the job (reproduced with a scheduling barrier: the cap returned in 0.36 s with the proxy and the engine
+alive and no receipt). Resolution: on Windows the CLI is created `CREATE_SUSPENDED`, put in the job object
+(`KILL_ON_JOB_CLOSE`) and resumed (`NtResumeProcess`) only after the assignment, so it runs no instruction
+before it is owned; elsewhere the CLI leads its own process group from the fork, which has no such window.
+**F2 (P2). A job setup or status failure read as 'the tree exited'.** With `job=None`, or a failed
+`QueryInformationJobObject`, `active()` returned 0 and `shutdown` never reached its fallback (fault-injecting
+`AssignProcessToJobObject`: the cap returned in 0.23 s, both descendants alive). Resolution: ownership is
+fail-closed (`OwnedTree.owned`): if the job cannot be created, configured, assigned or the CLI resumed, the
+suspended CLI is killed unrun and `run_claude` returns `killed: "no_tree_ownership"` without running the
+session; a status that cannot be queried is `None` (unknown), never 0, so the wait runs to its deadline, the job
+is terminated and `tree_left` reports the tree as unverified. `run_goal` aborts the series on `tree_left` or
+`no_tree_ownership` ("no further goal"), and a smoke exits 2.
+**F3 (P2). Ambiguous or unsupported usage envelopes bypassed the cap.** `json.loads` keeps the last of two
+equal keys: `{"input_tokens": 1000, "input_tokens": 0}`, a duplicated `usage` member and a duplicated `type`
+(ending as `system`) were accepted as zero or skipped; an array holding an over-cap event, and a result-only
+`usage: {}`, also ended DONE with `killed: null`. Resolution: duplicate keys are refused while decoding
+(`object_pairs_hook`), a line that parses to anything but an object, or a `[`/`{` line that cannot be read, is
+`usage_invalid`, and a `result` event's `usage` needs `input_tokens` like an assistant's (an explicit zero is a
+zero; a result without `usage` gives no floor; plain text lines are still ignored).
+Regression (`test_routeguard.py`, written first: 4 failures and 3 errors of the 7 new tests against 588b4c4, the
+rest being the shared setup): `test_ambiguous_duplicate_keys_end_the_session`,
+`test_unsupported_envelopes_end_the_session_and_plain_text_is_ignored`,
+`test_a_result_without_an_input_counter_is_unknown_not_zero_and_an_explicit_zero_is_zero`, and in
+`WindowsOwnershipTests` an early-spawning fake CLI with a deterministic barrier at the job (the engine must not
+exist before the job, no survivors, receipts and one reservation), a job that cannot be assigned (the CLI never
+runs, no survivors), a failed status query (the job is terminated, `tree_left` is reported, no survivors) and
+`TreeAbortTests` (a `tree_left` or `no_tree_ownership` result aborts the goal).
+
 ## Not covered
 
 - The minimal agent has only met our stand-in; the routes have met a real provider only in one trivial
