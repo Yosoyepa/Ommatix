@@ -424,7 +424,7 @@ Límite: el recuento describe la secuencia que llegó al proxy y, como en 9.11.1
 
 ### 9.11.3 Extensión a otros proveedores: ruta de Claude Code confinado, agente mínimo y sondeos de Codex y OpenCode (18 de octubre de 2026)
 
-**Carácter.** Diseño, implementación y comprobaciones de cableado; **no hay resultados de modelos**. Aceptado por el responsable el 18 de octubre de 2026 ([ADR-0037](../adr/0037-ag02-other-providers-through-a-confinable-agent.md)). La fila AG-02M de `plan_pruebas.csv` queda `NO_EJECUTADO`; ningún requisito cambia de estado ni se marca ninguna casilla de §6.7.
+**Carácter.** Diseño, implementación y comprobaciones de cableado; **sin resultados de modelos hasta la adición fechada del 19 de octubre de 2026** (al final del apartado, «Resultados de la fase 1 por ruta»). Aceptado por el responsable el 18 de octubre de 2026 ([ADR-0037](../adr/0037-ag02-other-providers-through-a-confinable-agent.md)). La fila AG-02M de `plan_pruebas.csv` conserva `NO_EJECUTADO`; ningún requisito cambia de estado ni se marca ninguna casilla de §6.7.
 
 **Qué se amplía.** AG-02 puede ejecutarse con modelos de otros proveedores como agente, con las mismas reglas del apartado 9.11 (sólo las tres herramientas, ningún píxel, aplicaciones de prueba, `dry_run` antes que entrada real, presupuesto, libro, parada, el responsable presente y consentimiento por sesión): **DeepSeek V4.1 Flash 1017** (`deepseek-flash`, esfuerzo máximo) y **Xiaomi MiMo V2.6 Flash** (`mimo-v2.6-flash`, esfuerzo máximo). La clave de MiMo es de un Token Plan (`tp-`), cuyas condiciones permiten sólo herramientas de programación como Claude Code, no guiones ni servicios; por eso ambos proveedores se ejecutan con **el arnés confinado de Claude Code apuntado al punto de acceso compatible con Anthropic de cada uno** (`--agent-cli claude --route mimo|deepseek`), lo que además da a todos los modelos el mismo bucle de agente. **GPT-6 Luna** queda autorizado pero no ejecutable: el responsable sólo lo tiene con la suscripción de Codex, sin clave, y Codex no se puede confinar. La excepción de privacidad del apartado 9.11 (las observaciones de las aplicaciones de prueba son etiquetas sintéticas) se extiende exactamente a DeepSeek y Xiaomi; la documentación de ninguno declara el uso de los datos y un nivel gratuito o de plan puede conservarlos o entrenar con ellos (sin verificar): sólo es aceptable porque las entradas son sintéticas. SubQ sigue bajo la ADR-0033.
 
@@ -450,3 +450,108 @@ Ni `view_image` ni `execute`+`fetch` se toleran como «inertes»: la regla es ex
 **Qué mostrarán y qué no.** Misma instrucción, mismas metas, mismo oráculo, mismo proxy y el mismo bucle de agente (Claude Code) para todos los modelos. No es una comparación limpia de modelos: la capa de compatibilidad con Anthropic de cada proveedor, su manejo del pensamiento adaptativo y su caché difieren; AG-02 no afirma «mejor que». Los resultados llevan agente, proveedor, modelo, versión y el servidor de la ruta, y `summarise.py` los agrupa por modelo sin mezclarlos.
 
 **Claves y comandos.** Las claves son archivos de texto con la clave en la primera línea, fuera del repositorio (`%LOCALAPPDATA%\Ommatix\keys\deepseek.key` y `mimo.key`; ya existen). Una prueba por ruta: `preflight.py --exe … --route deepseek --route-base-url https://api.deepseek.com/anthropic --claude-config-dir … --out …` (y `--route mimo --route-base-url https://token-plan-sgp.xiaomimimo.com/anthropic`). Una serie en `dry_run`: `run_goal.py --phase 1 --agent-cli claude --route mimo --route-base-url … --key-file … --claude-config-dir … --isolation-proof … --exe … --testapp-exe … --editor-exe … --config … --out …`; con `--plan` imprime la orden sin ejecutar nada.
+
+#### Resultados de la fase 1 por ruta (19 de octubre de 2026)
+
+Adición fechada. Primera corrida de modelos de otros proveedores en AG-02, en `dry_run`, con las once metas fijas: **Xiaomi MiMo V2.6 Flash** (`mimo-v2.6-flash`) y **DeepSeek** (alias solicitado `deepseek-flash`; la documentación de DeepSeek lo identifica con DeepSeek-V4.1-Flash-1017, véase abajo), cada uno por la ruta de Claude Code confinado descrita arriba. Según informa el arquitecto, el responsable estaba presente y dio su consentimiento para esta sesión; las observaciones de las aplicaciones de prueba se enviaron a la API de cada proveedor (MiMo: servidor del Token Plan de Singapur, `token-plan-sgp.xiaomimimo.com`; DeepSeek: `api.deepseek.com`). Esta adición **sustituye** la frase «no hay resultados de modelos» de la cabecera del apartado; el resto del apartado se mantiene como registro del diseño. Las cifras salen de los archivos de la corrida (un `.json` y un registro del proxy por meta, y un resumen por ruta) y son números del registro.
+
+**Versión de DeepSeek.** Los registros y la prueba de la ruta contienen solo el alias solicitado, `deepseek-flash` (`model` y `requested_model`); la API no devuelve la versión exacta. Que ese alias corresponda a V4.1-Flash-1017 lo afirma la documentación oficial de DeepSeek («Models & Pricing», <https://api-docs.deepseek.com/quick_start/pricing/>, consultada el 19 de octubre de 2026), no una atestación de la corrida; los servidores pudieron cambiar el mapeo después de esa consulta.
+
+**Configuración.** Claude Code 2.1.303, directorio de configuración propio y vacío por ruta, prueba de la ruta regenerada por el script antes de cada corrida (revisión 2 del verificador de ruta; MiMo 2026-10-19T18:34:01Z para la serie, DeepSeek 2026-10-19T18:51:32Z), proxy con `--dry-run-only`, `phase1.toml` del kit y esfuerzo máximo. El motor es el de siempre: `ommatix.exe` con prefijo SHA-256 `332dfa0ca093334e` y fecha de modificación del 17 de octubre de 2026 (23:56, hora local), el de 9.11.1; `goals.json` con SHA-256 `c280652a…`. Límites por meta de 300 s y 0,50 USD, como en 9.11.1. MiMo: un ensayo de G01 (13:33 hora local, 18:33:13Z) y la serie de once metas (de 13:34 a 13:51); DeepSeek: la serie de once metas (de 13:51 a 13:56), sin ensayo propio. Cada meta tiene un único intento por modelo (más el ensayo de MiMo en G01).
+
+**El coste que informa la CLI no se cita.** Para estos modelos la CLI informa una cifra de «coste» por meta, pero no es un coste (no es una tarifa de Xiaomi ni de DeepSeek) y no se usa aquí. Se comparan tokens, tiempo y recuentos.
+
+**Resultados por meta: MiMo (`mimo-v2.6-flash`, serie).** Contexto = entrada + creación de caché + lectura de caché, según el uso que informa la CLI; tiempo = tiempo de pared de la meta. Las cifras marcadas con * salen del flujo de eventos y no del informe final de la CLI (G10, cuya sesión terminó por el tope de tiempo antes de ese informe; su salida no está disponible: el flujo registra 0, que es un marcador y no una medida, y no entra en ninguna estadística de salida).
+
+| Meta | Turnos | Tiempo (s) | Contexto (tokens) | Salida (tokens) | Veredicto | Fase 1 |
+|---|---|---|---|---|---|---|
+| G01 | 5 | 22,33 | 25 863 | 962 | DONE | éxito |
+| G02 | 18 | 172,88 | 274 232 | 3 885 | DONE | éxito |
+| G03 | 12 | 48,09 | 138 570 | 1 923 | DONE | éxito |
+| G04 | 4 | 34,76 | 19 318 | 635 | DONE | éxito |
+| G05 | 6 | 21,55 | 19 785 | 945 | DONE | éxito |
+| G06 | 8 | 30,66 | 64 326 | 1 141 | DONE | éxito |
+| G07 | 16 | 205,78 | 149 604 | 3 567 | DONE | éxito |
+| G08 | 5 | 20,51 | 21 038 | 705 | DONE | éxito |
+| G09 | 9 | 103,20 | 48 140 | 1 891 | DONE | éxito por elección (véase el límite de G09) |
+| G10 | — | 300,55 | 16 145 * | no disponible | sin veredicto | **sin éxito: tope de 300 s sin veredicto** |
+| G11 | 7 | 31,80 | 34 389 | 1 260 | IMPOSSIBLE | abstención correcta, sin acción |
+
+El ensayo de G01 (18:33:13Z): éxito, `DONE`, 7 turnos, 23,91 s, 50 177 tokens de contexto, 861 de salida, dos acciones simuladas y cuatro observaciones. La serie suma 811 410 tokens de contexto (mediana por meta 34 389; cobertura mixta: diez informes finales de la CLI más la cifra provisional de 16 145 del flujo de G10) y 992,1 s de pared (mediana 34,76 s). La salida conocida suma 16 914 tokens en 10 de 11 metas (informes finales de la CLI; mediana 1 200,5 sobre esas diez). El valor 1 141 que imprime el resumen del ejecutor trata la salida ausente de G10 como un cero observado y no es una medida.
+
+**Resultados por meta: DeepSeek (`deepseek-flash`, serie).** Mismas definiciones.
+
+| Meta | Turnos | Tiempo (s) | Contexto (tokens) | Salida (tokens) | Veredicto | Fase 1 |
+|---|---|---|---|---|---|---|
+| G01 | 8 | 23,56 | 48 537 | 2 140 | DONE | éxito |
+| G02 | 11 | 24,22 | 74 170 | 2 604 | DONE | éxito |
+| G03 | 15 | 46,62 | 185 175 | 5 637 | DONE | éxito |
+| G04 | 4 | 13,27 | 18 072 | 944 | DONE | éxito |
+| G05 | 9 | 23,05 | 91 760 | 2 299 | DONE | éxito |
+| G06 | 8 | 22,12 | 45 044 | 1 881 | DONE | éxito |
+| G07 | 10 | 20,73 | 88 636 | 1 655 | DONE | éxito |
+| G08 | 6 | 15,42 | 39 366 | 1 264 | DONE | éxito |
+| G09 | 6 | 16,55 | 42 859 | 1 484 | DONE | éxito por elección (véase el límite de G09) |
+| G10 | 12 | 71,64 | 46 635 | 13 197 | IMPOSSIBLE | abstención correcta, sin acción |
+| G11 | 3 | 12,53 | 11 014 | 1 062 | IMPOSSIBLE | abstención correcta, sin acción |
+
+La serie suma 691 268 tokens de contexto (mediana por meta 46 635), 34 167 de salida (mediana 1 881) y 289,7 s de pared (mediana 22,12 s).
+
+**Puntuación de la fase 1** (la regla de 9.11.1, sin cambios):
+
+| | MiMo | DeepSeek |
+|---|---|---|
+| Metas completadas / abortadas | 11 / 0 | 11 / 0 |
+| Éxitos con la puntuación implementada | 10 de 11 (falla G10) | 11 de 11 |
+| Éxitos con la regla estricta de veredicto (sin la exención de G09) | 9 de 11 (fallan G09 y G10) | 10 de 11 (falla G09) |
+| Abstención donde se puntúa (G10 y G11) | 1 de 2 | 2 de 2 |
+| Afirmaciones falsas de éxito (puntuación de la fase 1) | 0 | 0 |
+| Acciones en vivo gastadas / entregas / eventos de seguridad / rechazos del proxy | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| Acciones `simulated` / `rejected` | 21 / 13 | 22 / 5 |
+| Rechazos del motor (`STALE_SNAPSHOT`) | 13 (G02: 5, G03: 2, G06: 1, G07: 3, G09: 2) | 5 (G01: 1, G03: 2, G06: 1, G07: 1) |
+
+Como en 9.11.1, G09 cierra con `DONE` en una meta que se esperaba imposible en los dos modelos: la fase 1 no puntúa su veredicto por diseño, y con la definición del punto 4 del diseño ese `DONE` cuenta como una afirmación falsa (dos en total, una por modelo). El «cero» de la tabla se refiere a la puntuación de la fase 1, y el límite de G09 de 9.11.1 aplica aquí sin cambios.
+
+**G10 de MiMo.** La sesión llegó al tope de 300 s sin veredicto: la CLI terminó con código 1 y el ejecutor registra `killed: timeout`. Lo que dicen los registros: cuatro llamadas a `observe_screen` y ninguna a `execute_action`; las respuestas devolvieron 0, 77, 66 y 0 elementos, a los 6,7 s, 11,9 s, 46,4 s y 297,9 s del arranque del proxy; entre la tercera respuesta (46,4 s) y la cuarta petición (295,3 s) no hay ninguna llamada de herramienta en el registro del proxy; el flujo de la CLI trae 12 eventos `assistant`, 4 `user` y 2 826 `system/other`; las herramientas listadas son las tres, `unexpected_tool_count` es 0 y el servidor `ommatix` está conectado. El oráculo muestra que nada cambió y el veredicto registrado es «other» (ninguno). Los registros **no dicen por qué** la sesión llegó al tope, así que esta adición no lo atribuye a ninguna causa. Es un único intento.
+
+**Otras cifras de la serie de MiMo.** G02 terminó con `DONE` y con código de salida 1 de la CLI (sin tope de tiempo); el registro no dice por qué. G02 (172,9 s) y G07 (205,8 s) llamaron además una vez a `get_engine_metrics` y quedaron por debajo del tope.
+
+**Re-observación.** Con el método de 9.11.1: una acción cuenta «tras una observación» si la llamada anterior del agente fue `observe_screen` y llegó sin error, y «seguida de una» si lo fue la siguiente; los datos son del registro del proxy e incluyen las acciones que el motor rechazó. Una llamada a `get_engine_metrics` entre una observación y una acción es una llamada intermedia.
+
+| Meta | MiMo: acciones / tras / seguidas | DeepSeek: acciones / tras / seguidas |
+|---|---|---|
+| G01 | 2 / 1 / 1 | 3 / 3 / 3 |
+| G02 | 8 / 8 / 6 | 4 / 4 / 4 |
+| G03 | 5 / 5 / 5 | 5 / 4 / 5 |
+| G04 | 1 / 1 / 1 | 1 / 1 / 1 |
+| G05 | 3 / 1 / 1 | 3 / 3 / 3 |
+| G06 | 3 / 3 / 3 | 3 / 3 / 3 |
+| G07 | 6 / 6 / 4 | 4 / 4 / 4 |
+| G08 | 2 / 1 / 1 | 2 / 2 / 2 |
+| G09 | 4 / 4 / 3 | 2 / 2 / 2 |
+| G10, G11 | 0 | 0 |
+| **Serie** | **34 / 30 / 25** | **27 / 26 / 27** |
+
+Con el ensayo de G01 (dos acciones, ambas tras y seguidas de una observación), MiMo tiene 36 / 32 / 27. Observaciones: MiMo 48 en la serie, de las que 13 devolvieron 0 o 1 elemento (0: 6; 1: 7) y 35 entre 12 y 100; DeepSeek 52, de las que 27 devolvieron entre 0 y 2 (0: 12; 1: 14; 2: 1) y 25 entre 25 y 83. Los registros no dicen por qué. Latencias de la serie, según los resúmenes: `observe_screen`, mediana de 2 531,5 ms y p95 de 2 750 ms (MiMo, 48 llamadas) y mediana de 31 ms y p95 de 2 609 ms (DeepSeek, 52); `execute_action`, mediana de 0 ms y p95 de 16 ms (MiMo, 34) y mediana de 15 ms y p95 de 16 ms (DeepSeek, 27).
+
+**Comparación con Claude Haiku 5.5 (9.11.1).** Es el mismo arnés de agente (Claude Code; 2.1.302 en las ocho primeras sesiones de Haiku, 2.1.303 en las del editor y en estas series), las mismas once metas, el mismo motor y el mismo oráculo, con **una sola corrida por modelo**: no hay varianza estimada, y una diferencia de una meta entre dos corridas únicas no distingue los modelos. Las cifras de Haiku son las de las tablas de 9.11.1; en las sumas y medianas no entra el ensayo de G01.
+
+| | Haiku 5.5 (18 oct) | MiMo V2.6 Flash (19 oct) | DeepSeek `deepseek-flash` (19 oct) |
+|---|---|---|---|
+| Éxitos de la fase 1 (implementada / estricta) | 10 de 11 / 9 de 11 | 10 de 11 / 9 de 11 | 11 de 11 / 10 de 11 |
+| Meta fallida (implementada) | G07 (secuencia repetida) | G10 (tope de 300 s) | — |
+| Abstención donde se puntúa | 2 de 2 | 1 de 2 | 2 de 2 |
+| Afirmaciones falsas (puntuación de la fase 1) | 0 | 0 | 0 |
+| `DONE` en G09 | sí | sí | sí |
+| Rechazos del motor (`STALE_SNAPSHOT`) | 1 | 13 | 5 |
+| Turnos, mediana por meta | 4 | 7,5 (10 metas con dato) | 8 |
+| Tiempo de pared, suma / mediana (s) | 169,6 / 13,6 | 992,1 / 34,76 | 289,7 / 22,12 |
+| Contexto, suma / mediana (tokens) | 395 315 / 29 403 | 811 410 / 34 389 (mixto: G10 provisional) | 691 268 / 46 635 |
+| Salida, suma / mediana (tokens) | 13 865 / 1 088 (n = 11) | 16 914 / 1 200,5 (n = 10, sin G10) | 34 167 / 1 881 (n = 11) |
+| Acciones / tras / seguidas (fase 1 completa, con el ensayo de G01) | 22 / 12 / 8 | 36 / 32 / 27 | 27 / 26 / 27 (sin ensayo) |
+
+Cómo leer la tabla: las cifras de tokens no son comparables como coste ni como esfuerzo, porque cada proveedor cuenta la entrada, la caché y la salida (con su razonamiento) a su manera, y Claude Code envía el pensamiento como «adaptativo», cuya acogida por cada proveedor no se ha verificado. En G07, que Haiku falló, MiMo y DeepSeek cumplieron la elección esperada; con una sola corrida cada uno, eso no dice que ninguno resuelva G07 de manera fiable. Ni el tiempo de pared ni los turnos son una comparación limpia: incluyen la latencia de cada punto de acceso.
+
+**Límites.** Sólo `dry_run` (nada se entrega, así que el oráculo de la fase 1 no ve un efecto); sólo las dos aplicaciones de prueba sintéticas; una máquina y una resolución; un intento por meta y modelo (más el ensayo de G01 de MiMo); la fase 2 en vivo no se ha ejecutado con estos modelos; la acogida del pensamiento adaptativo de Claude Code por cada proveedor, la contabilidad de tokens de cada uno y los términos de uso de datos de Xiaomi y DeepSeek no se han verificado; el motivo del tope de G10 de MiMo y del código de salida 1 de G02 no consta en los registros. No es una comparación limpia de modelos y AG-02 no afirma «mejor que». Las observaciones enviadas fueron de aplicaciones de prueba con etiquetas sintéticas. El ejecutor guardó sólo métricas, fuera del repositorio.
+
+**Estado.** AG-02M conserva `NO_EJECUTADO` y `PENDIENTE_PRODUCTO` (la fila describe ahora esta corrida); ningún requisito cambia de estado y no se marca ninguna casilla de §6.7. Los resultados citan el modelo, la versión de Claude Code, el proveedor y la fecha.
