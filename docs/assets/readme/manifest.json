@@ -3,12 +3,18 @@
   "inputs": {
     "contract": "docs/thesis/contratos/ejemplos",
     "results": "docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911",
-    "source_commit": "875495fad62cf69e4729a548f4e2186310f31943"
+    "source_commit": "bf90d327014ab664a36ca225f05bf53cc13144bf"
   },
   "runtime": {
     "node": "22.23.1",
     "chrome": "129.0.6668.58",
     "hyperframes": "0.8.178",
+    "demo": {
+      "fps": 30,
+      "duration": 44,
+      "width": 1280,
+      "height": 720
+    },
     "ffmpeg": "2024-04-10-git-0e4dfa4709"
   },
   "assets": {
@@ -84,37 +90,13 @@
       "bytes": 5246,
       "sha256": "5f30d36cbdf5c6c6399b2462853d1d06cbba3f6f8296816fe0a3fd18d9e5d9a6"
     },
+    "protocol-demo.gif": {
+      "bytes": 4395912,
+      "sha256": "0798752e78e107aa7b30a6d562e6d67500a6d125100c2289274c39736d83755e"
+    },
     "protocol-demo.mp4": {
-      "bytes": 291371,
-      "sha256": "46ef837c73e980210472211922ed278d82807efd28212878008cc5d2151f0822"
-    },
-    "protocol-loop-mobile.gif": {
-      "bytes": 41785,
-      "sha256": "a6c1996a82374200c117e0b4d7d1e062f4a6aee4a83618c2b2f408b7a39777f3"
-    },
-    "protocol-loop-mobile.svg": {
-      "bytes": 4435,
-      "sha256": "fb74cc4786531204c901bf90bd269968c3fab7ef51bce91a52da16df8e0a02e2"
-    },
-    "protocol-loop.gif": {
-      "bytes": 47773,
-      "sha256": "e61e04c6df1a2a50b282c9f8bf0bac350c2dfa969d7f50da889aef24fc2c7f36"
-    },
-    "protocol-loop.svg": {
-      "bytes": 4438,
-      "sha256": "bce08fd78390b8a03d1c0ce5437d2ce465ec22fc2ee3d3d1dd889605a92280b2"
-    },
-    "protocol-poster.png": {
-      "bytes": 62339,
-      "sha256": "eaace44c21d5683e3726a9ad231d0ff7096c02dd91fba2f966557ec593017c2b"
-    },
-    "protocol-still-mobile.svg": {
-      "bytes": 4486,
-      "sha256": "e9c903d4f65f4375fdd5abdc2ab9aca5dea3ea90d98b60712f8d51405e75b6c7"
-    },
-    "protocol-still.svg": {
-      "bytes": 4489,
-      "sha256": "50947127127585fc2cc8c5c750aca6b567c0020479017e14fbd75d9d46e868d2"
+      "bytes": 2416066,
+      "sha256": "8b861c157b4cfa5d04bc0815a81c4fce5082181fc9f190fc45982f5fb037b8a1"
     },
     "results-dark.svg": {
       "bytes": 3179,

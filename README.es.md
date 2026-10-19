@@ -26,26 +26,13 @@ refresco completo explícito cuando corresponde. La actuación falla de forma se
 acciones son dry run por defecto; la entrada real requiere la política del operador y una
 observación vigente. [Diseño y límites de confianza →](docs/architecture/overview.es.md)
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-reduced-motion: reduce)" srcset="docs/assets/readme/protocol-still-mobile.svg">
-  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/protocol-still.svg">
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/protocol-loop-mobile.gif">
-  <img src="docs/assets/readme/protocol-loop.gif" alt="Ilustración del protocolo: regiones cambiadas, elemento e7 en revisión 3, observe_screen, execute_action en dry run y rechazo del snapshot obsoleto s16." width="1200">
-</picture>
+<p align="center">
+  <a href="docs/assets/readme/protocol-demo.mp4"><img src="docs/assets/readme/protocol-demo.gif" alt="Ilustración animada del protocolo: sólo se vuelven a analizar las teselas que cambian en una ventana sintética; los controles reciben IDs y revisiones (e7, revisión 3); el agente llama a observe_screen y execute_action; una acción sobre el snapshot antiguo s16 se rechaza con STALE_SNAPSHOT y sin entrada; tras observar de nuevo, la acción en dry run sobre s17 devuelve simulated, input_delivered false, verified false." width="800"></a>
+</p>
 
-*Ilustración del protocolo sobre un escritorio simulado estilizado, generada a partir de los
-[ejemplos del contrato](docs/thesis/contratos/ejemplos). No es una grabación de pantalla.*
-
-<details>
-<summary>Ver la ilustración de 32 segundos con subtítulos en inglés (MP4 sin audio)</summary>
-
-[![Póster: la observación nombra el snapshot s17 y la acción nombra e7 con revisión esperada 3](docs/assets/readme/protocol-poster.png)](docs/assets/readme/protocol-demo.mp4)
-
-[Abrir o descargar el vídeo](docs/assets/readme/protocol-demo.mp4). El resultado final es
-`simulated`, con `input_delivered: false` y `verified: false`.
-[Guion, fuentes y compilación reproducible](tools/readme-media/README.md).
-
-</details>
+<p align="center"><sub>Ilustración sobre un escritorio simulado, generada a partir de los <a href="docs/thesis/contratos/ejemplos">ejemplos del contrato</a>; no es una grabación de pantalla.
+<a href="docs/assets/readme/protocol-demo.mp4">Ver el vídeo de 44 segundos</a> (MP4 sin audio, subtítulos en inglés) ·
+<a href="tools/readme-media/README.md">cómo se hace</a></sub></p>
 
 ## Por qué Ommatix
 

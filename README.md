@@ -25,26 +25,13 @@ regions against the last committed frame, with an explicit full-refresh fallback
 is fail-closed: actions default to a dry run; live input needs the operator’s policy and a
 current observation. [Design and trust boundaries →](docs/architecture/overview.md)
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-reduced-motion: reduce)" srcset="docs/assets/readme/protocol-still-mobile.svg">
-  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/protocol-still.svg">
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/protocol-loop-mobile.gif">
-  <img src="docs/assets/readme/protocol-loop.gif" alt="Protocol illustration: changed regions, element e7 at revision 3, observe_screen, a dry-run execute_action, and refusal of stale snapshot s16." width="1200">
-</picture>
+<p align="center">
+  <a href="docs/assets/readme/protocol-demo.mp4"><img src="docs/assets/readme/protocol-demo.gif" alt="Animated protocol illustration: only the changed tiles of a synthetic window are re-analysed; the controls get IDs and revisions (e7, revision 3); the agent calls observe_screen and execute_action; an action on the old snapshot s16 is refused with STALE_SNAPSHOT and no input; after observing again, the dry-run action on s17 returns simulated, input_delivered false, verified false." width="800"></a>
+</p>
 
-*Illustration of the protocol on a stylised simulated desktop, generated from the
-[contract examples](docs/thesis/contratos/ejemplos). No screen recording.*
-
-<details>
-<summary>Watch the 32-second captioned illustration (silent MP4)</summary>
-
-[![Poster: an observation names snapshot s17 and an action names e7 at expected revision 3](docs/assets/readme/protocol-poster.png)](docs/assets/readme/protocol-demo.mp4)
-
-[Open or download the video](docs/assets/readme/protocol-demo.mp4). The final result is
-`simulated`, with `input_delivered: false` and `verified: false`.
-[Storyboard, sources and reproducible build](tools/readme-media/README.md).
-
-</details>
+<p align="center"><sub>An illustration on a simulated desktop, generated from the <a href="docs/thesis/contratos/ejemplos">contract examples</a>; not a screen recording.
+<a href="docs/assets/readme/protocol-demo.mp4">Watch the 44-second video</a> (MP4, silent, captioned) ·
+<a href="tools/readme-media/README.md">how it is made</a></sub></p>
 
 ## Why Ommatix
 
