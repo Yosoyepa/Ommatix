@@ -690,7 +690,7 @@ MiMo:
 | `STALE_SNAPSHOT` / `INDETERMINATE_EFFECT` | 10 / 9 | 11 / 11 | 13 / 10 |
 | Contexto, suma / mediana (tokens) | 1 204 054 / 44 297 | 1 162 008 / 103 128 | 1 434 101 / 133 263 (mixto) |
 | Salida, suma / mediana (tokens) | 19 841 / 1 519 (n = 11) | 48 467 / 3 865 (n = 11) | 25 675 / 1 365 (n = 10) |
-| Tiempo de pared, suma / mediana (s) | 291,2 / 18,4 | 459,1 / 40,61 | 1 192,0 / 58,34 |
+| Tiempo de pared, suma / mediana (s) | 291,3 / 18,4 | 459,1 / 40,61 | 1 192,0 / 58,34 |
 | Observaciones | 51 | 70 | 88 llamadas |
 | Metas fallidas | G02, G05, G06, G07, G08 | G01, G03, G06, G10 | G02, G07, G08, G11 |
 
