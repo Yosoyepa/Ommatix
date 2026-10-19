@@ -345,11 +345,51 @@ prediction); `run_claude` sums input + cache creation + cache read over the mess
 (the definition of the results tables) and kills the session over the cap, `killed: "token_cap"`. The time
 cap is unchanged and the native Claude path keeps its dollar cap unchanged. The provenance of every route
 result records `max_context_tokens_per_goal` and `dollar_cap: "none"`; a plan prints the cap.
-Regression (`tools/agent/ag02/test_routecost.py`, written first: 7 failures and 3 errors of 12 against
+Regression (`tools/agent/ag02/test_routecost.py`, written first: 3 failures and 7 errors of 12 against
 7e382a2): `RouteArgvTests` (no flag on either route, native flag kept, refusal and plan refusal, cap
 option rules and default, provenance, plan) and `FakeCliTests` (a fake CLI that ends with
 `error_max_budget_usd` exactly when given a dollar cap: a route smoke succeeds, the fake over the token cap
 is killed with `token_cap`, under or without a cap it is not killed).
+
+### Review of PR 96 at 72d4f83 (Codex, CHANGES REQUIRED: 1 P1, 2 P2) - the token cap itself
+
+**C1-R1 (P1). Missing or invalid usage silently disabled the replacement budget.** The cap summed the
+reporting-only accounting, which drops absent or non-integer counters, accepts negatives and booleans, ignores
+usage without a message id, replaces the usage of a repeated id (so spend could go down) and loses an event whose
+integer exceeds Python's digit limit; with the CLI dollar cap gone, time was the only working limit while the
+provenance advertised a token cap. Reproduced with the real `run_claude` and synthetic streams, cap 100: no usage,
+`"1000"`, `1000.0`, `-1000`, usage without an id, result-only usage, a decrease (60, 0, then 60 of another message),
+a 5000-digit integer and `Infinity` all ended `killed: null`, DONE.
+Resolution: `ContextGuard` (run_goal.py), explicit validated accounting that distinguishes unknown from zero.
+Protocol: every `assistant` event carries a string `message.id` (1-200 characters) and a `message.usage` whose
+`input_tokens` is a count and whose cache counters, when present, are counts (an int, not a bool, not negative, at
+most 18 digits); repeated reports of one message keep the largest value per counter; the context is the sum over
+messages of input + cache creation + cache read (output tokens are not context); a `result` event's `usage` is a
+floor for the total. Anything else an assistant event can be, and any `{`-line that cannot be parsed, is unknown
+consumption and ends the session with the closed reason `usage_invalid`; over the cap it is `token_cap`. Integers
+are parsed with a length limit (`parse_int`) and `Infinity`/`NaN` are refused (`parse_constant`), so the digit
+limit can no longer discard an event. The guard reads before the reporting side and independently of it: an event
+the metrics cannot digest (an unhashable id, a message that is not an object) used to kill the reader thread; it
+now only skips that sample.
+**C1-R2 (P2). The literal `"usage"` byte check bypassed parsed usage.** `"usage": {...}` is the same JSON
+key; the old gate searched the raw text for `usage`. Resolution: there is no raw-text gate; the guard decodes every
+line and enforces on the decoded, validated data.
+**C1-R3 (P2). The cap returned while the owned proxy and engine were still running.** `proc.kill()` ended only the
+CLI; `run_claude` returned with the budget proxy (which waits up to 30 s for its engine) and the engine alive, and
+the next goal could start before the receipts were complete. Resolution: `OwnedTree`, the session's process tree: a
+Windows job object (also `KILL_ON_JOB_CLOSE`, so a dead runner leaves nothing) or a POSIX process group.
+Every ending of a session (cap, invalid usage, timeout, init or tool-surface kill, normal exit) now kills the CLI
+alone, so the proxy sees its input close and leaves with its engine and writes its receipts, waits up to
+`PROCESS_TREE_GRACE_S` (40 s), kills what is left and returns only when the tree has exited (`tree_left` in the
+result when something could not be ended). Reservations are untouched: nothing refunds a delivered or reserved
+call. The app's cleanup is the existing `finally` of `run_goal`, which now always runs after the tree is gone.
+Regression (`tools/agent/ag02/test_routeguard.py`, written first: 9 of 10 failed against 72d4f83, the tenth is
+the valid-stream control): `UsageGuardTests` (unknown consumption; wrong types, negatives, booleans, nonfinite;
+missing or invalid ids; oversized and unreadable events; decreasing updates; the escaped key ending promptly;
+valid per-message, duplicate and output-only controls; result-only usage) and `SessionTreeTests` (a fake CLI that
+starts the real budget proxy behind a slow engine and makes one reservation: at return the proxy and the engine
+have exited, the proxy log has its `end` record and the ledger is exactly one reservation; the same for a
+timeout).
 
 ## Not covered
 

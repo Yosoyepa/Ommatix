@@ -1328,54 +1328,268 @@ class TitleSampler(threading.Thread):
 
 # ---- running -------------------------------------------------------------------------------
 
-def context_tokens(metrics: StreamMetrics) -> int:
-    """The goal's context so far: input + cache creation + cache read over every message the stream reported
-    (the definition of the results tables)."""
-    total = metrics.usage_totals()
-    return sum(total[k] for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+USAGE_COUNTERS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+MAX_USAGE_DIGITS = 18  # a context count has at most this many digits; more is not a count
+MAX_MESSAGE_ID = 200
+OVERSIZED = object()  # stands for an integer literal longer than MAX_USAGE_DIGITS
+
+
+def _guard_int(text: str):
+    return int(text) if len(text) <= MAX_USAGE_DIGITS + 1 else OVERSIZED
+
+
+def _guard_constant(name: str):
+    raise ValueError("nonfinite " + name)
+
+
+def valid_counter(value) -> bool:
+    return type(value) is int and 0 <= value < 10 ** MAX_USAGE_DIGITS
+
+
+class ContextGuard:
+    """The per-goal token cap of a provider route, on decoded and validated data (the CLI's dollar figure is
+    invalid there, so this is the only budget besides the time cap).
+
+    Protocol: every ``assistant`` event must carry a string ``message.id`` (1 to 200 characters) and a
+    ``message.usage`` object whose ``input_tokens`` is a count and whose cache counters, when present, are counts
+    (an int, not a bool, not negative, at most 18 digits). Repeated reports of one message keep, per counter, the
+    largest value seen (a later, lower report never lowers the spend). The context is the sum, over messages, of
+    input + cache creation + cache read: the definition of the results tables. Output tokens are not context.
+    A ``result`` event's ``usage`` is a floor for the total: whichever of the two is larger counts.
+    Anything else an assistant event can be (no usage, a wrong type, a negative, a non-finite or oversized number,
+    no or an invalid id, an event that cannot be parsed) is *unknown consumption* and ends the session
+    (``usage_invalid``): unknown is not zero. The raw text is never searched: only the decoded event counts."""
+
+    def __init__(self, cap: int):
+        self.cap = cap
+        self.by_message: dict[str, dict[str, int]] = {}
+        self.result_total = 0
+        self.reason: str | None = None
+
+    @staticmethod
+    def _counts(usage, required: bool):
+        """The input counters of one usage object, or None when it is not valid."""
+        if not isinstance(usage, dict):
+            return None
+        if required and "input_tokens" not in usage:
+            return None
+        counts = {}
+        for key in USAGE_COUNTERS:
+            if key in usage:
+                if not valid_counter(usage[key]):
+                    return None
+                counts[key] = usage[key]
+        if "output_tokens" in usage and not valid_counter(usage["output_tokens"]):
+            return None
+        return counts
+
+    def total(self) -> int:
+        by_message = sum(sum(counts.values()) for counts in self.by_message.values())
+        return max(by_message, self.result_total)
+
+    def _verdict(self) -> str | None:
+        self.reason = self.reason or ("token_cap" if self.total() > self.cap else None)
+        return self.reason
+
+    def feed(self, line: str) -> str | None:
+        """Takes one stdout line; returns the closed reason the session must end for, if any."""
+        if self.reason:
+            return self.reason
+        try:
+            event = json.loads(line, parse_int=_guard_int, parse_constant=_guard_constant)
+        except (ValueError, RecursionError):
+            if line.lstrip().startswith("{"):  # an event that cannot be read is not evidence of low consumption
+                self.reason = "usage_invalid"
+            return self.reason
+        if not isinstance(event, dict):
+            return None
+        if event.get("type") == "assistant":
+            message = event.get("message")
+            message_id = message.get("id") if isinstance(message, dict) else None
+            counts = self._counts(message.get("usage"), True) if isinstance(message, dict) else None
+            if counts is None or not isinstance(message_id, str) or not 0 < len(message_id) <= MAX_MESSAGE_ID:
+                self.reason = "usage_invalid"
+                return self.reason
+            seen = self.by_message.setdefault(message_id, {})
+            for key, value in counts.items():
+                seen[key] = max(seen.get(key, 0), value)
+        elif event.get("type") == "result" and "usage" in event:
+            counts = self._counts(event["usage"], False)
+            if counts is None:
+                self.reason = "usage_invalid"
+                return self.reason
+            self.result_total = max(self.result_total, sum(counts.values()))
+        return self._verdict()
+
+
+PROCESS_TREE_GRACE_S = 40.0  # the proxy waits up to 30 s for its engine to leave, then kills it
+
+
+class OwnedTree:
+    """The session's process tree: the CLI and everything it starts (MCP proxy, engine). On Windows a job object
+    that also kills what is left if the runner dies; elsewhere a process group. ``shutdown`` returns only once
+    the tree has exited (the proxy gets ``PROCESS_TREE_GRACE_S`` to write its receipts and close its engine),
+    killing what is left after that; it never touches a process outside the tree."""
+
+    def __init__(self, proc):
+        self.proc = proc
+        self.job = None
+        if os.name == "nt":
+            self._open_job()
+
+    def _open_job(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class Basic(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class Counters(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in ("ro", "wo", "oo", "rb", "wb", "ob")]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [("Basic", Basic), ("Io", Counters), ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        class Accounting(ctypes.Structure):
+            _fields_ = [("times", ctypes.c_int64 * 4), ("TotalPageFaultCount", wintypes.DWORD),
+                        ("TotalProcesses", wintypes.DWORD), ("ActiveProcesses", wintypes.DWORD),
+                        ("TotalTerminatedProcesses", wintypes.DWORD)]
+
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                                  ctypes.c_void_p]
+        k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            return
+        info = Extended()
+        info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)) or \
+                not k32.AssignProcessToJobObject(job, int(self.proc._handle)):  # noqa: SLF001
+            k32.CloseHandle(job)
+            return
+        self.job, self._k32, self._accounting = job, k32, Accounting
+
+    def active(self) -> int:
+        """How many processes of the tree are still running."""
+        if os.name == "nt":
+            if self.job is None:
+                return 0 if self.proc.poll() is not None else 1
+            import ctypes
+            info = self._accounting()
+            if not self._k32.QueryInformationJobObject(self.job, 1, ctypes.byref(info), ctypes.sizeof(info), None):
+                return 0
+            return int(info.ActiveProcesses)
+        try:
+            os.killpg(self.proc.pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return 0
+        return 1
+
+    def _terminate(self) -> None:
+        if os.name == "nt":
+            if self.job is not None:
+                self._k32.TerminateJobObject(self.job, 1)
+            else:  # the runner was itself in a job that did not allow ours: end the tree by the CLI's pid
+                subprocess.run(["taskkill", "/PID", str(self.proc.pid), "/T", "/F"], capture_output=True)
+            return
+        import signal
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def shutdown(self, kill_cli: bool, grace: float = PROCESS_TREE_GRACE_S) -> int:
+        """Ends the tree and returns how many processes were still running at the end (0 when it is gone).
+        ``kill_cli`` first kills the CLI alone, which closes the proxy's input so the proxy and its engine leave
+        on their own; whatever is left after ``grace`` seconds is killed."""
+        if kill_cli and self.proc.poll() is None:
+            self.proc.kill()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        deadline = time.monotonic() + grace
+        while self.active() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if self.active():
+            self._terminate()
+            deadline = time.monotonic() + 5
+            while self.active() and time.monotonic() < deadline:
+                time.sleep(0.1)
+        left = self.active()
+        if self.job is not None:
+            self._k32.CloseHandle(self.job)
+            self.job = None
+        return left
 
 
 def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
                timeout: float, stderr_path: Path | None = None, env: dict | None = None,
                max_context_tokens: int | None = None) -> dict:
-    """Runs the command; feeds every stdout line to `metrics`; kills it on a timeout, when the
-    first event shows a session other than the proven one, when the tool surface is wider
-    than the three Ommatix tools, or (``max_context_tokens``, provider routes) when the context the stream
-    reports exceeds the cap: the route's per-goal limit, because the CLI's dollar figure is invalid there. The child's stderr is discarded unless a test passes `stderr_path`:
-    production never stores it (it can echo a credential or a response, and nothing filters it)."""
-    flags = 0x08000000 if os.name == "nt" else 0
+    """Runs the command; feeds every stdout line to `metrics`; ends the session on a timeout, when the first
+    event shows a session other than the proven one, when the tool surface is wider than the three Ommatix tools,
+    or (``max_context_tokens``, provider routes, where the CLI's dollar figure is invalid) when the
+    ``ContextGuard`` finds the context over the cap (``token_cap``) or its consumption unknown or invalid
+    (``usage_invalid``). It returns only once the session's whole process tree (the CLI, the budget proxy and
+    the engine it started) has exited; ``tree_left`` is in the result when something could not be ended.
+    The child's stderr is discarded unless a test passes `stderr_path`: production never stores it (it can
+    echo a credential or a response, and nothing filters it)."""
     stderr = open(stderr_path, "wb") if stderr_path else subprocess.DEVNULL
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=stderr, cwd=cwd, creationflags=flags,
+                            stderr=stderr, cwd=cwd, creationflags=0x08000000 if os.name == "nt" else 0,
+                            start_new_session=os.name != "nt",
                             env=env if env is not None else agent_env())
+    tree = OwnedTree(proc)
     proc.stdin.write(prompt.encode("utf-8"))
     proc.stdin.close()
     killed = {"reason": None}
+    guard = None if max_context_tokens is None else ContextGuard(max_context_tokens)
+
+    def stop(reason: str) -> None:
+        if killed["reason"] is None:
+            killed["reason"] = reason
+            proc.kill()  # the CLI alone: the proxy sees its input close and leaves with its engine
 
     def pump():
         for raw in proc.stdout:
-            metrics.feed(raw.decode("utf-8", errors="replace"))
-            if killed["reason"] is None and (metrics.init_problems or metrics.unexpected_tools):
-                killed["reason"] = "init" if metrics.init_problems else "tool_surface"
-                proc.kill()
-            if (killed["reason"] is None and max_context_tokens is not None and "usage" in raw.decode(
-                    "utf-8", errors="replace") and context_tokens(metrics) > max_context_tokens):
-                killed["reason"] = "token_cap"
-                proc.kill()
+            text = raw.decode("utf-8", errors="replace")
+            # The guard reads first and on its own: an event the reporting side cannot digest (an unhashable
+            # id, a message that is not an object) must never stop the guard from seeing it.
+            if guard is not None and (reason := guard.feed(text)):
+                stop(reason)
+            try:
+                metrics.feed(text)
+            except Exception:  # noqa: BLE001 - an event the metrics cannot read is a missing sample, not a crash
+                continue
+            if metrics.init_problems or metrics.unexpected_tools:
+                stop("init" if metrics.init_problems else "tool_surface")
 
     reader = threading.Thread(target=pump, daemon=True)
     reader.start()
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        killed["reason"] = "timeout"
-        proc.kill()
+        stop("timeout")
         proc.wait()
+    left = tree.shutdown(kill_cli=False)
     reader.join(timeout=10)
     proc.stdout.close()
     if stderr_path:
         stderr.close()
-    return {"exit_code": proc.returncode, "killed": killed["reason"]}
+    if guard is not None and killed["reason"] is None:
+        killed["reason"] = guard.reason  # e.g. a result event that reports more than the cap
+    out = {"exit_code": proc.returncode, "killed": killed["reason"]}
+    return out | ({"tree_left": left} if left else {})
 
 
 def agent_cli(args):
