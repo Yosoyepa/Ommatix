@@ -257,7 +257,7 @@ decision 3). Findings while building it, all measured on the 127.0.0.1 stand-in 
   anything starts and by the agent. Regression: `TokenPlanKeyTests` (three tests).
 - **G7 (note). Thinking.** Claude Code 2.1.303 sends `thinking: {"type": "adaptive"}` and the effort from
   the environment variable; no variable makes it send `{"type": "enabled"}`. Whether MiMo or DeepSeek
-  honour it is unverified; recorded in ADR-0037 and 9.11.2, not worked around.
+  honour it is unverified; recorded in ADR-0037 and 9.11.3, not worked around.
 - **G8 (note). The native proof is unchanged.** The route's stricter request-level verdict is gated by the
   route and carries its own `route_verifier_revision`; ADR-0036's `verifier_revision` (3) and its proofs
   stay valid, so the owner's existing native proof is not invalidated by this PR.
