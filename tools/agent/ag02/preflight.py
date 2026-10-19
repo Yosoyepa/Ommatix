@@ -35,6 +35,18 @@ switches were tried and rejected, because each removed `execute_action` from the
 
 Differences from a production session, stated rather than hidden: stage A's configuration
 directory is the canary's own; the endpoint is the stand-in; the key is a dummy.
+
+``--route mimo|deepseek`` (ADR-0037) runs the same two sessions through the route's child environment
+(``agentcli.route_env`` - the function production uses, with the stand-in's URL and a dummy token) and
+adds a request-level verdict from the real Messages requests the harness sent: every request that offers
+tools offers exactly the three Ommatix ones, every request names the route's model and no other, none
+carries an image block, the credential headers are ``Authorization: Bearer <token>`` and, when sent,
+``x-api-key: <token>`` only (Claude Code sends both when ``ANTHROPIC_API_KEY`` is set), the token is in no
+other header and no body, and the effort is the route's. A positive control feeds that verdict mutated
+copies of a real request (an extra tool, a dropped tool, another model, an image block, another
+``x-api-key`` value, another effort, the token in a body or another header) and the preflight fails if
+any goes unseen.
+The proof then carries the route (provider, production endpoint, model, effort) and the request facts.
 """
 
 from __future__ import annotations
@@ -51,9 +63,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import agentcli  # noqa: E402
 import proxy as proxy_module  # noqa: E402
 import run_goal as rg  # noqa: E402
 from fake_api import FakeApi  # noqa: E402
+from preflight_cli import decoded_strings  # noqa: E402
+
+ROUTE_DUMMY_TOKEN = "tp-canary-0000000000"
 
 KINDS = ("user_claude_md", "user_rules", "auto_memory", "skill", "command", "agent",
          "hook_context", "ancestor_claude_md", "project_claude_md", "project_local_md",
@@ -229,10 +245,17 @@ def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path,
     mcp_path.write_text(json.dumps(mcp), encoding="utf-8")
     argv = rg.build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
                                 system_instruction=goals["system_instruction"], max_budget_usd=0.5)
+    route = getattr(args, "route", None)
     with FakeApi() as api:
-        env = rg.scrubbed_env({"CLAUDE_CONFIG_DIR": str(config_dir), "ANTHROPIC_BASE_URL": api.url,
-                               "ANTHROPIC_API_KEY": "sk-ant-canary-0000000000",
-                               **getattr(args, "extra_env", {})})
+        if route:
+            env = agentcli.route_env(route, api.url, ROUTE_DUMMY_TOKEN, args.model, config_dir) | getattr(
+                args, "extra_env", {})
+            env_problems = agentcli.route_env_problems(env, route, agentcli.CLAUDE_ROUTES[route]["base_urls"])
+        else:
+            env_problems = []
+            env = rg.scrubbed_env({"CLAUDE_CONFIG_DIR": str(config_dir), "ANTHROPIC_BASE_URL": api.url,
+                                   "ANTHROPIC_API_KEY": "sk-ant-canary-0000000000",
+                                   **getattr(args, "extra_env", {})})
         if control:
             argv[argv.index("--setting-sources") + 1] = "user,project,local"
             env.pop("CLAUDE_CODE_DISABLE_CLAUDE_MDS", None)
@@ -240,7 +263,91 @@ def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path,
         cli = rg.run_claude(argv, rg.build_prompt({"prompt": "Say hi."}, 1), cwd, metrics, args.timeout,
                             env=env)
         bodies = list(api.bodies)
-    return {"cli": cli, "metrics": metrics, "bodies": bodies, "attestation": metrics.attestation}
+        requests = list(api.requests)
+    return {"cli": cli, "metrics": metrics, "bodies": bodies, "requests": requests, "env_problems": env_problems,
+            "attestation": metrics.attestation}
+
+
+def _has_image(value) -> bool:
+    if isinstance(value, dict):
+        return value.get("type") == "image" or any(_has_image(v) for v in value.values())
+    if isinstance(value, list):
+        return any(_has_image(v) for v in value)
+    return False
+
+
+def check_route_requests(requests: list[dict], *, model: str, token: str, effort: str) -> tuple[list[str], dict]:
+    """(closed problem tokens, facts) for the Messages requests Claude Code sent on a route."""
+    problems: list[str] = []
+    if not requests:
+        return ["no_request_captured"], {"requests": 0}
+    wanted = sorted(rg.ALLOWED_TOOL_NAMES)
+    models, thinking, efforts, offered = set(), set(), set(), False
+    for request in requests:
+        headers = request["headers"]
+        if request["path"] != "/v1/messages":
+            problems.append("request_path_differs")
+        if headers.get("authorization") != f"Bearer {token}":
+            problems.append("auth_header_differs")
+        if headers.get("x-api-key") not in (None, token):
+            problems.append("x_api_key_header_differs")
+        if any(token in value for name, value in headers.items() if name not in ("authorization", "x-api-key")):
+            problems.append("key_in_another_header")
+        try:
+            body = json.loads(request["body"])
+        except ValueError:
+            problems.append("request_unreadable")
+            continue
+        if not isinstance(body, dict):
+            problems.append("request_unreadable")
+            continue
+        if token in "\n".join(decoded_strings(body)):
+            problems.append("key_in_body")
+        if _has_image(body):
+            problems.append("image_in_request")
+        models.add(str(body.get("model")))
+        if "tools" in body:
+            offered = True
+            names = sorted(str(t.get("name")) for t in body["tools"] if isinstance(t, dict)) \
+                if isinstance(body["tools"], list) else []
+            if names != wanted:
+                problems.append("tools_not_the_three")
+        if isinstance(body.get("thinking"), dict):
+            thinking.add(str(body["thinking"].get("type")))
+        efforts.add(str((body.get("output_config") or {}).get("effort")))
+    if models != {model}:
+        problems.append("request_model_differs")
+    if not offered:
+        problems.append("no_request_offers_tools")
+    if efforts != {effort}:
+        problems.append("effort_differs")
+    return sorted(set(problems)), {"requests": len(requests), "request_tools": wanted if offered else [],
+                                   "request_models": sorted(models), "request_thinking": sorted(thinking),
+                                   "request_effort": sorted(efforts)}
+
+
+def route_control_mutations(request: dict, token: str) -> dict[str, dict]:
+    """Copies of one captured route request, each broken in one way the verdict must see."""
+    body = json.loads(request["body"])
+
+    def variant(change, headers_change=None):
+        mutated = json.loads(json.dumps(body))
+        change(mutated)
+        headers = dict(request["headers"])
+        if headers_change:
+            headers_change(headers)
+        return request | {"body": json.dumps(mutated).encode(), "headers": headers}
+    return {
+        "extra_tool": variant(lambda b: b["tools"].append({"name": "Bash", "description": "", "input_schema": {}})),
+        "dropped_tool": variant(lambda b: b["tools"].pop()),
+        "other_model": variant(lambda b: b.update(model="claude-haiku-5-5")),
+        "image_block": variant(lambda b: b["messages"].append({"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}]})),
+        "x_api_key_other_value": variant(lambda b: None, lambda h: h.update({"x-api-key": "other-" + token})),
+        "other_effort": variant(lambda b: b.update(output_config={"effort": "low"})),
+        "token_in_body": variant(lambda b: b["messages"].append({"role": "user", "content": token})),
+        "token_in_header": variant(lambda b: None, lambda h: h.update({"x-extra": token})),
+    }
 
 
 def refusals() -> list[str]:
@@ -280,6 +387,23 @@ def run(args) -> dict:
         b_leaked_lines = sum(1 for snippet in b_snippets if snippet in b_text)
         a_unreadable = request_texts(a["bodies"])[1]
         ancestors = rg.ancestor_context(scratch_b, production_dir)
+    route = getattr(args, "route", None)
+    route_facts, route_detected, route_blind = {}, [], []
+    if route:
+        spec = agentcli.CLAUDE_ROUTES[route]
+        route_requests = a["requests"] + b["requests"]
+        found, route_facts = check_route_requests(route_requests, model=args.model, token=ROUTE_DUMMY_TOKEN,
+                                                  effort=spec["effort"])
+        problems += [f"route_{p}" for p in found]
+        for session in (a, control, b):
+            problems += [f"route_env_{p}" for p in session["env_problems"]]
+        if a["requests"]:
+            for name, mutated in route_control_mutations(a["requests"][0], ROUTE_DUMMY_TOKEN).items():
+                seen, _ = check_route_requests([mutated], model=args.model, token=ROUTE_DUMMY_TOKEN,
+                                               effort=spec["effort"])
+                (route_detected if seen else route_blind).append(name)
+        if route_blind:
+            problems.append("route_control_blind")
     att_a, att_b = a["attestation"] or {}, b["attestation"] or {}
     for name, run_ in (("canary_session", a), ("production_dir_session", b)):
         if run_["cli"]["exit_code"] != 0 or run_["cli"]["killed"]:
@@ -332,20 +456,39 @@ def run(args) -> dict:
         "differences_from_production": [
             "stage A uses the canary's own configuration directory", "ANTHROPIC_BASE_URL is a local stand-in",
             "ANTHROPIC_API_KEY is a dummy"],
+        **({"route": {"provider": route, "base_url": args.route_base_url, "model": args.model,
+                      "effort": agentcli.CLAUDE_ROUTES[route]["effort"], "auth": "bearer"},
+            "route_verifier_revision": agentcli.ROUTE_VERIFIER_REVISION, "route_control_detected": route_detected,
+            "route_control_blind": route_blind, **route_facts,
+            "route_differences_from_production": [
+                "the base URL is the stand-in (the production URL is bound in `route`)",
+                "the token is a dummy; the model's answers are scripted"]} if route else {}),
     }
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], allow_abbrev=False)
     parser.add_argument("--exe", type=Path, required=True, help="the ommatix binary (serves --source sim)")
-    parser.add_argument("--model", required=True, help="the model the goals will be run with")
+    parser.add_argument("--model", help="the model the goals will be run with (with --route: the route's)")
     parser.add_argument("--claude-config-dir", type=Path, required=True,
                         help="the controlled configuration directory the goals will use (must exist)")
     parser.add_argument("--out", type=Path, required=True,
                         help="where to write the proof (absolute, outside the repository)")
     parser.add_argument("--claude", default="claude")
     parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument("--route", choices=sorted(agentcli.CLAUDE_ROUTES),
+                        help="ADR-0037: preflight the harness pointed at that provider's Anthropic-compatible endpoint")
+    parser.add_argument("--route-base-url", help="the production endpoint to bind (required with --route)")
     args = parser.parse_args(argv)
+    if args.route:
+        spec = agentcli.CLAUDE_ROUTES[args.route]
+        if args.route_base_url not in spec["base_urls"]:
+            parser.error("--route-base-url is required and must be one of: " + ", ".join(spec["base_urls"]))
+        args.model = args.model or spec["model"]
+    elif args.route_base_url:
+        parser.error("--route-base-url needs --route")
+    if not args.model:
+        parser.error("--model is required (without --route)")
     args.exe = rg.absolute_arg(args.exe)
     args.out = rg.absolute_arg(args.out)
     args.claude_config_dir = rg.absolute_arg(args.claude_config_dir)

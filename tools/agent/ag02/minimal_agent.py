@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""AG-02 minimal agent: a confinable tool-calling loop of our own, for providers whose CLIs cannot
-be confined to the three Ommatix tools (ADR-0037).
+"""AG-02 minimal agent: a tool-calling loop of our own for an OpenAI-compatible endpoint (ADR-0037).
 
 It speaks the OpenAI-compatible Chat Completions API to ONE configured endpoint and offers the model
 EXACTLY the three Ommatix tools, bridged over MCP stdio to the budget proxy (``proxy.py``) given in
@@ -10,11 +9,22 @@ system instruction, the goal prompt (stdin), the conversation so far and the thr
 definitions, and the only network peer is the endpoint (no redirect is followed, no proxy variable
 is honoured, a non-loopback endpoint must be https).
 
+Fail closed at every boundary (the PR-93 review): a provider reply is read with a byte bound and
+parsed strictly (no duplicate key, no ``NaN``, bounded nesting) and its whole message is validated
+**before** anything is emitted or forwarded - one function call at most, a function-typed call with a
+unique id, an allowed tool name, arguments that are a bounded JSON object matching the tool's schema
+(and, in the dry-run-only phase, ``dry_run: true``); a reply that fails any of that ends the session
+with a fixed token and forwards nothing. Usage is read from every reply and accounted at once;
+a missing or malformed usage ends the session; the token cap (and a dollar cap, if prices are given)
+is checked before every request against a conservative reservation (the request's size in bytes,
+which bounds its tokens, plus the explicit completion ceiling sent as ``max_tokens``) and after every
+reply, final ones included. The key file must lie outside any repository checkout.
+
 Output: one JSON object per line on stdout in the stream shape the runner already reads (the
 ``init`` / ``assistant`` / ``user`` / ``result`` events of ``run_goal.StreamMetrics``), so the
 runner, its scoring and its metrics are the same for every agent. stderr carries metadata only
-(HTTP status, byte sizes, token counts), never a body, a label or a key. The API key is read from
-``--key-file`` (outside the repository), sent in one header and never printed.
+(HTTP status, byte sizes), never a body, a label or a key. The API key is read from ``--key-file``
+and sent in one header.
 
 Standard library only.
 """
@@ -24,7 +34,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -33,18 +45,28 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-AGENT_VERSION = "1.0.0"
+AGENT_VERSION = "1.1.0"
 SERVER_NAME = "ommatix"
 TOOLS = ("observe_screen", "execute_action", "get_engine_metrics")
 LOOPBACK = ("127.0.0.1", "localhost", "::1")
-# The only body keys the request may ever carry. ``--extra-param`` may add the sampling and reasoning
-# parameters below and nothing else; the model's identity, the messages and the tools are not
-# configurable that way.
-BASE_KEYS = ("model", "messages", "tools", "tool_choice", "stream")
-EXTRA_KEYS = ("reasoning_effort", "thinking", "max_tokens", "max_completion_tokens", "temperature", "top_p")
+# The only body keys the request may ever carry. ``--extra-param`` may add the reasoning and sampling
+# parameters below and nothing else; the model's identity, the messages, the tools and the completion
+# ceiling are not configurable that way.
+BASE_KEYS = ("model", "messages", "tools", "tool_choice", "stream", "max_tokens")
+EXTRA_KEYS = ("reasoning_effort", "thinking", "temperature", "top_p")
 AUTH_STYLES = ("bearer", "api-key")
 MESSAGE_KEYS = ("role", "content", "tool_calls", "tool_call_id", "reasoning_content")
 MAX_RESULT_CHARS = 200_000
+# Bounds on what a provider may send (the PR-93 review): checked before allocation or dispatch.
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_TEXT_CHARS = 200_000
+MAX_ARGUMENT_CHARS = 16_000
+MAX_CALLS = 1
+DEFAULT_COMPLETION_CEILING = 32_768
+CALL_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+SCHEMA_ANNOTATIONS = frozenset({"$schema", "title", "description", "default", "examples"})
+# Tokens tell the budget about a model that cannot be priced: never free.
+TOKEN_PLAN_PREFIXES = ("tp-", "ttp-")
 
 
 class AgentError(Exception):
@@ -67,6 +89,51 @@ def note(text: str) -> None:
 
 def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+# ---- strict JSON ----------------------------------------------------------------------------
+
+def _no_duplicates(pairs):
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError("duplicate key")
+        seen[key] = value
+    return seen
+
+
+def _no_constant(name):
+    raise ValueError("non-JSON constant")
+
+
+def strict_loads(text, token: str):
+    """``json.loads`` that refuses a duplicate object key, ``NaN`` / ``Infinity`` and a nesting deep
+    enough to exhaust the decoder; every failure is the one fixed `token`."""
+    try:
+        return json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
+    except (ValueError, RecursionError):
+        raise AgentError(token) from None
+
+
+# ---- paths ----------------------------------------------------------------------------------
+
+def key_path_problem(path) -> str | None:
+    """Why `path` cannot hold the key: it must be an absolute path in plain form (no drive-relative
+    form, no extended-length or device prefix, no alternate data stream, no ``..``) that, resolved
+    (symbolic links and junctions followed), lies outside any repository checkout - the same rule as
+    the runner's, applied here because this is the boundary that opens the file."""
+    text = str(path)
+    p = Path(text)
+    if not p.is_absolute():
+        return "key_path_not_absolute"
+    if text.startswith(("\\\\?\\", "\\\\.\\", "//?/", "//./")):
+        return "key_path_extended_form"
+    if ":" in text[2:] or ".." in p.parts:
+        return "key_path_ambiguous"
+    here = Path(os.path.realpath(p))
+    if any((parent / ".git").exists() for parent in [here, *here.parents]):
+        return "key_path_inside_checkout"
+    return None
 
 
 def endpoint_problem(url: str) -> str | None:
@@ -92,6 +159,8 @@ def extra_param_problem(params) -> str | None:
 
 
 def load_key(path: Path) -> str:
+    if (problem := key_path_problem(path)) is not None:
+        raise AgentError(problem)
     try:
         key = path.read_text(encoding="utf-8").strip()
     except OSError:
@@ -101,6 +170,229 @@ def load_key(path: Path) -> str:
     return key
 
 
+# ---- tool arguments: bounded, strict, schema-checked ---------------------------------------------
+
+def _same(a, b) -> bool:
+    return type(a) is type(b) and a == b
+
+
+def _type_ok(rule, value) -> bool:
+    kinds = rule if isinstance(rule, list) else [rule]
+    for kind in kinds:
+        if kind == "object" and isinstance(value, dict):
+            return True
+        if kind == "array" and isinstance(value, list):
+            return True
+        if kind == "string" and isinstance(value, str):
+            return True
+        if kind == "boolean" and isinstance(value, bool):
+            return True
+        if kind == "null" and value is None:
+            return True
+        if kind == "integer" and isinstance(value, int) and not isinstance(value, bool):
+            return True
+        if kind == "number" and isinstance(value, (int, float)) and not isinstance(value, bool):
+            return True
+    return False
+
+
+def schema_ok(schema, value) -> bool:
+    """Whether `value` satisfies the JSON Schema subset the Ommatix tools use (type, enum, const,
+    properties, required, additionalProperties, items, min/max length and bounds, allOf, anyOf, oneOf,
+    not, if/then/else). A keyword outside the subset is a fixed refusal, not a pass."""
+    if schema is True:
+        return True
+    if schema is False:
+        return False
+    if not isinstance(schema, dict):
+        raise AgentError("schema_unsupported")
+    for key, rule in schema.items():
+        if key in SCHEMA_ANNOTATIONS or key in ("then", "else"):
+            continue
+        if key == "type":
+            if not _type_ok(rule, value):
+                return False
+        elif key == "enum":
+            if not any(_same(value, option) for option in rule):
+                return False
+        elif key == "const":
+            if not _same(value, rule):
+                return False
+        elif key == "properties":
+            if isinstance(value, dict):
+                for name, sub in rule.items():
+                    if name in value and not schema_ok(sub, value[name]):
+                        return False
+        elif key == "required":
+            if isinstance(value, dict) and not all(name in value for name in rule):
+                return False
+        elif key == "additionalProperties":
+            if isinstance(value, dict):
+                extra = [k for k in value if k not in schema.get("properties", {})]
+                if rule is False and extra:
+                    return False
+                if isinstance(rule, dict) and not all(schema_ok(rule, value[k]) for k in extra):
+                    return False
+        elif key == "items":
+            if isinstance(value, list) and not all(schema_ok(rule, item) for item in value):
+                return False
+        elif key in ("minLength", "maxLength"):
+            if isinstance(value, str) and (len(value) < rule if key == "minLength" else len(value) > rule):
+                return False
+        elif key in ("minimum", "maximum"):
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and (
+                    value < rule if key == "minimum" else value > rule):
+                return False
+        elif key == "allOf":
+            if not all(schema_ok(sub, value) for sub in rule):
+                return False
+        elif key == "anyOf":
+            if not any(schema_ok(sub, value) for sub in rule):
+                return False
+        elif key == "oneOf":
+            if sum(1 for sub in rule if schema_ok(sub, value)) != 1:
+                return False
+        elif key == "not":
+            if schema_ok(rule, value):
+                return False
+        elif key == "if":
+            branch = schema.get("then") if schema_ok(rule, value) else schema.get("else")
+            if branch is not None and not schema_ok(branch, value):
+                return False
+        else:
+            raise AgentError("schema_keyword_unsupported")
+    return True
+
+
+def validate_call(message: dict, seen_ids: set, schemas: dict, dry_run_only: bool):
+    """The one tool call of a provider message, fully validated, or None when it has none. Every
+    deviation is a fixed token and the caller forwards nothing."""
+    calls = message.get("tool_calls")
+    if calls is None or calls == []:
+        return None
+    if not isinstance(calls, list):
+        raise AgentError("tool_calls_not_a_list")
+    if len(calls) > MAX_CALLS:
+        raise AgentError("multiple_tool_calls")
+    call = calls[0]
+    if not isinstance(call, dict) or set(call) - {"id", "type", "function"} or call.get("type") != "function":
+        raise AgentError("tool_call_shape")
+    call_id = call.get("id")
+    if not isinstance(call_id, str) or not CALL_ID.match(call_id):
+        raise AgentError("tool_call_id_invalid")
+    if call_id in seen_ids:
+        raise AgentError("tool_call_id_repeated")
+    function = call.get("function")
+    if not isinstance(function, dict) or set(function) != {"name", "arguments"}:
+        raise AgentError("tool_call_shape")
+    name = function["name"]
+    if not isinstance(name, str) or name not in TOOLS:
+        raise AgentError("tool_call_unknown_name")
+    raw = function["arguments"]
+    if not isinstance(raw, str):
+        raise AgentError("arguments_not_a_string")
+    if len(raw) > MAX_ARGUMENT_CHARS:
+        raise AgentError("arguments_too_large")
+    arguments = strict_loads(raw, "arguments_unreadable")
+    if not isinstance(arguments, dict):
+        raise AgentError("arguments_not_an_object")
+    if not schema_ok(schemas.get(name, True), arguments):
+        raise AgentError("arguments_violate_the_schema")
+    if dry_run_only and name == "execute_action" and arguments.get("dry_run") is not True:
+        raise AgentError("live_argument_in_dry_run_phase")
+    return {"id": call_id, "name": name, "arguments": arguments, "raw": raw}
+
+
+def validate_text(value, token: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise AgentError(token)
+    if len(value) > MAX_TEXT_CHARS:
+        raise AgentError(token)
+    return value
+
+
+# ---- the budget -------------------------------------------------------------------------------
+
+class Budget:
+    """Tokens (context read plus output written) and, when prices are known, dollars. A request is
+    allowed only if its reservation - its body's size in bytes, an upper bound of its tokens, plus the
+    completion ceiling - fits in what is left; usage is accounted from every reply, final ones included,
+    and a reply without a valid usage is refused rather than counted as free."""
+
+    def __init__(self, max_tokens: int, ceiling: int, price=None, max_usd=None):
+        self.max_tokens, self.ceiling, self.price, self.max_usd = max_tokens, ceiling, price, max_usd
+        self.totals = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+                       "cache_creation_input_tokens": 0}
+
+    @property
+    def tokens(self) -> int:
+        t = self.totals
+        return t["input_tokens"] + t["cache_read_input_tokens"] + t["output_tokens"]
+
+    @property
+    def usd(self) -> float | None:
+        return cost_of(self.totals, self.price)
+
+    def can_afford(self, request_bytes: int) -> bool:
+        reserve = request_bytes + self.ceiling
+        if self.tokens + reserve > self.max_tokens:
+            return False
+        if self.max_usd is not None:
+            fresh, cached, out = self.price
+            worst = (request_bytes * max(fresh, cached) + self.ceiling * out) / 1_000_000
+            if (self.usd or 0.0) + worst > self.max_usd:
+                return False
+        return True
+
+    def account(self, reply: dict) -> dict:
+        usage = usage_of(reply)
+        for key, value in usage.items():
+            self.totals[key] += value
+        return usage
+
+    @property
+    def exhausted(self) -> bool:
+        return self.tokens > self.max_tokens or (
+            self.max_usd is not None and (self.usd or 0.0) > self.max_usd)
+
+
+def usage_of(reply: dict) -> dict:
+    """Chat usage in the stream's cache-aware shape: ``input_tokens`` is the part not read from the
+    cache, ``cache_read_input_tokens`` the cached part (OpenAI's ``prompt_tokens_details.cached_tokens``
+    or DeepSeek's ``prompt_cache_hit_tokens``), ``output_tokens`` the completion total (reasoning
+    included, as the providers count it). A reply without valid ``prompt_tokens`` and
+    ``completion_tokens`` is refused: an unknown balance is not a free one."""
+    usage = reply.get("usage")
+    if not isinstance(usage, dict):
+        raise AgentError("usage_missing_or_invalid")
+
+    def number(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+    prompt, completion = number(usage.get("prompt_tokens")), number(usage.get("completion_tokens"))
+    if prompt is None or completion is None:
+        raise AgentError("usage_missing_or_invalid")
+    cached = number(usage.get("prompt_cache_hit_tokens")) or 0
+    details = usage.get("prompt_tokens_details")
+    if not cached and isinstance(details, dict):
+        cached = number(details.get("cached_tokens")) or 0
+    cached = min(cached, prompt)
+    return {"input_tokens": prompt - cached, "output_tokens": completion,
+            "cache_read_input_tokens": cached, "cache_creation_input_tokens": 0}
+
+
+def cost_of(usage: dict, price) -> float | None:
+    """USD from ``--price`` (per million tokens: fresh input, cached input, output), or None."""
+    if not price:
+        return None
+    fresh, cached, out = price
+    return round((usage["input_tokens"] * fresh + usage["cache_read_input_tokens"] * cached
+                  + usage["output_tokens"] * out) / 1_000_000, 8)
+
+
+# ---- MCP -----------------------------------------------------------------------------------------
+
 class McpBridge:
     """Line-delimited JSON-RPC over the proxy's stdio (legacy profile: ``initialize``)."""
 
@@ -108,6 +400,7 @@ class McpBridge:
         self.proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                      stderr=subprocess.DEVNULL, env=env)
         self.next_id = 1
+        self.calls = 0
 
     def _send(self, message: dict) -> None:
         self.proc.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
@@ -119,10 +412,7 @@ class McpBridge:
         line = self.proc.stdout.readline()
         if not line:
             raise AgentError("mcp_server_closed")
-        try:
-            reply = json.loads(line)
-        except ValueError:
-            raise AgentError("mcp_reply_unreadable") from None
+        reply = strict_loads(line, "mcp_reply_unreadable")
         if not isinstance(reply, dict) or reply.get("id") != rid:
             raise AgentError("mcp_reply_id_mismatch")
         return reply
@@ -141,6 +431,7 @@ class McpBridge:
         return tools
 
     def call(self, name: str, arguments: dict) -> dict:
+        self.calls += 1
         return self.request("tools/call", {"name": name, "arguments": arguments})
 
     def close(self) -> None:
@@ -155,19 +446,20 @@ class McpBridge:
             self.proc.wait()
 
 
-def tool_definitions(listed: list[dict]) -> tuple[list[dict], list[str]]:
-    """(the three chat tool definitions, the names the server listed). The agent offers a tool only
-    if the server listed it; a server that lists anything but the three is reported through the
-    names and the init event, and the runner ends the session."""
+def tool_definitions(listed: list[dict]) -> tuple[list[dict], list[str], dict]:
+    """(the three chat tool definitions, the names the server listed, the input schemas by name).
+    The agent offers a tool only if the server listed it; a server that lists anything but the
+    three is reported through the names and the init event, and the runner ends the session."""
     names = sorted(str(t.get("name")) for t in listed if isinstance(t, dict))
-    defs = []
+    defs, schemas = [], {}
     for tool in sorted((t for t in listed if isinstance(t, dict) and t.get("name") in TOOLS),
                        key=lambda t: TOOLS.index(t["name"])):
         schema = tool.get("inputSchema") if isinstance(tool.get("inputSchema"), dict) else {
             "type": "object", "properties": {}}
+        schemas[tool["name"]] = schema
         defs.append({"type": "function", "function": {
             "name": tool["name"], "description": str(tool.get("description") or ""), "parameters": schema}})
-    return defs, names
+    return defs, names, schemas
 
 
 def result_text(reply: dict) -> tuple[str, bool]:
@@ -192,6 +484,8 @@ def result_text(reply: dict) -> tuple[str, bool]:
     return text[:MAX_RESULT_CHARS], bool(result.get("isError")) or "error" in reply
 
 
+# ---- the provider -----------------------------------------------------------------------------------
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):  # the recipient is the configured endpoint, no other
         return None
@@ -201,69 +495,48 @@ def build_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
 
-def chat_request(opener, url: str, headers: dict, body: dict, timeout: float) -> dict:
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+def chat_request(opener, url: str, headers: dict, data: bytes, timeout: float) -> dict:
+    """POST `data`; read at most ``MAX_RESPONSE_BYTES`` (a declared or undeclared body past it is a
+    fixed refusal before any parsing); parse strictly. No body text ever reaches an error."""
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with opener.open(request, timeout=timeout) as reply:
-            raw = reply.read()
+            declared = reply.headers.get("Content-Length") if getattr(reply, "headers", None) else None
+            if declared is not None and declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
+                raise AgentError("reply_too_large")
+            raw = reply.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as error:
         note(f"agent: http_status={error.code} request_bytes={len(data)}")
         raise AgentError(f"http_{error.code}") from None
     except (urllib.error.URLError, OSError, TimeoutError):
         raise AgentError("network_error") from None
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise AgentError("reply_too_large")
     try:
-        value = json.loads(raw)
-    except ValueError:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
         raise AgentError("reply_unreadable") from None
+    value = strict_loads(text, "reply_unreadable")
     if not isinstance(value, dict):
         raise AgentError("reply_unreadable")
     return value
 
 
-def usage_of(reply: dict) -> dict:
-    """Chat usage in the stream's cache-aware shape: ``input_tokens`` is the part not read from the
-    cache, ``cache_read_input_tokens`` the cached part (OpenAI's ``prompt_tokens_details.cached_tokens``
-    or DeepSeek's ``prompt_cache_hit_tokens``), ``output_tokens`` the completion total (reasoning
-    included, as the providers count it)."""
-    usage = reply.get("usage") if isinstance(reply.get("usage"), dict) else {}
-
-    def number(value):
-        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
-    prompt = number(usage.get("prompt_tokens"))
-    cached = number(usage.get("prompt_cache_hit_tokens"))
-    details = usage.get("prompt_tokens_details")
-    if not cached and isinstance(details, dict):
-        cached = number(details.get("cached_tokens"))
-    cached = min(cached, prompt)
-    return {"input_tokens": prompt - cached, "output_tokens": number(usage.get("completion_tokens")),
-            "cache_read_input_tokens": cached, "cache_creation_input_tokens": 0}
-
-
-def assistant_message(choice_message: dict) -> dict:
-    """The assistant message kept for the next request: its text, its tool calls (function calls
-    only) and the provider's ``reasoning_content`` (kept because thinking models need it back in the
-    same turn); nothing else the reply carried."""
-    kept = {"role": "assistant", "content": choice_message.get("content")
-            if isinstance(choice_message.get("content"), str) else None}
-    calls = []
-    for call in choice_message.get("tool_calls") or []:
-        if isinstance(call, dict) and isinstance(call.get("function"), dict):
-            calls.append({"id": str(call.get("id")), "type": "function", "function": {
-                "name": str(call["function"].get("name")),
-                "arguments": call["function"].get("arguments") if isinstance(
-                    call["function"].get("arguments"), str) else "{}"}})
-    if calls:
-        kept["tool_calls"] = calls
-    if isinstance(choice_message.get("reasoning_content"), str):
-        kept["reasoning_content"] = choice_message["reasoning_content"]
-    return kept
+def choice_message(reply: dict) -> dict:
+    choices = reply.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict) \
+            or not isinstance(choices[0].get("message"), dict):
+        raise AgentError("reply_has_no_message")
+    return choices[0]["message"]
 
 
 def run(args, prompt: str, bridge_factory=McpBridge, opener=None) -> int:
     started = time.monotonic()
-    mcp = json.loads(Path(args.mcp_config).read_text(encoding="utf-8"))["mcpServers"][SERVER_NAME]
     key = load_key(args.key_file)
+    if args.provider == "mimo" and key.startswith(TOKEN_PLAN_PREFIXES):
+        # A Token Plan key's terms forbid scripts and application backends: only coding tools.
+        raise AgentError("token_plan_key_not_for_scripts")
+    mcp = json.loads(Path(args.mcp_config).read_text(encoding="utf-8"))["mcpServers"][SERVER_NAME]
     headers = {"Content-Type": "application/json"}
     if args.auth_style == "bearer":
         headers["Authorization"] = f"Bearer {key}"
@@ -272,11 +545,11 @@ def run(args, prompt: str, bridge_factory=McpBridge, opener=None) -> int:
     url = args.base_url.rstrip("/") + "/chat/completions"
     opener = opener or build_opener()
     bridge = bridge_factory([mcp["command"], *mcp.get("args", [])])
-    totals = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
-              "cache_creation_input_tokens": 0}
+    budget = Budget(args.max_total_tokens, args.completion_ceiling, args.price, args.max_usd)
     turns, subtype, final_text, is_error = 0, "success", "", False
+    seen_ids: set = set()
     try:
-        defs, listed_names = tool_definitions(bridge.start())
+        defs, listed_names, schemas = tool_definitions(bridge.start())
         emit({"type": "system", "subtype": "init", "cli": "minimal-agent", "cli_version": AGENT_VERSION,
               "provider": args.provider, "model": args.model,
               "tools": [f"mcp__{SERVER_NAME}__{n}" for n in listed_names],
@@ -291,71 +564,63 @@ def run(args, prompt: str, bridge_factory=McpBridge, opener=None) -> int:
             if turns >= args.max_turns:
                 subtype = "error_max_turns"
                 break
-            if totals["input_tokens"] + totals["cache_read_input_tokens"] + totals["output_tokens"] \
-                    > args.max_total_tokens:
+            body = {"model": args.model, "messages": messages, "tools": defs, "tool_choice": "auto",
+                    "stream": False, "max_tokens": args.completion_ceiling, **args.extra_param}
+            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            if not budget.can_afford(len(data)):
                 subtype = "error_max_budget_usd"  # the stream's name for "a budget was exhausted"
                 break
-            body = {"model": args.model, "messages": messages, "tools": defs, "tool_choice": "auto",
-                    "stream": False, **args.extra_param}
-            reply = chat_request(opener, url, headers, body, args.request_timeout)
+            reply = chat_request(opener, url, headers, data, args.request_timeout)
             turns += 1
-            usage = usage_of(reply)
-            for k, v in usage.items():
-                totals[k] += v
-            choices = reply.get("choices")
-            if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict) \
-                    or not isinstance(choices[0].get("message"), dict):
-                raise AgentError("reply_has_no_message")
-            kept = assistant_message(choices[0]["message"])
+            usage = budget.account(reply)
+            message = choice_message(reply)
+            content = validate_text(message.get("content"), "content_invalid")
+            reasoning = validate_text(message.get("reasoning_content"), "reasoning_invalid")
+            call = validate_call(message, seen_ids, schemas, args.dry_run_only)
+            kept = {"role": "assistant", "content": content}
+            if call is not None:
+                seen_ids.add(call["id"])
+                kept["tool_calls"] = [{"id": call["id"], "type": "function",
+                                       "function": {"name": call["name"], "arguments": call["raw"]}}]
+            if reasoning is not None:
+                kept["reasoning_content"] = reasoning
             messages.append(kept)
             blocks = []
-            if kept["content"]:
-                blocks.append({"type": "text", "text": kept["content"]})
-                final_text = kept["content"]
-            calls = kept.get("tool_calls", [])
-            for call in calls:
-                try:
-                    arguments = json.loads(call["function"]["arguments"] or "{}")
-                except ValueError:
-                    arguments = None
+            if content:
+                blocks.append({"type": "text", "text": content})
+                final_text = content
+            if call is not None:
                 blocks.append({"type": "tool_use", "id": call["id"],
-                               "name": f"mcp__{SERVER_NAME}__{call['function']['name']}",
-                               "input": arguments if isinstance(arguments, dict) else {}})
+                               "name": f"mcp__{SERVER_NAME}__{call['name']}", "input": call["arguments"]})
             emit({"type": "assistant", "message": {"id": f"msg_{turns}", "content": blocks, "usage": usage}})
-            if not calls:
+            if budget.exhausted:  # a reply that overran the cap ends the goal, final replies included
+                subtype = "error_max_budget_usd"
                 break
-            results = []
-            for call in calls:
-                name = call["function"]["name"]
-                try:
-                    arguments = json.loads(call["function"]["arguments"] or "{}")
-                except ValueError:
-                    arguments = None
-                if name not in TOOLS or not isinstance(arguments, dict):
-                    text, error = json.dumps({"error": "unknown_tool_or_bad_arguments"}), True
-                else:
-                    text, error = result_text(bridge.call(name, arguments))
-                messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
-                results.append({"type": "tool_result", "tool_use_id": call["id"],
-                                "content": [{"type": "text", "text": text}], "is_error": error})
-            emit({"type": "user", "message": {"content": results}})
+            if call is None:
+                break
+            text, error = result_text(bridge.call(call["name"], call["arguments"]))
+            messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
+            emit({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": call["id"],
+                 "content": [{"type": "text", "text": text}], "is_error": error}]}})
     except AgentError as error:
         subtype, is_error, final_text = "error_during_execution", True, error.token
     finally:
         bridge.close()
     emit({"type": "result", "subtype": subtype, "is_error": is_error or subtype != "success",
-          "result": final_text, "num_turns": turns, "usage": totals,
-          "total_cost_usd": cost_of(totals, args.price), "duration_ms": round((time.monotonic() - started) * 1000)})
+          "result": final_text, "num_turns": turns, "usage": budget.totals,
+          "total_cost_usd": budget.usd, "duration_ms": round((time.monotonic() - started) * 1000)})
     return 0 if not is_error else 1
 
 
-def cost_of(usage: dict, price) -> float | None:
-    """USD from ``--price`` (per million tokens: fresh input, cached input, output), or None."""
-    if not price:
-        return None
-    fresh, cached, out = price
-    return round((usage["input_tokens"] * fresh + usage["cache_read_input_tokens"] * cached
-                  + usage["output_tokens"] * out) / 1_000_000, 8)
+def _price(text: str):
+    try:
+        values = tuple(float(x) for x in text.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError("price_not_numbers") from None
+    if len(values) != 3 or not all(math.isfinite(v) and v >= 0 for v in values):
+        raise argparse.ArgumentTypeError("price_needs_three_finite_nonnegative_numbers")
+    return values
 
 
 def parse_args(argv=None):
@@ -368,14 +633,21 @@ def parse_args(argv=None):
     p.add_argument("--mcp-config", type=Path, required=True)
     p.add_argument("--system-prompt", required=True)
     p.add_argument("--extra-param", default="{}", help="JSON object: " + ", ".join(EXTRA_KEYS))
+    p.add_argument("--dry-run-only", action="store_true",
+                   help="phase 1: a tool call whose dry_run is not true is refused before the bridge")
     p.add_argument("--max-turns", type=int, default=40)
     p.add_argument("--max-total-tokens", type=int, default=400_000,
-                   help="stop when the context tokens read plus output tokens written exceed this")
+                   help="stop when the context tokens read plus output tokens written would exceed this")
+    p.add_argument("--completion-ceiling", type=int, default=DEFAULT_COMPLETION_CEILING,
+                   help="max_tokens sent with every request (the completion ceiling of the reservation)")
+    p.add_argument("--max-usd", type=float, help="stop when the spend would exceed this (needs --price)")
     p.add_argument("--request-timeout", type=float, default=120.0)
-    p.add_argument("--price", help="USD per million tokens: fresh input,cached input,output")
+    p.add_argument("--price", type=_price, help="USD per million tokens: fresh input,cached input,output")
     args = p.parse_args(argv)
-    for name in ("key_file", "mcp_config"):
-        setattr(args, name, Path(os.path.abspath(os.fspath(getattr(args, name)))))
+    args.key_file = Path(os.path.abspath(os.fspath(args.key_file)))
+    args.mcp_config = Path(os.path.abspath(os.fspath(args.mcp_config)))
+    if (problem := key_path_problem(args.key_file)):
+        p.error(problem)
     if (problem := endpoint_problem(args.base_url)):
         p.error(problem)
     try:
@@ -384,9 +656,10 @@ def parse_args(argv=None):
         p.error("extra_param_not_json")
     if (problem := extra_param_problem(args.extra_param)):
         p.error(problem)
-    args.price = tuple(float(x) for x in args.price.split(",")) if args.price else None
-    if args.price is not None and len(args.price) != 3:
-        p.error("price_needs_three_numbers")
+    if args.max_total_tokens < 1 or args.completion_ceiling < 1 or args.max_turns < 1:
+        p.error("limits_must_be_positive")
+    if args.max_usd is not None and (args.price is None or not math.isfinite(args.max_usd) or args.max_usd < 0):
+        p.error("max_usd_needs_a_finite_nonnegative_cap_and_prices")
     return args
 
 

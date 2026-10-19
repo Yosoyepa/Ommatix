@@ -13,11 +13,45 @@ import sys
 import time
 
 SECRET_LABEL = "ETIQUETA-SECRETA"
+# The input schemas the real engine lists (Ommatix 1.0), copied so the agent's validator is tested on them.
+REAL_SCHEMAS = {
+    "observe_screen": {
+        "additionalProperties": False, "type": "object", "required": [],
+        "properties": {"cursor": {"maxLength": 128, "minLength": 1, "type": "string"},
+                       "include_values": {"default": False, "type": "boolean"},
+                       "limit": {"default": 100, "maximum": 200, "minimum": 1, "type": "integer"},
+                       "query": {"maxLength": 256, "type": "string"}}},
+    "get_engine_metrics": {"additionalProperties": False, "properties": {}, "required": [], "type": "object"},
+    "execute_action": {
+        "additionalProperties": False, "type": "object",
+        "allOf": [{"else": {"not": {"required": ["text"]}},
+                   "if": {"properties": {"action": {"const": "type"}}, "required": ["action"]},
+                   "then": {"required": ["text"]}},
+                  {"else": {"not": {"anyOf": [{"required": ["direction"]}, {"required": ["steps"]}]}},
+                   "if": {"properties": {"action": {"const": "scroll"}}, "required": ["action"]},
+                   "then": {"required": ["direction", "steps"]}}],
+        "properties": {"action": {"enum": ["click", "type", "scroll"]}, "direction": {"enum": ["up", "down"]},
+                       "dry_run": {"default": True, "type": "boolean"},
+                       "expected_effect": {"default": "none", "enum": [
+                           "none", "focus_changed", "value_updated", "scroll_moved", "visual_change"]},
+                       "expected_revision": {"minimum": 1, "type": "integer"},
+                       "geometry_epoch": {"minimum": 1, "type": "integer"},
+                       "request_id": {"maxLength": 64, "minLength": 1, "type": "string"},
+                       "session_id": {"maxLength": 64, "minLength": 1, "type": "string"},
+                       "snapshot_id": {"maxLength": 64, "minLength": 1, "type": "string"},
+                       "steps": {"maximum": 5, "minimum": 1, "type": "integer"},
+                       "target_id": {"maxLength": 64, "minLength": 1, "type": "string"},
+                       "text": {"maxLength": 2048, "minLength": 1, "type": "string"}},
+        "required": ["request_id", "session_id", "snapshot_id", "geometry_epoch", "target_id",
+                     "expected_revision", "action"]},
+}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--received", required=True)
+    parser.add_argument("--real-schemas", action="store_true",
+                        help="list the input schemas of the real engine (observe_screen, execute_action)")
     parser.add_argument("--extra-tool", default=None,
                         help="list this fourth tool in tools/list (a server that offers more than three)")
     parser.add_argument("--delay-action-ms", type=int, default=0,
@@ -38,7 +72,8 @@ def main() -> int:
         if message.get("method") == "tools/list":
             reply = {"jsonrpc": "2.0", "id": rid, "result": {"tools": [
                 {"name": name, "description": f"fake {name}",
-                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": True}}
+                 "inputSchema": (REAL_SCHEMAS.get(name) if args.real_schemas and name in REAL_SCHEMAS else
+                                 {"type": "object", "properties": {}, "additionalProperties": True})}
                 for name in ("observe_screen", "execute_action", "get_engine_metrics",
                              *([args.extra_tool] if args.extra_tool else []))]}}
         elif message.get("method") != "tools/call":

@@ -1410,12 +1410,22 @@ def parse_args(argv=None):
     p.add_argument("--max-total-tokens", type=int, default=400_000,
                    help="minimal agent: stop a goal after this many context plus output tokens")
     p.add_argument("--price", help="minimal agent: USD per million tokens: fresh input,cached input,output")
+    p.add_argument("--completion-ceiling", type=int,
+                   help="minimal agent: max_tokens sent with every request (default 32768)")
+    p.add_argument("--route", choices=("mimo", "deepseek"),
+                   help="Claude Code harness pointed at that provider's Anthropic-compatible endpoint "
+                        "(ADR-0037): needs --route-base-url, --key-file, --claude-config-dir, --isolation-proof")
+    p.add_argument("--route-base-url",
+                   help="the Anthropic-compatible endpoint of the route; required, one of a closed list "
+                        "(MiMo's Token Plan hosts are regional)")
     p.add_argument("--claude-config-dir", type=Path,
                    help="the controlled Claude Code configuration directory the proof was made for "
                         "(an existing directory outside the repository; it holds the login)")
     p.add_argument("--isolation-proof", type=Path,
                    help="the passing file written by preflight.py for this Claude Code version")
-    p.add_argument("--max-budget-usd", type=float, default=1.0)
+    p.add_argument("--max-budget-usd", type=float, default=None,
+                   help="Claude Code: the per-goal dollar cap (default 1.0); minimal agent: enforced only "
+                        "with --price")
     p.add_argument("--goal-timeout", type=float, default=300.0)
     p.add_argument("--foreground-wait", type=float, default=180.0)
     p.add_argument("--max-live-session", type=int, default=0,
@@ -1426,6 +1436,13 @@ def parse_args(argv=None):
     for name in ("exe", "config", "testapp_exe", "editor_exe", "ledger", "out", "isolation_proof",
                  "claude_config_dir", "key_file"):
         setattr(args, name, absolute_arg(getattr(args, name)))
+    args.max_usd_explicit = args.max_budget_usd is not None
+    if args.max_budget_usd is None:
+        args.max_budget_usd = 1.0
+    if args.route and args.agent_cli != "claude":
+        p.error("--route is for the Claude Code harness only (--agent-cli claude)")
+    if args.route_base_url and not args.route:
+        p.error("--route-base-url needs --route")
     if args.extra_param is not None:
         try:
             args.extra_param = json.loads(args.extra_param)
@@ -1447,8 +1464,11 @@ def parse_args(argv=None):
     if not args.plan and not args.exe:
         p.error("--exe is required")
     if args.agent_cli == "claude":
-        if not args.plan and not args.smoke and (args.isolation_proof is None or args.claude_config_dir is None):
+        if not args.plan and (not args.smoke or args.route) and (
+                args.isolation_proof is None or args.claude_config_dir is None):
             p.error("--isolation-proof and --claude-config-dir are required (run preflight.py first)")
+        if args.route and not args.plan and (args.route_base_url is None or args.key_file is None):
+            p.error("--route needs --route-base-url and --key-file")
     elif args.agent_cli == "minimal":
         if args.provider is None:
             p.error("--agent-cli minimal needs --provider")
@@ -1592,7 +1612,7 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
             result["cleanup"] = folder.cleanup()
 
 
-def run_smoke(args, out: Path, goals: dict, deps=RealDeps) -> dict:
+def run_smoke(args, out: Path, goals: dict, deps=RealDeps, proof: dict | None = None) -> dict:
     log = out / "smoke.proxy.jsonl"
     scratch = out / "scratch"
     scratch.mkdir(exist_ok=True)
@@ -1600,8 +1620,8 @@ def run_smoke(args, out: Path, goals: dict, deps=RealDeps) -> dict:
     mcp_path.write_text(json.dumps(build_mcp_config(
         sys.executable, proxy_args(args, 1, None, log, None),
         engine_argv(args, 1, args.config))), encoding="utf-8")
-    metrics = StreamMetrics([], None, None)
     agent = agent_cli(args)
+    metrics = StreamMetrics([], None, proof, config_dir=getattr(args, "claude_config_dir", None) if proof else None)
     cli = deps.run_claude(
         agent.build_argv(model=args.model, mcp_config=mcp_path,
                          system_instruction=goals["system_instruction"],
@@ -1637,10 +1657,17 @@ def main(argv=None, deps=RealDeps) -> int:
     if agent.checks_anthropic_routing and (routing := routing_problems(os.environ)):
         raise SystemExit("provider routing variables are set (ADR-0036 covers Anthropic's direct API "
                          "only); unset: " + ", ".join(routing))
-    proof = None if args.smoke else agent.load_proof(args.isolation_proof)
+    if (why := agent.key_problem()) is not None:
+        raise SystemExit(why)
+    proof = None if args.smoke and not args.route else agent.load_proof(args.isolation_proof)
+    if args.smoke and proof is not None:  # a route's smoke is a real session: it runs only under a proof
+        covered = agent.proof_problems(proof, args, getattr(args, "claude_config_dir", None),
+                                       goals["system_instruction"])
+        if covered:
+            raise SystemExit("the isolation proof does not cover this smoke: " + ",".join(covered))
     out.mkdir(parents=True)
     if args.smoke:
-        result = run_smoke(args, out, goals, deps)
+        result = run_smoke(args, out, goals, deps, proof)
         (out / "smoke.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(json.dumps({"smoke": out.as_posix(), "verdict": result["metrics"]["verdict"],
                           "mcp_status": result["metrics"]["mcp_status"],

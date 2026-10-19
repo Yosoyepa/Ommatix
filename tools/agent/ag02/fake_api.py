@@ -48,7 +48,9 @@ def _sse(model: str) -> bytes:
 
 
 def _chat_reply(model: str, step: dict, n: int, stream: bool) -> tuple[bytes, str]:
-    """A Chat Completions reply: the scripted text or one function call, with cache-aware usage."""
+    """A Chat Completions reply: the scripted text or one function call, with cache-aware usage.
+    Step keys beyond ``text`` / ``tool`` / ``args``: ``message`` (the whole assistant message, as written),
+    ``usage`` (replaces the usage object; ``None`` drops it) and ``reasoning``."""
     message = {"role": "assistant", "content": step.get("text")}
     if "reasoning" in step:  # a thinking model's reasoning_content, which the next request must carry back
         message["reasoning_content"] = step["reasoning"]
@@ -58,12 +60,18 @@ def _chat_reply(model: str, step: dict, n: int, stream: bool) -> tuple[bytes, st
         message["tool_calls"] = [{"id": f"call_{n}", "type": "function", "function": {
             "name": step["tool"], "arguments": json.dumps(step.get("args", {}))}}]
         finish = "tool_calls"
+    if "message" in step:
+        message = step["message"]
     usage = {"prompt_tokens": 100 + n, "completion_tokens": 5, "total_tokens": 105 + n,
              "prompt_tokens_details": {"cached_tokens": 0}}
+    if "usage" in step:
+        usage = step["usage"]
     if not stream:
-        return json.dumps({"id": f"chatcmpl-{n}", "object": "chat.completion", "created": 1, "model": model,
-                           "choices": [{"index": 0, "message": message, "finish_reason": finish}],
-                           "usage": usage}).encode(), "application/json"
+        reply = {"id": f"chatcmpl-{n}", "object": "chat.completion", "created": 1, "model": model,
+                 "choices": [{"index": 0, "message": message, "finish_reason": finish}]}
+        if usage is not None:
+            reply["usage"] = usage
+        return json.dumps(reply).encode(), "application/json"
     base = {"id": f"chatcmpl-{n}", "object": "chat.completion.chunk", "created": 1, "model": model}
     delta = {"role": "assistant", "content": message.get("content") or ""}
     if "tool_calls" in message:
@@ -142,6 +150,18 @@ class FakeApi:
                         outer._steps += 1
                     else:
                         step = {"text": "title"}
+                    if "raw" in step:  # bytes sent as they are, optionally with a lying or absent length
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        if not step.get("undeclared"):
+                            self.send_header("Content-Length", str(step.get("declared_length", len(step["raw"]))))
+                        self.end_headers()
+                        try:
+                            self.wfile.write(step["raw"])
+                        except OSError:
+                            pass
+                        self.close_connection = True
+                        return
                     data, kind = _chat_reply(model, step, outer._steps, bool(request.get("stream")))
                     self._reply(200, data, kind)
                     return
@@ -149,6 +169,8 @@ class FakeApi:
                     self._reply(404, b"{}", "application/json")
                     return
                 outer.bodies.append(body)
+                outer.requests.append({"path": path, "headers": {k.lower(): v for k, v in self.headers.items()},
+                                       "body": body})
                 try:
                     request = json.loads(body)
                 except ValueError:

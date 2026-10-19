@@ -40,7 +40,8 @@ class AgentRun:
     """One run of ``minimal_agent.py`` through the real proxy and a fake engine, against FakeApi."""
 
     def __init__(self, test, script, *, extra=None, provider="mimo", model="mimo-test", engine_extra=(),
-                 key="sk-test-KEY-123456", max_turns=None, max_tokens=None, api=None, base_path=None):
+                 key="sk-test-KEY-123456", max_turns=None, max_tokens=None, api=None, base_path=None,
+                 phase=1, price=None, max_usd=None, ceiling=None, real_schemas=False):
         self.test = test
         tmp = tempfile.TemporaryDirectory(prefix="ag02-minimal-")
         test.addCleanup(tmp.cleanup)
@@ -50,18 +51,23 @@ class AgentRun:
         key_file.write_text(key + "\n", encoding="utf-8")
         self.received = self.tmp / "engine.in"
         self.log = self.tmp / "proxy.jsonl"
-        engine = [sys.executable, str(FAKE_ENGINE), "--received", str(self.received), *engine_extra]
+        engine = [sys.executable, str(FAKE_ENGINE), "--received", str(self.received), *engine_extra,
+                  *(["--real-schemas"] if real_schemas else [])]
         mcp = self.tmp / "mcp.json"
-        mcp.write_text(json.dumps(rg.build_mcp_config(sys.executable, ["--dry-run-only", "--log", str(self.log)],
-                                                      engine)), encoding="utf-8")
+        mcp.write_text(json.dumps(rg.build_mcp_config(
+            sys.executable, ["--dry-run-only", "--log", str(self.log)] if phase == 1 else
+            ["--max-live", "5", "--ledger", str(self.tmp / "ledger.json"), "--goal-id", "G01",
+             "--max-live-goal", "5", "--log", str(self.log)], engine)), encoding="utf-8")
         with contextlib.ExitStack() as stack:
             api = api or stack.enter_context(FakeApi(script))
             self.api = api
             base = api.url if base_path is None else api.url + base_path
             ns = argparse.Namespace(provider=provider, base_url=base, key_file=key_file, effort=None,
-                                    extra_param=extra, max_total_tokens=max_tokens or 400_000, price=None)
+                                    extra_param=extra, max_total_tokens=max_tokens or 400_000, price=price,
+                                    phase=phase, completion_ceiling=ceiling, max_usd_explicit=max_usd is not None)
             cli = agentcli.MinimalCLI(ns)
-            argv = cli.build_argv(model=model, mcp_config=mcp, system_instruction=INSTRUCTION, max_budget_usd=1)
+            argv = cli.build_argv(model=model, mcp_config=mcp, system_instruction=INSTRUCTION,
+                                  max_budget_usd=max_usd if max_usd is not None else 1)
             if max_turns is not None:
                 argv += ["--max-turns", str(max_turns)]
             self.argv = argv
@@ -69,7 +75,18 @@ class AgentRun:
             self.stderr = self.tmp / "stderr.txt"
             self.ran = rg.run_claude(argv, PROMPT, self.tmp, self.metrics, 60, self.stderr, env=cli.env())
             self.requests = list(api.requests)
-        self.events = []
+
+    @property
+    def forwarded(self):
+        """The tools/call lines the fake engine really received (what got past the proxy)."""
+        if not self.received.exists():
+            return []
+        return [json.loads(line) for line in self.received.read_text(encoding="utf-8").splitlines()
+                if '"tools/call"' in line]
+
+    @property
+    def result(self):
+        return self.metrics.result or {}
 
 
 def bodies(run):
@@ -110,7 +127,8 @@ class EndpointAndParameterTests(unittest.TestCase):
                                                   "cache_read_input_tokens": 60, "cache_creation_input_tokens": 0})
         self.assertEqual(ma.usage_of({"usage": {"prompt_tokens": 5, "completion_tokens": 1,
                                                 "prompt_cache_hit_tokens": 99}})["input_tokens"], 0)
-        self.assertEqual(ma.usage_of({})["output_tokens"], 0)
+        with self.assertRaises(ma.AgentError):
+            ma.usage_of({})
 
     def test_only_text_reaches_the_model_an_image_or_other_block_is_replaced_by_a_fixed_note(self):
         reply = {"result": {"content": [{"type": "text", "text": "ok"},
@@ -123,15 +141,6 @@ class EndpointAndParameterTests(unittest.TestCase):
         self.assertEqual((json.loads(text), error), ({"a": 1}, True))
         self.assertEqual(ma.result_text({"error": {"code": -1, "message": "SECRET"}}),
                          ('{"error": "rpc_error"}', True))
-
-    def test_the_assistant_message_kept_for_the_next_request_has_only_text_calls_and_reasoning(self):
-        kept = ma.assistant_message({
-            "role": "assistant", "content": "t", "refusal": "x", "audio": {"id": "a"}, "reasoning_content": "r",
-            "tool_calls": [{"id": 1, "type": "function", "function": {"name": "observe_screen", "arguments": "{}"},
-                            "extra": 1}]})
-        self.assertEqual(set(kept), {"role", "content", "tool_calls", "reasoning_content"})
-        self.assertEqual(kept["tool_calls"][0], {"id": "1", "type": "function",
-                                                 "function": {"name": "observe_screen", "arguments": "{}"}})
 
 
 class EndToEndTests(unittest.TestCase):
@@ -155,8 +164,9 @@ class EndToEndTests(unittest.TestCase):
         run = AgentRun(self, self.SCRIPT, extra={"reasoning_effort": "max"})
         first, second = bodies(run)
         for body in (first, second):
-            self.assertEqual(set(body), {"model", "messages", "tools", "tool_choice", "stream",
+            self.assertEqual(set(body), {"model", "messages", "tools", "tool_choice", "stream", "max_tokens",
                                          "reasoning_effort"})
+            self.assertEqual(body["max_tokens"], ma.DEFAULT_COMPLETION_CEILING)
             self.assertEqual([t["function"]["name"] for t in body["tools"]], list(rg.TOOLS))
             self.assertIs(body["stream"], False)
         self.assertEqual(first["messages"], [{"role": "system", "content": INSTRUCTION},
@@ -182,15 +192,13 @@ class EndToEndTests(unittest.TestCase):
         run = AgentRun(self, self.SCRIPT, base_path="/v1")
         self.assertEqual({r["path"] for r in run.requests}, {"/v1/chat/completions"})
 
-    def test_a_tool_the_model_invents_is_never_forwarded_to_the_engine(self):
+    def test_a_tool_the_model_invents_ends_the_session_and_nothing_is_forwarded(self):
         script = [{"tool": "bash", "args": {"command": "dir"}}, {"text": "VERDICT: IMPOSSIBLE"}]
         run = AgentRun(self, script)
-        tool_message = bodies(run)[1]["messages"][-1]
-        self.assertEqual(tool_message["role"], "tool")
-        self.assertIn("unknown_tool_or_bad_arguments", tool_message["content"])
-        received = run.received.read_text(encoding="utf-8")
-        self.assertNotIn("bash", received)
-        self.assertEqual(run.metrics.summary()["tool_calls"], {"unknown": 1})
+        self.assertEqual(run.result["result"], "tool_call_unknown_name")
+        self.assertEqual(len(run.requests), 1)
+        self.assertEqual(run.forwarded, [])
+        self.assertEqual(run.metrics.summary()["tool_calls"], {})
 
     def test_reasoning_content_is_carried_back_in_the_same_turn(self):
         script = [{"tool": "observe_screen", "args": {}, "reasoning": "thinking about it"}, {"text": "VERDICT: DONE"}]
@@ -289,7 +297,7 @@ class HostileEndpointTests(unittest.TestCase):
 
     def test_a_reply_without_a_message_is_an_error_not_a_crash(self):
         def reply(h):
-            body = b'{"choices": []}'
+            body = b'{"choices": [], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}'
             h.send_response(200)
             h.send_header("Content-Length", str(len(body)))
             h.end_headers()
@@ -306,8 +314,9 @@ class VerifierTests(unittest.TestCase):
         return run
 
     def check(self, requests, **overrides):
-        kw = dict(model="mimo-test", extra_keys={"reasoning_effort"}, system_instruction=INSTRUCTION, prompt=PROMPT,
-                  sentinels={"k": "CANARY-K-1"}, dummy_key="sk-test-KEY-123456", auth_style="api-key", base_path="/v1")
+        kw = dict(model="mimo-test", expected_extra={"reasoning_effort": "max"}, ceiling=ma.DEFAULT_COMPLETION_CEILING,
+                  system_instruction=INSTRUCTION, prompt=PROMPT, sentinels={"k": "CANARY-K-1"},
+                  dummy_key="sk-test-KEY-123456", auth_style="api-key", base_path="/v1")
         kw.update(overrides)
         return pc.check_chat_requests(requests, **kw)
 
@@ -315,19 +324,23 @@ class VerifierTests(unittest.TestCase):
         problems, facts = self.check(self.captured().requests)
         self.assertEqual(problems, [])
         self.assertEqual((facts["requests"], facts["request_keys"]),
-                         (2, ["messages", "model", "reasoning_effort", "stream", "tool_choice", "tools"]))
+                         (2, ["max_tokens", "messages", "model", "reasoning_effort", "stream", "tool_choice", "tools"]))
         self.assertEqual(len(facts["tool_definitions_sha256"]), 64)
 
     def test_each_kind_of_deviation_is_seen(self):
         run = self.captured()
-        for name, mutated in pc.control_mutations(run.requests[0], "CANARY-K-1").items():
+        mutations = pc.control_mutations(run.requests[0], "CANARY-K-1", {"reasoning_effort": "max"})
+        for name, mutated in mutations.items():
             problems, _ = self.check([mutated])
             self.assertTrue(problems, f"{name} went unseen")
         expected = {"extra_tool": "tools_not_the_three", "sentinel": "sentinel_in_request",
+                    "escaped_sentinel": "sentinel_in_request",
                     "image_part": "non_text_content", "extra_key": "body_keys_differ",
                     "other_model": "model_differs", "dropped_tool": "tools_not_the_three",
-                    "changed_instruction": "opening_messages_differ"}
-        for name, mutated in pc.control_mutations(run.requests[0], "CANARY-K-1").items():
+                    "changed_instruction": "opening_messages_differ", "changed_ceiling": "param_values_differ",
+                    "changed_value_reasoning_effort": "param_values_differ"}
+        self.assertEqual(sorted(mutations), sorted(expected))
+        for name, mutated in mutations.items():
             self.assertIn(expected[name], self.check([mutated])[0], name)
 
     def test_headers_paths_keys_and_history_are_checked_too(self):
@@ -380,7 +393,7 @@ class PreflightAndProofTests(unittest.TestCase):
         self.assertEqual(proof["problems"], [])
         self.assertTrue(proof["passed"])
         self.assertEqual(proof["control_blind"], [])
-        self.assertEqual(len(proof["control_detected"]), 7)
+        self.assertEqual(len(proof["control_detected"]), 9)  # no configured parameter on mimo: no value mutation
         self.assertEqual(proof["requests_checked"], 2)
         self.assertEqual((proof["plugins"], proof["agents"], sorted(proof["tools"])), ([], [], THREE))
         self.assertEqual(proof["base_url"], "https://api.xiaomimimo.com/v1")
@@ -405,7 +418,8 @@ class PreflightAndProofTests(unittest.TestCase):
     def test_an_agent_that_adds_a_tool_or_a_body_key_fails_the_preflight(self):
         source = agentcli.MINIMAL_AGENT.read_text(encoding="utf-8")
         for old, new, token in (
-                ('"stream": False, **args.extra_param}', '"stream": False, "metadata": {"a": 1}, **args.extra_param}',
+                ('"max_tokens": args.completion_ceiling, **args.extra_param}',
+                 '"max_tokens": args.completion_ceiling, "metadata": {"a": 1}, **args.extra_param}',
                  "body_keys_differ"),
                 ('"tool_choice": "auto",', '"tool_choice": "required",', "stream_or_tool_choice_differs")):
             self.assertIn(old, source)

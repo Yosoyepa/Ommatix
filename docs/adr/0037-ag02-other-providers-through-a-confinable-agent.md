@@ -19,84 +19,117 @@ max) through Codex CLI and/or OpenCode. ADR-0036's central control is that the a
 is **proved** to be the three tools by looking at what the agent really sends, not by what its
 documentation says. The author probed both command-line agents the way ADR-0036 probes Claude Code
 (a stand-in on 127.0.0.1 that keeps the real request; no provider reached). Neither can be confined.
-The coordinator ruled the same day that the two must stay refused (fail closed) and that the other
-providers be reached through a loop of our own.
+The coordinator ruled the same day that the two must stay refused (fail closed).
 
-The owner also told the coordinator on 2026-10-18 that API keys exist **only for DeepSeek and MiMo**;
-GPT-6 Luna is available only through the Codex subscription, with no API key.
+The owner also told the coordinator that API keys exist **only for DeepSeek and MiMo** (GPT-6 Luna is
+available only through the Codex subscription, with no API key), and later the same day that the MiMo
+key is a **Token Plan** key (prefix `tp-`) whose terms allow coding tools such as Claude Code only, not
+scripts or application backends, and whose endpoint is a regional Token Plan host, not
+`api.xiaomimimo.com`. The owner therefore decided to run **both** providers through the confined Claude
+Code harness pointed at each provider's Anthropic-compatible endpoint, which also gives every model the
+same agent loop. The independent review of PR 93 (Codex, CHANGES REQUIRED, 1 P1 and 5 P2) found six
+defects in the first answer to the problem, a minimal agent of our own; the owner's decision and the
+review are both answered here.
 
 ## Decision
 
-1. **Models and providers.** AG-02 may run, in the same phases and under the same rules as ADR-0036:
-   - **DeepSeek V4.1 Flash 1017**, effort max, through DeepSeek's own API (`https://api.deepseek.com`,
-     OpenAI-compatible Chat Completions). DeepSeek's documentation names the model `deepseek-flash`
-     and says it "is now served by DeepSeek-V4.1-Flash-1017". The effort is `reasoning_effort: "max"`
-     with `thinking: {"type": "enabled"}`.
-   - **Xiaomi MiMo V2.6 Flash**, effort max (free tier as the owner has it), through Xiaomi's API
-     (`https://api.xiaomimimo.com/v1`, OpenAI-compatible; the key goes in an `api-key` header). The
-     pages read name `mimo-v2.6-pro` only: the model id `mimo-v2.6-flash` and the spelling of effort
-     max are **unverified**, so the owner supplies them (`--model`, `--extra-param`) and the first
-     dry run shows whether the provider accepts them.
-   - **OpenAI GPT-6 Luna** is **authorised but not runnable**: it exists for the owner only through
-     the Codex subscription, and Codex cannot be confined (decision 6). It is recorded in the code
+1. **Models and routes.** AG-02 may run, in the same phases and under the same rules as ADR-0036, with
+   the **confined Claude Code harness** (`--agent-cli claude --route mimo|deepseek`):
+   - **DeepSeek V4.1 Flash 1017**, effort max: model `deepseek-flash` (DeepSeek's documentation says it
+     "is now served by DeepSeek-V4.1-Flash-1017"), endpoint `https://api.deepseek.com/anthropic`.
+   - **Xiaomi MiMo V2.6 Flash**, effort max: model `mimo-v2.6-flash`, endpoint one of the Token Plan
+     hosts `https://token-plan-{sgp,cn,ams}.xiaomimimo.com/anthropic`, **named explicitly by the
+     operator** (`--route-base-url`; no default, and `api.xiaomimimo.com` is not in the list). A Token
+     Plan key (`tp-`/`ttp-`) is refused with any other URL and a Token Plan URL with any other key.
+   - **OpenAI GPT-6 Luna** is **authorised but not runnable**: it exists for the owner only through the
+     Codex subscription, and Codex cannot be confined (decision 6). It is recorded in the code
      (`AUTHORISED_NOT_RUNNABLE`) and runs only if Codex ever passes its probe.
    SubQ stays under [ADR-0033](0033-external-decision-model-for-offline-agent-experiments.md).
 2. **The privacy exception of ADR-0036 is extended to exactly these two providers.** The observations
    of `ommatix-testapp.exe` and `ommatix-testeditor.exe` (synthetic labels) are the model's input and
    leave the machine for the provider's API; nothing else may be on screen, which the owner arranges
    by hand before a session. Each provider's data-use position, as far as it was checked, travels with
-   the results (`PROVIDERS[...]["caveat"]`): DeepSeek's API documentation has no data-use statement
-   and its terms were not read (unverified); Xiaomi's quick-start has none either, and a free tier may
-   retain or train on inputs (unverified). Neither statement changes the rule: the inputs are
-   synthetic test-application labels, which is the only reason the exception is acceptable. Zen, the
-   OpenCode aggregator, was **not** adopted as a route: it would add a recipient, and its page says
-   that during their free period MiMo models' "collected data may be used to improve the model".
-3. **The agent for these providers is `tools/agent/ag02/minimal_agent.py`** (standard library only):
-   - It speaks Chat Completions to **one** endpoint, offers the model **exactly the three Ommatix
-     tools** (their definitions come from the engine's `tools/list`, through the budget proxy) and
-     has no other capability by construction: no shell, file, web or image code exists in it; no
-     skill, plugin, memory or instruction file is read; the request carries only the fixed system
-     instruction of `goals.json`, the goal prompt and the conversation, plus the closed list of
-     request parameters (`reasoning_effort`, `thinking`, `max_tokens`, `max_completion_tokens`,
-     `temperature`, `top_p`) that `--extra-param` may set and nothing that can touch the model, the
-     messages or the tools.
-   - Only text reaches the model: an MCP result's non-text block is replaced by a fixed note. A tool
-     name outside the three is answered with an error and never forwarded. If the server lists
-     anything but the three tools, the session reports it at `init` and the runner ends it before any
-     request is sent.
-   - The endpoint is https (or `http` on a loopback address, for the preflight's stand-in); no
-     redirect is followed, no proxy variable is honoured, and the child's environment is the operating
-     system's basics only. The key is read from a file outside the repository (`--key-file`), sent in
-     one header and never printed, logged, put in an argument or an environment variable.
-   - HTTP errors reach the stream as a status code (`http_500`), never a body, because a provider may
-     echo its input in an error. The stream is the one the runner already reads (`init`, `assistant`,
-     `user`, `result`), so the runner, the proxy, the oracle and the scoring are the same for every
-     agent. `reasoning_content` of an assistant message is kept for the next request of the same turn
-     (the providers ask for it back with tool calls) and nothing else of the reply is kept.
-   - Budgets: `--max-turns` (40) and `--max-total-tokens` (400 000 context plus output tokens per
-     goal) on top of the proxy's live-action budget; a limit ends the goal with the stream's
-     `error_max_turns` / `error_max_budget_usd`. Cost is reported only if `--price` is given.
+   the results (`CLAUDE_ROUTES[...]["caveat"]`): neither provider's API documentation has a data-use
+   statement and their terms were not read (unverified), and a free or plan tier may retain or train
+   on inputs. That does not change the rule: the inputs are synthetic test-application labels, which is
+   the only reason the exception is acceptable. The OpenCode aggregator Zen was **not** adopted as a
+   route: it would add a recipient, and its page says that during their free period MiMo models'
+   "collected data may be used to improve the model".
+3. **The route.** The harness is Claude Code with every ADR-0036 control unchanged (no built-in tool,
+   `--strict-mcp-config`, `--setting-sources ""`, the controlled configuration directory, the budget
+   proxy, the isolation proof). What a route adds is the child's environment, built by one function,
+   `agentcli.route_env`, used by the preflight (with the stand-in's URL and a dummy token) and by
+   production (with the provider's URL and the key):
+   - The environment is the operating system's basics and **nothing of the operator's own**, plus
+     exactly `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, the model in
+     `ANTHROPIC_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`, the three `ANTHROPIC_DEFAULT_*_MODEL` and
+     `CLAUDE_CODE_SUBAGENT_MODEL` (so no request names another model), `CLAUDE_CODE_EFFORT_LEVEL=max`,
+     the configuration directory and the two ADR-0036 switches. The key is read from `--key-file` (a
+     file outside the checkout, validated by the same path rule as every other path) and appears in
+     that environment and nowhere else: never in an argument, a log, a result or the proof. The
+     operator's own routing variables are still refused (`routing_problems`); the harness-controlled
+     route is the only one allowed, and `route_env_problems` checks the final child environment: the
+     routing variables present are `ANTHROPIC_BASE_URL` alone, naming one of the route's endpoints.
+   - `ANTHROPIC_API_KEY` carries the same value as `ANTHROPIC_AUTH_TOKEN` because Claude Code 2.1.303,
+     with only the token set, drops `execute_action` from its tool list (observed on the stand-in;
+     another instance of the dependence of the CLI's tool surface on its authentication state recorded
+     in ADR-0036 decision 9). With both set it lists the three tools and sends the secret in
+     `Authorization: Bearer` and `x-api-key`, to the one endpoint the route names.
+   - Effort max is `CLAUDE_CODE_EFFORT_LEVEL=max` (DeepSeek's documented setting), seen in every
+     request as `output_config.effort`. **Thinking is whatever Claude Code sends**: version 2.1.303
+     always sends `thinking: {"type": "adaptive"}`, and no environment variable makes it send
+     `{"type": "enabled"}` (the form MiMo's pages suggest); whether either provider honours or even
+     accepts it, and whether the models then think, is **unverified**. The first smoke reported zero
+     thinking tokens for DeepSeek, which is not evidence either way.
+   - **The route preflight** (`preflight.py --route`) runs the real Claude Code through the same two
+     sessions as ADR-0036 decision 9 (the canary and the controlled directory) against the stand-in
+     on the route's environment and adds a verdict on the **real Messages requests**: every request that
+     offers tools offers exactly the three Ommatix ones; every request names the route's model and no
+     other; none carries an image block; the credential headers are `Authorization: Bearer <token>` and,
+     when sent, `x-api-key: <token>` only, and the token is in no other header and no body (decoded
+     strings, so a JSON escape hides nothing); the effort is the route's. A positive control feeds that
+     verdict eight broken copies of a real request and fails the preflight if any goes unseen. The proof
+     carries the route (provider, production endpoint, model, effort), the request facts and
+     `route_verifier_revision`; the runner refuses a route run whose proof is native, lacks the route, or
+     binds another endpoint or model, and a native run with a route proof. The native Claude proof and
+     its `verifier_revision` are untouched, so existing ADR-0036 proofs stay valid.
+   - **Smoke.** `run_goal.py --smoke --route …` runs one trivial dry-run session against `ommatix serve
+     --source sim` (no screen, no input) and only under the route's passing proof.
 4. **An `AgentCLI` interface** (`tools/agent/ag02/agentcli.py`) gives `run_goal.py` the agent's
    command, environment, proof and provenance, so the runner is not forked: `--agent-cli claude`
-   (default; ADR-0036, behaviour unchanged), `minimal` (with `--provider deepseek|mimo`), `codex` and
-   `opencode` (probes only).
-5. **The minimal agent's preflight** (`preflight_cli.py --agent-cli minimal`) reads the real request
-   it sends to a stand-in on 127.0.0.1 in a world of sentinels (instruction files in the working
-   directory, its ancestors and a stand-in home, a skill, a dotenv file, and provider keys and a proxy
-   in the parent environment) and passes only if: every body has exactly the fixed keys plus the
-   configured parameters; the model, the fixed instruction and the prompt are exactly those; later
-   messages are assistant and tool messages with text content only; the tools are exactly the three
-   definitions, the same in every request; no sentinel and no key is in any body; the only headers are
-   the expected ones with the key in one; the only path is `<provider path>/chat/completions`; the
-   history is only appended to; the agent's source passes a static check (import allowlist; no
-   `eval`, `exec`, `open`; `subprocess` only to start the proxy); and a **positive control** feeds the
-   verifier seven broken copies of a real request (an extra tool, a dropped tool, a sentinel, an image
-   part, an extra key, another model, another instruction) and fails the preflight if any goes unseen.
-   The proof (`ag02-isolation-proof-minimal-1`) binds the agent's source SHA-256, version, provider,
-   production endpoint, authentication style, model, request parameters, instruction and the init
-   facts; the runner refuses a run that differs, and checks every session's `init` against it. It
-   differs from production in stated ways only: the endpoint is a stand-in (the path below the host is
-   the production one), the key is a dummy and the model's answers are scripted.
+   (default; with `--route` the routes above), `minimal`, `codex` and `opencode` (probes only).
+5. **The minimal agent is kept as code and is not the route of either provider.**
+   `tools/agent/ag02/minimal_agent.py` (standard library only) speaks OpenAI-compatible Chat Completions
+   to one endpoint, offers the model exactly the three tools and has no other capability by construction;
+   its request-level preflight and proof (`preflight_cli.py --agent-cli minimal`, schema
+   `ag02-isolation-proof-minimal-1`, **revision 2**) bind its source hash. It is **refused for MiMo
+   Token Plan keys**, by the runner before anything starts and by the agent itself (`tp-` is not for
+   scripts), and DeepSeek goes through the route. The review of PR 93 asked for six corrections and the
+   choice was to **fix all six**, so the agent can still be used (for a provider with an ordinary key and
+   a Chat Completions endpoint) without a second review of the same defects:
+   - *R1* The preflight verifier matched sentinels and the key on the raw bytes, so a JSON escape hid a
+     context-reading agent. It now inspects every decoded string of every request, keys included, counts
+     the key in the headers separately (exactly the authentication value, nowhere else), and has a control
+     with an escaped sentinel; a stricter verifier raises the revision and invalidates older proofs.
+   - *R2* The dollar budget was silently ignored and the token check was a post-hoc `>` that final replies
+     skipped. A dollar cap is enforced only with valid `--price` (the runner refuses it otherwise); before
+     every request the reservation (the body's size in bytes, an upper bound of its tokens, plus the
+     explicit `max_tokens` ceiling sent with every request) must fit what is left; usage is accounted
+     after every reply, final ones included, and an overrun ends the goal as budget-exhausted without
+     executing its call; a missing or malformed usage ends the session.
+   - *R3* Malformed, duplicate and parallel calls reached the bridge. The whole provider message is
+     validated before anything is emitted or forwarded: at most one call, `type: function`, a unique
+     id of plain characters, an allowed name, arguments that are a bounded JSON-object string (strict:
+     no duplicate key, no `NaN`) matching the tool's schema, and, in the dry-run-only phase,
+     `dry_run: true` stated; nothing is repaired into a default.
+   - *R4* Replies and payloads were unbounded: the body is read up to a byte limit plus one (declared
+     or not), nesting is bounded by the decoder and refused with a fixed token, and text, reasoning and
+     arguments have size limits, all before anything is retained.
+   - *R5* The proof hashed the requested parameters, not the captured ones. The verifier now requires
+     every configured value, with its type, in every request (and the ceiling), and the proof hashes the
+     captured values.
+   - *R6* The agent's own CLI accepted a key inside a checkout. The path rule (absolute, plain, resolved
+     outside any checkout) now runs where the file is opened.
 6. **Codex CLI and OpenCode are implemented as probes that fail closed.** `preflight_cli.py
    --agent-cli codex|opencode` builds the strictest configuration found for the installed version,
    runs the real CLI against the stand-in with the Ommatix MCP server, and reads the tool list and
@@ -126,28 +159,29 @@ GPT-6 Luna is available only through the Codex subscription, with no API key.
    Neither `view_image` nor `execute`+`fetch` is accepted as "inert": ADR-0036's rule is exactly the
    three tools. A later version, or a configuration found later, may pass the probe; the runner
    would still need a stream reader for it.
-7. **Provenance and the summary.** A result carries the agent (`cli`), the provider, the model the
-   session reported and the one requested, the agent's version (and, for the minimal agent, the SHA-256
-   of its source, the endpoint's host and the names of the request parameters). `summarise.py` groups
-   by `<agent>:<provider>/<model>` and prints one block per group, never one blended table.
+7. **Provenance and the summary.** A result carries the agent (`cli`), the provider (`mimo`/`deepseek`
+   for a route, with the endpoint's host), the model the session reported and the one requested, and
+   the agent's version (for the minimal agent also the source SHA-256, the endpoint's host and the names
+   of the request parameters). `summarise.py` groups by `<agent>:<provider>/<model>` and prints one
+   block per group, never one blended table.
 8. **Keys.** Plain files outside the repository, one key per file, first line, no other content, e.g.
    `%LOCALAPPDATA%\Ommatix\keys\deepseek.key` and `mimo.key`; the path is a command-line argument
-   (`--key-file`), the content is read only by the agent. **No key exists yet; this change makes no
-   real call.**
+   (`--key-file`), the content is read only to build the child's environment (or the minimal agent's
+   header). The owner's files exist; nothing printed, logged or stored contains them (checked on the
+   smoke outputs and the configuration directories).
 9. **Phases and consent are those of ADR-0036**: the multi-model runs start in dry run (phase 1) after
-   this change is reviewed; phase 2 needs the owner present and a consent for that session, per
+   the review of this change; phase 2 needs the owner present and a consent for that session, per
    model; a consent never carries over. AG-02 stays `NO_EJECUTADO`; this ADR ticks no box.
 
 ## What the multi-model results will and will not show
 
-Same fixed instruction, same goals, same oracle and same proxy for every agent: that is what makes
-the figures comparable in kind. They are **not** a clean comparison of models: the Claude Code runs
-use Claude Code's own loop, prompts and tool schema handling, the others use ours; sampling, thinking
-and output limits differ by provider. A difference between rows can come from the model, the loop or
-the provider's tool-calling quirks; AG-02 makes no claim of "better than". The minimal agent is only
-tested against our stand-in: the first real dry run may show provider differences the stand-in cannot
-(for instance MiMo's `reasoning_content` handling or its effort parameter), and those would be fixed
-in the agent and its proof, not worked around in the runner.
+Same fixed instruction, same goals, same oracle, same proxy and **the same agent loop** (Claude Code) for
+every model: that makes the figures comparable in kind. They are still not a clean comparison of models:
+each provider's Anthropic-compatibility layer, its handling of Claude Code's adaptive thinking and its
+caching differ, and Claude Code's own cost figure for a model it does not price is meaningless (the
+smokes reported USD 0.019 and 0.027 for sessions of a few thousand tokens; tokens are the usable figure).
+A difference between rows can come from the model, the provider's layer or its tool-calling quirks;
+AG-02 makes no claim of "better than".
 
 ## Alternatives considered
 
@@ -156,12 +190,18 @@ in the agent and its proof, not worked around in the runner.
   wrapping them cannot remove a tool from the request. Rejected: fail closed.
 - **Accept `view_image` under a read-denying permission profile, or `execute` without `fetch`.**
   The coordinator ruled against tolerating either: the rule is exactly three tools.
-- **A general client library (LiteLLM, the OpenAI SDK).** A large dependency tree for the one request
-  shape we need; the confinement proof would have to cover it. Rejected for a standard-library loop
-  whose source hash is bound to the proof.
+- **The minimal agent as the route (the first answer).** Rejected by the owner's decision: the MiMo Token
+  Plan key is for coding tools only, and one loop for all models makes the comparison fairer. Kept as
+  code, hardened, refused for `tp-` keys.
+- **Setting only `ANTHROPIC_AUTH_TOKEN`.** The documented configuration, but it removes `execute_action`
+  from the tool list of this Claude Code version (see decision 3); rejected, with the proof showing both
+  variables, the headers and the tools.
+- **Pointing the harness at the provider with the operator's own environment.** Rejected: the
+  environment is built, not inherited, so no stray provider variable, proxy or credential reaches it.
 - **OpenCode Zen as the route to MiMo and DeepSeek.** One more recipient, with a stated
-  data-improvement clause for the MiMo free models. Rejected; the providers' own APIs are the
-  recipients named in decision 1.
+  data-improvement clause for the MiMo free models. Rejected.
+- **A general client library (LiteLLM, the OpenAI SDK).** A large dependency tree the confinement proof
+  would have to cover. Rejected.
 - **Forking the runner for the new agents.** Rejected: the budget proxy, oracle and scoring stay
   shared; only the agent differs.
 
@@ -169,31 +209,38 @@ in the agent and its proof, not worked around in the runner.
 
 - Two more recipients of synthetic test-application labels (DeepSeek, Xiaomi) with their caveats
   unverified; the owner decides to run each session knowing so.
-- A loop of our own to maintain, covered by tests and bound to the proof by its hash; any edit to
-  `minimal_agent.py` invalidates every proof until the preflight is repeated.
+- A route is only as good as its preflight: it is renewed when Claude Code, the model, the endpoint or
+  the configuration directory changes. The native proof is not affected.
+- A loop of our own to maintain (the minimal agent), covered by tests and bound to its proof by its
+  hash; any edit to `minimal_agent.py` invalidates its proofs until the preflight is repeated.
 - Codex and OpenCode stay refused, and GPT-6 Luna stays unrunnable, until a version passes.
-- Probes run on 2026-10-18 on the author's PC (Codex 0.163.0, OpenCode 2.0.12): the verdicts above,
-  and the minimal agent's preflight against the real `ommatix serve --source sim` for both providers
-  (passed, seven of seven control mutations seen). No provider was reached and no screen or input was
-  used. Starting `opencode` commands started a background `opencode serve --service` process, which
-  the author stopped; the owner may find one after running the probe.
+- Runs on 2026-10-18 on the author's PC (Claude Code 2.1.303; Codex 0.163.0; OpenCode 2.0.12): the
+  probe verdicts above; the route preflights for MiMo (Singapore host) and DeepSeek against the stand-in,
+  with the real Claude Code and the real `ommatix serve --source sim` (passed; eight of eight control
+  mutations seen); the minimal agent's preflights (passed); and **one real smoke session per provider**
+  after its preflight passed, against `ommatix serve --source sim` (no screen, no input): each ended
+  `DONE` with the three tools listed, `ommatix` connected, one `observe_screen` and one dry-run
+  `execute_action` (`simulated`), no proxy refusal and no unexpected tool. These are wiring checks, not
+  results. Starting `opencode` commands started a background `opencode serve --service` process, which
+  the author stopped.
 
 ## Required validation
 
-- `tools/agent/ag02/test_multimodel.py`: the endpoint and parameter rules; the key file; usage in
-  both providers' spellings; non-text content refused; the assistant message kept; the agent
-  end to end against the stand-in and the real proxy and a fake engine (exactly three tools in every
-  request, instruction and prompt, auth header per provider, the key nowhere else, path below the
-  host, an invented tool never forwarded, `reasoning_content` carried, a fourth listed tool ending the
-  session before any request, turn and token limits, usage as the runner reads it, the prompt off the
-  command line, the environment scrubbed); hostile endpoints (error body, redirect, malformed reply);
-  the request verifier against real requests and against each broken copy; the static check; the
-  preflight on the real agent and on leaky or widened copies of it; the proof loader and every
-  binding; the init comparison; the provider table; the runner (`--plan`, refusals, a goal run end to
-  end with the minimal agent and its provenance); the Codex and OpenCode verdicts on request bodies
-  shaped like the installed versions'; the builders; the per-model summary.
-- `tools/agent/ag02/test_run_goal.py` (existing, the Claude path unchanged apart from the provenance
-  fields) and `test_summarise.py`.
+- `tools/agent/ag02/test_prreview93.py` (written to fail on the reviewed head 65a83c9: against it the 78
+  tests give 48 failures and 42 errors, with the new fakes): R1 decoded matching and the full preflight
+  with an escaping, context-reading copy of the agent; R2 exact-boundary, final-reply, missing-usage and
+  dollar-cap budgets; R3 every malformed, duplicate, parallel and schema-violating call with zero bridge
+  calls and one-to-one metrics, and the dry-run-only phase; R4 oversized declared, undeclared and
+  streamed bodies, oversized arguments and text, nesting and call lists, with no response text stored;
+  R5 changed and mistyped values and the full preflight with a lower effort; R6 the agent's own CLI,
+  links and junctions; the Token Plan key rules; and the route (environment, endpoints, keys, proofs,
+  the request verdict and its controls, the preflight end to end with the scripted Claude, smoke
+  conditions, no key in any plan or provenance).
+- `tools/agent/ag02/test_multimodel.py`: the agent end to end, the verifier, the preflight and proof of
+  the minimal agent, the Codex and OpenCode verdicts on request bodies shaped like the installed
+  versions', the runner integration and the per-model summary.
+- `tools/agent/ag02/test_run_goal.py`, `test_preflight.py` and `test_summarise.py` (existing; the Claude
+  path unchanged apart from the provenance fields).
 - The owner's multi-model sessions are the evidence of the experiment; until they are run and
   recorded, AG-02 stays `NO_EJECUTADO`.
 
@@ -203,41 +250,55 @@ in the agent and its proof, not worked around in the runner.
 proveedores como agente, con las mismas reglas de la ADR-0036: sólo las tres herramientas de Ommatix,
 nunca píxeles ni imágenes, ninguna otra capacidad, sólo las aplicaciones de prueba, `dry_run` antes de
 entrada real, presupuesto, libro y parada, el responsable presente y consentimiento por sesión.
-Modelos: DeepSeek V4.1 Flash 1017 (esfuerzo máximo, `deepseek-flash` en la API de DeepSeek), Xiaomi
-MiMo V2.6 Flash (esfuerzo máximo, nivel gratuito; el identificador del modelo y el parámetro de
-esfuerzo no están en las páginas leídas y los aporta el responsable) y GPT-6 Luna, **autorizado pero
-no ejecutable**: el responsable sólo lo tiene con la suscripción de Codex, sin clave de API, y Codex no
-se puede confinar. La excepción de privacidad de la ADR-0036 (las observaciones de las aplicaciones de
-prueba son etiquetas sintéticas) se extiende exactamente a DeepSeek y Xiaomi, con su salvedad: la
-documentación de ninguno declara el uso de los datos y el nivel gratuito puede conservarlos o
-entrenar con ellos (sin verificar); sólo es aceptable porque las entradas son etiquetas sintéticas.
-SubQ sigue bajo la ADR-0033.
+Modelos: DeepSeek V4.1 Flash 1017 (`deepseek-flash`, esfuerzo máximo) y Xiaomi MiMo V2.6 Flash
+(`mimo-v2.6-flash`, esfuerzo máximo) y GPT-6 Luna, **autorizado pero no ejecutable**: el responsable
+sólo lo tiene con la suscripción de Codex, sin clave de API, y Codex no se puede confinar. La clave de
+MiMo es de un Token Plan (`tp-`), cuyas condiciones permiten sólo herramientas de programación como
+Claude Code, no guiones ni servicios; por eso **ambos proveedores se ejecutan con el arnés confinado de
+Claude Code apuntado al punto de acceso compatible con Anthropic de cada uno** (DeepSeek:
+`https://api.deepseek.com/anthropic`; MiMo: un servidor regional del Token Plan, que el operador nombra
+explícitamente, sin valor por defecto y sin `api.xiaomimimo.com`). Una clave `tp-` se rechaza con
+cualquier otra URL. La excepción de privacidad de la ADR-0036 (las observaciones de las aplicaciones de
+prueba son etiquetas sintéticas) se extiende exactamente a DeepSeek y Xiaomi; la documentación de ninguno
+declara el uso de los datos (sin verificar): sólo es aceptable porque las entradas son sintéticas. SubQ
+sigue bajo la ADR-0033.
 
-**Sondeos de Codex y OpenCode (18 de octubre de 2026).** Con un servidor local en 127.0.0.1 que
-guarda la petición real y sin llamar a ningún proveedor: Codex 0.163.0, con la configuración más
-estricta que existe, sigue ofreciendo `view_image`, herramientas de recursos MCP y un `tool_search`
-tras el que quedan diferidas las herramientas de Ommatix, y lee habilidades del `~/.agents/skills` real
-(`HOME` y `USERPROFILE` se ignoran en Windows); no hay ninguna clave que quite `view_image` ni las
-habilidades. OpenCode 2.0.12 sólo llega a las herramientas MCP por `execute`, un entorno de JavaScript
-que expone `fetch` (HTTP), lista las habilidades reales del operador mientras no se niegue la acción `skill` (con ella negada
-desaparecen) y, salvo que se niegue por nombre, un espacio `browser` de 45 herramientas. Ni `view_image` ni `execute`+`fetch` se toleran como
-«inertes»: ambos CLI quedan **rechazados por defecto** (`tool_surface_wider_than_three`; Codex
-además `skills_from_real_home`) y el ejecutor no los lanza.
+**La ruta.** El entorno del hijo lo construye una sola función (`route_env`, la misma en el preflight y en
+producción): sólo lo básico del sistema y nada del entorno del operador, más exactamente la URL, la clave
+(en `ANTHROPIC_AUTH_TOKEN` y en `ANTHROPIC_API_KEY`, porque con sólo el token esta versión de Claude Code
+quita `execute_action` de su lista), el modelo en todas las variables de modelo y el esfuerzo máximo
+(`CLAUDE_CODE_EFFORT_LEVEL=max`). La clave se lee de un archivo fuera del repositorio y sólo aparece en
+ese entorno. Los controles de la ADR-0036 no cambian. Claude Code 2.1.303 envía siempre
+`thinking: {"type": "adaptive"}`; que los proveedores lo acepten o piensen es **sin verificar**. El
+preflight de la ruta ejecuta el Claude Code real contra el servidor local y verifica en las peticiones
+reales: exactamente las tres herramientas, sólo el modelo de la ruta, ninguna imagen, sólo las cabeceras
+de credencial esperadas y el esfuerzo; con un control positivo de ocho copias rotas. La prueba lleva la
+ruta y el ejecutor la compara; la prueba nativa de la ADR-0036 no cambia. Se hizo **una sesión real de
+humo por proveedor**, tras su preflight, contra `ommatix serve --source sim` (sin pantalla ni entrada):
+ambas terminaron con `DONE`, las tres herramientas y ninguna incidencia; son comprobaciones de cableado,
+no resultados.
 
-**El agente mínimo.** `minimal_agent.py` (biblioteca estándar) habla Chat Completions con un único
-punto de acceso, ofrece exactamente las tres herramientas (las definiciones vienen del `tools/list`
-del motor, a través del proxy de presupuesto), no tiene capacidad alguna más (sin shell, archivos,
-web ni imágenes; no lee habilidades, plugins, memoria ni archivos de instrucciones), sólo deja pasar
-texto al modelo, no sigue redirecciones ni usa variables de proxy, tiene un entorno mínimo y lee la
-clave de un archivo fuera del repositorio que nunca imprime. Emite el mismo flujo que ya lee el
-ejecutor, de modo que proxy, oráculo y puntuación son los mismos. Su preflight (`preflight_cli.py`)
-lee la petición real en un mundo de centinelas y exige: claves del cuerpo exactas, modelo, instrucción
-y prompt exactos, mensajes sólo de texto, exactamente las tres definiciones, ningún centinela ni clave
-en el cuerpo, las únicas cabeceras esperadas y la ruta del proveedor; un control positivo con siete
-copias rotas de una petición real que el verificador debe ver. La prueba liga el hash del código del
-agente, el proveedor, el punto de acceso, el modelo, los parámetros, la instrucción y los hechos de
-`init`, y el ejecutor rechaza una corrida que difiera. Los resultados llevan agente, proveedor, modelo
-y versión, y `summarise.py` agrupa por modelo sin mezclarlos. Las cifras no son una comparación limpia
-de modelos (el bucle, el muestreo y el razonamiento difieren) y AG-02 no afirma «mejor que». Las
-claves son archivos fuera del repositorio (por ejemplo `deepseek.key` y `mimo.key`); aún no existen y
-este cambio no hace ninguna llamada real. AG-02 sigue `NO_EJECUTADO`.
+**Sondeos de Codex y OpenCode.** Codex 0.163.0, con la configuración más estricta que existe, sigue
+ofreciendo `view_image`, herramientas de recursos MCP y un `tool_search` tras el que quedan diferidas las
+herramientas de Ommatix, y lee habilidades del `~/.agents/skills` real (`HOME` y `USERPROFILE` se
+ignoran en Windows). OpenCode 2.0.12 sólo llega a las herramientas MCP por `execute`, un entorno de
+JavaScript que expone `fetch` (HTTP), y lista las habilidades reales del operador mientras no se niegue
+la acción `skill` (y un espacio `browser` de 45 herramientas mientras no se niegue por nombre). Ni
+`view_image` ni `execute`+`fetch` se toleran como «inertes»: ambos CLI quedan **rechazados por defecto**
+(`tool_surface_wider_than_three`; Codex además `skills_from_real_home`) y el ejecutor no los lanza.
+
+**El agente mínimo y la revisión del PR 93.** `minimal_agent.py` (biblioteca estándar, Chat Completions)
+se conserva como código, no es la ruta de ningún proveedor y se **rechaza con claves `tp-` de MiMo**. La
+revisión pidió seis correcciones y se eligió **corregir las seis**: (R1) el verificador busca centinelas
+y clave en las cadenas decodificadas de cada petición, no en los bytes; (R2) el tope en dólares sólo se
+acepta con precios y se aplica, y el de tokens se reserva antes de cada petición y se contabiliza tras
+cada respuesta, también la final; una respuesta sin uso válido termina la sesión; (R3) el mensaje del
+proveedor se valida entero antes de emitir o reenviar nada (una llamada como máximo, identificador único,
+nombre permitido, argumentos estrictos que cumplan el esquema y, en la fase 1, `dry_run: true`); (R4)
+límites de bytes, anidamiento, texto y argumentos antes de retener nada; (R5) la prueba liga los valores
+que las peticiones llevaron, no los pedidos; (R6) la ruta de la clave se valida donde se abre el archivo.
+Las nuevas pruebas fallaban contra la cabeza revisada (48 fallos y 42 errores de 78). Los resultados
+llevan agente, proveedor, modelo y versión, y `summarise.py` agrupa por modelo sin mezclarlos. Las cifras
+no son una comparación limpia de modelos (la capa de compatibilidad, el pensamiento y la caché difieren
+por proveedor) y el coste que informa Claude Code para un modelo que no conoce no sirve; AG-02 no afirma
+«mejor que». AG-02 sigue `NO_EJECUTADO`.

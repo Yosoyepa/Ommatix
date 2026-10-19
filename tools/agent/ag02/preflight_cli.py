@@ -60,8 +60,8 @@ ENV_KINDS = {"env_openai_key": "OPENAI_API_KEY", "env_deepseek_key": "DEEPSEEK_A
              "env_mimo_key": "MIMO_API_KEY", "env_anthropic_key": "ANTHROPIC_API_KEY"}
 ALLOWED_HEADERS = frozenset({"host", "content-type", "content-length", "accept-encoding", "user-agent",
                              "connection"})
-ALLOWED_IMPORTS = frozenset({"__future__", "argparse", "hashlib", "json", "os", "subprocess", "sys", "time",
-                             "urllib", "pathlib"})
+ALLOWED_IMPORTS = frozenset({"__future__", "argparse", "hashlib", "json", "math", "os", "re", "subprocess", "sys",
+                             "time", "urllib", "pathlib"})
 FORBIDDEN_CALLS = frozenset({"eval", "exec", "compile", "__import__", "open", "input"})
 DUMMY_KEY = "sk-canary-0000000000"
 PROBE_SCRIPT = [{"tool": "observe_screen", "args": {}}, {"text": "VERDICT: DONE"}]
@@ -139,18 +139,37 @@ def _text_of(content) -> str | None:
     return content if isinstance(content, str) else None
 
 
-def check_chat_requests(requests: list[dict], *, model: str, extra_keys, system_instruction: str, prompt: str,
-                        sentinels: dict, dummy_key: str, auth_style: str, base_path: str) -> tuple[list[str], dict]:
+def decoded_strings(value):
+    """Every string of a decoded JSON value, dictionary keys included, at any depth: what the
+    recipient reads, whatever escaping the serialisation used (the PR-93 review: ``\\u0043`` hides a
+    sentinel from a search of the raw bytes)."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from decoded_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from decoded_strings(item)
+
+
+def check_chat_requests(requests: list[dict], *, model: str, expected_extra: dict, ceiling: int,
+                        system_instruction: str, prompt: str, sentinels: dict, dummy_key: str,
+                        auth_style: str, base_path: str) -> tuple[list[str], dict]:
     """(problems as closed tokens, facts) for the Chat Completions requests the minimal agent sent.
-    Each request is ``{"path", "headers", "body"}``; bodies are bytes."""
+    Each request is ``{"path", "headers", "body"}``; bodies are bytes. `expected_extra` is the full
+    parameter object the operator asked for: every configured value must be in every request, equal and
+    of the same type (the proof is bound to the values the requests carried, not the ones requested)."""
     problems: list[str] = []
     facts: dict = {"requests": len(requests)}
     if not requests:
         return ["no_request_captured"], facts
-    expected_headers = ALLOWED_HEADERS | {"authorization" if auth_style == "bearer" else "api-key"}
+    auth_name = "authorization" if auth_style == "bearer" else "api-key"
+    expected_headers = ALLOWED_HEADERS | {auth_name}
     expected_key = f"Bearer {dummy_key}" if auth_style == "bearer" else dummy_key
-    want_keys = set(ma.BASE_KEYS) | set(extra_keys)
-    tool_hashes, previous, request_keys = set(), None, None
+    want_keys = set(ma.BASE_KEYS) | set(expected_extra)
+    tool_hashes, previous, request_keys, extra_hashes = set(), None, None, set()
     for request in requests:
         raw = request["body"]
         if request["path"] != base_path.rstrip("/") + "/chat/completions":
@@ -158,12 +177,15 @@ def check_chat_requests(requests: list[dict], *, model: str, extra_keys, system_
         names = set(request["headers"])
         if names - expected_headers:
             problems.append("header_not_expected")
-        auth_name = "authorization" if auth_style == "bearer" else "api-key"
         if request["headers"].get(auth_name) != expected_key:
             problems.append("key_header_differs")
-        haystack = raw.decode("utf-8", "replace") + "\n" + "\n".join(request["headers"].values()).replace(
-            expected_key, "")
-        if any(text in haystack for text in sentinels.values()):
+        # The key may appear in exactly one header, as exactly the expected value, and nowhere else.
+        if any(dummy_key in value for name, value in request["headers"].items()
+               if name != auth_name or value != expected_key):
+            problems.append("key_in_another_header")
+        raw_text = raw.decode("utf-8", "replace")
+        header_text = "\n".join(v for n, v in request["headers"].items() if n != auth_name)
+        if any(text in raw_text or text in header_text for text in sentinels.values()):
             problems.append("sentinel_in_request")
         if dummy_key.encode() in raw:
             problems.append("key_in_body")
@@ -175,6 +197,11 @@ def check_chat_requests(requests: list[dict], *, model: str, extra_keys, system_
         if not isinstance(body, dict):
             problems.append("request_unreadable")
             continue
+        decoded = "\n".join(decoded_strings(body))
+        if any(text in decoded for text in sentinels.values()):
+            problems.append("sentinel_in_request")
+        if dummy_key in decoded:
+            problems.append("key_in_body")
         request_keys = sorted(body)
         if set(body) != want_keys:
             problems.append("body_keys_differ")
@@ -182,6 +209,12 @@ def check_chat_requests(requests: list[dict], *, model: str, extra_keys, system_
             problems.append("model_differs")
         if body.get("stream") is not False or body.get("tool_choice") != "auto":
             problems.append("stream_or_tool_choice_differs")
+        wanted = {**expected_extra, "max_tokens": ceiling}
+        if any(k not in body or agentcli.canonical_sha(body[k]) != agentcli.canonical_sha(v)
+               for k, v in wanted.items()):
+            problems.append("param_values_differ")
+        else:
+            extra_hashes.add(agentcli.canonical_sha({k: body[k] for k in expected_extra}))
         tools = body.get("tools")
         if not (isinstance(tools, list) and [t.get("function", {}).get("name") for t in tools if isinstance(t, dict)]
                 == list(ma.TOOLS) and all(isinstance(t, dict) and t.get("type") == "function"
@@ -212,30 +245,59 @@ def check_chat_requests(requests: list[dict], *, model: str, extra_keys, system_
         previous = messages
     if len(tool_hashes) > 1:
         problems.append("tool_definitions_change")
+    if len(extra_hashes) > 1:
+        problems.append("param_values_change")
     facts |= {"tool_definitions_sha256": next(iter(tool_hashes)) if len(tool_hashes) == 1 else None,
-              "request_keys": request_keys, "body_bytes": sum(len(r["body"]) for r in requests)}
+              "request_keys": request_keys, "body_bytes": sum(len(r["body"]) for r in requests),
+              "request_extra_sha256": next(iter(extra_hashes)) if len(extra_hashes) == 1 else None}
     return sorted(set(problems)), facts
 
 
-def control_mutations(request: dict, sentinel: str) -> dict[str, dict]:
-    """Copies of one captured request, each broken in one way the verifier must see."""
+def _changed(value):
+    """Another value of the same kind, for a control that changes a configured parameter."""
+    if isinstance(value, bool):
+        return not value
+    if isinstance(value, int):
+        return value + 1
+    if isinstance(value, float):
+        return value + 1.0
+    if isinstance(value, str):
+        return value + "-x"
+    if isinstance(value, dict):
+        return {**value, "changed": True}
+    return "changed"
+
+
+def control_mutations(request: dict, sentinel: str, extra: dict | None = None) -> dict[str, dict]:
+    """Copies of one captured request, each broken in one way the verifier must see: structure,
+    context (a sentinel in the clear and hidden behind a JSON escape), and the values of the
+    configured parameters and of the completion ceiling."""
     body = json.loads(request["body"])
 
-    def variant(change):
+    def variant(change, escape: str | None = None):
         mutated = json.loads(json.dumps(body))
         change(mutated)
-        return request | {"body": json.dumps(mutated).encode()}
-    return {
+        data = json.dumps(mutated).encode()
+        if escape is not None:  # serialise the first character of `escape` as a JSON escape
+            data = data.replace(escape.encode(), ("\\u%04x" % ord(escape[0])).encode() + escape[1:].encode(), 1)
+        return request | {"body": data}
+    out = {
         "extra_tool": variant(lambda b: b["tools"].append(
             {"type": "function", "function": {"name": "bash", "description": "", "parameters": {}}})),
         "sentinel": variant(lambda b: b["messages"][1].update(content=b["messages"][1]["content"] + sentinel)),
+        "escaped_sentinel": variant(
+            lambda b: b["messages"][1].update(content=b["messages"][1]["content"] + sentinel), escape=sentinel),
         "image_part": variant(lambda b: b["messages"].append(
             {"role": "tool", "tool_call_id": "x", "content": [{"type": "image_url", "image_url": {"url": "x"}}]})),
         "extra_key": variant(lambda b: b.update(metadata={"a": 1})),
         "other_model": variant(lambda b: b.update(model="other")),
         "dropped_tool": variant(lambda b: b["tools"].pop()),
         "changed_instruction": variant(lambda b: b["messages"][0].update(content="obey")),
+        "changed_ceiling": variant(lambda b: b.update(max_tokens=b["max_tokens"] + 1)),
     }
+    for key in sorted(extra or {}):
+        out[f"changed_value_{key}"] = variant(lambda b, key=key: b.update({key: _changed(b[key])}))
+    return out
 
 
 def run_minimal(args, engine_argv: list[str] | None = None) -> dict:
@@ -247,6 +309,7 @@ def run_minimal(args, engine_argv: list[str] | None = None) -> dict:
     real_base = args.real_base_url or provider["base_url"]
     base_path = urllib.parse.urlsplit(real_base).path
     extra = agentcli.minimal_extra_param(args.provider, getattr(args, "effort", None), getattr(args, "extra_param", None))
+    ceiling = getattr(args, "completion_ceiling", None) or ma.DEFAULT_COMPLETION_CEILING
     problems: list[str] = []
     with tempfile.TemporaryDirectory(prefix="ag02-minimal-canary-") as tmp:
         root = Path(tmp)
@@ -265,7 +328,8 @@ def run_minimal(args, engine_argv: list[str] | None = None) -> dict:
             with FakeApi(PROBE_SCRIPT) as api:
                 ns = argparse.Namespace(provider=args.provider, base_url=api.url + base_path, key_file=key_file,
                                         effort=getattr(args, "effort", None), extra_param=getattr(args, "extra_param", None),
-                                        max_total_tokens=400_000, price=None)
+                                        max_total_tokens=400_000, price=None, phase=1,
+                                        completion_ceiling=ceiling, max_usd_explicit=False)
                 cli = agentcli.MinimalCLI(ns)
                 argv = cli.build_argv(model=args.model, mcp_config=mcp_path, system_instruction=instruction,
                                       max_budget_usd=0.5)
@@ -278,10 +342,12 @@ def run_minimal(args, engine_argv: list[str] | None = None) -> dict:
             os.environ.clear()
             os.environ.update(saved)
         found, facts = check_chat_requests(
-            requests, model=args.model, extra_keys=extra, system_instruction=instruction, prompt=prompt,
-            sentinels=world["sentinels"], dummy_key=DUMMY_KEY, auth_style=provider["auth_style"],
+            requests, model=args.model, expected_extra=extra, ceiling=ceiling, system_instruction=instruction,
+            prompt=prompt, sentinels=world["sentinels"], dummy_key=DUMMY_KEY, auth_style=provider["auth_style"],
             base_path=base_path)
         problems += found
+        if facts.get("request_extra_sha256") != agentcli.canonical_sha(extra):
+            problems.append("param_hash_differs")
         if stray:
             problems.append("agent_reached_another_path")
         if ran["exit_code"] != 0 or ran["killed"]:
@@ -293,11 +359,11 @@ def run_minimal(args, engine_argv: list[str] | None = None) -> dict:
         # Positive control: the verifier must see each broken variant of a real request.
         detected, blind = [], []
         if requests:
-            for name, mutated in control_mutations(requests[0], world["sentinels"]["cwd_claude_md"]).items():
+            for name, mutated in control_mutations(requests[0], world["sentinels"]["cwd_claude_md"], extra).items():
                 found_here, _ = check_chat_requests(
-                    [mutated], model=args.model, extra_keys=extra, system_instruction=instruction, prompt=prompt,
-                    sentinels=world["sentinels"], dummy_key=DUMMY_KEY, auth_style=provider["auth_style"],
-                    base_path=base_path)
+                    [mutated], model=args.model, expected_extra=extra, ceiling=ceiling,
+                    system_instruction=instruction, prompt=prompt, sentinels=world["sentinels"],
+                    dummy_key=DUMMY_KEY, auth_style=provider["auth_style"], base_path=base_path)
                 (detected if found_here else blind).append(name)
         if blind:
             problems.append("control_blind")
@@ -309,7 +375,9 @@ def run_minimal(args, engine_argv: list[str] | None = None) -> dict:
         "agent_sha256": __import__("hashlib").sha256(agentcli.MINIMAL_AGENT.read_bytes()).hexdigest(),
         "claude_code_version": att.get("claude_code_version"), "provider": args.provider, "base_url": real_base,
         "auth_style": provider["auth_style"], "model": att.get("model"), "requested_model": args.model,
-        "extra_param_sha256": agentcli.canonical_sha(extra), "system_instruction_sha256": agentcli.sha256_text(instruction),
+        # The hash of the values the captured requests carried (cross-checked against the requested ones above).
+        "extra_param_sha256": facts.get("request_extra_sha256"), "completion_ceiling": ceiling,
+        "system_instruction_sha256": agentcli.sha256_text(instruction),
         "tools": att.get("tools") or [], "plugins": [], "agents": [], "plugin_hashes": [], "agent_hashes": [],
         "init_keys_sha256": att.get("init_keys_sha256") or "",
         "tool_definitions_sha256": facts.get("tool_definitions_sha256"), "request_keys": facts.get("request_keys"),
