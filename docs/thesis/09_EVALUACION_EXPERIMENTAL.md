@@ -708,3 +708,91 @@ Cómo leer la tabla. (1) Los tres quedan entre 6 y 7 de 11 con la puntuación, c
 - La presencia del responsable y su confirmación `SI VIVO` en cada corrida son afirmaciones del arquitecto.
 
 **Estado.** La fase 2 se ejecutó con los dos modelos. La fila AG-02M de `plan_pruebas.csv` conserva `NO_EJECUTADO` y `PENDIENTE_PRODUCTO` (su texto describe ahora estas corridas); ningún requisito cambia de estado y no se marca ninguna casilla de §6.7. Los resultados citan el modelo, la versión de Claude Code, el proveedor y la fecha.
+
+## 9.12 AG-03 (propuesta) y repeticiones de AG-02 (AG-02R)
+
+**Carácter.** Propuesta, preparada el 19 de octubre de 2026 por encargo del responsable y **no ejecutada**: no se llamó a ningún proveedor, no se capturó ninguna pantalla y no se envió ninguna entrada. El diseño completo y las decisiones abiertas están en la [ADR-0038](../adr/0038-ag03-vision-baseline-and-ag02-repetitions.md), en estado `Proposed`. Las filas AG-03 y AG-02R de `plan_pruebas.csv` están en `NO_EJECUTADO`; este apartado no cambia el estado de ningún requisito ni marca ninguna casilla de §6.7.
+
+**Por qué.** Los resultados de 9.11 tienen dos huecos que impiden afirmar nada más allá de un preprint: (1) no hay línea base de visión, de modo que ninguna cifra dice si el contrato estructurado es más barato, rápido o fiable que los píxeles (ADR-0036, decisión 3, lo dejó como AG-03); (2) cada modelo tiene **una** serie por fase (6, 7 y 7 de 11 en la fase 2), sin varianza, y 9.11.3 ya dice que una diferencia de una meta entre corridas únicas no distingue a los modelos.
+
+### 9.12.1 AG-03: línea base de visión (propuesta)
+
+**Diseño.** Cambia una sola cosa: cómo el agente percibe y actúa. Mismas once metas (`goals.json`, mismo SHA-256), mismas aplicaciones, mismo oráculo del sistema operativo, misma puntuación, mismos topes por meta (`max_live`, suma 39), presupuesto de sesión 40, tope de 300 s, archivo de parada del operador, libro de cuentas, responsable presente y consentimiento por sesión. El modelo es, cuando se puede, el mismo (Claude Haiku 5.5): el contraste es «contrato estructurado» frente a «píxeles». El agente es Claude Code confinado con un servidor de herramientas propio de **tres** herramientas, `screenshot`, `click(x, y)` y `type_text(texto)`, sin el motor Ommatix.
+
+| Montaje | ¿Viable? | Motivo |
+|---|---|---|
+| Claude Code (suscripción) y servidor de herramientas de píxeles, Haiku 5.5 | Sí, recomendado, sujeto a una sonda previa | Mismo arnés, misma prueba de aislamiento, mismo modelo. Se debe comprobar sin proveedor si Claude Code reenvía imágenes de resultados MCP |
+| Herramienta de uso del ordenador de la API de Mensajes (la más cercana a un montaje estándar) | No hoy | Necesita una clave de API de Anthropic que el responsable no tiene y un bucle propio |
+| Uso del ordenador de la aplicación de escritorio de Claude | No | Captura todo el escritorio y maneja cualquier aplicación: no se puede confinar a dos aplicaciones |
+| DeepSeek o MiMo como agentes de visión | Sin verificar | No se sabe si sus puntos de acceso aceptan imágenes; no se llamó a ningún proveedor. Opcional y con aceptación aparte |
+| Codex, OpenCode | No | ADR-0037, decisión 6 |
+
+**Guardas del actuador por coordenadas** (del arnés, independientes de Ommatix; fallan cerrado y, en este orden): archivo de parada del operador ausente; fase (en la fase 1 devuelve `simulated` y no llama al sistema); captura de menos de 10 s en la meta; reserva en el libro antes de cualquier llamada al sistema; primer plano del proceso que lanzó esta corrida (`ommatix-testapp.exe` u `ommatix-testeditor.exe` y el pid del ejecutor; nunca `explorer.exe` ni `applicationframehost.exe`), sin clase auxiliar, sin elevación y en el monitor primario; punto dentro del área cliente y misma ventana de nivel superior en ese punto; sin modificadores pulsados; y una última comprobación justo antes de enviar. Sólo clic izquierdo y texto ASCII imprimible de 1 a 16 caracteres, sin teclas especiales. Las guardas son funciones puras sobre una instantánea de ventana y se prueban sin entrada real.
+
+**Privacidad.** Excepción nueva y acotada a la ADR-0012 que el responsable debe aceptar de forma explícita: se envían **píxeles** (no sólo etiquetas) de las dos aplicaciones de prueba sintéticas al proveedor, también en la fase 1. Sólo la ventana atestiguada (nunca el monitor, la barra de tareas ni el cursor; `PrintWindow` de esa ventana o, si no es fiel, una copia de su rectángulo que se rechaza si otra ventana visible la solapa); el responsable minimiza las demás ventanas a mano; la imagen vive sólo en memoria, no se escribe ni se registra, y los resultados guardan recuentos, dimensiones, tamaños, latencias y booleanos. Los términos de retención y entrenamiento del proveedor no se verificaron.
+
+**Diferencias de puntuación, a propósito.** No hay comprobación de frescura de contenido (los rechazos `STALE_SNAPSHOT` de AG-02 son parte de Ommatix y no se injertan en la línea base); en G09 el texto que llega a un campo del señuelo es un fallo puntuado de la meta y no un evento de seguridad (un agente de píxeles no tiene la puerta de foco del motor), mientras que una infracción de las guardas del arnés sí es un evento de seguridad y termina la serie. Métricas: éxito por oráculo, estado final, falsos éxitos, abstenciones, pasos, acciones en vivo, tokens de entrada y salida, número y dimensiones de las capturas con el reparto de tokens de imagen **sólo estimado**, latencia por llamada, tiempo de pared, clics sobre un destino equivocado y el coste que informa la CLI para los modelos de Anthropic.
+
+**Lo que mostraría y lo que no.** Para una familia de modelos, en once metas sintéticas de dos aplicaciones hechas para el motor (etiquetas grandes y limpias), lo que logra y gasta el mismo modelo con el contrato estructurado y con píxeles, con varianza (9.12.2). No mostraría que Ommatix supera a los agentes de visión en general, nada de aplicaciones reales ni de otros modelos, ni la seguridad de la actuación por coordenadas en general (la guarda es una red de seguridad del experimento, no una reimplementación de la puerta del motor), y el bucle y las herramientas de la línea base son propios, no un montaje estándar. El aviso de la línea base tiene una ronda de ajuste acotada y preinscrita en la fase 1 y luego se congela antes de la fase 2.
+
+### 9.12.2 AG-02R: repeticiones de AG-02 (plan)
+
+**Qué se repite.** Las fases 1 y 2 de AG-02 con los mismos tres agentes (Haiku 5.5, DeepSeek `deepseek-flash` y MiMo `mimo-v2.6-flash`, todos por el arnés confinado de Claude Code) y **n = 5 series por modelo y fase** (mínimo pedido por el responsable; n = 10 es una decisión abierta), más el brazo AG-03 con el mismo n. Una serie son las once metas una vez.
+
+**Qué cambia entre repeticiones: nada salvo la corrida.** Cada serie registra su huella: prefijos SHA-256 de los tres binarios (`332dfa0ca093334e`, `ca6e1ec7c5c7ee1b`, `ea67a7aae6f5a050`), SHA-256 de `goals.json` y del archivo de configuración de la fase, versión de Claude Code, modelo pedido y resuelto, servidor de la ruta, esfuerzo máximo, fecha y revisión de la prueba de aislamiento, máquina, resolución y escala del monitor, y los topes. Una serie con otra huella no se agrupa. Las series únicas de 9.11 (Haiku con presupuesto de sesión 30 y Claude Code 2.1.302 en parte; los otros dos con 40) se informan al lado como **corrida 0** y no se agrupan. Las repeticiones usan presupuesto de sesión 40 en todos los modelos; como los topes por meta suman 39, ningún presupuesto de sesión llega a limitar.
+
+**Orden y aleatorización, preinscritos.** En la repetición `r` las metas se ejecutan ordenadas por el SHA-256 de `AG-02R/rep{r}/{meta}` (sin generador de números aleatorios cuyo algoritmo pueda cambiar), con **el mismo orden para los tres modelos** y distinto entre repeticiones. Los modelos se intercalan: repetición 1 de los tres, luego la 2, y así, rotando el orden de los modelos (Haiku, DeepSeek, MiMo; DeepSeek, MiMo, Haiku; MiMo, Haiku, DeepSeek; ...). Las repeticiones se reparten en **al menos dos días** y se registra la hora de inicio.
+
+| r | Orden de las metas |
+|---|---|
+| 1 | G11 G05 G06 G04 G02 G03 G08 G10 G01 G09 G07 |
+| 2 | G04 G05 G08 G06 G03 G07 G02 G01 G10 G09 G11 |
+| 3 | G05 G06 G02 G04 G09 G10 G01 G03 G11 G08 G07 |
+| 4 | G05 G10 G03 G07 G08 G06 G11 G09 G04 G01 G02 |
+| 5 | G08 G09 G11 G06 G04 G05 G03 G01 G07 G02 G10 |
+
+(Para n = 10, las repeticiones 6 a 10 salen de la misma regla; una prueba de la herramienta comprobará que estos órdenes se reproducen.)
+
+**Presupuesto.** Por serie, los topes de AG-02: como máximo 39 acciones en vivo (AG-02 gastó 25 a 32). Con n = 5 y tres modelos: **como máximo 585** entradas reales en la fase 2 (unas 430 esperadas con las 25, 29 y 32 registradas), 15 series de la fase 2 y 15 de la fase 1. Reglas de parada: el archivo de parada del operador; un evento de seguridad termina la **campaña** hasta que el responsable decida; una meta abortada por el arnés antes de la primera llamada del agente (una aplicación que no abrió) se repite una vez y se registran ambos intentos; un error del proveedor o un tiempo agotado tras la primera llamada es un fallo y permanece en el denominador.
+
+**Tiempo y coste, a partir de lo registrado** (la cifra de coste de la CLI no sirve para DeepSeek ni MiMo; son cifras de planificación, no promesas):
+
+| Por serie (registrada, corrida 0) | Contexto (tokens) | Salida (tokens) | Tiempo de pared |
+|---|---|---|---|
+| Fase 2, Haiku | 1 204 054 | 19 841 | 291 s |
+| Fase 2, DeepSeek | 1 162 008 | 48 467 | 459 s |
+| Fase 2, MiMo | 1 434 101 (mixto) | unos 28 000 (25 675 en 10 metas) | 1 192 s |
+| Fase 1, Haiku | 395 315 | 13 865 | 170 s |
+| Fase 1, DeepSeek | 691 268 | 34 167 | 290 s |
+| Fase 1, MiMo | 811 410 | 16 914 en 10 metas | 992 s |
+
+Con n = 5 y tres modelos, la fase 2 son unos **19,0 M** de tokens de contexto, **0,47 M** de salida y **2,7 h** de agente; la fase 1, unos **9,5 M**, **0,32 M** y **2,0 h**; en total unos 28,5 M y 4,7 h, el doble con n = 10. Las cifras de la CLI para Haiku (0,052 USD por serie de la fase 2 y 0,031 por serie de la fase 1) dan unos **0,42 USD** por sus diez series con la aritmética de la propia CLI (una suscripción gasta cuota, no dólares); DeepSeek y MiMo se dan sólo en tokens. Para AG-03 (Haiku, n = 5, ambas fases) se planifican **1,0 a 3,0 M** de tokens de contexto por serie de la fase 2 (de 0,8 a 2,5 veces los de Haiku en AG-02, suponiendo unas dos capturas por acción de unos 1,2 mil tokens estimados cada una, a 1280 por 720 píxeles) y de 7 a 15 min de pared; se sustituyen por cifras medidas tras la fase 1.
+
+**Cómo se informa la varianza.** La unidad es el intento de meta; las metas son fijas y las repeticiones son la muestra.
+
+- **Por meta y modelo: k de n** con el intervalo de Wilson al 95 %. Con n = 5: 5/5 es 0,57 a 1,00; 4/5, 0,38 a 0,96; 3/5, 0,23 a 0,88; 2/5, 0,12 a 0,77; 1/5, 0,04 a 0,62; 0/5, 0 a 0,43. Con n = 10: 10/10 es 0,72 a 1,00 y 5/10, 0,24 a 0,76. El plan declara de antemano que **n = 5 no separa una meta superada 3 de 5 veces de una superada 5 de 5**.
+- **Por modelo: la puntuación de serie (0 a 11)** como lista de los n valores, su media y su rango, y el intervalo *t* al 95 % de la media (gl 4, ancho, y así se rotula); sin bootstrap con n = 5.
+- **Falsos éxitos y eventos de seguridad** como recuentos sobre todos los intentos con la cota superior exacta de Clopper-Pearson: 0 de 55 da 6,5 %; 0 de 110, 3,3 %.
+- **Entre modelos (y AG-02 frente a AG-03):** diferencias de proporciones por meta y de medias de serie con intervalos, y una prueba de permutación exacta sobre las puntuaciones de serie para los pares preinscritos (Haiku frente a cada otro modelo; Haiku de AG-02 frente a Haiku de AG-03). Con 5 contra 5 hay 252 disposiciones y el menor p bilateral es 0,0079. No se afirma corrección por múltiples comparaciones y **no se concluye «mejor que» con un intervalo que se solapa**.
+- **Tokens, tiempo y pasos:** mediana y rango entre repeticiones por meta y por serie, no la suma de una corrida única. Los intentos abortados permanecen en el denominador y la lectura estricta del veredicto de G09 se informa junto a la implementada.
+
+**Consentimiento.** Se mantiene la regla de ADR-0036: por sesión, sin traspaso. La lectura conservadora usada aquí es que **una sesión es una serie de un modelo**: 15 consentimientos en vivo para la fase 2 de AG-02R y 5 para la de AG-03. El responsable está presente, lleva cada aplicación al primer plano a mano y minimiza las demás ventanas antes de cada sesión; la fase 1 pide su consentimiento por los datos que salen del equipo, no por entrada.
+
+### 9.12.3 Decisiones abiertas del responsable
+
+| # | Decisión | Recomendación |
+|---|---|---|
+| O1 | Aceptar la excepción de píxeles a la ADR-0012, acotada como arriba | Sí, sólo con esas cotas |
+| O2 | Brazo de visión: Claude Code con herramientas de píxeles en Haiku 5.5 (exige que pase la sonda previa) o la herramienta de uso del ordenador de la API (exige una clave de API de Anthropic) | La primera; la segunda sólo si se consigue una clave |
+| O3 | Probar DeepSeek o MiMo como agentes de visión (el responsable confirma en la documentación de cada proveedor que modelo y punto de acceso aceptan imágenes; aceptación aparte) | No en esta ronda |
+| O4 | Actuador por coordenadas: ayudante de Python con `ctypes` y guardas puras, o una herramienta de Rust que reutilice el adaptador de entrada | Python, revisado antes de cualquier corrida en vivo |
+| O5 | Capturas: sólo en memoria o guardadas fuera del repositorio para auditoría | Sólo en memoria |
+| O6 | G09 en AG-03 como fallo puntuado, no evento de seguridad | Sí |
+| O7 | n por modelo: 5 o 10 | 5, y decidir 10 tras ver los intervalos |
+| O8 | Un consentimiento por serie o por bloque de series | Por serie hasta que el responsable diga otra cosa |
+| O9 | Mantener el tope de 0,50 USD de la CLI por meta en DeepSeek y MiMo (detuvo G08 de MiMo con una cifra que no es un coste) | Mantenerlo, para que las repeticiones coincidan con la corrida 0 |
+| O10 | Informar las series únicas anteriores como corrida 0, sin agruparlas | Sí |
+| O11 | Desactivar la actualización automática de Claude Code durante la campaña (ajuste del sistema del responsable) | Sí |
+| O12 | Una ronda acotada de ajuste del aviso de la línea base en la fase 1, luego congelado | Sí |
+
+**Estado.** Propuesta sin ejecutar. AG-03 y AG-02R están en `NO_EJECUTADO` y `PENDIENTE_PRODUCTO`; ningún requisito cambia de estado y no se marca ninguna casilla de §6.7.
