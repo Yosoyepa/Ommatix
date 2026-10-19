@@ -109,6 +109,10 @@ PROOF_SCHEMA = "ag02-isolation-proof-3"
 #   3: decoded-request matching, untestable-file failure, manifest cap as a refusal, managed-policy
 #      drop-ins and unreadable roots/keys (third review)
 VERIFIER_REVISION = 3
+# The per-goal cap on context tokens of a provider route (the CLI's dollar figure is invalid there). The largest
+# per-goal context of the four route series of 2026-10-19 is 274 232 (MiMo, phase 1, G02); the default is twice
+# that, rounded up. It is a runaway guard, not a prediction, and every run records it in its provenance.
+ROUTE_CONTEXT_TOKENS_DEFAULT = 550_000
 VERSION = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,80}$")
 
@@ -331,10 +335,13 @@ def build_mcp_config(python: str, proxy_args: list[str], engine_argv: list[str])
 
 
 def build_claude_argv(*, claude: str, model: str, mcp_config: Path, system_instruction: str,
-                      max_budget_usd: float) -> list[str]:
+                      max_budget_usd: float | None) -> list[str]:
     """The command; the prompt goes through stdin (no quoting of «» on Windows). The flags are
     the ones of ``claude --help`` (Claude Code 2.1.x). Every settings source is off
-    (``--setting-sources ""``): there is no mode that loads user, project or local settings."""
+    (``--setting-sources ""``): there is no mode that loads user, project or local settings.
+    ``max_budget_usd`` is None on a provider route: the CLI prices a response with Anthropic's prices for a
+    model it does not know, so its dollar figure is invalid and no dollar cap is passed (the runner
+    enforces a token cap instead; ``run_claude``)."""
     head = list(claude) if isinstance(claude, (list, tuple)) else [claude]
     return [*head, "-p", "--model", model, "--output-format", "stream-json", "--verbose",
             "--mcp-config", str(mcp_config), "--strict-mcp-config",
@@ -342,7 +349,7 @@ def build_claude_argv(*, claude: str, model: str, mcp_config: Path, system_instr
             "--permission-mode", "dontAsk", "--permission-prompts", "none",
             "--system-prompt", system_instruction, "--no-session-persistence",
             "--disable-slash-commands", "--setting-sources", "",
-            "--max-budget-usd", f"{max_budget_usd:g}"]
+            *([] if max_budget_usd is None else ["--max-budget-usd", f"{max_budget_usd:g}"])]
 
 
 # Variables that select another provider or another endpoint, or add routing headers: a session
@@ -1321,11 +1328,20 @@ class TitleSampler(threading.Thread):
 
 # ---- running -------------------------------------------------------------------------------
 
+def context_tokens(metrics: StreamMetrics) -> int:
+    """The goal's context so far: input + cache creation + cache read over every message the stream reported
+    (the definition of the results tables)."""
+    total = metrics.usage_totals()
+    return sum(total[k] for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+
+
 def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
-               timeout: float, stderr_path: Path | None = None, env: dict | None = None) -> dict:
+               timeout: float, stderr_path: Path | None = None, env: dict | None = None,
+               max_context_tokens: int | None = None) -> dict:
     """Runs the command; feeds every stdout line to `metrics`; kills it on a timeout, when the
-    first event shows a session other than the proven one, or when the tool surface is wider
-    than the three Ommatix tools. The child's stderr is discarded unless a test passes `stderr_path`:
+    first event shows a session other than the proven one, when the tool surface is wider
+    than the three Ommatix tools, or (``max_context_tokens``, provider routes) when the context the stream
+    reports exceeds the cap: the route's per-goal limit, because the CLI's dollar figure is invalid there. The child's stderr is discarded unless a test passes `stderr_path`:
     production never stores it (it can echo a credential or a response, and nothing filters it)."""
     flags = 0x08000000 if os.name == "nt" else 0
     stderr = open(stderr_path, "wb") if stderr_path else subprocess.DEVNULL
@@ -1341,6 +1357,10 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
             metrics.feed(raw.decode("utf-8", errors="replace"))
             if killed["reason"] is None and (metrics.init_problems or metrics.unexpected_tools):
                 killed["reason"] = "init" if metrics.init_problems else "tool_surface"
+                proc.kill()
+            if (killed["reason"] is None and max_context_tokens is not None and "usage" in raw.decode(
+                    "utf-8", errors="replace") and context_tokens(metrics) > max_context_tokens):
+                killed["reason"] = "token_cap"
                 proc.kill()
 
     reader = threading.Thread(target=pump, daemon=True)
@@ -1425,8 +1445,11 @@ def parse_args(argv=None):
     p.add_argument("--isolation-proof", type=Path,
                    help="the passing file written by preflight.py for this Claude Code version")
     p.add_argument("--max-budget-usd", type=float, default=None,
-                   help="Claude Code: the per-goal dollar cap (default 1.0); minimal agent: enforced only "
-                        "with --price")
+                   help="native Claude Code: the per-goal dollar cap (default 1.0); minimal agent: enforced only "
+                        "with --price; refused on a provider route (the CLI's figure is invalid there)")
+    p.add_argument("--max-context-tokens-per-goal", type=int, default=None,
+                   help="provider route: the per-goal cap on the context tokens the stream reports (the runner "
+                        "kills the session over it); default agentcli.ROUTE_CONTEXT_TOKENS_DEFAULT")
     p.add_argument("--goal-timeout", type=float, default=300.0)
     p.add_argument("--foreground-wait", type=float, default=180.0)
     p.add_argument("--max-live-session", type=int, default=0,
@@ -1440,6 +1463,12 @@ def parse_args(argv=None):
     args.max_usd_explicit = args.max_budget_usd is not None
     if args.max_budget_usd is None:
         args.max_budget_usd = 1.0
+    if args.max_context_tokens_per_goal is not None and args.max_context_tokens_per_goal <= 0:
+        p.error("--max-context-tokens-per-goal must be positive")
+    if args.max_context_tokens_per_goal is not None and not args.route:
+        p.error("--max-context-tokens-per-goal is for a provider route (--route); the native path has its dollar cap")
+    if args.route and args.max_context_tokens_per_goal is None:
+        args.max_context_tokens_per_goal = ROUTE_CONTEXT_TOKENS_DEFAULT
     if args.route and args.agent_cli != "claude":
         p.error("--route is for the Claude Code harness only (--agent-cli claude)")
     if args.route_base_url and not args.route:
@@ -1490,6 +1519,12 @@ def parse_args(argv=None):
     return args
 
 
+def token_cap_kwargs(args) -> dict:
+    """The per-goal token cap of a provider route, as ``run_claude`` keyword arguments (nothing otherwise)."""
+    cap = getattr(args, "max_context_tokens_per_goal", None) if getattr(args, "route", None) else None
+    return {} if cap is None else {"max_context_tokens": cap}
+
+
 def agent_flags(args, out: Path) -> list[str]:
     """The agent's command flags for ``--plan`` (the first element, the program, left out; the
     key file's path and the instruction are placeholders)."""
@@ -1514,6 +1549,7 @@ def plan_lines(args, goals: dict, chosen: list[dict], out: Path) -> list[dict]:
             "engine_argv": engine_argv(args, args.phase, args.config),
             "agent_cli": args.agent_cli,
             "claude_flags": agent_flags(args, out),
+            "max_context_tokens_per_goal": getattr(args, "max_context_tokens_per_goal", None),
             "prompt_phase_line": PHASE_LINES[args.phase][:40],
             "result": str(out / f"{goal['id']}.json"), "goals_sha256": goals_sha256()})
     return lines
@@ -1580,7 +1616,8 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                            system_instruction=goals["system_instruction"],
                            max_budget_usd=args.max_budget_usd),
             build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
-            env=cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None))
+            env=cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None),
+            **token_cap_kwargs(args))
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)
@@ -1629,7 +1666,7 @@ def run_smoke(args, out: Path, goals: dict, deps=RealDeps, proof: dict | None = 
                          max_budget_usd=args.max_budget_usd),
         # The child's stderr is discarded here as it is for every goal: a provider error or a CLI diagnostic
         # may echo the credential, a response or a label, and nothing filters it (the re-review of PR 93, N1).
-        SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env())
+        SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env(), **token_cap_kwargs(args))
     return {"smoke": True, "cli": cli, "provenance": metrics.provenance(args.model) | agent.provenance(),
             "metrics": metrics.summary(), "proxy": proxy_summary(log)}
 

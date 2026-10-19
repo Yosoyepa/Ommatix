@@ -325,6 +325,32 @@ Regression: `RouteRequestVerdictTests.test_only_the_reviewed_header_names_pass_w
 `route_cookie`; twelve controls; names within the list), `RouteVerifierRevisionTests`, and the route-proof
 loader test that refuses revision 1.
 
+## Operational finding of the first route runs (2026-10-19): the CLI's dollar cap on a provider route
+
+### C1 (P2). `--max-budget-usd` stopped a MiMo session on a figure that is not a cost
+
+Finding: in the live phase 2 of 2026-10-19 the MiMo session of G08 ended with `error_max_budget_usd` (exit
+code 1, no verdict) although the oracle showed the goal reached. Claude Code prices a response with
+Anthropic's prices for a model it does not know, so on a provider route its `total_cost_usd` is invalid
+(already recorded for the smokes), yet the runner passed `--max-budget-usd 0.50` to the CLI on every route
+run and the CLI enforced it on that figure. A session could also be stopped by a figure unrelated to what
+the provider charges, or run on past any real limit.
+Resolution: a provider route passes the CLI **no** dollar cap (`build_claude_argv(max_budget_usd=None)` omits
+the flag, `ClaudeCLI.build_argv` passes `None` on a route, the route preflight builds the same command) and
+**refuses** one given on the command line (`ClaudeCLI.refusal`: a provider route takes no dollar cap). The
+per-goal limit is a token cap enforced by the runner from the stream: `--max-context-tokens-per-goal`
+(routes only; positive; default `ROUTE_CONTEXT_TOKENS_DEFAULT` = 550 000, twice the largest per-goal
+context of the four route series of 2026-10-19, 274 232 for MiMo phase 1 G02, a runaway guard and not a
+prediction); `run_claude` sums input + cache creation + cache read over the messages the stream reports
+(the definition of the results tables) and kills the session over the cap, `killed: "token_cap"`. The time
+cap is unchanged and the native Claude path keeps its dollar cap unchanged. The provenance of every route
+result records `max_context_tokens_per_goal` and `dollar_cap: "none"`; a plan prints the cap.
+Regression (`tools/agent/ag02/test_routecost.py`, written first: 7 failures and 3 errors of 12 against
+7e382a2): `RouteArgvTests` (no flag on either route, native flag kept, refusal and plan refusal, cap
+option rules and default, provenance, plan) and `FakeCliTests` (a fake CLI that ends with
+`error_max_budget_usd` exactly when given a dollar cap: a route smoke succeeds, the fake over the token cap
+is killed with `token_cap`, under or without a cap it is not killed).
+
 ## Not covered
 
 - The minimal agent has only met our stand-in; the routes have met a real provider only in one trivial

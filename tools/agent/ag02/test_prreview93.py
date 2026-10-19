@@ -707,7 +707,9 @@ class RouteRunnerTests(unittest.TestCase):
         cli = agentcli.make(args)
         self.assertNotIn("tp-secret-route-key", json.dumps(cli.provenance()))
         self.assertEqual(cli.provenance(), {"cli": "claude-code", "provider": "mimo",
-                                            "route_host": "token-plan-sgp.xiaomimimo.com"})
+                                            "route_host": "token-plan-sgp.xiaomimimo.com",
+                                            "max_context_tokens_per_goal": agentcli.ROUTE_CONTEXT_TOKENS_DEFAULT,
+                                            "dollar_cap": "none"})
 
     def test_the_key_is_read_from_the_file_only_into_the_childs_environment(self):
         args = self.parse(plan=False)
@@ -720,8 +722,9 @@ class RouteRunnerTests(unittest.TestCase):
         self.assertNotIn("operators-key", json.dumps(env))
         argv = cli.build_argv(model=args.model, mcp_config=self.root / "m.json", system_instruction="i", max_budget_usd=1)
         self.assertNotIn("tp-secret-route-key", " ".join(argv))
+        # the route's command is the native one without the dollar cap (see test_routecost.py)
         self.assertEqual(argv, rg.build_claude_argv(claude="claude", model=args.model, mcp_config=self.root / "m.json",
-                                                    system_instruction="i", max_budget_usd=1))
+                                                    system_instruction="i", max_budget_usd=None))
 
     def test_a_token_plan_key_with_a_non_token_plan_url_or_a_missing_key_file_is_refused(self):
         deepseek = self.parse(route="deepseek", url=DEEPSEEK_URL, plan=False)
