@@ -153,7 +153,9 @@ provider was reached, and no screen was captured while writing it.
     only and is then frozen and pinned before phase 2 (O12); otherwise a weak baseline would flatter the
     contract. All of that goes in the results next to the numbers.
 11. **Caps (pre-registered, equal to AG-02 where AG-02 has one):** `max_live` per goal from `goals.json`
-    (sum 39), session budget 40, wall time 300 s per goal, CLI cost cap 0.50 USD per goal, plus new ones
+    (sum 39), session budget 40, wall time 300 s per goal, and the per-goal cap of AG-02 as it stands after PR 96: the native Claude route
+    keeps its 0.50 USD CLI cap (AG-03 uses that route), a provider route (DeepSeek, MiMo in AG-02R) has no
+    dollar cap and instead a 550 000 context-token cap per goal imposed by the runner, plus new ones
     that bound the cost AG-02 never had to: at most 30 screenshots and 60 tool calls per goal.
 
 ### B. Order of work (none of it is done by this change)
@@ -328,7 +330,7 @@ It does not supersede them.
 | O6 | G09 in AG-03 as a scored failure, not a safety event | Yes |
 | O7 | n per model: 5 or 10 | 5, and decide on 10 after seeing the intervals |
 | O8 | One consent per series, or per block of series | Per series until the owner says otherwise |
-| O9 | Keep the 0.50 USD CLI cap per goal for DeepSeek and MiMo (it stopped MiMo's G08 on a meaningless figure) | Keep it, so the repetitions match run 0 |
+| O9 | DeepSeek and MiMo repetitions run under the per-goal cap that PR 96 introduced (550 000 context tokens, no dollar cap), not the 0.50 USD cap of run 0 (which stopped MiMo's G08 on a meaningless figure); Haiku and AG-03 keep the dollar cap | Yes; run 0 is already not pooled (O10) |
 | O10 | Report the earlier single series as run 0, not pooled | Yes |
 | O11 | Disable Claude Code's automatic update for the campaign (an owner system setting) | Yes |
 | O12 | Bounded phase-1 prompt tuning for the pixel baseline, then frozen | Yes, one round |
@@ -375,5 +377,5 @@ meta con intervalo de Wilson al 95 %, puntuación de serie con media, rango e in
 exactos para los falsos éxitos (0 de 55: 6,5 %) y una prueba de permutación exacta entre pares fijados
 (5 contra 5: p mínimo 0,0079); sin conclusión de «mejor que» con intervalos solapados. Decisiones
 abiertas del responsable: O1 a O12 de la tabla (excepción de píxeles, brazo de visión, modelos de
-DeepSeek/MiMo, actuador, capturas, G09, n, consentimiento por serie, tope de 0,50 USD, corrida 0,
+DeepSeek/MiMo, actuador, capturas, G09, n, consentimiento por serie, tope por meta de DeepSeek y MiMo (tokens de contexto, no dólares), corrida 0,
 actualización automática y ajuste del aviso).

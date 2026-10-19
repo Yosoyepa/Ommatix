@@ -109,6 +109,10 @@ PROOF_SCHEMA = "ag02-isolation-proof-3"
 #   3: decoded-request matching, untestable-file failure, manifest cap as a refusal, managed-policy
 #      drop-ins and unreadable roots/keys (third review)
 VERIFIER_REVISION = 3
+# The per-goal cap on context tokens of a provider route (the CLI's dollar figure is invalid there). The largest
+# per-goal context of the four route series of 2026-10-19 is 274 232 (MiMo, phase 1, G02); the default is twice
+# that, rounded up. It is a runaway guard, not a prediction, and every run records it in its provenance.
+ROUTE_CONTEXT_TOKENS_DEFAULT = 550_000
 VERSION = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,80}$")
 
@@ -331,10 +335,13 @@ def build_mcp_config(python: str, proxy_args: list[str], engine_argv: list[str])
 
 
 def build_claude_argv(*, claude: str, model: str, mcp_config: Path, system_instruction: str,
-                      max_budget_usd: float) -> list[str]:
+                      max_budget_usd: float | None) -> list[str]:
     """The command; the prompt goes through stdin (no quoting of «» on Windows). The flags are
     the ones of ``claude --help`` (Claude Code 2.1.x). Every settings source is off
-    (``--setting-sources ""``): there is no mode that loads user, project or local settings."""
+    (``--setting-sources ""``): there is no mode that loads user, project or local settings.
+    ``max_budget_usd`` is None on a provider route: the CLI prices a response with Anthropic's prices for a
+    model it does not know, so its dollar figure is invalid and no dollar cap is passed (the runner
+    enforces a token cap instead; ``run_claude``)."""
     head = list(claude) if isinstance(claude, (list, tuple)) else [claude]
     return [*head, "-p", "--model", model, "--output-format", "stream-json", "--verbose",
             "--mcp-config", str(mcp_config), "--strict-mcp-config",
@@ -342,7 +349,7 @@ def build_claude_argv(*, claude: str, model: str, mcp_config: Path, system_instr
             "--permission-mode", "dontAsk", "--permission-prompts", "none",
             "--system-prompt", system_instruction, "--no-session-persistence",
             "--disable-slash-commands", "--setting-sources", "",
-            "--max-budget-usd", f"{max_budget_usd:g}"]
+            *([] if max_budget_usd is None else ["--max-budget-usd", f"{max_budget_usd:g}"])]
 
 
 # Variables that select another provider or another endpoint, or add routing headers: a session
@@ -1321,41 +1328,319 @@ class TitleSampler(threading.Thread):
 
 # ---- running -------------------------------------------------------------------------------
 
+USAGE_COUNTERS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+MAX_USAGE_DIGITS = 18  # a context count has at most this many digits; more is not a count
+MAX_MESSAGE_ID = 200
+OVERSIZED = object()  # stands for an integer literal longer than MAX_USAGE_DIGITS
+
+
+def _guard_int(text: str):
+    return int(text) if len(text) <= MAX_USAGE_DIGITS + 1 else OVERSIZED
+
+
+def _guard_constant(name: str):
+    raise ValueError("nonfinite " + name)
+
+
+def _guard_object(pairs):
+    """json.loads keeps the last of two equal keys, so a duplicated key could hide a count: it is refused."""
+    keys = [key for key, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("duplicate key")
+    return dict(pairs)
+
+
+def valid_counter(value) -> bool:
+    return type(value) is int and 0 <= value < 10 ** MAX_USAGE_DIGITS
+
+
+class ContextGuard:
+    """The per-goal token cap of a provider route, on decoded and validated data (the CLI's dollar figure is
+    invalid there, so this is the only budget besides the time cap).
+
+    Protocol: every ``assistant`` event must carry a string ``message.id`` (1 to 200 characters) and a
+    ``message.usage`` object whose ``input_tokens`` is a count and whose cache counters, when present, are counts
+    (an int, not a bool, not negative, at most 18 digits). Repeated reports of one message keep, per counter, the
+    largest value seen (a later, lower report never lowers the spend). The context is the sum, over messages, of
+    input + cache creation + cache read: the definition of the results tables. Output tokens are not context.
+    A ``result`` event's ``usage`` is a floor for the total: whichever of the two is larger counts.
+    Anything else an assistant event can be (no usage, a wrong type, a negative, a non-finite or oversized number,
+    no or an invalid id, an event that cannot be parsed) is *unknown consumption* and ends the session
+    (``usage_invalid``): unknown is not zero. The raw text is never searched: only the decoded event counts."""
+
+    def __init__(self, cap: int):
+        self.cap = cap
+        self.by_message: dict[str, dict[str, int]] = {}
+        self.result_total = 0
+        self.reason: str | None = None
+
+    @staticmethod
+    def _counts(usage, required: bool):
+        """The input counters of one usage object, or None when it is not valid."""
+        if not isinstance(usage, dict):
+            return None
+        if required and "input_tokens" not in usage:
+            return None
+        counts = {}
+        for key in USAGE_COUNTERS:
+            if key in usage:
+                if not valid_counter(usage[key]):
+                    return None
+                counts[key] = usage[key]
+        if "output_tokens" in usage and not valid_counter(usage["output_tokens"]):
+            return None
+        return counts
+
+    def total(self) -> int:
+        by_message = sum(sum(counts.values()) for counts in self.by_message.values())
+        return max(by_message, self.result_total)
+
+    def _verdict(self) -> str | None:
+        self.reason = self.reason or ("token_cap" if self.total() > self.cap else None)
+        return self.reason
+
+    def feed(self, line: str) -> str | None:
+        """Takes one stdout line; returns the closed reason the session must end for, if any."""
+        if self.reason:
+            return self.reason
+        text = line.strip()
+        if not text:
+            return None
+        try:
+            event = json.loads(text, parse_int=_guard_int, parse_constant=_guard_constant,
+                               object_pairs_hook=_guard_object)
+        except (ValueError, RecursionError):
+            if text[0] in "{[":  # an event that cannot be read is not evidence of low consumption
+                self.reason = "usage_invalid"
+            return self.reason
+        if not isinstance(event, dict):  # the stream's envelope is one JSON object per line
+            self.reason = "usage_invalid"
+            return self.reason
+        if event.get("type") == "assistant":
+            message = event.get("message")
+            message_id = message.get("id") if isinstance(message, dict) else None
+            counts = self._counts(message.get("usage"), True) if isinstance(message, dict) else None
+            if counts is None or not isinstance(message_id, str) or not 0 < len(message_id) <= MAX_MESSAGE_ID:
+                self.reason = "usage_invalid"
+                return self.reason
+            seen = self.by_message.setdefault(message_id, {})
+            for key, value in counts.items():
+                seen[key] = max(seen.get(key, 0), value)
+        elif event.get("type") == "result" and "usage" in event:
+            counts = self._counts(event["usage"], True)
+            if counts is None:
+                self.reason = "usage_invalid"
+                return self.reason
+            self.result_total = max(self.result_total, sum(counts.values()))
+        return self._verdict()
+
+
+PROCESS_TREE_GRACE_S = 40.0  # the proxy waits up to 30 s for its engine to leave, then kills it
+
+
+class OwnedTree:
+    """The session's process tree: the CLI and everything it starts (MCP proxy, engine), owned from before the
+    CLI runs one instruction. On Windows the CLI is created suspended, put in a job object (which also kills what
+    is left if the runner dies) and only then resumed, so nothing it starts can be outside the job; elsewhere
+    the CLI leads its own process group from the fork. ``owned`` is False when that could not be established,
+    and the caller must not run the session. ``shutdown`` returns only once the tree has exited (the proxy gets
+    ``PROCESS_TREE_GRACE_S`` to write its receipts and close its engine), killing what is left after that; a
+    tree whose state cannot be queried is never taken as gone. It never touches a process outside the tree."""
+
+    def __init__(self, proc):
+        self.proc = proc
+        self.job = None
+        self.owned = True
+        if os.name == "nt":
+            self.owned = False
+            try:
+                self._open_job()
+                self.owned = self.job is not None and self._assign() and self._resume()
+            except OSError:
+                self.owned = False
+            if not self.owned:
+                self._terminate()  # the CLI never ran an instruction: this ends it and the job
+
+    def _open_job(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+        class Basic(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class Counters(ctypes.Structure):
+            _fields_ = [(n, ctypes.c_uint64) for n in ("ro", "wo", "oo", "rb", "wb", "ob")]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [("Basic", Basic), ("Io", Counters), ("ProcessMemoryLimit", ctypes.c_size_t),
+                        ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                        ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+        class Accounting(ctypes.Structure):
+            _fields_ = [("times", ctypes.c_int64 * 4), ("TotalPageFaultCount", wintypes.DWORD),
+                        ("TotalProcesses", wintypes.DWORD), ("ActiveProcesses", wintypes.DWORD),
+                        ("TotalTerminatedProcesses", wintypes.DWORD)]
+
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                                  ctypes.c_void_p]
+        k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        self._k32, self._accounting = k32, Accounting
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            return
+        info = Extended()
+        info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            k32.CloseHandle(job)
+            return
+        self.job = job
+
+    def _assign(self) -> bool:
+        return bool(self._k32.AssignProcessToJobObject(self.job, int(self.proc._handle)))  # noqa: SLF001
+
+    def _resume(self) -> bool:
+        import ctypes
+        from ctypes import wintypes
+        resume = ctypes.WinDLL("ntdll").NtResumeProcess
+        resume.argtypes = [wintypes.HANDLE]
+        return resume(int(self.proc._handle)) == 0  # noqa: SLF001
+
+    def _query_active(self):
+        """The number of running processes of the job, or None when the job cannot be queried."""
+        import ctypes
+        info = self._accounting()
+        if self.job is None or not self._k32.QueryInformationJobObject(
+                self.job, 1, ctypes.byref(info), ctypes.sizeof(info), None):
+            return None
+        return int(info.ActiveProcesses)
+
+    def active(self):
+        """How many processes of the tree are still running; None when that is unknown (never read as 0)."""
+        if os.name == "nt":
+            return self._query_active()
+        try:
+            os.killpg(self.proc.pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return 0
+        return 1
+
+    def _terminate(self) -> None:
+        if os.name == "nt":
+            if self.job is not None:
+                self._k32.TerminateJobObject(self.job, 1)
+            if self.proc.poll() is None:
+                self.proc.kill()
+            return
+        import signal
+        try:
+            os.killpg(self.proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def shutdown(self, kill_cli: bool, grace: float | None = None) -> int:
+        """Ends the tree and returns how many processes were still running, or unverified, at the end (0 when
+        it is gone). ``kill_cli`` first kills the CLI alone, which closes the proxy's input so the proxy and its
+        engine leave on their own; whatever is left after ``grace`` seconds is killed."""
+        grace = PROCESS_TREE_GRACE_S if grace is None else grace
+        if kill_cli and self.proc.poll() is None:
+            self.proc.kill()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+
+        def running():
+            count = self.active()
+            return 1 if count is None else count  # unknown is not zero
+
+        deadline = time.monotonic() + grace
+        while running() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if running():
+            self._terminate()
+            deadline = time.monotonic() + 5
+            while running() and time.monotonic() < deadline:
+                time.sleep(0.1)
+        left = running()
+        if self.job is not None:
+            self._k32.CloseHandle(self.job)  # KILL_ON_JOB_CLOSE: nothing outlives the handle
+            self.job = None
+        return left
+
+
 def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
-               timeout: float, stderr_path: Path | None = None, env: dict | None = None) -> dict:
-    """Runs the command; feeds every stdout line to `metrics`; kills it on a timeout, when the
-    first event shows a session other than the proven one, or when the tool surface is wider
-    than the three Ommatix tools. The child's stderr is discarded unless a test passes `stderr_path`:
-    production never stores it (it can echo a credential or a response, and nothing filters it)."""
-    flags = 0x08000000 if os.name == "nt" else 0
+               timeout: float, stderr_path: Path | None = None, env: dict | None = None,
+               max_context_tokens: int | None = None) -> dict:
+    """Runs the command; feeds every stdout line to `metrics`; ends the session on a timeout, when the first
+    event shows a session other than the proven one, when the tool surface is wider than the three Ommatix tools,
+    or (``max_context_tokens``, provider routes, where the CLI's dollar figure is invalid) when the
+    ``ContextGuard`` finds the context over the cap (``token_cap``) or its consumption unknown or invalid
+    (``usage_invalid``). It returns only once the session's whole process tree (the CLI, the budget proxy and
+    the engine it started) has exited; ``tree_left`` is in the result when something could not be ended.
+    The child's stderr is discarded unless a test passes `stderr_path`: production never stores it (it can
+    echo a credential or a response, and nothing filters it)."""
     stderr = open(stderr_path, "wb") if stderr_path else subprocess.DEVNULL
+    # CREATE_NO_WINDOW | CREATE_SUSPENDED on Windows: the CLI does not run until the job owns it.
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=stderr, cwd=cwd, creationflags=flags,
+                            stderr=stderr, cwd=cwd, creationflags=0x08000004 if os.name == "nt" else 0,
+                            start_new_session=os.name != "nt",
                             env=env if env is not None else agent_env())
+    tree = OwnedTree(proc)
+    if not tree.owned:  # ownership of the tree could not be established: the session is not run
+        proc.wait()
+        proc.stdin.close()
+        proc.stdout.close()
+        if stderr_path:
+            stderr.close()
+        return {"exit_code": proc.returncode, "killed": "no_tree_ownership"}
     proc.stdin.write(prompt.encode("utf-8"))
     proc.stdin.close()
     killed = {"reason": None}
+    guard = None if max_context_tokens is None else ContextGuard(max_context_tokens)
+
+    def stop(reason: str) -> None:
+        if killed["reason"] is None:
+            killed["reason"] = reason
+            proc.kill()  # the CLI alone: the proxy sees its input close and leaves with its engine
 
     def pump():
         for raw in proc.stdout:
-            metrics.feed(raw.decode("utf-8", errors="replace"))
-            if killed["reason"] is None and (metrics.init_problems or metrics.unexpected_tools):
-                killed["reason"] = "init" if metrics.init_problems else "tool_surface"
-                proc.kill()
+            text = raw.decode("utf-8", errors="replace")
+            # The guard reads first and on its own: an event the reporting side cannot digest (an unhashable
+            # id, a message that is not an object) must never stop the guard from seeing it.
+            if guard is not None and (reason := guard.feed(text)):
+                stop(reason)
+            try:
+                metrics.feed(text)
+            except Exception:  # noqa: BLE001 - an event the metrics cannot read is a missing sample, not a crash
+                continue
+            if metrics.init_problems or metrics.unexpected_tools:
+                stop("init" if metrics.init_problems else "tool_surface")
 
     reader = threading.Thread(target=pump, daemon=True)
     reader.start()
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        killed["reason"] = "timeout"
-        proc.kill()
+        stop("timeout")
         proc.wait()
+    left = tree.shutdown(kill_cli=False)
     reader.join(timeout=10)
     proc.stdout.close()
     if stderr_path:
         stderr.close()
-    return {"exit_code": proc.returncode, "killed": killed["reason"]}
+    if guard is not None and killed["reason"] is None:
+        killed["reason"] = guard.reason  # e.g. a result event that reports more than the cap
+    out = {"exit_code": proc.returncode, "killed": killed["reason"]}
+    return out | ({"tree_left": left} if left else {})
 
 
 def agent_cli(args):
@@ -1425,8 +1710,11 @@ def parse_args(argv=None):
     p.add_argument("--isolation-proof", type=Path,
                    help="the passing file written by preflight.py for this Claude Code version")
     p.add_argument("--max-budget-usd", type=float, default=None,
-                   help="Claude Code: the per-goal dollar cap (default 1.0); minimal agent: enforced only "
-                        "with --price")
+                   help="native Claude Code: the per-goal dollar cap (default 1.0); minimal agent: enforced only "
+                        "with --price; refused on a provider route (the CLI's figure is invalid there)")
+    p.add_argument("--max-context-tokens-per-goal", type=int, default=None,
+                   help="provider route: the per-goal cap on the context tokens the stream reports (the runner "
+                        "kills the session over it); default agentcli.ROUTE_CONTEXT_TOKENS_DEFAULT")
     p.add_argument("--goal-timeout", type=float, default=300.0)
     p.add_argument("--foreground-wait", type=float, default=180.0)
     p.add_argument("--max-live-session", type=int, default=0,
@@ -1440,6 +1728,12 @@ def parse_args(argv=None):
     args.max_usd_explicit = args.max_budget_usd is not None
     if args.max_budget_usd is None:
         args.max_budget_usd = 1.0
+    if args.max_context_tokens_per_goal is not None and args.max_context_tokens_per_goal <= 0:
+        p.error("--max-context-tokens-per-goal must be positive")
+    if args.max_context_tokens_per_goal is not None and not args.route:
+        p.error("--max-context-tokens-per-goal is for a provider route (--route); the native path has its dollar cap")
+    if args.route and args.max_context_tokens_per_goal is None:
+        args.max_context_tokens_per_goal = ROUTE_CONTEXT_TOKENS_DEFAULT
     if args.route and args.agent_cli != "claude":
         p.error("--route is for the Claude Code harness only (--agent-cli claude)")
     if args.route_base_url and not args.route:
@@ -1490,6 +1784,12 @@ def parse_args(argv=None):
     return args
 
 
+def token_cap_kwargs(args) -> dict:
+    """The per-goal token cap of a provider route, as ``run_claude`` keyword arguments (nothing otherwise)."""
+    cap = getattr(args, "max_context_tokens_per_goal", None) if getattr(args, "route", None) else None
+    return {} if cap is None else {"max_context_tokens": cap}
+
+
 def agent_flags(args, out: Path) -> list[str]:
     """The agent's command flags for ``--plan`` (the first element, the program, left out; the
     key file's path and the instruction are placeholders)."""
@@ -1514,6 +1814,7 @@ def plan_lines(args, goals: dict, chosen: list[dict], out: Path) -> list[dict]:
             "engine_argv": engine_argv(args, args.phase, args.config),
             "agent_cli": args.agent_cli,
             "claude_flags": agent_flags(args, out),
+            "max_context_tokens_per_goal": getattr(args, "max_context_tokens_per_goal", None),
             "prompt_phase_line": PHASE_LINES[args.phase][:40],
             "result": str(out / f"{goal['id']}.json"), "goals_sha256": goals_sha256()})
     return lines
@@ -1580,7 +1881,8 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                            system_instruction=goals["system_instruction"],
                            max_budget_usd=args.max_budget_usd),
             build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
-            env=cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None))
+            env=cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None),
+            **token_cap_kwargs(args))
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)
@@ -1594,6 +1896,10 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                    "proxy": proxy, "final_state_counts": final, "note": note.split(":")[0],
                    "states_seen": len(history),
                    "live_spent": (proxy_module.read_ledger(ledger)["total"] - spent_before) if ledger else 0}
+        if ran.get("tree_left") or ran.get("killed") == "no_tree_ownership":
+            result["aborted"] = ("the session's process tree could not be owned or was not verified gone "
+                                 f"(tree_left={ran.get('tree_left', 0)}, killed={ran.get('killed')}): no further goal")
+            return result
         if metrics.init_problems or not metrics.attestation:
             result["aborted"] = "unclean init: " + ",".join(metrics.init_problems or ["no_init_attestation"])
             return result
@@ -1629,7 +1935,7 @@ def run_smoke(args, out: Path, goals: dict, deps=RealDeps, proof: dict | None = 
                          max_budget_usd=args.max_budget_usd),
         # The child's stderr is discarded here as it is for every goal: a provider error or a CLI diagnostic
         # may echo the credential, a response or a label, and nothing filters it (the re-review of PR 93, N1).
-        SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env())
+        SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env(), **token_cap_kwargs(args))
     return {"smoke": True, "cli": cli, "provenance": metrics.provenance(args.model) | agent.provenance(),
             "metrics": metrics.summary(), "proxy": proxy_summary(log)}
 
@@ -1675,7 +1981,7 @@ def main(argv=None, deps=RealDeps) -> int:
         print(json.dumps({"smoke": out.as_posix(), "verdict": result["metrics"]["verdict"],
                           "mcp_status": result["metrics"]["mcp_status"],
                           "init_problems": result["metrics"]["init_problems"]}))
-        return 0
+        return 2 if result["cli"].get("tree_left") or result["cli"].get("killed") == "no_tree_ownership" else 0
     stop_file = stop_path_of(config, config_dir)
     return run_series(args, goals, chosen, out, args.ledger, stop_file, proof, deps, windows_driver())
 

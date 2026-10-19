@@ -790,7 +790,7 @@ Con n = 5 y tres modelos, la fase 2 son unos **19,0 M** de tokens de contexto, *
 | O6 | G09 en AG-03 como fallo puntuado, no evento de seguridad | Sí |
 | O7 | n por modelo: 5 o 10 | 5, y decidir 10 tras ver los intervalos |
 | O8 | Un consentimiento por serie o por bloque de series | Por serie hasta que el responsable diga otra cosa |
-| O9 | Mantener el tope de 0,50 USD de la CLI por meta en DeepSeek y MiMo (detuvo G08 de MiMo con una cifra que no es un coste) | Mantenerlo, para que las repeticiones coincidan con la corrida 0 |
+| O9 | Las repeticiones de DeepSeek y MiMo se ejecutan con el tope por meta que introdujo el PR 96 (550 000 tokens de contexto, sin tope en dólares) y no con el de 0,50 USD de la corrida 0 (que detuvo G08 de MiMo con una cifra que no es un coste); Haiku y AG-03 conservan el tope en dólares | Sí; la corrida 0 ya no se agrupa (O10) |
 | O10 | Informar las series únicas anteriores como corrida 0, sin agruparlas | Sí |
 | O11 | Desactivar la actualización automática de Claude Code durante la campaña (ajuste del sistema del responsable) | Sí |
 | O12 | Una ronda acotada de ajuste del aviso de la línea base en la fase 1, luego congelado | Sí |

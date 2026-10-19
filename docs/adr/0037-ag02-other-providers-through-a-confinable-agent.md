@@ -194,6 +194,18 @@ every model: that makes the figures comparable in kind. They are still not a cle
 each provider's Anthropic-compatibility layer, its handling of Claude Code's adaptive thinking and its
 caching differ, and Claude Code's own cost figure for a model it does not price is meaningless (the
 smokes reported USD 0.019 and 0.027 for sessions of a few thousand tokens; tokens are the usable figure).
+*Implementation note (2026-10-19).* The first live runs showed that the figure also drove a limit: the
+CLI's `--max-budget-usd` ended a MiMo session (G08) on it. A provider route therefore passes the CLI no
+dollar cap and refuses one; the per-goal limit is a token cap the runner enforces from the stream
+(`--max-context-tokens-per-goal`, default 550 000 = twice the largest per-goal context seen, recorded in
+the provenance as `max_context_tokens_per_goal` next to `dollar_cap: "none"`) beside the time cap. The cap
+fails closed: it reads decoded, validated usage per message id (the largest report per counter, a result's
+usage as a floor) and a session whose consumption is unknown or invalid (`usage_invalid`) ends like one over the
+cap (`token_cap`); every end of a session waits for the whole process tree (CLI, proxy, engine) to exit. The tree is owned before
+the CLI runs (Windows: created suspended, put in a job object, then resumed; a session whose tree cannot be
+owned is not run, and a tree that cannot be verified gone aborts the series); duplicate keys and non-object
+lines in the stream are refused. The native
+Claude path keeps its dollar cap (the figure is valid there). See the review record, C1.
 A difference between rows can come from the model, the provider's layer or its tool-calling quirks;
 AG-02 makes no claim of "better than".
 
@@ -320,4 +332,13 @@ Las nuevas pruebas fallaban contra la cabeza revisada (48 fallos y 42 errores de
 llevan agente, proveedor, modelo y versión, y `summarise.py` agrupa por modelo sin mezclarlos. Las cifras
 no son una comparación limpia de modelos (la capa de compatibilidad, el pensamiento y la caché difieren
 por proveedor) y el coste que informa Claude Code para un modelo que no conoce no sirve; AG-02 no afirma
-«mejor que». AG-02 sigue `NO_EJECUTADO`.
+«mejor que». Nota de implementación (19 de octubre de 2026): esa cifra detuvo una sesión de MiMo (G08) con
+`--max-budget-usd`; en una ruta de proveedor la CLI no recibe tope en dólares (y se rechaza uno dado) y el
+límite por meta es un tope de tokens de contexto que impone el ejecutor desde el flujo
+(`--max-context-tokens-per-goal`, por defecto 550 000), registrado en la procedencia; el tope falla cerrado (lee
+el uso decodificado y validado por mensaje, y un consumo desconocido o inválido termina la sesión) y toda
+terminación espera a que salga el árbol de procesos (CLI, proxy y motor), que se posee antes de que la
+CLI ejecute nada (en Windows se crea suspendida, se mete en un job y se reanuda; una sesión cuyo árbol no
+puede poseerse no se ejecuta y un árbol no verificado como terminado aborta la serie), y se rechazan claves
+duplicadas y líneas que no son objetos en el flujo; la ruta nativa de
+Claude conserva su tope en dólares. AG-02 sigue `NO_EJECUTADO`.
