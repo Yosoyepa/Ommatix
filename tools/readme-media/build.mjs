@@ -7,8 +7,8 @@ import {createHash} from 'node:crypto';
 import puppeteer from 'puppeteer-core';
 import ffprobe from 'ffprobe-static';
 import {optimize} from 'svgo';
-import {hero,pipeline,results,gate,loop,social,loadContract,svg} from './artwork.mjs';
-import {composition} from './storyboard.mjs';
+import {hero,pipeline,results,gate,social,svg} from './artwork.mjs';
+import {demo,demoData,demoComposition} from './demo.mjs';
 
 export const here=path.dirname(fileURLToPath(import.meta.url));
 export const root=path.resolve(here,'../..');
@@ -51,7 +51,7 @@ async function main() {
     const result=optimize(body,{multipass:true,plugins:[{name:'preset-default',params:{overrides:{removeDesc:false,cleanupIds:false,removeUnknownsAndDefaults:{keepRoleAttr:true}}}}]});
     await writeFile(path.join(output,name),result.data+'\n');generated.push(name);
   }
-  const data=loadContract(root);
+  const data=demoData(root);
   const rust=await readFile(path.join(root,'rust-toolchain.toml'),'utf8');
   const rustVersion=rust.match(/channel = "([^"]+)"/)[1];
   for(const [name,label] of [['code','Code: MIT OR Apache-2.0'],['docs','Docs: CC BY 4.0'],['rust','Rust '+rustVersion],['mcp','MCP / stdio'],['status','Research prototype'],['platform','Windows 11 x64']]) {
@@ -62,38 +62,25 @@ async function main() {
     const suffix=`${mobile?'mobile-':''}${theme}.svg`;
     for(const [name,make] of [['hero',hero],['pipeline',pipeline],['results',results],['gate',gate]]) await asset(`${name}-${suffix}`,make(theme,mobile));
   }
-  for(const mobile of [false,true]) await asset(`protocol-loop${mobile?'-mobile':''}.svg`,loop(data,mobile));
-  for(const mobile of [false,true]) await asset(`protocol-still${mobile?'-mobile':''}.svg`,loop(data,mobile).replace('</style>','.step{animation:none!important;opacity:0}.step0{opacity:1}</style>'));
   await writeFile(path.join(here,'social-preview.svg'),social());
-  await writeFile(path.join(here,'.build/index.html'),composition(data));
-  await writeFile(path.join(here,'.build/hyperframes.json'),JSON.stringify({name:'ommatix-protocol'},null,2)+'\n');
   const browser=await openBrowser();
   try {
-    const page=await localPage(browser,1280,720);
-    await page.goto(pathToFileURL(path.join(here,'.build/index.html')).href);
-    await page.evaluate(()=>window.draw(15));
-    await page.screenshot({path:path.join(output,'protocol-poster.png')});generated.push('protocol-poster.png');
-    await page.setViewport({width:1280,height:640,deviceScaleFactor:1});
+    const page=await localPage(browser,1280,640);
     await page.goto(pathToFileURL(path.join(here,'social-preview.svg')).href);
     await page.screenshot({path:path.join(output,'social-preview.png')});generated.push('social-preview.png');
-    for(const mobile of [false,true]) {
-      const kind=mobile?'mobile':'desktop';
-      await page.setViewport({width:mobile?600:1200,height:mobile?336:224,deviceScaleFactor:1});
-      await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'no-preference'}]);
-      await page.goto(pathToFileURL(path.join(output,`protocol-loop${mobile?'-mobile':''}.svg`)).href);
-      for(let index=0;index<6;index++) {
-        await page.evaluate(time=>document.getAnimations().forEach(animation=>{animation.pause();animation.currentTime=time;}),index*5000+250);
-        await page.screenshot({path:path.join(here,`.build/loop-${kind}-${index}.png`)});
-      }
-      const name=`protocol-loop${mobile?'-mobile':''}.gif`;
-      await run('ffmpeg',['-y','-loglevel','error','-framerate','1/5','-i',`.build/loop-${kind}-%d.png`,'-filter_complex','split[a][b];[a]palettegen=max_colors=128:reserve_transparent=0[p];[b][p]paletteuse=dither=bayer','-loop','0','-threads','1',path.join(output,name)]);generated.push(name);
-    }
   } finally {await browser.close();}
+  // The demo: a seekable HyperFrames composition (demo/scene.js) rendered headless, then encoded.
+  const project=path.join(here,'.build/demo');
+  await mkdir(project,{recursive:true});
+  await writeFile(path.join(project,'index.html'),demoComposition(data));
+  await writeFile(path.join(project,'hyperframes.json'),JSON.stringify({name:'ommatix-protocol-demo'},null,2)+'\n');
   const env={...process.env,HYPERFRAMES_BROWSER_PATH:chrome,HYPERFRAMES_FFPROBE_PATH:ffprobe.path,HYPERFRAMES_NO_TELEMETRY:'1',DO_NOT_TRACK:'1',HYPERFRAMES_NO_UPDATE_CHECK:'1',HYPERFRAMES_NO_AUTO_INSTALL:'1',CI:'1'};
-  await run(process.execPath,['--import',pathToFileURL(path.join(here,'offline.mjs')).href,path.join(here,'node_modules/hyperframes/bin/hyperframes.mjs'),'render','.build','--output','.build/protocol-raw.mp4','--fps','24','--workers','1','--quality','standard','--crf','24','--no-page-side-compositing','--experimental-fast-capture=false'],{env});
-  await run('ffmpeg',['-y','-loglevel','error','-i','.build/protocol-raw.mp4','-map_metadata','-1','-fflags','+bitexact','-flags:v','+bitexact','-c:v','libx264','-preset','slow','-crf','24','-pix_fmt','yuv420p','-threads','1','-an','-movflags','+faststart',path.join(output,'protocol-demo.mp4')]);generated.push('protocol-demo.mp4');
+  await run(process.execPath,['--import',pathToFileURL(path.join(here,'offline.mjs')).href,path.join(here,'node_modules/hyperframes/bin/hyperframes.mjs'),'render','.build/demo','--output','.build/demo-raw.mp4','--fps',String(demo.fps),'--workers','1','--quality','high','--no-page-side-compositing','--experimental-fast-capture=false'],{env});
+  await run('ffmpeg',['-y','-loglevel','error','-i','.build/demo-raw.mp4','-map_metadata','-1','-fflags','+bitexact','-flags:v','+bitexact','-c:v','libx264','-preset','slow','-crf','22','-pix_fmt','yuv420p','-threads','1','-an','-movflags','+faststart',path.join(output,'protocol-demo.mp4')]);generated.push('protocol-demo.mp4');
+  // The inline GIF: scenes 01-05 (5.0-35.8 s) at 1.5x, 800 px, 12 fps, 64 colours.
+  await run('ffmpeg',['-y','-loglevel','error','-ss','5.0','-t','30.8','-i','.build/demo-raw.mp4','-filter_complex','setpts=PTS/1.5,fps=12,scale=800:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=64:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle','-loop','0','-threads','1',path.join(output,'protocol-demo.gif')]);generated.push('protocol-demo.gif');
   let binaryTotal=0;
-  const manifest={schema:1,inputs:{contract:'docs/thesis/contratos/ejemplos',results:'docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911',source_commit:'875495fad62cf69e4729a548f4e2186310f31943'},runtime:{node:'22.23.1',chrome:'129.0.6668.58',hyperframes:'0.8.178',ffmpeg:'2024-04-10-git-0e4dfa4709'},assets:{}};
+  const manifest={schema:1,inputs:{contract:'docs/thesis/contratos/ejemplos',results:'docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911',source_commit:'bf90d327014ab664a36ca225f05bf53cc13144bf'},runtime:{node:'22.23.1',chrome:'129.0.6668.58',hyperframes:'0.8.178',demo:{fps:demo.fps,duration:demo.duration,width:demo.width,height:demo.height},ffmpeg:'2024-04-10-git-0e4dfa4709'},assets:{}};
   for(const name of generated.sort()) {
     const bytes=await readFile(path.join(output,name)),size=(await stat(path.join(output,name))).size;
     manifest.assets[name]={bytes:size,sha256:createHash('sha256').update(bytes).digest('hex')};

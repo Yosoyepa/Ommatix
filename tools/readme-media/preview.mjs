@@ -43,7 +43,7 @@ try{
     await page.screenshot({path:path.join(here,'.qa',name+'-full.png'),fullPage:true});
     if(lang==='en') {
       const pictures=await page.$$('picture');
-      for(const [label,index] of [['pipeline',2],['gate',3],['results',4]]) await pictures[index].screenshot({path:path.join(here,'.qa',name+'-'+label+'.png')});
+      for(const [label,index] of [['pipeline',1],['gate',2],['results',3]]) await pictures[index].screenshot({path:path.join(here,'.qa',name+'-'+label+'.png')});
     }
     findings.push({name,...await page.evaluate(()=>({overflow:document.documentElement.scrollWidth>innerWidth,brokenImages:[...document.images].filter(i=>!i.complete||i.naturalWidth===0).map(i=>i.getAttribute('src'))}))});
     await page.evaluate(()=>document.querySelectorAll('details').forEach(d=>d.open=true));

@@ -1,5 +1,4 @@
-// Synthetic artwork only. Element text and protocol fields come from the dossier examples.
-import {readFileSync} from 'node:fs';
+// Synthetic artwork only (badges, hero, pipeline, results, gate, social preview).
 
 export const palette = {
   light: {bg: '#f3f6fa', surface: '#ffffff', ink: '#132b40', muted: '#4f6375', line: '#cad6df', accent: '#006c65', tint: '#d8f3ed', amber: '#805400'},
@@ -87,77 +86,6 @@ export function gate(theme='dark',mobile=false) {
   });
   out+=text(32,h-24,'Any failed check refuses input. Uncertainty never triggers an automatic retry.',mobile?16:20,p.accent);
   return svg(w,h,'Fail-closed action gate','Default dry run is simulated. Live input requires local policy, foreground attestation, a fresh snapshot and last look before delivery. The result reports delivery and effect separately.',out,p);
-}
-
-export function loadContract(root) {
-  const path=root+'/docs/thesis/contratos/ejemplos/';
-  return Object.fromEntries(['observe_output','click_input','simulated_output','stale_output'].map(name=>[name,JSON.parse(readFileSync(path+name+'.json','utf8'))]));
-}
-export const beats = [
-  {at:0,end:4,heading:'A screenshot is a moment in time.',caption:'Repeated full-frame observations and coordinate actions still need temporal grounding.'},
-  {at:4,end:9,heading:'Plan the regions that changed.',caption:'Compare against the committed base. A measured cost rule can select a full refresh.'},
-  {at:9,end:14,heading:'Give the agent an element identity.',caption:'Geometry stays inside Ommatix. The agent receives IDs, revisions and actionability.'},
-  {at:14,end:20,heading:'Observe. Choose. Ask to act.',caption:'The MCP contract binds an action to a session, snapshot, target and expected revision.'},
-  {at:20,end:25,heading:'An old snapshot is refused.',caption:'STALE_SNAPSHOT: observe again. No input was delivered; the target is never silently replaced.'},
-  {at:25,end:29,heading:'Report only what is known.',caption:'This example is a dry run: simulated, input_delivered false, verified false.'},
-  {at:29,end:32,heading:'Ommatix',caption:'Spatial Indexing and Incremental Perception for GUI Agents'},
-];
-
-export function videoScene(index,data,progress=1) {
-  const p=palette.dark, beat=beats[index], e=data.observe_output.elements[0];
-  let out=rect(0,0,1280,720,p.bg)+text(48,48,'OMMATIX / PROTOCOL ILLUSTRATION',18,p.accent,'letter-spacing="2" font-weight="650"');
-  out+=text(1232,48,`${String(index+1).padStart(2,'0')} / 07`,18,p.muted,'text-anchor="end"');
-  out+=text(48,120,beat.heading,index===6?72:42,p.ink,'font-weight="700"');
-  if(index<3) {
-    out+=rect(48,176,704,368,p.surface,p.line,20)+rect(72,200,656,48,p.bg,'none',10)+text(96,232,data.observe_output.elements[1].label,21,p.muted);
-    out+=rect(96,296,392,72,p.bg,p.line,10)+text(120,340,'Synthetic document',26,p.muted);
-    out+=rect(400,424,296,72,p.tint,p.accent,12)+text(424,468,e.label,24,p.accent,'font-weight="650"');
-    if(index===1) {
-      for(let r=0;r<4;r++) for(let c=0;c<7;c++) out+=rect(72+c*94,256+r*66,88,60, r>1&&c>3?p.tint:'none',r>1&&c>3?p.accent:p.line,4,'opacity=".55"');
-    }
-    out+=rect(800,176,432,368,p.surface,p.line,20);
-    const lines=index===0?['Full frame','Observe → reason → act','The desktop may change.']:index===1?['Changed regions','Committed base','+ pending dirty tiles','+ halo closure']:['target_id: '+e.target_id,'revision: '+e.revision,'role: '+e.role,'actionability: confirmed'];
-    lines.forEach((line,i)=>out+=text(832,232+i*64,line,i===0?30:24,i===0?p.accent:p.ink,`font-family="${mono}"`));
-  } else if(index===3) {
-    out+=rect(48,176,512,368,p.surface,p.line,20)+text(80,224,'observe_screen → snapshot',24,p.accent,'font-weight="650"');
-    ['session_id: "'+data.click_input.session_id+'"','snapshot_id: "'+data.click_input.snapshot_id+'"','target_id: "'+e.target_id+'"','revision: '+e.revision].forEach((line,i)=>out+=text(80,288+i*56,line,23,p.ink,`font-family="${mono}"`));
-    out+=arrow(592,356,p.accent)+rect(656,176,576,368,p.surface,p.line,20)+text(688,224,'execute_action · excerpt',24,p.accent,'font-weight="650"');
-    ['"snapshot_id": "'+data.click_input.snapshot_id+'",','"target_id": "'+data.click_input.target_id+'",','"expected_revision": '+data.click_input.expected_revision+',','"action": "'+data.click_input.action+'",','"dry_run": true'].forEach((line,i)=>out+=text(688,280+i*48,line,25,p.ink,`font-family="${mono}"`));
-  } else if(index===4||index===5) {
-    const stale=index===4,obj=stale?data.stale_output:data.simulated_output, color=stale?p.amber:p.accent;
-    out+=rect(48,184,1184,360,p.surface,p.line,24)+text(80,240,stale?'snapshot_id: '+obj.snapshot_id+' → current: '+data.observe_output.snapshot_id:'request_id: '+obj.request_id,28,p.muted,`font-family="${mono}"`);
-    out+=text(80,320,stale?obj.error.code:obj.status,48,color,'font-weight="700"');
-    out+=text(80,392,'input_delivered: '+obj.input_delivered,30,p.ink,`font-family="${mono}"`)+text(80,448,'verified: '+obj.verified,30,p.ink,`font-family="${mono}"`);
-    out+=text(80,508,stale?'next_step: '+obj.error.next_step:'A simulation does not claim delivery or an effect.',25,color);
-  } else {
-    out+=text(48,224,'Local perception. Explicit actions.',40,p.accent,'font-weight="650"');
-    out+=text(48,312,'Incremental regions',32,p.ink)+text(48,376,'Stable session IDs + revisions',32,p.ink)+text(48,440,'Fail-closed actuation',32,p.ink);
-    out+=rect(896,192,336,296,p.surface,p.line,24)+text(928,264,'e7',64,p.ink,'font-weight="700"')+text(928,328,'revision 3',30,p.accent)+text(928,416,'RESEARCH PROTOTYPE',18,p.muted,'letter-spacing="1"');
-  }
-  const words=beat.caption.split(' '), lines=[''];
-  for(const word of words) { const n=lines.length-1; if((lines[n]+' '+word).trim().length>90) lines.push(word); else lines[n]+=(lines[n]?' ':'')+word; }
-  lines.forEach((line,i)=>out+=text(48,592+i*32,line,24,p.ink));
-  out+=text(48,684,'Stylised simulated desktop · dossier examples · no screen recording',18,p.muted);
-  out+=rect(48,704,1184,4,p.line,'none',2)+rect(48,704,1184*progress,4,p.accent,'none',2);
-  return out;
-}
-
-export function loop(data,mobile=false) {
-  const p=palette.dark,w=mobile?600:1200,h=mobile?336:224;
-  let out=rect(0,0,w,h,p.bg,p.line,24)+text(32,40,'SIMULATED DESKTOP / PROTOCOL ILLUSTRATION',mobile?17:18,p.muted);
-  const labels=[['01 / REGION PLAN','Re-analyse changed regions'],['02 / IDENTITY','e7 · revision 3'],['03 / OBSERVE','observe_screen → s17'],['04 / ACT','execute_action(e7, revision 3)'],['05 / REFUSE','s16 → STALE_SNAPSHOT'],['06 / REPORT','simulated · no input delivered']];
-  let css='';
-  labels.forEach(([a,b],i)=>{
-    let scene=text(32,mobile?104:96,a,20,p.accent,'font-weight="650" letter-spacing="1"')+text(32,mobile?152:148,b,mobile?25:32,p.ink,'font-weight="650"');
-    const x=mobile?32:872,y=mobile?200:64;
-    scene+=rect(x,y,mobile?536:296,80,p.surface,i===4?p.amber:p.line,16)+text(x+24,y+35,data.observe_output.elements[0].label,22,p.ink)+text(x+24,y+64,i===4?'refused · observe again':'e7  /  revision 3',19,i===4?p.amber:p.accent);
-    out+=`<g class="step step${i}" opacity="${i===0?1:0}">${scene}</g>`;
-    const start=i*100/6,end=(i+1)*100/6;
-    css+=`.step${i}{animation:step${i} 30s steps(1,end) infinite}@keyframes step${i}{0%{opacity:${i===0?1:0}}${start>0?start+'%{opacity:1}':''}${end<100?end+'%{opacity:0}':''}100%{opacity:0}}`;
-  });
-  out+=text(32,h-24,'A schematic of the contract, not a live run or a performance measurement.',mobile?15:18,p.muted);
-  css+='@media(prefers-reduced-motion:reduce){.step{animation:none;opacity:0}.step0{opacity:1}}';
-  return svg(w,h,'Animated illustration of Ommatix on a simulated desktop','Cycles through region planning, stable identity, observation, a dry-run action, a stale snapshot refusal and honest reporting. Reduced-motion mode shows a still frame.',out,p,css);
 }
 
 export function social() {

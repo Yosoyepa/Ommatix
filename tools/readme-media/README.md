@@ -30,19 +30,22 @@ needed for byte-for-byte reproduction. Builds on another OS/font rasteriser may 
 
 The render subprocess disables telemetry and update checks. `offline.mjs` rejects
 non-loopback HTTP from Node, the composition's CSP denies external resources, and the
-poster/preview browser blocks external requests. Headless Chrome uses a local composition
+social-preview, stills and preview browser blocks external requests. Headless Chrome uses a local composition
 server; it does not record the desktop. The build never publishes or uploads anything.
 
-`artwork.mjs` contains the palette, typography, 8-pixel-based layout and SVG generators.
-`storyboard.mjs` defines a seekable HyperFrames composition with no animation dependency,
-clock or random source. `social-preview.svg` is the generated SVG source for the social
-preview PNG. SVGO preserves titles, descriptions and image roles. The loop SVG honours
-`prefers-reduced-motion`. Its six frames also generate compact GIFs for GitHub's image
-renderer; the README supplies a static SVG alternative for reduced motion in `<picture>`.
+`artwork.mjs` contains the palette, typography, 8-pixel-based layout and SVG generators for the
+badges, hero, pipeline, results, gate and social preview. `demo.mjs` reads the contract examples
+and wraps `demo/scene.js`, the demo composition: every frame is a pure function of time (eased
+transitions, no animation library, clock or random source) exposed through HyperFrames' seekable
+timeline. `demo-stills.mjs` (`npm run stills -- OUT_DIR 8.5 26.5 ...`) renders single frames for
+review before a full render. `social-preview.svg` is the generated SVG source for the social
+preview PNG. SVGO preserves titles, descriptions and image roles.
 
 Outputs go to [`docs/assets/readme/`](../../docs/assets/readme). `manifest.json` lists their
-sizes and SHA-256 digests. The MP4 is 1280×720, 24 fps, 32 seconds, silent H.264 with burned-in
-English captions; final FFmpeg encoding uses a single thread and strips variable metadata.
+sizes and SHA-256 digests. `protocol-demo.mp4` is 1280×720, 30 fps, 44 seconds, silent H.264
+with burned-in English captions. `protocol-demo.gif`, the README's inline animation, is cut
+from the same render: scenes 01–05 (5.0–35.8 s) at 1.5× speed, 800 px wide, 12 fps, 64 colours;
+final FFmpeg encoding uses a single thread and strips variable metadata.
 Each binary must be at most 5 MB, all binaries at most 12 MB, and the social preview below
 1 MB. These limits are enforced by the build.
 
@@ -71,16 +74,17 @@ components. No browser, encoder, probe or dependency binary is committed or redi
 
 | Time | Illustration | Source |
 |---|---|---|
-| 0–4 s | A full-frame observation is a moment in time | Architecture problem statement |
-| 4–9 s | Tiles, changed regions and the full-refresh fallback | Algorithms 1 and ADR-0030 |
-| 9–14 s | `e7`, revision 3, confirmed button | `observe_output.json` |
-| 14–20 s | `observe_screen` and an excerpt of dry-run action arguments | `observe_output.json`, `click_input.json` |
-| 20–25 s | Old snapshot `s16` refused as `STALE_SNAPSHOT` | `stale_output.json` |
-| 25–29 s | `simulated`, delivery false, verification false | `simulated_output.json` |
-| 29–32 s | Name, tagline and research-prototype close | Repository README |
+| 0–4.4 s | Title: agents act on element IDs and revisions, not pixels | Repository README |
+| 4.4–10.2 s | A synthetic window changes; only the changed tiles light up | Algorithm 1 (chapter 04) |
+| 10.2–16.2 s | Boxes and tags for `e8` and `e7` (revision 3, button, confirmed); what the agent receives and what stays in the engine | `observe_output.json`, chapter 07 |
+| 16.2–23 s | The agent calls `observe_screen` and reads the element list (snapshot `s16`); the snapshot's age starts counting (compressed clock) | `observe_output.json` (elements), `stale_output.json` (snapshot) |
+| 23–30 s | The window changes; `s16` passes the 10 s `max_snapshot_age_ms` bound, so the dry-run `execute_action` on it stops at the gate: `STALE_SNAPSHOT`, no input | `stale_output.json`, chapter 07 §7.4 and ADR-0025 |
+| 30–35.8 s | A new observation re-analyses the changed tiles and publishes `s17`; the dry run on `s17` returns `simulated`, `input_delivered: false`, `verified: false` | `click_input.json`, `simulated_output.json` |
+| 35.8–39.6 s | The live-input chain: operator policy, foreground app, fresh snapshot, last look, delivery, effect verification; a failed check before delivery delivers nothing, an uncertain effect after delivery is `indeterminate` | AGENTS.md §5 rule 6, ADR-0007 |
+| 39.6–44 s | Name, tagline, repository | Repository README |
 
 The animation illustrates the protocol on a stylised simulated desktop. It is not a
-recording, a successful live action, or a latency measurement. A revision mismatch is
+recording, a successful live action, or a latency measurement. A dry run ends before any capture, so it never detects pixel changes; its `STALE_SNAPSHOT` here comes from the snapshot's age. A revision mismatch is
 `STALE_TARGET`; the illustrated `STALE_SNAPSHOT` is specifically an old snapshot.
 The results figure transcribes [chapter 09 §9.11](../../docs/thesis/09_EVALUACION_EXPERIMENTAL.md),
 including its phase-1 decoy-verdict exception and provider-version attribution.
@@ -101,7 +105,7 @@ Mermaid views. Inspect those files before committing. It checks body overflow an
 loading; it does not use GitHub's Markdown API or any online rendering service.
 
 Rebuild twice and compare `manifest.json` to check determinism. The build records source
-commit `875495f`, where the cited scores and protocol examples were verified. Asset sources
+commit `bf90d32`, where the cited scores and protocol examples were verified. Asset sources
 must be updated together with outputs. A future media-freshness CI job could run the build,
 checker and digest comparison in a pinned Windows/browser environment; this PR changes no
 CI workflow.
@@ -110,8 +114,8 @@ CI workflow.
 
 GitHub's [attachment documentation](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/attaching-files)
 describes uploaded video attachments and recommends H.264. A repository MP4 link opens a
-file page rather than an autoplaying README player, so the README uses a looping GIF and a
-poster link. Optionally, the owner can upload `protocol-demo.mp4` in GitHub's web interface
+file page rather than an autoplaying README player, so the README shows the looping GIF,
+which links to the MP4. Optionally, the owner can upload `protocol-demo.mp4` in GitHub's web interface
 and place the resulting attachment URL in both READMEs for an inline player. Uploading
 publishes content and is not part of the build.
 
