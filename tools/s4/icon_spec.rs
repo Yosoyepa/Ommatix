@@ -6,26 +6,24 @@
 //! operator's prototypes and the offline corpus.
 //!
 //! Plain data and plain functions with no dependency, so both workspaces can include the file.
-//! Coordinates are design units of a [`TILE`]-sized tile (one unit is one pixel at 100 %
-//! scaling). Nothing here comes from a screen capture.
+//! The icons are bare glyphs: ink on the window, with no tile and no border (a tile's chrome is
+//! the same for every class and would dominate the descriptor's shared support). Coordinates
+//! are design units of a [`CELL`]-sized cell (one unit is one pixel at 100 % scaling). Nothing
+//! here comes from a screen capture.
 // Each program uses a different part of this file.
 #![allow(dead_code)]
 
-/// Side of one icon tile, in design units.
-pub const TILE: f64 = 56.0;
-/// Gap between two tiles of the strip, in design units.
+/// Side of the cell of one icon, in design units.
+pub const CELL: f64 = 56.0;
+/// Gap between two cells of the strip, in design units.
 pub const GAP: f64 = 24.0;
 /// How many icons the strip shows, and how many classes the prototypes label.
 pub const CLASSES: usize = 8;
 /// [`CLASSES`] as a number of design units.
 const CLASSES_F: f64 = 8.0;
-/// Width of the tile border, in design units.
-pub const BORDER: f64 = 2.0;
 
 /// Grey levels of the nominal rendering (the prototypes use these).
 pub const WINDOW_GREY: u8 = 248;
-pub const TILE_GREY: u8 = 236;
-pub const BORDER_GREY: u8 = 140;
 pub const INK_GREY: u8 = 40;
 
 /// The synthetic label of each class: a closed vocabulary, nothing read from a screen.
@@ -119,35 +117,30 @@ const CROSS: [Shape; 2] = [
         width: 6.0,
     },
 ];
-const TARGET: [Shape; 2] = [
-    Shape::Ring {
-        c: (28.0, 28.0),
-        r: 18.0,
-        width: 4.0,
+const CHECK: [Shape; 2] = [
+    Shape::Segment {
+        a: (12.0, 28.0),
+        b: (22.0, 40.0),
+        width: 6.0,
     },
-    Shape::Disc {
-        c: (28.0, 28.0),
-        r: 7.0,
+    Shape::Segment {
+        a: (22.0, 40.0),
+        b: (44.0, 14.0),
+        width: 6.0,
     },
 ];
-const BARS: [Shape; 3] = [
+const PAUSE: [Shape; 2] = [
     Shape::Rect {
-        x0: 12.0,
-        y0: 14.0,
-        x1: 44.0,
-        y1: 20.0,
+        x0: 14.0,
+        y0: 12.0,
+        x1: 25.0,
+        y1: 44.0,
     },
     Shape::Rect {
-        x0: 12.0,
-        y0: 25.0,
-        x1: 44.0,
-        y1: 31.0,
-    },
-    Shape::Rect {
-        x0: 12.0,
-        y0: 36.0,
-        x1: 44.0,
-        y1: 42.0,
+        x0: 31.0,
+        y0: 12.0,
+        x1: 42.0,
+        y1: 44.0,
     },
 ];
 const CHEVRON: [Shape; 2] = [
@@ -163,7 +156,7 @@ const CHEVRON: [Shape; 2] = [
     },
 ];
 
-/// The shapes of class `class` (0..[`CLASSES`]), in a [`TILE`]-sized tile. Empty for an index
+/// The shapes of class `class` (0..[`CLASSES`]), in a [`CELL`]-sized cell. Empty for an index
 /// out of range.
 #[must_use]
 pub fn glyph(class: usize) -> &'static [Shape] {
@@ -173,22 +166,22 @@ pub fn glyph(class: usize) -> &'static [Shape] {
         2 => &TRIANGLE,
         3 => &SQUARE,
         4 => &CROSS,
-        5 => &TARGET,
-        6 => &BARS,
+        5 => &CHECK,
+        6 => &PAUSE,
         7 => &CHEVRON,
         _ => &[],
     }
 }
 
-/// Top-left corner of tile `i` of a strip whose first tile starts at `x0`, in design units
+/// Top-left corner of cell `i` of a strip whose first cell starts at `x0`, in design units
 /// scaled by `scale` (1.0 at 100 %).
 #[must_use]
 pub fn tile_origin(i: u8, x0: f64, y0: f64, scale: f64) -> (f64, f64) {
-    (x0 + (TILE + GAP) * scale * f64::from(i), y0)
+    (x0 + (CELL + GAP) * scale * f64::from(i), y0)
 }
 
 /// Width of the whole strip, in design units.
 #[must_use]
 pub fn strip_width() -> f64 {
-    TILE * CLASSES_F + GAP * (CLASSES_F - 1.0)
+    CELL * CLASSES_F + GAP * (CLASSES_F - 1.0)
 }

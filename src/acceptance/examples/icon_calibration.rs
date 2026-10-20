@@ -27,7 +27,8 @@
 //! `IconCache::lookup` by a test.
 //!
 //! `--smoke` runs a tiny corpus on other seeds to exercise the tool; its report says so and
-//! proposes nothing. `--strips-only` writes only the PNG sequences.
+//! proposes nothing. `--strips-only` writes only the PNG sequences; `--diagnose` writes `diagnosis.json`, exploratory and on the
+//! calibration set only.
 
 // The summary is this tool's output: it may print to stdout (the workspace denies it for the
 // MCP server).
@@ -55,10 +56,7 @@ use sha2::{Digest, Sha256};
 
 #[path = "../../../tools/s4/icon_spec.rs"]
 mod icon_spec;
-use icon_spec::{
-    BORDER, BORDER_GREY, CLASSES, GAP, INK_GREY, LABELS, Shape, TILE, TILE_GREY, WINDOW_GREY,
-    glyph, strip_width,
-};
+use icon_spec::{CELL, CLASSES, GAP, INK_GREY, LABELS, Shape, WINDOW_GREY, glyph, strip_width};
 
 // ---- the frozen protocol (S0 §19.2) ----
 
@@ -68,10 +66,13 @@ const CONTEXT: &str = "ommatix-testapp.exe";
 const MAX_ENTRIES: u32 = 64;
 /// Seeds of the calibration (selection), validation (gate) and test (report) sets.
 const SEEDS: [u64; 3] = [
-    0x0C1A_55E5_0000_0001,
-    0x0C1A_55E5_0000_0002,
-    0x0C1A_55E5_0000_0003,
+    0x0C1A_55E5_0002_0001,
+    0x0C1A_55E5_0002_0002,
+    0x0C1A_55E5_0002_0003,
 ];
+/// The development seed of `--diagnose`: where the feasibility of a protocol is looked at before
+/// it is frozen. Never one of the three of [`SEEDS`].
+const DEV_SEED: u64 = 0x0C1A_55E5_0002_00D0;
 /// Other seeds, for `--smoke`.
 const SMOKE_SEEDS: [u64; 3] = [0x5E0E_0001, 0x5E0E_0002, 0x5E0E_0003];
 /// Samples per set: positives per class, then per out-of-distribution shape (16 shapes) and per
@@ -86,11 +87,14 @@ const SMOKE_SIZES: Sizes = Sizes {
     per_shape: 3,
     per_procedural: 3,
 };
-/// Renderings of a sample: scale, sub-pixel offset and detector-box jitter.
+/// Renderings of a sample: scale, sub-pixel offset and detector-box margins.
 const SCALES: [f64; 3] = [1.0, 1.25, 1.5];
 const OFFSETS: [f64; 4] = [0.0, 0.25, 0.5, 0.75];
-/// The detector's box may be this many pixels inside or outside each side of the tile.
-const MAX_JITTER: i64 = 2;
+/// The detector's box is the glyph's own box with this margin, in pixels, on each side, drawn
+/// uniformly per side: a negative margin cuts into the ink.
+const MARGIN_RANGE: (i64, i64) = (-1, 4);
+/// No crop is smaller than this, in pixels, on either side.
+const MIN_CROP: i64 = 9;
 /// Gradient thresholds searched (grey levels).
 const TAUS: [u8; 11] = [2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64];
 /// `max_distance` and `min_margin` are searched in 0.00 ..= 0.50 in steps of 0.01.
@@ -191,8 +195,6 @@ fn covers(shape: &Shape, x: f64, y: f64) -> bool {
 #[derive(Debug, Clone, Copy)]
 struct Style {
     window: u8,
-    fill: u8,
-    border: u8,
     ink: u8,
     /// Deviation of the Gaussian noise added to each pixel, in grey levels.
     sigma: f64,
@@ -200,8 +202,6 @@ struct Style {
 
 const NOMINAL: Style = Style {
     window: WINDOW_GREY,
-    fill: TILE_GREY,
-    border: BORDER_GREY,
     ink: INK_GREY,
     sigma: 0.0,
 };
@@ -210,25 +210,18 @@ fn random_style(rng: &mut Rng) -> Style {
     let level = |rng: &mut Rng, lo, hi| rng.between(lo, hi) as u8;
     Style {
         window: level(rng, 230, 255),
-        fill: level(rng, 215, 250),
-        border: level(rng, 100, 190),
         ink: level(rng, 20, 90),
         sigma: [0.0, 1.0, 2.0, 3.0][rng.below(4)],
     }
 }
 
-/// The grey of the design point `(dx, dy)` of a tile with `shapes`; outside the tile, the window.
-fn tile_sample(style: &Style, shapes: &[Shape], dx: f64, dy: f64) -> u8 {
-    if !(0.0..TILE).contains(&dx) || !(0.0..TILE).contains(&dy) {
-        return style.window;
-    }
-    if dx < BORDER || dy < BORDER || dx >= TILE - BORDER || dy >= TILE - BORDER {
-        return style.border;
-    }
+/// The grey of the design point `(dx, dy)` of a glyph made of `shapes`: ink under a shape, the
+/// window elsewhere.
+fn glyph_sample(style: &Style, shapes: &[Shape], dx: f64, dy: f64) -> u8 {
     if shapes.iter().any(|s| covers(s, dx, dy)) {
         style.ink
     } else {
-        style.fill
+        style.window
     }
 }
 
@@ -249,7 +242,7 @@ fn pixel(x: usize, y: usize, sample: &dyn Fn(f64, f64) -> u8) -> u8 {
     ((sum + n / 2) / n) as u8
 }
 
-/// Where the tile sits inside the crop the detector would hand over.
+/// Where the design origin sits inside the crop the detector would hand over.
 #[derive(Debug, Clone, Copy)]
 struct View {
     scale: f64,
@@ -268,14 +261,13 @@ fn grey_frame(width: usize, height: usize, grey: &[u8]) -> BgraFrame {
         .expect("the generated crops are valid frames")
 }
 
-/// One crop: the tile under `view`, supersampled, with the style's noise and, for a theme
-/// inverted ideally, `255 - Y`.
+/// One crop: the glyph under `view`, supersampled, with the style's noise.
 fn render(view: &View, style: &Style, shapes: &[Shape], rng: &mut Rng) -> BgraFrame {
     let mut grey = Vec::with_capacity(view.width * view.height);
     for y in 0..view.height {
         for x in 0..view.width {
             let mut v = f64::from(pixel(x, y, &|px, py| {
-                tile_sample(
+                glyph_sample(
                     style,
                     shapes,
                     (px - view.tx) / view.scale,
@@ -307,21 +299,66 @@ fn invert(grid: &[u8; GRID_LEN]) -> [u8; GRID_LEN] {
     grid.map(|v| 255 - v)
 }
 
-/// A detector box around the tile: a scale, a sub-pixel offset and up to [`MAX_JITTER`] pixels in
-/// or out on each side.
-fn random_view(rng: &mut Rng) -> View {
-    let scale = SCALES[rng.below(SCALES.len())];
-    let tile = (TILE * scale).round() as i64;
-    let mut side = || rng.between(-MAX_JITTER, MAX_JITTER);
-    let (left, right, top, bottom) = (side(), side(), side(), side());
-    let (ox, oy) = (OFFSETS[rng.below(4)], OFFSETS[rng.below(4)]);
+/// The box of `shapes` in design units: `(x0, y0, x1, y1)`; the cell's interior for no shapes.
+fn extent(shapes: &[Shape]) -> (f64, f64, f64, f64) {
+    let mut e = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let mut grow = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        e = (e.0.min(x0), e.1.min(y0), e.2.max(x1), e.3.max(y1));
+    };
+    for shape in shapes {
+        match *shape {
+            Shape::Rect { x0, y0, x1, y1 } => grow(x0, y0, x1, y1),
+            Shape::Disc { c, r } | Shape::Ring { c, r, .. } => {
+                grow(c.0 - r, c.1 - r, c.0 + r, c.1 + r);
+            }
+            Shape::Segment { a, b, width } => {
+                let h = width / 2.0;
+                grow(
+                    a.0.min(b.0) - h,
+                    a.1.min(b.1) - h,
+                    a.0.max(b.0) + h,
+                    a.1.max(b.1) + h,
+                );
+            }
+            Shape::Poly(points) => {
+                for p in points {
+                    grow(p.0, p.1, p.0, p.1);
+                }
+            }
+        }
+    }
+    if shapes.is_empty() {
+        (8.0, 8.0, CELL - 8.0, CELL - 8.0)
+    } else {
+        e
+    }
+}
+
+/// The crop a detector would hand over around `shapes`: the glyph's own box at `scale`, with
+/// `margins` pixels (left, top, right, bottom; negative cuts into the ink) and a sub-pixel
+/// `offset` of the drawing inside it.
+fn view_around(shapes: &[Shape], scale: f64, margins: [i64; 4], offset: (f64, f64)) -> View {
+    let (gx0, gy0, gx1, gy1) = extent(shapes);
+    let left = (gx0 * scale).floor() as i64 - margins[0];
+    let top = (gy0 * scale).floor() as i64 - margins[1];
+    let right = (gx1 * scale).ceil() as i64 + margins[2];
+    let bottom = (gy1 * scale).ceil() as i64 + margins[3];
     View {
         scale,
-        tx: left as f64 + ox,
-        ty: top as f64 + oy,
-        width: (tile + left + right + 1) as usize,
-        height: (tile + top + bottom + 1) as usize,
+        tx: -(left as f64) + offset.0,
+        ty: -(top as f64) + offset.1,
+        width: (right - left + 1).max(MIN_CROP) as usize,
+        height: (bottom - top + 1).max(MIN_CROP) as usize,
     }
+}
+
+/// A detector box around `shapes`: a scale, a sub-pixel offset and a margin on each side.
+fn random_view(rng: &mut Rng, shapes: &[Shape]) -> View {
+    let scale = SCALES[rng.below(SCALES.len())];
+    let mut side = || rng.between(MARGIN_RANGE.0, MARGIN_RANGE.1);
+    let margins = [side(), side(), side(), side()];
+    let offset = (OFFSETS[rng.below(4)], OFFSETS[rng.below(4)]);
+    view_around(shapes, scale, margins, offset)
 }
 
 // ---- the shapes that are not in the strip ----
@@ -376,14 +413,14 @@ fn near_misses() -> [Vec<Shape>; 8] {
         ],
         vec![seg((14.0, 14.0), (42.0, 42.0), 6.0)],
         vec![
-            Shape::Ring {
-                c: CENTRE,
-                r: 18.0,
-                width: 4.0,
-            },
-            Shape::Disc { c: CENTRE, r: 12.0 },
+            seg((12.0, 28.0), (22.0, 40.0), 6.0),
+            seg((22.0, 40.0), (30.0, 30.0), 6.0),
         ],
-        vec![rect(12.0, 14.0, 44.0, 20.0), rect(12.0, 25.0, 44.0, 31.0)],
+        vec![
+            rect(12.0, 12.0, 20.0, 44.0),
+            rect(24.0, 12.0, 32.0, 44.0),
+            rect(36.0, 12.0, 44.0, 44.0),
+        ],
         vec![
             seg((36.0, 12.0), (18.0, 28.0), 6.0),
             seg((18.0, 28.0), (36.0, 44.0), 6.0),
@@ -401,7 +438,7 @@ fn other_shapes() -> [Vec<Shape>; 8] {
             rect(37.0, 12.0, 43.0, 44.0),
             rect(13.0, 25.0, 43.0, 31.0),
         ],
-        vec![rect(12.0, 25.0, 44.0, 31.0)],
+        vec![rect(25.0, 12.0, 31.0, 44.0)],
         vec![Shape::Poly(&DIAMOND)],
         vec![
             Shape::Disc {
@@ -503,7 +540,7 @@ fn build_corpus(seed: u64, sizes: Sizes) -> Corpus {
     let mut positives = Vec::new();
     for class in 0..CLASSES {
         for _ in 0..sizes.positives_per_class {
-            let (view, style) = (random_view(&mut rng), random_style(&mut rng));
+            let (view, style) = (random_view(&mut rng, glyph(class)), random_style(&mut rng));
             let frame = render(&view, &style, glyph(class), &mut rng);
             positives.push((class, grid_of(&frame)));
         }
@@ -515,15 +552,15 @@ fn build_corpus(seed: u64, sizes: Sizes) -> Corpus {
         .chain(other_shapes().into_iter().map(|s| (Group::OtherShape, s)))
     {
         for _ in 0..sizes.per_shape {
-            let (view, style) = (random_view(&mut rng), random_style(&mut rng));
+            let (view, style) = (random_view(&mut rng, &shapes), random_style(&mut rng));
             let frame = render(&view, &style, &shapes, &mut rng);
             ood.push((group, grid_of(&frame)));
         }
     }
     for kind in PROCEDURAL {
         for _ in 0..sizes.per_procedural {
-            let (view, mut style) = (random_view(&mut rng), random_style(&mut rng));
             let (shapes, sigma) = procedural_shapes(kind, &mut rng);
+            let (view, mut style) = (random_view(&mut rng, &shapes), random_style(&mut rng));
             style.sigma = style.sigma.max(sigma);
             let frame = render(&view, &style, &shapes, &mut rng);
             ood.push((Group::Procedural, grid_of(&frame)));
@@ -534,30 +571,15 @@ fn build_corpus(seed: u64, sizes: Sizes) -> Corpus {
 
 // ---- the prototypes ----
 
-/// The four renderings of each class kept as prototypes: the exact tile at 100 %, a box one
-/// pixel outside with half a pixel of offset, and the exact tile at 125 % and 150 %.
-fn prototype_views() -> [View; 4] {
-    let exact = |scale: f64| {
-        let side = (TILE * scale).round() as usize;
-        View {
-            scale,
-            tx: 0.0,
-            ty: 0.0,
-            width: side,
-            height: side,
-        }
-    };
+/// The four renderings of each class kept as prototypes: the glyph's box with a two-pixel margin
+/// at 100 %, the glyph's own box with half a pixel of offset, and the two-pixel margin at 125 %
+/// and 150 %.
+fn prototype_views(shapes: &[Shape]) -> [View; 4] {
     [
-        exact(1.0),
-        View {
-            scale: 1.0,
-            tx: 1.5,
-            ty: 1.5,
-            width: TILE as usize + 2,
-            height: TILE as usize + 2,
-        },
-        exact(1.25),
-        exact(1.5),
+        view_around(shapes, 1.0, [2; 4], (0.0, 0.0)),
+        view_around(shapes, 1.0, [0; 4], (0.5, 0.5)),
+        view_around(shapes, 1.25, [2; 4], (0.0, 0.0)),
+        view_around(shapes, 1.5, [2; 4], (0.0, 0.0)),
     ]
 }
 
@@ -566,7 +588,7 @@ fn prototype_grids() -> Vec<(usize, [u8; GRID_LEN])> {
     let mut rng = Rng::new(1);
     let mut out = Vec::new();
     for class in 0..CLASSES {
-        for view in prototype_views() {
+        for view in prototype_views(glyph(class)) {
             let frame = render(&view, &NOMINAL, glyph(class), &mut rng);
             out.push((class, grid_of(&frame)));
         }
@@ -929,6 +951,7 @@ fn calibrate(smoke: bool) -> Value {
 
     json!({
         "schema": 1,
+        "protocol_version": 2,
         "tool": "src/acceptance/examples/icon_calibration.rs",
         "smoke": smoke,
         "synthetic_offline": true,
@@ -945,7 +968,7 @@ fn calibrate(smoke: bool) -> Value {
             "seeds": seeds, "positives_per_class": sizes.positives_per_class,
             "ood_per_shape": sizes.per_shape, "ood_shapes": 16,
             "ood_per_procedural_kind": sizes.per_procedural, "ood_procedural_kinds": 4,
-            "scales": SCALES, "subpixel_offsets": OFFSETS, "box_jitter_px": MAX_JITTER,
+            "scales": SCALES, "subpixel_offsets": OFFSETS, "detector_box_margin_px": [MARGIN_RANGE.0, MARGIN_RANGE.1],
             "taus": TAUS, "distance_and_margin_steps": [0.0, step_value(STEPS), 0.01],
             "support_policy": { "min_support": SupportPolicy::default().min_support,
                                 "min_overlap": SupportPolicy::default().min_overlap },
@@ -959,6 +982,58 @@ fn calibrate(smoke: bool) -> Value {
         "selection": selection,
         "limits": "synthetic corpus drawn by this tool's own rasteriser, not the test application's real rendering; one descriptor version; ideal inversion only; a proposal for the owner, never a default",
     })
+}
+
+/// Exploratory, on the development seed only: what each constraint costs on its own. It does not
+/// choose anything and never touches the validation or the test set; its output informs a
+/// change of protocol, which then needs new seeds and its own pre-registration.
+fn diagnose() -> Value {
+    let corpus = build_corpus(DEV_SEED, FULL_SIZES);
+    let grids = prototype_grids();
+    let mut rows = Vec::new();
+    for tau in TAUS {
+        let ev = evaluate(&corpus, tau, &descriptors(&grids, tau));
+        let mut all: Vec<(Params, Tally)> = Vec::new();
+        for distance_step in 0..=STEPS {
+            for margin_step in 0..=STEPS {
+                let params = Params {
+                    tau,
+                    distance_step,
+                    margin_step,
+                };
+                let t = tally(
+                    &ev.positives,
+                    &ev.ood,
+                    step_value(distance_step),
+                    step_value(margin_step),
+                );
+                all.push((params, t));
+            }
+        }
+        let best = |filter: &dyn Fn(&Tally) -> bool| {
+            all.iter()
+                .filter(|(_, t)| filter(t) && t.correct > 0)
+                .max_by_key(|(p, t)| (t.correct, std::cmp::Reverse(p.distance_step), p.margin_step))
+                .map(|(p, _)| {
+                    let (d, m) = (step_value(p.distance_step), step_value(p.margin_step));
+                    json!({ "max_distance": d, "min_margin": m, "metrics": metrics(&ev, d, m) })
+                })
+        };
+        rows.push(json!({
+            "tau": tau,
+            "no_wrong_labels_only": best(&|t| t.wrong == 0),
+            "ood_limit_only": best(&|t| t.ood_accepted * 100 <= t.ood * FAR_LIMIT_PERCENT),
+            "both_constraints": best(&constraints_hold),
+            "no_wrong_labels_and_half_coverage": all.iter()
+                .filter(|(_, t)| t.wrong == 0 && t.correct * 100 >= t.positives * MIN_COVERAGE_PERCENT)
+                .min_by_key(|(_, t)| t.ood_accepted)
+                .map(|(p, _)| {
+                    let (d, m) = (step_value(p.distance_step), step_value(p.margin_step));
+                    json!({ "max_distance": d, "min_margin": m, "metrics": metrics(&ev, d, m) })
+                }),
+        }));
+    }
+    json!({ "exploratory": true, "set": "development seed only", "rows": rows })
 }
 
 fn proposal_toml(report: &Value) -> Option<String> {
@@ -989,7 +1064,7 @@ const STRIP_TOP: f64 = 780.0;
 
 fn strip_grey(scale: f64, x: usize, y: usize) -> u8 {
     let x0 = (FRAME.0 as f64 - strip_width() * scale) / 2.0;
-    let pitch = (TILE + GAP) * scale;
+    let pitch = (CELL + GAP) * scale;
     pixel(x, y, &|px, py| {
         let rel = px - x0;
         let (py_rel, i) = (py - STRIP_TOP, (rel / pitch).floor());
@@ -997,10 +1072,10 @@ fn strip_grey(scale: f64, x: usize, y: usize) -> u8 {
             return WINDOW_GREY;
         }
         let local = rel - i * pitch;
-        if local >= TILE * scale {
+        if local >= CELL * scale {
             return WINDOW_GREY;
         }
-        tile_sample(&NOMINAL, glyph(i as usize), local / scale, py_rel / scale)
+        glyph_sample(&NOMINAL, glyph(i as usize), local / scale, py_rel / scale)
     })
 }
 
@@ -1012,7 +1087,7 @@ fn write_strips(out: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let x1 = x0 + (strip_width() * scale).ceil() as usize + 4;
         let (y0, y1) = (
             STRIP_TOP as usize - 2,
-            STRIP_TOP as usize + (TILE * scale).ceil() as usize + 2,
+            STRIP_TOP as usize + (CELL * scale).ceil() as usize + 2,
         );
         let mut rgb = Vec::with_capacity(FRAME.0 * FRAME.1 * 3);
         for y in 0..FRAME.1 {
@@ -1045,17 +1120,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Err("icon_calibration requires --release".into());
     }
     let mut args = std::env::args().skip(1);
-    let (mut out, mut smoke, mut strips_only) = (None, false, false);
+    let (mut out, mut smoke, mut strips_only, mut diagnosing) = (None, false, false, false);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--out-dir" => out = Some(args.next().ok_or("--out-dir needs a path")?),
             "--smoke" => smoke = true,
             "--strips-only" => strips_only = true,
+            "--diagnose" => diagnosing = true,
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
     }
     let out = Path::new(&out.ok_or("--out-dir DIR is required")?).to_path_buf();
     std::fs::create_dir_all(&out)?;
+    if diagnosing {
+        std::fs::write(
+            out.join("diagnosis.json"),
+            serde_json::to_vec_pretty(&diagnose())?,
+        )?;
+        return Ok(());
+    }
     write_strips(&out)?;
     if strips_only {
         return Ok(());
@@ -1115,21 +1198,38 @@ mod tests {
     }
 
     #[test]
-    fn the_rasteriser_paints_window_border_fill_and_ink_in_their_places() {
+    fn the_rasteriser_paints_ink_under_the_glyph_and_the_window_elsewhere() {
         let mut rng = Rng::new(7);
-        let view = View {
-            scale: 1.0,
-            tx: 4.0,
-            ty: 4.0,
-            width: 64,
-            height: 64,
-        };
+        // The plus: arms 12..44 and 24..32 in design units; a two-pixel margin at 100 %.
+        let view = view_around(glyph(0), 1.0, [2; 4], (0.0, 0.0));
+        assert_eq!((view.width, view.height), (37, 37));
         let frame = render(&view, &NOMINAL, glyph(0), &mut rng);
-        let at = |x: usize, y: usize| frame.pixels()[(y * 64 + x) * 4];
-        assert_eq!(at(1, 1), WINDOW_GREY, "outside the tile");
-        assert_eq!(at(5, 20), BORDER_GREY, "on the border");
-        assert_eq!(at(8, 20), TILE_GREY, "inside, away from the glyph");
-        assert_eq!(at(32, 32), INK_GREY, "the plus covers the centre");
+        let at = |x: usize, y: usize| frame.pixels()[(y * view.width + x) * 4];
+        assert_eq!(at(0, 0), WINDOW_GREY, "the corner is window");
+        assert_eq!(at(18, 18), INK_GREY, "the plus covers the centre");
+        assert_eq!(at(18, 2), INK_GREY, "and the top of its vertical arm");
+        assert_eq!(at(4, 4), WINDOW_GREY, "but not the corner of its box");
+    }
+
+    #[test]
+    fn a_detector_box_follows_the_glyph_and_its_margins() {
+        let tight = view_around(glyph(0), 1.0, [0; 4], (0.0, 0.0));
+        let loose = view_around(glyph(0), 1.0, [3, 1, 2, 4], (0.0, 0.0));
+        assert_eq!((tight.width, tight.height), (33, 33));
+        assert_eq!((loose.width, loose.height), (38, 38));
+        // The chevron is narrower than the plus.
+        assert!(view_around(glyph(7), 1.0, [0; 4], (0.0, 0.0)).width < tight.width);
+        // A cut into the ink shrinks the crop, but never below the minimum.
+        assert_eq!(
+            view_around(glyph(0), 1.0, [-20; 4], (0.0, 0.0)).width,
+            MIN_CROP as usize
+        );
+        let mut rng = Rng::new(3);
+        for _ in 0..200 {
+            let v = random_view(&mut rng, glyph(3));
+            assert!(SCALES.contains(&v.scale));
+            assert!(v.width >= MIN_CROP as usize && v.height >= MIN_CROP as usize);
+        }
     }
 
     #[test]
@@ -1164,18 +1264,32 @@ mod tests {
         }
     }
 
-    /// The prototypes of different classes differ, and the four renderings of one class stay
-    /// closer to their class than to any other, at a gradient threshold the strip's contrast
-    /// supports: a prototype that is not its own nearest label would make every threshold wrong.
+    /// Every prototype is closest to its own class and to no other class at distance zero: two
+    /// classes that a prototype cannot tell apart would be `Ambiguous` for every margin, so the
+    /// strip would label neither. Checked at gradient thresholds across the searched range.
     #[test]
-    fn each_prototype_is_closest_to_its_own_class() {
+    fn each_prototype_is_closest_to_its_own_class_and_to_no_other_at_zero() {
         let grids = prototype_grids();
-        let protos = descriptors(&grids, 16);
-        for (class, grid) in &grids {
-            let raw = raw_of(grid, 16, &protos);
-            let (d, best) = raw.best.expect("a prototype matches itself");
-            assert!(raw.support_ok);
-            assert_eq!((d, best), (0.0, *class));
+        for tau in [8, 16, 32] {
+            let protos = descriptors(&grids, tau);
+            for (class, grid) in &grids {
+                let raw = raw_of(grid, tau, &protos);
+                let (d, best) = raw.best.unwrap_or_else(|| {
+                    panic!(
+                        "tau {tau}: class {class} matches nothing, support {:?}",
+                        gradient_descriptor(grid, tau).map(|d| d.support())
+                    )
+                });
+                assert!(raw.support_ok, "tau {tau} class {class}");
+                assert_eq!((d, best), (0.0, *class), "tau {tau}");
+                // No other class within the support policy is better still.
+                if let Some(next) = raw.next {
+                    assert!(
+                        next > 0.0,
+                        "tau {tau}: class {class} ties with another class"
+                    );
+                }
+            }
         }
     }
 
@@ -1344,13 +1458,18 @@ mod tests {
     }
 
     #[test]
-    fn the_strip_frame_paints_every_tile_and_leaves_the_rest_of_the_window() {
+    fn the_strip_frame_paints_every_glyph_and_leaves_the_rest_of_the_window() {
         let x0 = (FRAME.0 as f64 - strip_width()) / 2.0;
         let (px, py) = tile_origin(0, x0, STRIP_TOP, 1.0);
-        // The centre of tile 0 (a plus) is ink; the window far from the strip is the window grey.
+        // The centre of cell 0 (a plus) is ink; its corner and the window far from the strip are
+        // the window grey.
         assert_eq!(
-            strip_grey(1.0, (px + TILE / 2.0) as usize, (py + TILE / 2.0) as usize),
+            strip_grey(1.0, (px + CELL / 2.0) as usize, (py + CELL / 2.0) as usize),
             INK_GREY
+        );
+        assert_eq!(
+            strip_grey(1.0, (px + 2.0) as usize, (py + 2.0) as usize),
+            WINDOW_GREY
         );
         assert_eq!(strip_grey(1.0, 10, 10), WINDOW_GREY);
     }

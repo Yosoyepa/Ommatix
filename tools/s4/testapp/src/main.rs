@@ -25,12 +25,21 @@
 //! `--animate-labels <1|2>` picks how many (default 1). `--animate-flash` replaces the labels
 //! with a dark veil over the whole window that comes and goes every `<ms>` milliseconds, so
 //! that every observation is a full refresh. The flags are not listed anywhere user-visible.
+//!
+//! **Hidden `--icon-strip` flag** (the icon-cache soak, dossier S0 §19; AG-02 never passes it):
+//! a row of eight bare text-less synthetic glyphs painted by code from `tools/s4/icon_spec.rs`, near
+//! the bottom of the window, so that the detector has icon candidates for the icon cache.
+//! They are drawn on a layer of the window and nothing else: they take no input and expose
+//! nothing to UI Automation, and without the flag the window is exactly the same.
 
 #![windows_subsystem = "windows"]
 
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+
+#[path = "../../icon_spec.rs"]
+mod icon_spec;
 
 /// The counter's values, spelt out.
 const CARDINALS: [&str; 10] = [
@@ -191,14 +200,16 @@ impl Animation {
 struct TestApp {
     state: State,
     animation: Option<Animation>,
+    icon_strip: bool,
     started: Instant,
 }
 
 impl TestApp {
-    fn new(animation: Option<Animation>) -> Self {
+    fn new(animation: Option<Animation>, icon_strip: bool) -> Self {
         Self {
             state: State::default(),
             animation,
+            icon_strip,
             started: Instant::now(),
         }
     }
@@ -238,6 +249,96 @@ impl TestApp {
         ctx.request_repaint_after(animation.period);
     }
 }
+
+// icon strip: begin
+/// Whether the hidden `--icon-strip` flag was given.
+fn icon_strip_requested(args: impl IntoIterator<Item = String>) -> bool {
+    args.into_iter().any(|arg| arg == "--icon-strip")
+}
+
+/// Points above the window's bottom edge where the strip ends.
+const STRIP_BOTTOM_MARGIN: f32 = 64.0;
+
+/// A design coordinate (the spec is in `f64`) as a point; the values are a few hundred, so the
+/// narrowing is exact.
+#[allow(clippy::cast_possible_truncation)]
+fn pt(value: f64) -> f32 {
+    value as f32
+}
+
+fn grey(level: u8) -> egui::Color32 {
+    egui::Color32::from_gray(level)
+}
+
+/// The strip's rectangle in a window of `screen`: centred, on whole points, with its bottom
+/// [`STRIP_BOTTOM_MARGIN`] above the bottom edge (below the controls, clear of both animated
+/// labels).
+fn strip_rect(screen: egui::Rect) -> egui::Rect {
+    let size = egui::vec2(pt(icon_spec::strip_width()), pt(icon_spec::CELL));
+    let x = (screen.center().x - size.x / 2.0).round();
+    let y = (screen.max.y - size.y - STRIP_BOTTOM_MARGIN).round();
+    egui::Rect::from_min_size(egui::pos2(x, y), size)
+}
+
+fn paint_shape(painter: &egui::Painter, origin: egui::Pos2, shape: &icon_spec::Shape) {
+    let at = |p: (f64, f64)| egui::pos2(origin.x + pt(p.0), origin.y + pt(p.1));
+    let ink = grey(icon_spec::INK_GREY);
+    match *shape {
+        icon_spec::Shape::Segment { a, b, width } => {
+            painter.line_segment([at(a), at(b)], egui::Stroke::new(pt(width), ink));
+            painter.circle_filled(at(a), pt(width / 2.0), ink);
+            painter.circle_filled(at(b), pt(width / 2.0), ink);
+        }
+        icon_spec::Shape::Ring { c, r, width } => {
+            painter.circle_stroke(
+                at(c),
+                pt(r - width / 2.0),
+                egui::Stroke::new(pt(width), ink),
+            );
+        }
+        icon_spec::Shape::Disc { c, r } => {
+            painter.circle_filled(at(c), pt(r), ink);
+        }
+        icon_spec::Shape::Rect { x0, y0, x1, y1 } => {
+            painter.rect_filled(
+                egui::Rect::from_min_max(at((x0, y0)), at((x1, y1))),
+                0.0,
+                ink,
+            );
+        }
+        icon_spec::Shape::Poly(points) => {
+            painter.add(egui::Shape::convex_polygon(
+                points.iter().map(|p| at(*p)).collect(),
+                ink,
+                egui::Stroke::NONE,
+            ));
+        }
+    }
+}
+
+/// Paints the eight glyphs on a foreground layer of the window, with no tile or border,
+/// exactly as the calibration tool rasterises them.
+fn paint_icon_strip(ctx: &egui::Context) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("icon-strip"),
+    ));
+    let strip = strip_rect(ctx.content_rect());
+    let count = u8::try_from(icon_spec::CLASSES).unwrap_or(0);
+    for class in 0..count {
+        let cell = egui::Rect::from_min_size(
+            egui::pos2(
+                strip.min.x + f32::from(class) * pt(icon_spec::CELL + icon_spec::GAP),
+                strip.min.y,
+            ),
+            egui::vec2(pt(icon_spec::CELL), pt(icon_spec::CELL)),
+        );
+        for shape in icon_spec::glyph(usize::from(class)) {
+            paint_shape(&painter, cell.min, shape);
+        }
+    }
+}
+// icon strip: end
 
 fn button(ui: &mut egui::Ui, label: &str) -> bool {
     ui.add_sized(
@@ -344,11 +445,15 @@ impl eframe::App for TestApp {
         if let Some(animation) = self.animation {
             self.animated_labels(ui.ctx(), animation);
         }
+        if self.icon_strip {
+            paint_icon_strip(ui.ctx());
+        }
     }
 }
 
 fn main() -> eframe::Result {
     let animation = Animation::from_args(std::env::args().skip(1));
+    let icon_strip = icon_strip_requested(std::env::args().skip(1));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(State::default().title())
@@ -360,7 +465,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             cc.egui_ctx.set_theme(egui::Theme::Light);
-            Ok(Box::new(TestApp::new(animation)))
+            Ok(Box::new(TestApp::new(animation, icon_strip)))
         }),
     )
 }
@@ -432,6 +537,69 @@ mod tests {
         assert_eq!((b.period, b.labels), (Duration::from_millis(40), 2));
         let c = Animation::from_args(args(&["--animate", "40", "--animate-labels", "9"])).unwrap();
         assert_eq!(c.labels, 2);
+    }
+
+    #[test]
+    fn the_icon_strip_is_off_without_its_hidden_flag() {
+        assert!(!icon_strip_requested(args(&[])));
+        assert!(!icon_strip_requested(args(&["--animate", "100"])));
+        assert!(!icon_strip_requested(args(&["--icon-strips"])));
+        assert!(icon_strip_requested(args(&[
+            "--animate",
+            "100",
+            "--icon-strip"
+        ])));
+    }
+
+    #[test]
+    fn the_icon_strip_has_one_cell_per_class_clear_of_the_controls_and_the_labels() {
+        // The window of the 100 % profile: 1920 points wide and about 1000 high.
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1920.0, 1000.0));
+        let strip = strip_rect(screen);
+        assert!(screen.contains_rect(strip));
+        assert!((strip.width() - pt(icon_spec::strip_width())).abs() < f32::EPSILON);
+        assert!((strip.center().x - screen.center().x).abs() <= 0.5);
+        // Whole points, so that the tiles start on whole pixels at 100 %.
+        assert!((strip.min.x - strip.min.x.round()).abs() < f32::EPSILON);
+        assert!((strip.min.y - strip.min.y.round()).abs() < f32::EPSILON);
+        // The tallest column of controls ends near 560 points; the animated labels sit at the
+        // top left and the bottom right.
+        assert!(strip.min.y > super::CONTENT + 60.0 + 100.0);
+        let tick_a =
+            egui::Rect::from_min_size(screen.min + egui::vec2(24.0, 16.0), egui::vec2(220.0, 60.0));
+        let tick_b = egui::Rect::from_min_size(
+            screen.max - egui::vec2(220.0, 64.0),
+            egui::vec2(200.0, 60.0),
+        );
+        assert!(!strip.intersects(tick_a) && !strip.intersects(tick_b));
+        assert_eq!(icon_spec::CLASSES, 8);
+        for class in 0..icon_spec::CLASSES {
+            assert!(!icon_spec::glyph(class).is_empty(), "class {class}");
+        }
+    }
+
+    /// The strip is painted on a layer and nothing else: no widget, no input, no accessibility
+    /// node. The forbidden names are built from pieces so that this test does not contain them.
+    #[test]
+    fn the_icon_strip_takes_no_input_and_exposes_nothing() {
+        let source = include_str!("main.rs");
+        let begin = source.find("// icon strip: begin").unwrap();
+        let end = source.find("// icon strip: end").unwrap();
+        let section = &source[begin..end];
+        assert!(section.contains("layer_painter"));
+        for forbidden in [
+            ["Sen", "se"].concat(),
+            ["Bu", "tton"].concat(),
+            ["access", "kit"].concat(),
+            ["inter", "act"].concat(),
+            ["clic", "k"].concat(),
+            ["Ui", "::"].concat(),
+        ] {
+            assert!(
+                !section.contains(&forbidden),
+                "the icon strip section contains {forbidden}"
+            );
+        }
     }
 
     #[test]
