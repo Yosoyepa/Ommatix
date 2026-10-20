@@ -115,7 +115,8 @@ init, timeout, parse - earns a retry or discards a recorded terminal state), raw
   left by a hard crash is removed **by hand** by the operator, after checking that nothing of the campaign is still running.
 * **Interruption**: on every exit path (normal, exception, Ctrl+C, SIGTERM, Ctrl+Break) the owned job/tree is killed and
   verified gone **before** the lock is released, and the cleanup itself is fail closed (every step is attempted, further
-  Ctrl+C / SIGTERM / Ctrl+Break are ignored while it runs). The lock is released **only on positive proof**; if that cannot be verified, the lock is **kept** and the runner says so:
+  Ctrl+C / SIGTERM / Ctrl+Break are ignored while it runs, and installing and lifting that mask is itself guarded: a signal
+  at any point of it neither skips the cleanup nor leaves a handler ignored). The lock is released **only on positive proof**; if that cannot be verified, the lock is **kept** and the runner says so:
   check that nothing of the campaign is running, then remove it by hand. The watcher's effects (stop file, kill) go through
   one gate that is closed before `run_claude` returns, so nothing can act on an ended session.
 * **Logs**: a server log that cannot be read or parsed completely is a terminal **uncertain delivery** (deliveries unknown,

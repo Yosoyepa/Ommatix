@@ -1449,27 +1449,72 @@ WATCHER_JOIN_S = 5.0
 @contextlib.contextmanager
 def _interrupts_ignored():
     """SIGINT, SIGTERM and (Windows) SIGBREAK are ignored while the body runs and the previous handlers are restored
-    afterwards - only in the main thread, where Python delivers them; elsewhere a no-op."""
+    afterwards - only in the main thread, where Python delivers them; elsewhere a no-op.
+
+    Changing the mask is itself guarded (review of PR 101, J1). The previous handlers are read before anything changes;
+    a signal that lands while the mask is being installed or lifted (the handlers of the campaign raise
+    ``KeyboardInterrupt``) is remembered and the step is repeated, so the body - the session cleanup - always runs and
+    every handler is put back before the remembered interruption is raised. A handler that cannot be put back is an
+    error, not a success."""
     if threading.current_thread() is not threading.main_thread():
         yield
         return
-    previous = {}
-    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
-        number = getattr(signal, name, None)
-        if number is None:
-            continue
+    numbers = [number for number in (getattr(signal, name, None) for name in ("SIGINT", "SIGTERM", "SIGBREAK"))
+               if number is not None]
+    saved: dict[int, object] = {}
+    masked: set[int] = set()
+    restored: set[int] = set()
+    interrupted: list[BaseException] = []
+
+    def attempt(action) -> None:
+        """Repeats ``action`` (every one is idempotent) while a signal lands inside it."""
+        for _ in range(16):
+            try:
+                action()
+                return
+            except BaseException as error:  # noqa: BLE001 - a real second SIGINT/SIGTERM/SIGBREAK
+                interrupted.append(error)
+
+    def set_handler(number, handler) -> None:
         try:
-            previous[number] = signal.signal(number, signal.SIG_IGN)
+            signal.signal(number, handler)
         except (ValueError, OSError):
-            pass
+            pass  # not settable here: nothing was changed, nothing to put back
+
+    def save_all() -> None:
+        for number in numbers:
+            if number not in saved:
+                saved[number] = signal.getsignal(number)
+
+    def mask_all() -> None:
+        for number in numbers:
+            if number in saved and number not in masked:  # a handler that could not even be read is never changed
+                set_handler(number, signal.SIG_IGN)
+                masked.add(number)
+
+    def restore_one(number) -> None:
+        set_handler(number, saved[number])
+        restored.add(number)
+
+    def restore_all() -> None:
+        for number in reversed(numbers):  # one handler that keeps failing must not keep the others from being put back
+            if number in saved and number not in restored:
+                attempt(lambda number=number: restore_one(number))
+
+    def setup() -> None:
+        save_all()
+        mask_all()
+
     try:
+        attempt(setup)
         yield
     finally:
-        for number, handler in previous.items():
-            try:
-                signal.signal(number, handler)
-            except (ValueError, OSError):
-                pass
+        attempt(restore_all)
+    unrestored = [number for number in numbers if number in saved and number not in restored]
+    if unrestored:
+        raise RuntimeError(f"signal handlers {unrestored} could not be restored") from (interrupted or [None])[0]
+    if interrupted:
+        raise interrupted[0]
 
 
 class OwnedSessionNotQuiescent(RuntimeError):
@@ -1764,7 +1809,10 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
                 return True
             return False
 
-        with _interrupts_ignored():
+        body_done = False
+
+        def cleanup_body() -> None:
+            nonlocal quiescent, left, body_done
             quiescent = bool(step(close_gate, False))
             step(finished.set)
             if watcher is not None:
@@ -1781,6 +1829,24 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
                 step(proc.stdout.close)  # closing under a blocked read would block here as well
             if stderr_path:
                 step(stderr.close)
+            body_done = True
+
+        # The mask is part of the protected region (review of PR 101, J1): a signal that lands while it is installed or
+        # lifted never skips the cleanup. If the body did not complete (the mask could not be entered), it is run again -
+        # every step is idempotent - and the last attempt goes without the mask. Whatever escaped is kept for the end.
+        mask_error = None
+        for attempt_no in range(8):
+            try:
+                if attempt_no < 7:
+                    with _interrupts_ignored():
+                        cleanup_body()
+                else:
+                    cleanup_body()
+            except BaseException as error:  # noqa: BLE001 - a signal at a mask transition, or a handler not restored
+                cleanup_errors.append(error)
+                mask_error = mask_error or error
+            if body_done:
+                break
         verified = quiescent and left == 0
         if verified and ownership is not None:
             ownership["unverified"] = ownership.get("unverified", 0) - 1
@@ -1791,6 +1857,8 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
             "lock must stay until the operator has checked") from (failure or (cleanup_errors or [None])[0])
     if failure is not None:
         raise failure
+    if mask_error is not None:
+        raise mask_error  # the session is verified gone and the mask is lifted: now the interruption may propagate
     if guard is not None and killed["reason"] is None:
         killed["reason"] = guard.reason  # e.g. a result event that reports more than the cap
     out = {"exit_code": proc.returncode, "killed": killed["reason"]}
