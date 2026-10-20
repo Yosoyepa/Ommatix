@@ -83,6 +83,8 @@ def script(request: dict, n: int) -> dict:
 def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path, scratch_name: str,
                 memory_dir: Path | None) -> dict:
     """One session. Production flags, or (control) the settings sources on and the CLAUDE.md switch off."""
+    session_tmp = log.with_name(scratch_name + "-cli-tmp")  # the child's own TEMP/TMP/TMPDIR/CLAUDE_CODE_TMPDIR
+    session_tmp.mkdir(parents=True, exist_ok=True)
     mcp = pa.build_mcp_config(sys.executable, ["--synthetic", "--synthetic-size", "640x360", "--log", str(log)])
     mcp_path = log.with_name(scratch_name + ".mcp.json")
     mcp_path.write_text(json.dumps(mcp), encoding="utf-8")
@@ -96,30 +98,39 @@ def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path, 
                 getattr(args, "extra_env", {})
             env_problems = agentcli.route_env_problems(env, route, agentcli.CLAUDE_ROUTES[route]["base_urls"],
                                                        pa.PIXEL_ENV)
+            env |= disk.child_temp_env(session_tmp)
         else:
             env_problems = []
             env = rg.scrubbed_env({"CLAUDE_CONFIG_DIR": str(config_dir), "ANTHROPIC_BASE_URL": api.url,
                                    "ANTHROPIC_API_KEY": "sk-ant-canary-0000000000", **pa.PIXEL_ENV,
-                                   **getattr(args, "extra_env", {})})
+                                   **getattr(args, "extra_env", {})}) | disk.child_temp_env(session_tmp)
         if control:
             argv[argv.index("--setting-sources") + 1] = "user,project,local"
             env.pop("CLAUDE_CODE_DISABLE_CLAUDE_MDS", None)
         metrics = pa.PixelStream([], None, None, config_dir=memory_dir)
-        # What the session leaves on disk (O5): the configuration directory and the CLI's cache, before and after.
-        cache_root = disk.cli_cache_root()
-        before_config, before_cache = disk.snapshot(config_dir), disk.snapshot(cache_root)
+        # What the session leaves on disk (O5): the configuration directory, the child's own temp directory and the CLI's
+        # cache, before and after. Every location is derived from the environment the CLI REALLY runs with (R106-1), and
+        # an incomplete listing is a refusal (R106-2).
+        cache_root = disk.cli_cache_root(environ=env)
+        before_config, before_temp = disk.snapshot(config_dir), disk.snapshot(session_tmp)
+        before_cache = disk.snapshot(cache_root, optional=True)
         cli = rg.run_claude(argv, pa.build_prompt({"prompt": "Say hi."}, 1), cwd, metrics, args.timeout, env=env)
         config_tokens, config_facts = disk.config_problems(config_dir, before_config, disk.snapshot(config_dir))
-        cache_tokens, cache_facts = disk.cache_problems(cache_root, before_cache, disk.snapshot(cache_root))
+        temp_tokens, temp_facts = disk.temp_problems(session_tmp, before_temp, disk.snapshot(session_tmp))
+        cache_tokens, cache_facts = disk.cache_problems(cache_root, before_cache,
+                                                        disk.snapshot(cache_root, optional=True))
         requests = list(api.requests)
         bodies = [r["body"] for r in requests]
     # The command this session really ran (the control widens only ``--setting-sources``) and its environment.
-    command_tokens = pa.command_problems(argv) + pa.env_problems(env)
+    command_tokens = pa.command_problems(argv) + pa.env_problems(env) + pa.temp_env_problems(env)
     return {"cli": cli, "metrics": metrics, "bodies": bodies, "requests": requests, "env_problems": env_problems,
             "attestation": metrics.attestation, "tool_calls": metrics.summary()["tool_calls"],
-            "disk_problems": sorted(set(config_tokens + cache_tokens + command_tokens)),
-            "disk_facts": {"config_touched": config_facts["touched"], "cache_touched": cache_facts["touched"],
-                           "image_data": any(t.endswith("image_data") for t in config_tokens + cache_tokens)}}
+            "disk_problems": sorted(set(config_tokens + temp_tokens + cache_tokens + command_tokens)),
+            "disk_facts": {"config_touched": config_facts["touched"], "temp_touched": temp_facts["touched"],
+                           "cache_touched": cache_facts["touched"],
+                           "image_data": any(t.endswith("image_data") for t in config_tokens + temp_tokens + cache_tokens),
+                           "complete": not any(t.endswith("incomplete") for t in config_tokens + temp_tokens + cache_tokens),
+                           "cache_root_sha256": disk.cache_root_fingerprint(env)}}
 
 
 # ---- the route's request verdict (AG-02's headers/model/effort, without its image rule) ---------------------
@@ -303,13 +314,22 @@ def run(args) -> dict:
         problems.append("pixel_control_blind")
     if route_blind:
         problems.append("route_control_blind")
-    disk_facts = {"config_files_touched": {}, "cache_files_touched": 0, "image_data_found": False}
+    disk_facts = {"config_files_touched": {}, "temp_files_touched": {}, "cache_files_touched": 0,
+                  "image_data_found": False, "scan_complete": True}
+    cache_roots = set()
     for name, session in (("canary", a), ("control", control), ("production_dir", b)):
         # what a session wrote is named by session; a lost command or environment invariant is one finding
         problems += [f"{name}_{token}" if token.startswith("disk_") else token for token in session["disk_problems"]]
         disk_facts["config_files_touched"][name] = session["disk_facts"]["config_touched"]
+        disk_facts["temp_files_touched"][name] = session["disk_facts"]["temp_touched"]
         disk_facts["cache_files_touched"] += session["disk_facts"]["cache_touched"]
         disk_facts["image_data_found"] = disk_facts["image_data_found"] or session["disk_facts"]["image_data"]
+        disk_facts["scan_complete"] = disk_facts["scan_complete"] and session["disk_facts"]["complete"]
+        cache_roots.add(session["disk_facts"]["cache_root_sha256"])
+    if len(cache_roots) != 1:  # the three children must agree on where the CLI's cache is
+        problems.append("disk_cache_root_differs_between_sessions")
+    disk_facts["cache_root_sha256"] = sorted(cache_roots)[0]
+    disk_facts["temp_isolated"] = not any("child_temp_not_isolated" in s["disk_problems"] for s in (a, control, b))
     att_a, att_b = a["attestation"] or {}, b["attestation"] or {}
     for name, run_ in (("canary_session", a), ("production_dir_session", b)):
         if run_["cli"]["exit_code"] != 0 or run_["cli"]["killed"]:
@@ -413,7 +433,10 @@ def load_isolation_proof(path: Path) -> dict:
           and pixel.get("images_only_in_screenshot_result") is True and pixel.get("screenshot_result_images", 0) >= 1
           and proof.get("real_capture_in_this_proof") is False
           and isinstance(proof.get("disk"), dict) and proof["disk"].get("no_session_persistence_flag") is True
-          and proof["disk"].get("image_data_found") is False and proof.get("agent_env") == pa.PIXEL_ENV)
+          and proof["disk"].get("image_data_found") is False and proof["disk"].get("scan_complete") is True
+          and proof["disk"].get("temp_isolated") is True
+          and isinstance(proof["disk"].get("cache_root_sha256"), str) and len(proof["disk"]["cache_root_sha256"]) == 64
+          and proof.get("agent_env") == pa.PIXEL_ENV)
     if not ok:
         raise SystemExit(f"the isolation proof is not a passing {PROOF_SCHEMA} file with verifier revision "
                          f"{VERIFIER_REVISION}; run pixel_preflight.py again")

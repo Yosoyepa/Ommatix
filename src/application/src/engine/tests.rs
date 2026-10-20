@@ -2574,6 +2574,28 @@ mod icons {
         assert_eq!((g[0], g[3], g[6]), (76, 150, 29));
     }
 
+    /// The calibration tooling normalises a crop with the public `ommatix_application::
+    /// grey_grid`: it is the crop the observation labels with, not a copy of it. A prototype
+    /// built from the public function's grid labels the icon in a real observation.
+    #[test]
+    fn the_public_grey_grid_is_the_crop_the_observation_labels_with() {
+        let world = icon_world(Some(grid(7)), Actionability::Confirmed);
+        let frame = render(&world);
+        let public = crate::grey_grid(&frame, &icon_box()).unwrap();
+        assert_eq!(public, grey_grid(&frame, &icon_box()).unwrap());
+        assert_eq!(public.to_vec(), grid(7));
+        let mut r = rig_with(
+            icon_world(Some(grid(7)), Actionability::Confirmed),
+            config(APP, vec![prototype("Probe", APP, &public)]),
+        );
+        assert_eq!(label_of(&r.observe()), ("Probe", LabelSource::CuratedIcon));
+        // A crop wholly outside the frame is None, as inside.
+        assert_eq!(
+            crate::grey_grid(&frame, &bx(5000.0, 5000.0, 5010.0, 5010.0)),
+            None
+        );
+    }
+
     #[test]
     fn a_curated_icon_in_the_configured_context_is_labelled_curated_icon() {
         let mut r = rig_with(

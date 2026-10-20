@@ -49,5 +49,12 @@ test = true
 name = "state_bounds"
 test = true
 
+[[example]]
+## Box 7 (S0 section 19): the offline calibration of the icon cache on a synthetic corpus and the
+## generator of the soak's curated prototypes. Its tests run with `cargo test`; the run needs
+## `--release`.
+name = "icon_calibration"
+test = true
+
 [lints]
 workspace = true

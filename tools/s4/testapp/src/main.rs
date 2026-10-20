@@ -25,12 +25,24 @@
 //! `--animate-labels <1|2>` picks how many (default 1). `--animate-flash` replaces the labels
 //! with a dark veil over the whole window that comes and goes every `<ms>` milliseconds, so
 //! that every observation is a full refresh. The flags are not listed anywhere user-visible.
+//!
+//! **Hidden `--icon-strip` flag** (the icon-cache soak, dossier S0 §19; AG-02 never passes it):
+//! a row of eight bare text-less synthetic glyphs painted by code from `tools/s4/icon_spec.rs`, near
+//! the bottom of the window, so that the detector has icon candidates for the icon cache.
+//! They are drawn on a layer of the window and nothing else: they take no input and expose
+//! nothing to UI Automation, and without the flag the window is exactly the same. With the flag
+//! the ink of the glyphs advances by a grey level every 100 ms through a cycle of 37 levels, so
+//! that between two observations the strip's region has always changed and the planner must
+//! re-analyse it (the engine's incrementality is untouched; only the strip changes).
 
 #![windows_subsystem = "windows"]
 
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+
+#[path = "../../icon_spec.rs"]
+mod icon_spec;
 
 /// The counter's values, spelt out.
 const CARDINALS: [&str; 10] = [
@@ -191,14 +203,16 @@ impl Animation {
 struct TestApp {
     state: State,
     animation: Option<Animation>,
+    icon_strip: bool,
     started: Instant,
 }
 
 impl TestApp {
-    fn new(animation: Option<Animation>) -> Self {
+    fn new(animation: Option<Animation>, icon_strip: bool) -> Self {
         Self {
             state: State::default(),
             animation,
+            icon_strip,
             started: Instant::now(),
         }
     }
@@ -238,6 +252,115 @@ impl TestApp {
         ctx.request_repaint_after(animation.period);
     }
 }
+
+// icon strip: begin
+/// Whether the hidden `--icon-strip` flag was given.
+fn icon_strip_requested(args: impl IntoIterator<Item = String>) -> bool {
+    args.into_iter().any(|arg| arg == "--icon-strip")
+}
+
+/// Points above the window's bottom edge where the strip ends.
+const STRIP_BOTTOM_MARGIN: f32 = 64.0;
+
+/// How often the strip's ink advances, in milliseconds, and how many levels it cycles through:
+/// one grey level per tick over a prime number of ticks, so that the observations of a soak
+/// (every 5 s give or take a second) never see the same level twice in a row and the strip's
+/// region is always among the changed ones.
+const STRIP_TICK_MS: u128 = 100;
+const STRIP_CYCLE: u128 = 37;
+
+/// The ink of every glyph at `tick`: the nominal ink plus the tick's place in the cycle, so
+/// between 40 and 76, inside the style range the calibration draws (20 to 90).
+fn strip_ink(tick: u128) -> u8 {
+    icon_spec::INK_GREY + u8::try_from(tick % STRIP_CYCLE).unwrap_or(0)
+}
+
+/// A design coordinate (the spec is in `f64`) as a point; the values are a few hundred, so the
+/// narrowing is exact.
+#[allow(clippy::cast_possible_truncation)]
+fn pt(value: f64) -> f32 {
+    value as f32
+}
+
+fn grey(level: u8) -> egui::Color32 {
+    egui::Color32::from_gray(level)
+}
+
+/// The strip's rectangle in a window of `screen`: centred, on whole points, with its bottom
+/// [`STRIP_BOTTOM_MARGIN`] above the bottom edge (below the controls, clear of both animated
+/// labels).
+fn strip_rect(screen: egui::Rect) -> egui::Rect {
+    let size = egui::vec2(pt(icon_spec::strip_width()), pt(icon_spec::CELL));
+    let x = (screen.center().x - size.x / 2.0).round();
+    let y = (screen.max.y - size.y - STRIP_BOTTOM_MARGIN).round();
+    egui::Rect::from_min_size(egui::pos2(x, y), size)
+}
+
+fn paint_shape(
+    painter: &egui::Painter,
+    origin: egui::Pos2,
+    shape: &icon_spec::Shape,
+    ink: egui::Color32,
+) {
+    let at = |p: (f64, f64)| egui::pos2(origin.x + pt(p.0), origin.y + pt(p.1));
+    match *shape {
+        icon_spec::Shape::Segment { a, b, width } => {
+            painter.line_segment([at(a), at(b)], egui::Stroke::new(pt(width), ink));
+            painter.circle_filled(at(a), pt(width / 2.0), ink);
+            painter.circle_filled(at(b), pt(width / 2.0), ink);
+        }
+        icon_spec::Shape::Ring { c, r, width } => {
+            painter.circle_stroke(
+                at(c),
+                pt(r - width / 2.0),
+                egui::Stroke::new(pt(width), ink),
+            );
+        }
+        icon_spec::Shape::Disc { c, r } => {
+            painter.circle_filled(at(c), pt(r), ink);
+        }
+        icon_spec::Shape::Rect { x0, y0, x1, y1 } => {
+            painter.rect_filled(
+                egui::Rect::from_min_max(at((x0, y0)), at((x1, y1))),
+                0.0,
+                ink,
+            );
+        }
+        icon_spec::Shape::Poly(points) => {
+            painter.add(egui::Shape::convex_polygon(
+                points.iter().map(|p| at(*p)).collect(),
+                ink,
+                egui::Stroke::NONE,
+            ));
+        }
+    }
+}
+
+/// Paints the eight glyphs on a foreground layer of the window, with no tile or border, as the
+/// calibration tool rasterises them but with the ink of `tick`, and asks for the next tick.
+fn paint_icon_strip(ctx: &egui::Context, tick: u128) {
+    let ink = grey(strip_ink(tick));
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("icon-strip"),
+    ));
+    let strip = strip_rect(ctx.content_rect());
+    let count = u8::try_from(icon_spec::CLASSES).unwrap_or(0);
+    for class in 0..count {
+        let cell = egui::Rect::from_min_size(
+            egui::pos2(
+                strip.min.x + f32::from(class) * pt(icon_spec::CELL + icon_spec::GAP),
+                strip.min.y,
+            ),
+            egui::vec2(pt(icon_spec::CELL), pt(icon_spec::CELL)),
+        );
+        for shape in icon_spec::glyph(usize::from(class)) {
+            paint_shape(&painter, cell.min, shape, ink);
+        }
+    }
+    ctx.request_repaint_after(Duration::from_millis(100));
+}
+// icon strip: end
 
 fn button(ui: &mut egui::Ui, label: &str) -> bool {
     ui.add_sized(
@@ -344,11 +467,16 @@ impl eframe::App for TestApp {
         if let Some(animation) = self.animation {
             self.animated_labels(ui.ctx(), animation);
         }
+        if self.icon_strip {
+            let tick = self.started.elapsed().as_millis() / STRIP_TICK_MS;
+            paint_icon_strip(ui.ctx(), tick);
+        }
     }
 }
 
 fn main() -> eframe::Result {
     let animation = Animation::from_args(std::env::args().skip(1));
+    let icon_strip = icon_strip_requested(std::env::args().skip(1));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(State::default().title())
@@ -360,7 +488,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             cc.egui_ctx.set_theme(egui::Theme::Light);
-            Ok(Box::new(TestApp::new(animation)))
+            Ok(Box::new(TestApp::new(animation, icon_strip)))
         }),
     )
 }
@@ -432,6 +560,101 @@ mod tests {
         assert_eq!((b.period, b.labels), (Duration::from_millis(40), 2));
         let c = Animation::from_args(args(&["--animate", "40", "--animate-labels", "9"])).unwrap();
         assert_eq!(c.labels, 2);
+    }
+
+    #[test]
+    fn the_icon_strip_is_off_without_its_hidden_flag() {
+        assert!(!icon_strip_requested(args(&[])));
+        assert!(!icon_strip_requested(args(&["--animate", "100"])));
+        assert!(!icon_strip_requested(args(&["--icon-strips"])));
+        assert!(icon_strip_requested(args(&[
+            "--animate",
+            "100",
+            "--icon-strip"
+        ])));
+    }
+
+    #[test]
+    fn the_icon_strip_has_one_cell_per_class_clear_of_the_controls_and_the_labels() {
+        // The window of the 100 % profile: 1920 points wide and about 1000 high.
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1920.0, 1000.0));
+        let strip = strip_rect(screen);
+        assert!(screen.contains_rect(strip));
+        assert!((strip.width() - pt(icon_spec::strip_width())).abs() < f32::EPSILON);
+        assert!((strip.center().x - screen.center().x).abs() <= 0.5);
+        // Whole points, so that the tiles start on whole pixels at 100 %.
+        assert!((strip.min.x - strip.min.x.round()).abs() < f32::EPSILON);
+        assert!((strip.min.y - strip.min.y.round()).abs() < f32::EPSILON);
+        // The tallest column of controls ends near 560 points; the animated labels sit at the
+        // top left and the bottom right.
+        assert!(strip.min.y > super::CONTENT + 60.0 + 100.0);
+        let tick_a =
+            egui::Rect::from_min_size(screen.min + egui::vec2(24.0, 16.0), egui::vec2(220.0, 60.0));
+        let tick_b = egui::Rect::from_min_size(
+            screen.max - egui::vec2(220.0, 64.0),
+            egui::vec2(200.0, 60.0),
+        );
+        assert!(!strip.intersects(tick_a) && !strip.intersects(tick_b));
+        assert_eq!(icon_spec::CLASSES, 8);
+        for class in 0..icon_spec::CLASSES {
+            assert!(!icon_spec::glyph(class).is_empty(), "class {class}");
+        }
+    }
+
+    /// The strip is painted on a layer and nothing else: no widget, no input, no accessibility
+    /// node. The forbidden names are built from pieces so that this test does not contain them.
+    /// R105-2: the strip changes between two consecutive observations of a soak, so that the
+    /// planner always has to re-analyse its region and the resolver re-describes every glyph;
+    /// a static strip would be crossed once and then kept as it was. The ink advances by one
+    /// grey level every tick through a cycle of 37 ticks (a prime), and the soak observes every
+    /// 5 seconds give or take a second, so no spacing between 4.0 and 6.5 s lands on the same
+    /// level.
+    #[test]
+    fn the_icon_strip_changes_between_consecutive_observations() {
+        for tick in 0..STRIP_CYCLE {
+            assert!(strip_ink(tick) >= icon_spec::INK_GREY);
+            assert!(
+                strip_ink(tick) <= 90,
+                "inside the calibrated style range (20 to 90)"
+            );
+        }
+        for spacing_ms in (4000..=6500).step_by(100) {
+            for start in 0..STRIP_CYCLE {
+                assert_ne!(
+                    strip_ink(start),
+                    strip_ink(start + spacing_ms / STRIP_TICK_MS),
+                    "start tick {start}, spacing {spacing_ms} ms"
+                );
+            }
+        }
+        // The ink never reaches the 255 levels of contrast that the measurement configuration
+        // would need for a valid gradient against the window.
+        assert!(
+            u16::from(icon_spec::WINDOW_GREY) - u16::from(strip_ink(0)) < 255,
+            "a glyph stays far from pure black on pure white"
+        );
+    }
+
+    #[test]
+    fn the_icon_strip_takes_no_input_and_exposes_nothing() {
+        let source = include_str!("main.rs");
+        let begin = source.find("// icon strip: begin").unwrap();
+        let end = source.find("// icon strip: end").unwrap();
+        let section = &source[begin..end];
+        assert!(section.contains("layer_painter"));
+        for forbidden in [
+            ["Sen", "se"].concat(),
+            ["Bu", "tton"].concat(),
+            ["access", "kit"].concat(),
+            ["inter", "act"].concat(),
+            ["clic", "k"].concat(),
+            ["Ui", "::"].concat(),
+        ] {
+            assert!(
+                !section.contains(&forbidden),
+                "the icon strip section contains {forbidden}"
+            );
+        }
     }
 
     #[test]

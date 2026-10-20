@@ -18,6 +18,7 @@ JSON-escaped and base64 in the three alignments). It reads, never writes or dele
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -41,15 +42,39 @@ def image_hits(data: bytes) -> list[str]:
     return sorted(name for name, needle in NEEDLES.items() if needle in data)
 
 
-def snapshot(root: Path) -> dict[str, tuple[int, int]]:
-    """``{path: (size, mtime_ns)}`` of every file under ``root`` (an absent root is an empty snapshot)."""
-    found: dict[str, tuple[int, int]] = {}
-    for directory, _dirs, files in os.walk(root):
+class Snapshot(dict):
+    """``{path: (size, mtime_ns)}`` of the files under a root, plus whether the listing is COMPLETE. A directory that could
+    not be listed, a file whose metadata could not be read or a required root that is missing makes it incomplete: an
+    incomplete listing is a refusal (``*_incomplete``), never an empty one (review of PR 106, R106-2)."""
+
+    def __init__(self, files=(), incomplete: bool = False):
+        super().__init__(files)
+        self.incomplete = incomplete
+
+
+def snapshot(root: Path, *, optional: bool = False) -> Snapshot:
+    """The snapshot of ``root``. A root that does not exist is a complete empty snapshot only when ``optional`` (the CLI's
+    cache may not exist before the first run) and ONLY when it is genuinely not found; any other failure to look the root up
+    (a denied lookup of an existing path included), like any enumeration or metadata error, makes it incomplete."""
+    found = Snapshot()
+    try:
+        os.stat(root)
+    except (FileNotFoundError, NotADirectoryError):  # genuinely not there: the only absence
+        found.incomplete = not optional
+        return found
+    except OSError:  # present or not, it cannot be looked up (``os.path.exists`` would say "absent"): never complete
+        found.incomplete = True
+        return found
+
+    def listing_failed(_error):
+        found.incomplete = True
+    for directory, _dirs, files in os.walk(root, onerror=listing_failed):
         for name in files:
             path = Path(directory) / name
             try:
                 stat = path.stat()
             except OSError:
+                found.incomplete = True
                 continue
             found[str(path)] = (stat.st_size, stat.st_mtime_ns)
     return found
@@ -70,13 +95,32 @@ def _scan(path: str) -> list[str] | None:
         return None
 
 
+def _incomplete(before, after) -> bool:
+    return bool(getattr(before, "incomplete", False) or getattr(after, "incomplete", False))
+
+
+def _tree_problems(label: str, before: dict, after: dict) -> tuple[set[str], list[str]]:
+    """The tokens common to every monitored location: ``disk_<label>_incomplete`` (a listing that could not be completed),
+    ``_unreadable`` (a touched file that could not be read) and ``_image_data``; and the touched paths."""
+    problems: set[str] = set()
+    if _incomplete(before, after):
+        problems.add(f"disk_{label}_incomplete")
+    paths = touched(before, after)
+    for path in paths:
+        hits = _scan(path)
+        if hits is None:
+            problems.add(f"disk_{label}_unreadable")
+        elif hits:
+            problems.add(f"disk_{label}_image_data")
+    return problems, paths
+
+
 def config_problems(root: Path, before: dict, after: dict) -> tuple[list[str], dict]:
     """Closed tokens for what a session wrote in its configuration directory ``root`` (``before``/``after`` are its
     snapshots): anything under ``projects/`` (a persisted session), a ``tool-results`` file, a ``.jsonl`` transcript, image
-    data in any touched file, a touched file that cannot be read. ``.claude.json`` and its backups may change; they must
-    only hold no image. Returns ``(tokens, {"touched": n})``."""
-    problems: set[str] = set()
-    paths = touched(before, after)
+    data in any touched file, a touched file that cannot be read, an incomplete listing. ``.claude.json`` and its backups
+    may change; they must only hold no image. Returns ``(tokens, {"touched": n})``."""
+    problems, paths = _tree_problems("config", before, after)
     for path in paths:
         try:
             parts = [part.lower() for part in Path(path).relative_to(root).parts]
@@ -88,25 +132,29 @@ def config_problems(root: Path, before: dict, after: dict) -> tuple[list[str], d
             problems.add("disk_config_tool_results")
         if parts and parts[-1].endswith(".jsonl"):
             problems.add("disk_config_transcript")
-        hits = _scan(path)
-        if hits is None:
-            problems.add("disk_config_unreadable")
-        elif hits:
-            problems.add("disk_config_image_data")
     return sorted(problems), {"touched": len(paths)}
 
 
 def cache_problems(root: Path, before: dict, after: dict) -> tuple[list[str], dict]:
     """The same for the CLI's cache (the MCP debug logs): the files touched during the session must hold no image data."""
-    problems: set[str] = set()
-    paths = touched(before, after)
-    for path in paths:
-        hits = _scan(path)
-        if hits is None:
-            problems.add("disk_cache_unreadable")
-        elif hits:
-            problems.add("disk_cache_image_data")
+    problems, paths = _tree_problems("cache", before, after)
     return sorted(problems), {"touched": len(paths)}
+
+
+def temp_problems(root: Path, before: dict, after: dict) -> tuple[list[str], dict]:
+    """The same for the child's own temp directory (``TEMP``/``TMP``/``TMPDIR``/``CLAUDE_CODE_TMPDIR``, where the CLI keeps
+    its image and scratch files): no image data may appear in it (review of PR 106, R106-1)."""
+    problems, paths = _tree_problems("temp", before, after)
+    return sorted(problems), {"touched": len(paths)}
+
+
+# The variables that decide where the CLI puts its temporary and image files; one directory of the session's own.
+TEMP_ENV_NAMES = ("TEMP", "TMP", "TMPDIR", "CLAUDE_CODE_TMPDIR")
+
+
+def child_temp_env(directory) -> dict:
+    """The child environment entries that give the session a temp directory of its own."""
+    return {name: str(directory) for name in TEMP_ENV_NAMES}
 
 
 def cli_cache_root(platform: str | None = None, environ: dict | None = None) -> Path:
@@ -121,3 +169,9 @@ def cli_cache_root(platform: str | None = None, environ: dict | None = None) -> 
     if platform == "darwin":
         return home / "Library" / "Caches" / "claude-cli-nodejs"
     return Path(env.get("XDG_CACHE_HOME") or home / ".cache") / "claude-cli-nodejs"
+
+
+def cache_root_fingerprint(environ: dict | None = None, platform: str | None = None) -> str:
+    """SHA-256 of the cache root a child with this environment would use (no path leaves the machine in a proof): the
+    preflight records it and the runner compares it with the production child's before every launch."""
+    return hashlib.sha256(str(cli_cache_root(platform, environ)).encode("utf-8")).hexdigest()

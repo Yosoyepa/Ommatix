@@ -171,9 +171,16 @@ decision O1; **nothing here deletes a screenshot remotely**. Outputs belong outs
   convention and are not measured). On synthetic sessions it is ~4.6 KB and holds no image data. **The harness does not delete
   it**, the preflight scans what a session adds to it for image data and refuses the proof otherwise, and **what it would hold
   on a real screen is not measured**.
-* The preflight (`ag03-isolation-proof-1`, verifier revision 2) therefore snapshots the configuration directory and the CLI's
-  cache around each synthetic session and refuses when a session wrote anything under `projects/`, a `tool-results` file, a
-  `.jsonl` transcript or PNG / base64-PNG data, and records the facts in the proof (`disk`, `agent_env`). The pixel agent's
+* The preflight (`ag03-isolation-proof-1`, verifier revision 2) therefore snapshots the configuration directory, **the child's
+  own temp directory** (`TEMP`, `TMP`, `TMPDIR` and `CLAUDE_CODE_TMPDIR`: one directory per session that the harness supplies)
+  and the CLI's cache around each synthetic session and refuses when a session wrote anything under `projects/`, a
+  `tool-results` file, a `.jsonl` transcript or PNG / base64-PNG data, or when a listing could not be completed (a directory
+  that cannot be listed or a file whose metadata cannot be read: `disk_*_incomplete`, never an empty pass). Every monitored
+  location is derived from the environment the CLI **really** runs with (the cache root from the child's environment, not the
+  parent's); the proof binds a fingerprint of that cache root (`cache_root_sha256`), and the runner gives every production
+  attempt its own temp directory inside the attempt folder and refuses to launch if the child's cache root is not the one the
+  proof bound. The facts go in the proof (`disk`, `agent_env`). A clean snapshot after a session is **not** proof that nothing
+  was ever written transiently while it ran. The pixel agent's
   environment sets `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` (AG-03 only).
 * **Claude Code auto-updated to 2.1.305 on 2026-10-20.** Every proof must be regenerated with the version used before a live
   series (O11). With 2.1.305 the preflight currently fails (`pixel_tools_not_the_three`): the CLI adds a

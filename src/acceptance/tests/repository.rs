@@ -971,3 +971,57 @@ fn doc_01_the_scope_rule_refuses_an_acceptance_without_a_note() {
     );
     assert_eq!(scope_note_problem(&pending, &scope_block, &changelog), None);
 }
+
+// ---- the perf tools read the wire names the engine really emits (box 7, C5) ----
+
+/// The strings inside the parentheses of `NAME = ("a", "b", ...)` in a Python source.
+fn python_string_tuple(source: &str, name: &str) -> Vec<String> {
+    let line = source
+        .lines()
+        .find(|l| l.starts_with(&format!("{name} = (")))
+        .unwrap_or_else(|| panic!("{name} is not defined"));
+    line.split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// C5 of S0 §19.4 counts the observations whose plan record says `work = full`. A fake producer
+/// and a fake consumer once agreed on `full_refresh`, a name the engine never emits. The names
+/// the Python tools read are bound here to the real serializer: `WorkKind::as_str` as the MCP
+/// adapter's `dto::plan_meta` copies it into `_meta`, under the adapter's own key.
+#[test]
+fn plan_work_names_in_the_perf_tools_are_the_wire_names() {
+    use ommatix_adapter_mcp::{PLAN_META_KEY, dto};
+    use ommatix_application::contract::{ObservationPlan, WorkKind};
+
+    let wire = |work: WorkKind| {
+        let meta = dto::plan_meta(&ObservationPlan {
+            work,
+            ..ObservationPlan::default()
+        });
+        meta["work"].as_str().expect("work is a string").to_owned()
+    };
+    let names = [WorkKind::Full, WorkKind::Regions, WorkKind::Idle].map(wire);
+    assert_eq!(names, ["full", "regions", "idle"]);
+
+    let common = read("tools/perf/perf_common.py");
+    assert_eq!(python_string_tuple(&common, "PLAN_WORK_KINDS"), names);
+    assert!(
+        common.contains(&format!("PLAN_WORK_FULL = \"{}\"", wire(WorkKind::Full))),
+        "PLAN_WORK_FULL is the wire name of a full refresh"
+    );
+    assert!(
+        common.contains(&format!("PLAN_KEY = \"{PLAN_META_KEY}\"")),
+        "the tools read the plan under the adapter's key"
+    );
+    // The consumer names no plan kind of its own.
+    let soak = read("tools/perf/soak.py");
+    for invented in ["\"full_refresh\"", "'full_refresh'", "\"nothing\""] {
+        assert!(
+            !soak.contains(invented),
+            "soak.py spells a plan kind {invented}"
+        );
+    }
+}

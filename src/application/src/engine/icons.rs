@@ -135,7 +135,12 @@ fn luma(bgra: &[u8]) -> u64 {
 /// greyscale grid, row-major. Each cell is the rounded mean luma of its pixel block; the
 /// blocks partition the crop by integer division, and a crop narrower than the grid
 /// repeats pixels (every block has at least one). `None` when the crop is empty.
-pub(super) fn grey_grid(frame: &BgraFrame, bbox: &BBox) -> Option<[u8; GRID_LEN]> {
+///
+/// Public so that offline calibration tooling normalises a crop exactly as the observation
+/// does (Algorithm 3A, chapter 04 §4.4); the engine's behaviour is the same with or without
+/// that use. A pure function of its arguments.
+#[must_use]
+pub fn grey_grid(frame: &BgraFrame, bbox: &BBox) -> Option<[u8; GRID_LEN]> {
     let clamp = |v: f64, max: u32| -> u64 { v.clamp(0.0, f64::from(max)) as u64 };
     let (x0, x1) = (
         clamp(bbox.x0().floor(), frame.width()),
