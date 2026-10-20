@@ -14,6 +14,14 @@ seconds for ``--minutes`` (default 120, the soak of RNF-06), samples:
   actions (delivered must stay 0);
 * the round trip of ``observe_screen`` and the engine's own total from ``_meta``.
 
+With ``--icon-strip`` the test application also paints its hidden strip of eight text-less
+synthetic icons (dossier S0 §19), so that the icon cache has candidates; ``--icon-probe-every N``
+adds, every N ticks, one more ``observe_screen`` (limit 200, outside the latency figures) that
+only *counts* the elements by label source and by the closed synthetic vocabulary of the strip,
+never keeping a label or a coordinate; ``--expect-cache`` judges that the engine started with
+curated prototypes and that the probes saw candidates (the number of curated labels is reported
+without a criterion). Without these flags the soak is the one of S0 §18.
+
 The report is JSON with no screen data: no frame, no element label, no coordinates. It carries
 the raw samples, the latency percentiles per window of time, and for each resource the first
 and last medians and the least-squares slope per hour after the warm-up. ``handle_steps`` lists
@@ -63,9 +71,12 @@ import argparse
 import hashlib
 import json
 import platform
+import re
+import statistics
 import subprocess
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -73,6 +84,15 @@ import perf_common as common  # noqa: E402
 
 MIB = 1024 * 1024
 EXIT_OK, EXIT_ENDED_EARLY, EXIT_REFUSED = 0, 1, 2
+
+# The closed vocabulary of the strip's synthetic labels (tools/s4/icon_spec.rs), and the share of
+# probes that must see a candidate for the icon cache to count as exercised (S0 §19.4, C5).
+SYNTHETIC_LABEL_PREFIX = "cache-icon-"
+PROBE_LIMIT = 200
+PROBE_SHARE_MIN = 0.95
+
+_NOTE = re.compile(r"\[cache\] (\d+) curated icon prototypes, (\d+) for context")
+_NO_NOTE = "[cache] no curated icon prototypes are configured"
 
 
 # ---- analysis (pure) ----------------------------------------------------------------------
@@ -199,6 +219,88 @@ def latency_windows(points: list[tuple[float, float]], window_s: float) -> list[
     return rows
 
 
+def cache_note(lines: list[str]) -> dict | None:
+    """The engine's start-up note about the icon cache, as numbers: the prototypes it loaded and
+    how many belong to the configured context. None when it wrote no such note. Only the counts
+    are kept; the context name is not."""
+    for line in lines:
+        match = _NOTE.search(line)
+        if match:
+            return {"prototypes": int(match.group(1)), "for_context": int(match.group(2))}
+        if _NO_NOTE in line:
+            return {"prototypes": 0, "for_context": 0}
+    return None
+
+
+def probe_counts(page) -> dict | None:
+    """What one probe page holds, as counts: elements, by label source, those labelled with the
+    synthetic vocabulary, and the candidates (no label, source ``unknown``, not a text node).
+    No label, no coordinate and no identifier is kept. None for a page that is not a snapshot."""
+    if not isinstance(page, dict) or not isinstance(page.get("elements"), list):
+        return None
+    sources: dict[str, int] = {}
+    vocabulary = candidates = 0
+    for element in page["elements"]:
+        if not isinstance(element, dict):
+            continue
+        source = str(element.get("label_source", "unknown"))
+        sources[source] = sources.get(source, 0) + 1
+        label = element.get("label")
+        if isinstance(label, str) and label.startswith(SYNTHETIC_LABEL_PREFIX):
+            vocabulary += 1
+        if source == "unknown" and not label and element.get("role") != "text_node":
+            candidates += 1
+    return {"elements": len(page["elements"]), "by_label_source": sources,
+            "curated_icon": sources.get("curated_icon", 0), "vocabulary_labelled": vocabulary,
+            "candidates": candidates, "truncated": bool(page.get("next_cursor"))}
+
+
+def probe_summary(probes: list[dict], every: int) -> dict:
+    """The counts of every probe, summarised: how many saw a candidate (or a curated label) and
+    the range of curated labels."""
+    summary = {"every_ticks": every, "probes": len(probes)}
+    if not probes:
+        return summary
+    curated = [p["curated_icon"] for p in probes]
+    seen = sum(1 for p in probes if p["candidates"] + p["curated_icon"] >= 1)
+    summary.update(
+        with_candidate=seen, share_with_candidate=round(seen / len(probes), 4),
+        curated_icon={"min": min(curated), "max": max(curated),
+                      "median": statistics.median(curated)},
+        vocabulary_labelled_max=max(p["vocabulary_labelled"] for p in probes),
+        candidates_max=max(p["candidates"] for p in probes),
+        elements_max=max(p["elements"] for p in probes),
+        truncated=sum(1 for p in probes if p["truncated"]))
+    return summary
+
+
+def cache_criterion(note: dict | None, summary: dict) -> dict:
+    """S0 §19.4, C5: the engine started with curated prototypes and the probes saw candidates in
+    at least ``PROBE_SHARE_MIN`` of the probes. The curated labels are not judged: whether the
+    real drawing is accepted by thresholds calibrated offline is a finding, not a criterion."""
+    share = summary.get("share_with_candidate")
+    loaded = note is not None and note["prototypes"] >= 1
+    return {"rule": f"curated prototypes loaded and candidates seen in >= {PROBE_SHARE_MIN:.0%} "
+                    "of the probes (the curated labels are reported without a criterion)",
+            "cache_note": note, "share_with_candidate": share,
+            "probes": summary.get("probes", 0),
+            "met": bool(loaded and share is not None and share >= PROBE_SHARE_MIN)}
+
+
+def cache_settings(config_text: str) -> dict | None:
+    """The ``[cache]`` settings of the configuration that the report may carry (no path): the
+    bound, the context, the thresholds and the pinned digest. None without a prototypes file."""
+    try:
+        cache = tomllib.loads(config_text).get("cache", {})
+    except tomllib.TOMLDecodeError:
+        return None
+    if not cache.get("prototypes"):
+        return None
+    keys = ("max_entries", "context", "gradient_tau", "max_distance", "min_margin",
+            "prototypes_sha256")
+    return {key: cache.get(key) for key in keys}
+
+
 def criteria(report_resources: dict, pending: dict, handle: dict, args) -> dict:
     """The thresholds the owner set, each with the value measured against it. The working-set
     threshold and the handle rule always apply; the handle slope only when its flag is given,
@@ -245,8 +347,11 @@ class Host:
         return common.GpuMemory(pid)
 
     def start_testapp(self, args) -> subprocess.Popen:
-        return subprocess.Popen([str(args.testapp), "--animate", str(args.animate_ms),
-                                 "--animate-labels", str(args.animate_labels)])
+        argv = [str(args.testapp), "--animate", str(args.animate_ms),
+                "--animate-labels", str(args.animate_labels)]
+        if getattr(args, "icon_strip", False):
+            argv.append("--icon-strip")
+        return subprocess.Popen(argv)
 
     def start_engine(self, args):
         return common.Engine([str(args.exe), "serve", "--source", "dxgi",
@@ -264,9 +369,15 @@ class Soak:
         a = self.args
         if not Path(a.config).is_file():
             return "the configuration file does not exist"
-        problem = common.config_problem(Path(a.config).read_text(encoding="utf-8"))
+        text = Path(a.config).read_text(encoding="utf-8")
+        problem = common.config_problem(text)
         if problem:
             return f"input-free configuration required: {problem}"
+        if getattr(a, "expect_cache", False):
+            if not getattr(a, "icon_probe_every", 0):
+                return "--expect-cache needs --icon-probe-every"
+            if cache_settings(text) is None:
+                return "--expect-cache needs a [cache] block with a prototypes file"
         for image in ("ommatix.exe", "ommatix-testapp.exe"):
             if self.host.running(image):
                 return f"{image} is already running; the soak measures its own processes only"
@@ -288,6 +399,7 @@ class Soak:
             "tool": "tools/perf/soak.py", "requirement": "RNF-06 / PERF-03",
             "minutes": a.minutes, "interval_s": a.interval, "animate_ms": a.animate_ms,
             "animate_labels": a.animate_labels, "window_s": a.window_minutes * 60,
+            "icon_strip": bool(getattr(a, "icon_strip", False)),
             "python": platform.python_version(), "platform": platform.platform(),
             **common.source_state(),
         }
@@ -298,9 +410,11 @@ class Soak:
         for label, path in (("exe", a.exe), ("config", a.config)):
             if Path(path).is_file():
                 report[f"{label}_sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        report["cache_config"] = cache_settings(Path(a.config).read_text(encoding="utf-8"))
         samples: list[dict] = []
         counts = {"ticks": 0, "observed": 0, "foreground_lost": 0, "observe_errors": 0,
                   "discarded_latencies": 0}
+        probes: list[dict] = []
         report.update(ended="running", counts=counts, samples=samples)
         app = engine = gpu = None
         try:
@@ -314,7 +428,7 @@ class Soak:
             report["engine_pid"] = engine.pid
             gpu = self.host.gpu(engine.pid)
             report["gpu_counter"] = {"available": gpu.reason is None, "reason": gpu.reason}
-            report["ended"] = self.loop(app, engine, gpu, samples, counts)
+            report["ended"] = self.loop(app, engine, gpu, samples, counts, probes)
         except KeyboardInterrupt:
             report["ended"] = "interrupted"
         except (common.McpTimeout, OSError, RuntimeError) as error:
@@ -324,6 +438,8 @@ class Soak:
             if gpu is not None:
                 gpu.close()
             if engine is not None:
+                stderr_lines = getattr(engine, "stderr_lines", None)
+                report["cache_note"] = cache_note(stderr_lines() if stderr_lines else [])
                 engine.close()
             if app is not None:
                 app.terminate()  # only the process this tool started
@@ -331,10 +447,27 @@ class Soak:
                     app.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     app.kill()
-        self.summarise(report, samples)
+        self.summarise(report, samples, probes)
         return report, EXIT_OK if report["ended"] == "completed" else EXIT_ENDED_EARLY
 
-    def loop(self, app, engine, gpu, samples: list[dict], counts: dict) -> str:
+    def probe(self, app, engine, probes: list[dict], counts: dict) -> None:
+        """One extra observation that only counts what the snapshot holds (outside the latency
+        figures). Taken only while the test application is in front before and after it."""
+        if self.host.foreground_pid() != app.pid:
+            return
+        page, is_error, _, _ = engine.call(
+            "observe_screen", {"limit": PROBE_LIMIT}, timeout=self.args.call_timeout)
+        if is_error or self.host.foreground_pid() != app.pid:
+            counts["probes_skipped"] = counts.get("probes_skipped", 0) + 1
+            return
+        found = probe_counts(page)
+        if found is None:
+            counts["probes_skipped"] = counts.get("probes_skipped", 0) + 1
+            return
+        probes.append(found)
+
+    def loop(self, app, engine, gpu, samples: list[dict], counts: dict,
+             probes: list[dict] | None = None) -> str:
         a = self.args
         start = self.host.now()
         end = start + a.minutes * 60
@@ -395,6 +528,9 @@ class Soak:
                 rejected_actions=metrics.get("rejected_actions"),
                 delivered_actions=metrics.get("delivered_actions"))
             samples.append(sample)
+            every = getattr(a, "icon_probe_every", 0)
+            if every and probes is not None and counts["ticks"] % every == 0:
+                self.probe(app, engine, probes, counts)
             if a.out and counts["observed"] % 60 == 0:
                 self.checkpoint(samples, counts)
 
@@ -404,7 +540,8 @@ class Soak:
                    "minutes": self.args.minutes}
         common.write_json(Path(self.args.out), partial)
 
-    def summarise(self, report: dict, samples: list[dict]) -> None:
+    def summarise(self, report: dict, samples: list[dict],
+                  probes: list[dict] | None = None) -> None:
         a = self.args
         total_s = samples[-1]["t_s"] if samples else 0
         warmup = min(a.warmup_minutes * 60, total_s * 0.1)
@@ -443,6 +580,12 @@ class Soak:
         }
         rule = handle_rule(samples, handle_warmup, report["ended"] == "completed")
         report["criteria"] = criteria(resources, pending, rule, a)
+        every = getattr(a, "icon_probe_every", 0)
+        if every:
+            report["icon_probe"] = probe_summary(probes or [], every)
+            if getattr(a, "expect_cache", False):
+                report["criteria"]["icon_cache_exercised"] = cache_criterion(
+                    report.get("cache_note"), report["icon_probe"])
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -475,6 +618,17 @@ def build_parser() -> argparse.ArgumentParser:
                          "the warm-up, per hour (no default: the owner's handle rule of 17 "
                          "October 2026 is criteria.handle_count; 0 is the no-growth rule of 15 "
                          "October 2026)")
+    ap.add_argument("--icon-strip", action="store_true",
+                    help="start the test application with its hidden strip of eight synthetic "
+                         "text-less icons (dossier S0 section 19); AG-02 never uses it")
+    ap.add_argument("--icon-probe-every", type=int, default=0, metavar="N",
+                    help="every N ticks, one extra observe_screen (limit 200, outside the "
+                         "latencies) that only counts elements by label source and by the "
+                         "strip's synthetic vocabulary; 0 (default) is off")
+    ap.add_argument("--expect-cache", action="store_true",
+                    help="judge that the engine started with curated icon prototypes and that "
+                         "the probes saw candidates (needs --icon-probe-every and a [cache] "
+                         "block); the curated labels are reported without a criterion")
     ap.add_argument("--max-pending-regions", type=int, default=None,
                     help="the owner's structural bound for the queue (pending_regions): the tile "
                          "count of the frame, ceil(W/64) * ceil(H/64), 510 for 1920x1080 "
@@ -487,6 +641,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = ap.parse_args(argv)
     if args.minutes <= 0 or args.interval <= 0:
         ap.error("--minutes and --interval must be positive")
+    if args.icon_probe_every < 0:
+        ap.error("--icon-probe-every must not be negative")
     return args
 
 
@@ -494,7 +650,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     report, code = Soak(args, Host()).run()
     common.write_json(args.out, report)
-    summary = {k: report.get(k) for k in ("ended", "reason", "counts", "criteria")}
+    summary = {k: report.get(k)
+               for k in ("ended", "reason", "counts", "criteria", "icon_probe", "cache_note")}
     print(json.dumps(summary, indent=2))
     return code
 

@@ -579,5 +579,205 @@ class HandleRuleInTheReport(Case):
         self.assertEqual(rule["flat_final_s"], 3055.0)
 
 
+# ---- the icon-cache soak (dossier S0 §19): the strip, the probe and the cache criterion ----
+
+CACHE_TOML = (
+    '[engine]\nmode = "dry_run"\n[cache]\nmax_entries = 64\nprototypes = "icons.jsonl"\n'
+    'prototypes_sha256 = "' + "ab" * 32 + '"\ncontext = "ommatix-testapp.exe"\n'
+    'gradient_tau = 24\nmax_distance = 0.3\nmin_margin = 0.1\n')
+NOTE = ("ommatix: note: [cache] 32 curated icon prototypes, 32 for context "
+        '"ommatix-testapp.exe"; the thresholds are the operator\'s, not calibrated by this build')
+
+
+def element(label="", source="unknown", role="unknown"):
+    return {"target_id": "e1", "revision": 1, "role": role, "label": label,
+            "label_source": source, "actionability": "confirmed",
+            "bbox": [1, 2, 3, 4]}
+
+
+class IconEngine(FakeEngine):
+    """An engine whose probe pages (limit 200) hold a strip of icons and some text."""
+
+    def __init__(self, curated=0, candidates=8, note=NOTE, **kwargs):
+        super().__init__(**kwargs)
+        self.curated, self.candidates, self.note = curated, candidates, note
+        self.limits = []
+
+    def stderr_lines(self):
+        return ["ommatix: note: [models] detector: threads", self.note] if self.note else []
+
+    def call(self, name, arguments, timeout=0):
+        if name == "observe_screen" and arguments.get("limit") == soak.PROBE_LIMIT:
+            self.calls.append(name)
+            self.limits.append(arguments["limit"])
+            elements = [element(f"cache-icon-0{i + 1}", "curated_icon")
+                        for i in range(self.curated)]
+            elements += [element() for _ in range(self.candidates)]
+            elements += [element("Sumar", "ocr", "button"), element("Tic 0001", "ocr", "text_node"),
+                         element("", "unknown", "text_node")]
+            return ({"elements": elements, "geometry_epoch": 1}, False, {}, 40.0)
+        return super().call(name, arguments, timeout)
+
+
+class IconStrip(Case):
+    def setUp(self):
+        super().setUp()
+        self.config.write_text(CACHE_TOML, encoding="utf-8")
+
+    def test_the_flag_reaches_the_test_application_and_without_it_nothing_changes(self):
+        started = []
+
+        class Recorder(soak.Host):
+            pass
+
+        original = soak.subprocess.Popen
+        soak.subprocess.Popen = lambda argv, **kw: started.append(argv) or FakeProc(APP)
+        self.addCleanup(setattr, soak.subprocess, "Popen", original)
+        Recorder().start_testapp(self.args(icon_strip=True))
+        Recorder().start_testapp(self.args(icon_strip=False))
+        Recorder().start_testapp(self.args())
+        self.assertEqual(started[0][-1], "--icon-strip")
+        self.assertEqual(started[0][1:5], ["--animate", "100", "--animate-labels", "2"])
+        self.assertNotIn("--icon-strip", started[1])
+        self.assertEqual(started[1], started[2])
+
+    def test_a_probe_is_taken_every_n_ticks_and_only_counts(self):
+        engine = IconEngine(curated=3)
+        report, code = self.run_soak(FakeHost(engine=engine), icon_probe_every=12,
+                                     icon_strip=True)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        probe = report["icon_probe"]
+        self.assertEqual((probe["every_ticks"], probe["probes"]), (12, 2))  # 24 ticks
+        self.assertEqual(probe["curated_icon"], {"min": 3, "max": 3, "median": 3})
+        self.assertEqual((probe["candidates_max"], probe["vocabulary_labelled_max"]), (8, 3))
+        self.assertEqual(probe["with_candidate"], 2)
+        self.assertEqual(engine.limits, [soak.PROBE_LIMIT] * 2)
+        self.assertTrue(report["icon_strip"])
+        # The probes are not latency samples: 24 observations, not 26.
+        self.assertEqual(report["latency_ms"]["rtt"]["n"], 24)
+        self.assertEqual(report["counts"]["observed"], 24)
+
+    def test_the_report_keeps_no_label_no_identifier_and_no_coordinate(self):
+        engine = IconEngine(curated=2)
+        report, _ = self.run_soak(FakeHost(engine=engine), icon_probe_every=12)
+        text = json.dumps(report)
+        for leaked in ("cache-icon-0", "Sumar", "Tic 0001", "target_id", "bbox"):
+            self.assertNotIn(leaked, text)
+        self.assertEqual(report["cache_note"], {"prototypes": 32, "for_context": 32})
+        self.assertNotIn("ommatix-testapp.exe\"", json.dumps(report["cache_note"]))
+
+    def test_the_cache_settings_are_reported_without_a_path(self):
+        report, _ = self.run_soak(FakeHost(engine=IconEngine()), icon_probe_every=12)
+        self.assertEqual(report["cache_config"], {
+            "max_entries": 64, "context": "ommatix-testapp.exe", "gradient_tau": 24,
+            "max_distance": 0.3, "min_margin": 0.1, "prototypes_sha256": "ab" * 32})
+        self.assertNotIn("icons.jsonl", json.dumps(report))
+
+    def test_without_the_probe_flag_the_soak_is_the_one_of_section_18(self):
+        engine = IconEngine()
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        self.assertNotIn("icon_probe", report)
+        self.assertNotIn("icon_cache_exercised", report["criteria"])
+        self.assertEqual(engine.limits, [])
+
+    def test_a_probe_while_the_application_is_not_in_front_is_not_taken(self):
+        engine = IconEngine()
+        # In front only for the first minute.
+        host = FakeHost(front=lambda t: APP if t < 60 else 999, engine=engine)
+        report, _ = self.run_soak(host, icon_probe_every=12, minutes=4.0)
+        self.assertEqual(report["icon_probe"]["probes"], 1)
+
+
+class CacheCriterion(Case):
+    def setUp(self):
+        super().setUp()
+        self.config.write_text(CACHE_TOML, encoding="utf-8")
+
+    def run_expecting(self, engine, **extra):
+        return self.run_soak(FakeHost(engine=engine), icon_probe_every=12, expect_cache=True,
+                             **extra)[0]
+
+    def test_prototypes_loaded_and_candidates_seen_meet_the_criterion(self):
+        criterion = self.run_expecting(IconEngine(curated=0))["criteria"]["icon_cache_exercised"]
+        self.assertTrue(criterion["met"])
+        self.assertEqual(criterion["share_with_candidate"], 1.0)
+
+    def test_zero_curated_labels_is_not_a_failure_but_a_finding(self):
+        report = self.run_expecting(IconEngine(curated=0))
+        self.assertTrue(report["criteria"]["icon_cache_exercised"]["met"])
+        self.assertEqual(report["icon_probe"]["curated_icon"]["max"], 0)
+
+    def test_no_candidate_at_all_does_not_meet_it(self):
+        report = self.run_expecting(IconEngine(curated=0, candidates=0))
+        # The page still holds an unlabelled text node, which is not a candidate.
+        self.assertFalse(report["criteria"]["icon_cache_exercised"]["met"])
+        self.assertEqual(report["icon_probe"]["share_with_candidate"], 0.0)
+
+    def test_an_engine_without_prototypes_does_not_meet_it(self):
+        none = "ommatix: note: [cache] no curated icon prototypes are configured: icon labels stay unknown"
+        report = self.run_expecting(IconEngine(note=none))
+        self.assertEqual(report["cache_note"], {"prototypes": 0, "for_context": 0})
+        self.assertFalse(report["criteria"]["icon_cache_exercised"]["met"])
+        self.assertIsNone(self.run_expecting(IconEngine(note=None))["cache_note"])
+        self.assertFalse(
+            self.run_expecting(IconEngine(note=None))["criteria"]["icon_cache_exercised"]["met"])
+
+    def test_the_share_of_probes_with_candidates_has_a_floor(self):
+        self.assertTrue(soak.cache_criterion(
+            {"prototypes": 32, "for_context": 32},
+            {"probes": 20, "share_with_candidate": 0.95})["met"])
+        self.assertFalse(soak.cache_criterion(
+            {"prototypes": 32, "for_context": 32},
+            {"probes": 20, "share_with_candidate": 0.9})["met"])
+        self.assertFalse(soak.cache_criterion(
+            {"prototypes": 32, "for_context": 32}, {"probes": 0})["met"])
+
+    def test_it_refuses_to_judge_the_cache_without_a_probe_or_without_a_cache_block(self):
+        report, code = self.run_soak(FakeHost(), expect_cache=True, icon_probe_every=0)
+        self.assertEqual((code, report["ended"]), (2, "refused"))
+        self.assertIn("--icon-probe-every", report["reason"])
+        self.config.write_text('[engine]\nmode = "dry_run"\n', encoding="utf-8")
+        report, code = self.run_soak(FakeHost(), expect_cache=True, icon_probe_every=12)
+        self.assertEqual((code, report["ended"]), (2, "refused"))
+        self.assertIn("[cache]", report["reason"])
+
+
+class ProbeCounting(unittest.TestCase):
+    def test_the_counts_of_a_page(self):
+        page = {"elements": [element("cache-icon-01", "curated_icon"), element(), element(),
+                             element("Sumar", "ocr", "button"),
+                             element("", "unknown", "text_node")],
+                "next_cursor": "c"}
+        counts = soak.probe_counts(page)
+        self.assertEqual(counts["elements"], 5)
+        self.assertEqual(counts["by_label_source"], {"curated_icon": 1, "unknown": 3, "ocr": 1})
+        self.assertEqual((counts["candidates"], counts["curated_icon"],
+                          counts["vocabulary_labelled"]), (2, 1, 1))
+        self.assertTrue(counts["truncated"])
+
+    def test_a_page_that_is_not_a_snapshot_has_no_counts(self):
+        self.assertIsNone(soak.probe_counts({"error": {"code": "X"}}))
+        self.assertIsNone(soak.probe_counts(None))
+
+    def test_the_summary_of_no_probe_is_just_its_period(self):
+        self.assertEqual(soak.probe_summary([], 12), {"every_ticks": 12, "probes": 0})
+
+    def test_the_options_default_to_off(self):
+        args = soak.parse_args(["--config", "c.toml", "--out", "o.json"])
+        self.assertEqual((args.icon_strip, args.icon_probe_every, args.expect_cache),
+                         (False, 0, False))
+        args = soak.parse_args(["--config", "c.toml", "--out", "o.json", "--icon-strip",
+                                "--icon-probe-every", "12", "--expect-cache"])
+        self.assertEqual((args.icon_strip, args.icon_probe_every, args.expect_cache),
+                         (True, 12, True))
+        with self.assertRaises(SystemExit):
+            soak.parse_args(["--config", "c.toml", "--out", "o.json", "--icon-probe-every",
+                             "-1"])
+
+    def test_the_cache_note_is_read_as_numbers(self):
+        self.assertEqual(soak.cache_note([NOTE]), {"prototypes": 32, "for_context": 32})
+        self.assertIsNone(soak.cache_note(["ommatix: something else"]))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -360,6 +360,10 @@ class Engine:
     def alive(self) -> bool:
         return self._server.proc.poll() is None
 
+    def stderr_lines(self) -> list[str]:
+        """A copy of what the engine has written to stderr so far (kept in memory only)."""
+        return list(self._server.stderr)
+
     def call(self, name: str, arguments: dict, timeout: float = 120.0
              ) -> tuple[dict, bool, dict, float]:
         if name not in self.ALLOWED:

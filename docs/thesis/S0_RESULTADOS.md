@@ -1196,7 +1196,11 @@ El intento 1 se congeló en el commit `6e561f7` y su resultado está en 19.3. Es
 
 *Lo que se sabía del intento 2 antes de congelarlo.* La exploración con la semilla de desarrollo (`--diagnose`, antes de este congelado) indicó que el intento 2 tampoco encontraría un ajuste que cumpla: con `gradient_tau` hasta 16 no hay ningún ajuste con cero etiquetas equivocadas y alguna correcta, y con `gradient_tau` de 24 a 48 la menor aceptación de fuera de distribución que deja cero equivocadas y una cobertura de al menos el 50 % fue de alrededor del 4,3 %, frente al límite del 1 %; aun con `max_distance = 0` se aceptaban formas que no son de ninguna clase (de «otras formas» alrededor del 4–5 %). Se ejecuta de todos modos el protocolo congelado, una sola vez, para registrar su resultado preregistrado; no se cambia la regla.
 
-**Intento 2.** *Pendiente: se rellena tras la corrida de la herramienta, con el commit y los SHA-256.*
+**Intento 2 (commit `1fa369e`, protocolo congelado en ese commit y en `origin`, ejecutado una vez, 20 de octubre de 2026, árbol limpio).** Glifos desnudos, semillas `0x0C1A55E50002000{1,2,3}`. Resultado: **sin umbrales**, con la misma razón: ningún ajuste cumple a la vez cero etiquetas equivocadas y aceptación fuera de distribución ≤ 1 % en el conjunto de calibración con al menos una etiqueta correcta; validación y prueba no se calcularon. Hash de `icons.jsonl` del intento 2 (32 prototipos): `d43a784c8376772f89d63c997cc99fa7df458cea5d78324c5727f2dec71d14a8`; la propuesta de `[cache]` no existe.
+
+**Dos intentos de dos.** Siguiendo las condiciones del coordinador, **no hay un tercer intento ni un cambio de regla sin el responsable**. Los números que explican el fallo salen de la semilla de desarrollo (`--diagnose`, exploratoria, no es el conjunto de calibración): (a) con `gradient_tau` hasta 16 no existe ningún ajuste con cero etiquetas equivocadas y alguna correcta; (b) con `gradient_tau` de 24 a 48, la menor aceptación de fuera de distribución con cero equivocadas y cobertura de al menos el 50 % es del 4,3 al 4,5 % (`gradient_tau` 32: cobertura 52,7 %, aceptación 4,3 %, de ellas casi iguales 6,2 %, otras formas 4,4 %, procedurales 0 %); (c) con cero equivocadas y **sin** el límite de aceptación, la mayor cobertura es del 79,2 % (`gradient_tau` 24, `max_distance` 0,34, `min_margin` 0,15) con una aceptación de fuera de distribución del 8,9 %; (d) ningún ajuste cumple el límite del 1 % con alguna etiqueta aceptada.
+
+**Lectura.** Con el descriptor de la versión 1 (64 signos de gradientes horizontales y su máscara, soporte mínimo de 8 y solape de 0,70) sobre una rejilla de 9×8, incluso a distancia 0 se aceptan formas que no son de ninguna clase. H4 pide no aumentar la aceptación de íconos desconocidos más allá de un umbral fijado antes del test; el 1 % es una elección del protocolo (la tesis no fija ninguno, 19.1) y con este descriptor no se alcanza con una cobertura útil. Es un hallazgo sobre el Algoritmo 3A bajo esta política de soporte (inicial en la tesis y hoy no configurable), acotado a un corpus sintético dibujado por esta herramienta; no es una medición con íconos reales. Qué hacer con él es del responsable: no se hizo ningún ajuste con la intención de que el resultado saliera.
 
 ### 19.4 Criterios del soak, preregistrados antes de correr
 
@@ -1223,4 +1227,19 @@ Criterios, **por corrida**, con los valores y reglas ya usados en §18 y §9.7 (
 
 ### 19.5 Reproducir
 
-*Pendiente: las órdenes exactas quedan en la guía de operador de la PR, tras la implementación.*
+La calibración y los prototipos (sin pantalla, sin entrada; hace falta `--release`; las salidas quedan fuera del repositorio, ADR-0012):
+
+```powershell
+cargo run --release -p ommatix-acceptance --example icon_calibration -- --out-dir "$env:LOCALAPPDATA\Ommatix\box7\calibration-2"
+```
+
+Escribe `icons.jsonl` (su SHA-256 es el que se fija en `[cache] prototypes_sha256`; la prueba `the_prototype_file_has_the_pinned_digest` lo fija en el repositorio), `calibration.json`, `cache-proposal.toml` **sólo si hay propuesta** (en los dos intentos no la hubo) y las secuencias `seq_100`, `seq_125` y `seq_150` de PNG sintéticos. Con `--diagnose` escribe `diagnosis.json` (exploratorio, sólo la semilla de desarrollo) y con `--strips-only` sólo los PNG. El intento 1 se reproduce en el commit `6e561f7` y el 2 en `1fa369e`. La compuerta del detector, también sin pantalla: `ommatix demo --source images --images <seq_100> --config <configuración del operador> --observations 2` con el binario compilado con los modelos.
+
+La aplicación de prueba con la franja (sólo para una sesión con el responsable presente; esta PR no corrió ninguna): `tools/s4/testapp` con `--animate 100 --animate-labels 2 --icon-strip`, que lanza `tools/perf/soak.py` con `--icon-strip`. El soak con sonda y criterio de caché, **que exige una propuesta de umbrales aprobada por el responsable**:
+
+```powershell
+python tools/perf/soak.py --config <copia con [cache] aprobado> --icon-strip --icon-probe-every 12 --expect-cache `
+    --minutes 120 --max-pending-regions 510 --foreground-wait 300 --out "$env:LOCALAPPDATA\Ommatix\runs\soak-icons-R1.json"
+```
+
+Sin `--expect-cache` ni `[cache]` es el control R3 (el mismo dibujo, sin caché).

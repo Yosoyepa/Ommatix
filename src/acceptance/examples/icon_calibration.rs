@@ -1264,6 +1264,18 @@ mod tests {
         }
     }
 
+    /// The bytes of the curated file are pinned: the operator pins their SHA-256, and an edit of
+    /// `tools/s4/icon_spec.rs` or of the rasteriser that changed them would silently invalidate
+    /// every pin. The value is the one of attempt 2 (S0 §19.3); change it only with the spec,
+    /// in a commit that says so.
+    #[test]
+    fn the_prototype_file_has_the_pinned_digest() {
+        assert_eq!(
+            sha256_hex(prototype_file().as_bytes()),
+            "d43a784c8376772f89d63c997cc99fa7df458cea5d78324c5727f2dec71d14a8"
+        );
+    }
+
     /// Every prototype is closest to its own class and to no other class at distance zero: two
     /// classes that a prototype cannot tell apart would be `Ambiguous` for every margin, so the
     /// strip would label neither. Checked at gradient thresholds across the searched range.
