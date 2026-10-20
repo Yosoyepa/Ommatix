@@ -162,10 +162,35 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
        data-usage page says the user chooses whether data is used to improve future models; with the
        setting on, retention is 5 years, with it off, 30 days; the setting is changed at
        claude.ai/settings/data-privacy-controls. Commercial and API terms differ (30 days, no training
-       by default) and are not the owner's account type as far as is known. **The owner does not yet know his plan or
-       the current setting and will check them; they are an open owner item (OI-1), recorded as unknown, and
-       must be recorded before the Claude gate smoke**: until the owner states them,
-       remote retention (30 days or 5 years) and training use are explicitly **unknown** for this recipient.
+       by default) and are not the owner's account type as far as is known. **OI-1, answered by the owner on
+       2026-10-20:** the account is a consumer subscription with "Help improve our AI models" **off**, as the
+       owner checked that day (claude.ai → Settings → Privacy). Nothing else is known about the account; the
+       policies do not use that label, and the setting is taken to be the model-improvement setting they
+       describe. The reading for that case (public pages, read on 2026-10-20 with a web-fetch tool that returns
+       quoted segments, not checked against a browser copy):
+       the Claude Code data-usage page (https://code.claude.com/docs/en/data-usage; no date shown) says training
+       on Free, Pro and Max accounts happens "when this setting is on", and gives a **30-day retention period**
+       for Claude Code data from users who do not allow data use for model improvement. Its stated exceptions are
+       transcripts sent with `/feedback`, `/bug` or `/share` (retained for 5 years), session-survey transcripts
+       shared after the survey (up to 6 months), and the Development Partner Program, which it says needs an
+       express opt-in and exists only for the first-party API. The Privacy Policy
+       (https://www.anthropic.com/legal/privacy; effective 10 September 2026 as read) and the Consumer Terms
+       (https://www.anthropic.com/legal/consumer-terms; effective 8 October 2025 as read) say Inputs and Outputs
+       may be used for training "unless you opt out" through account settings, and that even after an opt-out
+       they are used for model improvement when conversations are flagged for safety review or the user reports
+       the material to Anthropic, for example through the feedback mechanisms. The Privacy Policy gives no day
+       count for conversation data except the 30 days for back-end deletion of individually deleted conversations;
+       the Consumer Terms give none. Neither states a period for flagged or feedback material. The Privacy Center (https://privacy.claude.com/,
+       reached by redirect from privacy.anthropic.com) says nothing on training or retention for this case. The
+       data-usage page also describes an optional upload of a session transcript after the session-quality
+       survey, kept up to 6 months; this design does not yet address that path. **Recorded as:** general training
+       on this account's data is tied to the setting, which is off (the policies state the case where it is on and
+       state no absolute ban for the case where it is off); the exceptions the policies state for use with the
+       setting off are safety-flagged material and material the user reports, including as feedback; retention:
+       30 days for Claude Code data (the data-usage page), with longer periods stated for `/feedback`, `/bug` and
+       `/share` transcripts (5 years) and for shared survey transcripts (up to 6 months); no period stated for
+       flagged or feedback material (**unknown**). This is the owner's report of 2026-10-20: the setting can be
+       changed at any time, and nothing here deletes a screenshot remotely.
      - *DeepSeek*, API key. Read on 2026-10-19 (public pages, no key, no model call). The **Open Platform
        Terms of Service**
        (https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html; released
@@ -227,7 +252,7 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
 
      These readings, with their URLs and the date read, are a **precondition of each provider's gate
      smoke**, and are repeated if a page's date changes before the smoke; the Claude gate smoke also needs
-     OI-1 recorded. Where a page is silent the entry stays *unknown*, inside the scope accepted under O1.
+     OI-1 recorded, which the owner did on 2026-10-20 (above). Where a page is silent the entry stays *unknown*, inside the scope accepted under O1.
 
      The inputs are the test applications' own windows (large Spanish labels, no personal data), which is
      the only reason the exception is acceptable whatever a recipient retains.
@@ -561,11 +586,13 @@ It does not supersede them.
 | O11 | Automatic update of the agent | Disabled for the campaign, through the agent's controlled environment only | Architect default |
 | O12 | Baseline prompt | No tuning | Architect default |
 
-Owner items opened by the review of PR 97 and their answers (2026-10-19):
+Owner items opened by the review of PR 97 and their answers (2026-10-19; OI-1 on 2026-10-20):
 
 - **OI-1** Tell us the Claude account's plan and its model-improvement setting
-  (claude.ai/settings/data-privacy-controls). **Open:** the owner does not know them yet and will check;
-  recorded as unknown, and it must be recorded before the Claude vision gate smoke.
+  (claude.ai/settings/data-privacy-controls). **Answered by the owner on 2026-10-20:** a consumer
+  subscription with "Help improve our AI models" off, as checked that day; nothing else is known about the
+  account. The reading of the policies for that case is in decision 5. This records OI-1, which the Claude vision
+  gate smoke needed; no other decision changes.
 - **OI-2** Read the public DeepSeek Open Platform terms and privacy policy and the Xiaomi MiMo Token Plan
   and API platform terms. **Answered yes and done** on 2026-10-19 (public pages only, no key, no model
   call): what they say, with URL and date, is in decision 5, with *unknown* kept where they are silent (the Xiaomi account was corrected after the third review, R6: the mainland and overseas policies have different scopes and do not contradict each other).
@@ -632,9 +659,7 @@ lanzado, sin elevación, punto dentro de la ventana, sin modificadores). **Priva
 almacenamiento local (en memoria, nada en disco) se separa de la retención y el entrenamiento del
 proveedor, que esta máquina no controla y nada borra a distancia, y que forman parte del alcance de uso de
 datos que el responsable aceptó en O1. Anthropic (Claude Code con suscripción, planes de consumo): con la
-mejora de modelos activada, retención de 5 años; sin ella, 30 días; el responsable aún no conoce su plan ni
-su ajuste y los comprobará (tarea OI-1, abierta): queda como desconocido y debe registrarse antes de la
-prueba real de la puerta de Claude. DeepSeek (leído el 19 de octubre de 2026): los términos de la
+mejora de modelos activada, retención de 5 años; sin ella, 30 días; **OI-1, respondida por el responsable el 20 de octubre de 2026**: cuenta de suscripción de consumo con el ajuste de mejora de modelos desactivado («Help improve our AI models», comprobado ese día); nada más se conoce de la cuenta. Lectura de ese caso (páginas públicas leídas el 20 de octubre de 2026; URL y fecha en la decisión 5): la página de uso de datos de Claude Code da 30 días de retención para quien no permite usar sus datos para mejorar modelos y dice que el entrenamiento con cuentas Free, Pro y Max se hace «cuando este ajuste está activado»; sus excepciones son las transcripciones enviadas con `/feedback`, `/bug` o `/share` (5 años) y las transcripciones de encuesta compartidas (hasta 6 meses), y describe además una subida opcional de la transcripción tras la encuesta de sesión, que el diseño todavía no contempla. La política de privacidad y los términos de consumo sujetan el entrenamiento a la exclusión en los ajustes de la cuenta, con dos excepciones que se usan aunque se haya excluido: el material marcado para revisión de seguridad y el que el usuario comunica a Anthropic, también con sus mecanismos de comentarios; la política de privacidad sólo da los 30 días de borrado de las conversaciones borradas una a una, y los términos de consumo no dan ningún plazo para los datos de conversación; ninguno de los dos fija plazo para el material marcado ni para la retroalimentación (desconocido). Con esto se cumple la precondición de la prueba real de la puerta de Claude; el ajuste puede cambiarse en cualquier momento, y este registro describe el estado del 20 de octubre de 2026. DeepSeek (leído el 19 de octubre de 2026): los términos de la
 plataforma abierta (vigentes desde el 29 de abril de 2026) dejan al cliente sus derechos sobre las entradas y
 permiten entrenar otros modelos con ellas, pero callan si DeepSeek entrena con las entradas de la API y no dan plazo de retención ni de borrado para las entradas de la API (la sección 3.3 sólo obliga al desarrollador a atender las solicitudes de los usuarios finales, como la de borrado, y remite a un contacto de DeepSeek) ni lugar de tratamiento; su política de privacidad (10 de febrero de 2026) permite
 entrenar con datos personales, incluidas entradas, con exclusión por correo, y almacena en China sin tratar
@@ -686,7 +711,7 @@ la exclusión de un modelo no son fallos que reintentar. Los intentos brutos y l
 informan por separado; las casillas no intentadas tras una parada de la campaña no son fallos ni entran en
 n, y la serie incompleta sale de los contrastes de puntuación de serie.
 
-**Tareas del responsable (PR 97).** OI-1, abierta: decir el plan de la cuenta de Claude y su ajuste de mejora
-de modelos (el responsable lo comprobará; debe registrarse antes de la prueba real de la puerta de Claude).
+**Tareas del responsable (PR 97).** OI-1, respondida el 20 de octubre de 2026: cuenta de suscripción de consumo con el ajuste de mejora de modelos
+desactivado (lectura en la decisión 5 y en el párrafo R3 de este resumen; la precondición de la prueba de Claude queda cumplida).
 OI-2, respondida sí y hecha el 19 de octubre de 2026: los términos y políticas públicos de DeepSeek y de
 Xiaomi están leídos y registrados arriba. OI-3, respondida: el responsable cambió O7 a n = 6.
