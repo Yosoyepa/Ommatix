@@ -75,3 +75,12 @@ Also from the review: the preflight records the missing `--no-session-persistenc
 pre-launch guard there; the runner's check is). On `DeferredToolPlaceholder` the review agrees that the "exactly three tools" verdict
 stays unchanged, with no exception by name.
 
+## Re-review of PR 106 at `ef38309`: one P2 left (R106-2, optional roots), resolved
+
+`snapshot` decided that an optional root (the CLI cache before its first run) was absent with `os.path.exists`, which also
+answers "absent" when permission prevents the lookup; a denied cache root therefore produced a passing proof with
+`scan_complete: true`. Now the root is looked up with `os.stat`: only `FileNotFoundError` / `NotADirectoryError` is absence (complete
+and empty when optional); any other failure to look it up makes the snapshot incomplete (`disk_cache_incomplete`, proof refused,
+`scan_complete: false`). Regressions first (`step5fix_red\disk3\`: 2 failures): `SnapshotCompletenessTests`
+(`test_an_optional_root_that_exists_but_cannot_be_looked_up_is_incomplete_not_absent`, `test_only_a_not_found_root_is_absent`) and
+`DeniedOptionalRootTests` (a full preflight with the cache root lookup denied refuses; a really missing cache root still passes).

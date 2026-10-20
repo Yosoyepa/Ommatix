@@ -54,10 +54,16 @@ class Snapshot(dict):
 
 def snapshot(root: Path, *, optional: bool = False) -> Snapshot:
     """The snapshot of ``root``. A root that does not exist is a complete empty snapshot only when ``optional`` (the CLI's
-    cache may not exist before the first run); otherwise, like any enumeration or metadata error, it is incomplete."""
+    cache may not exist before the first run) and ONLY when it is genuinely not found; any other failure to look the root up
+    (a denied lookup of an existing path included), like any enumeration or metadata error, makes it incomplete."""
     found = Snapshot()
-    if not os.path.exists(root):
+    try:
+        os.stat(root)
+    except (FileNotFoundError, NotADirectoryError):  # genuinely not there: the only absence
         found.incomplete = not optional
+        return found
+    except OSError:  # present or not, it cannot be looked up (``os.path.exists`` would say "absent"): never complete
+        found.incomplete = True
         return found
 
     def listing_failed(_error):

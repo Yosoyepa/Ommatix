@@ -350,6 +350,45 @@ class IncompleteScanTests(PreflightHarness):
         self.assertNotIn(str(self.production), json.dumps(proof["problems"]), "no path in the verdict")
 
 
+def deny_stat_of(path):
+    """``os.stat`` raises PermissionError for exactly ``path`` (an existing root that cannot be looked up)."""
+    real = os.stat
+    target = os.path.normcase(str(path))
+
+    def stat(candidate, *args, **kwargs):
+        if os.path.normcase(str(candidate)) == target:
+            raise PermissionError("synthetic denied lookup")
+        return real(candidate, *args, **kwargs)
+    return mock.patch.object(os, "stat", stat)
+
+
+class DeniedOptionalRootTests(PreflightHarness):
+    """Re-review of PR 106 (R106-2, optional roots): a denied lookup of the CLI cache root is incomplete, not 'absent'."""
+
+    def test_a_preflight_cannot_pass_when_the_cache_root_lookup_is_denied(self):
+        real = os.stat
+        harness = self
+
+        def stat(candidate, *args, **kwargs):
+            cache = getattr(harness, "cache", None)  # created by the harness once the preflight starts
+            if cache is not None and os.path.normcase(str(candidate)) == os.path.normcase(str(cache)):
+                raise PermissionError("synthetic denied cache root lookup")
+            return real(candidate, *args, **kwargs)
+        with mock.patch.object(os, "stat", stat):
+            proof = self.preflight()
+        self.assertFalse(proof["passed"], "a denied cache root lookup passed the preflight")
+        self.assertFalse(proof["disk"]["scan_complete"])
+        for name in ("canary", "control", "production_dir"):
+            self.assertIn(f"{name}_disk_cache_incomplete", proof["problems"])
+
+    def test_a_cache_root_that_really_does_not_exist_still_passes(self):
+        import pixel_disk
+        proof = self.preflight()
+        self.assertTrue(proof["passed"], proof["problems"])
+        absent = Path(tempfile.gettempdir()) / "ag03-no-such-cache-root"
+        self.assertFalse(pixel_disk.snapshot(absent, optional=True).incomplete)
+
+
 class SnapshotCompletenessTests(unittest.TestCase):
     def setUp(self):
         import pixel_disk
@@ -397,6 +436,18 @@ class SnapshotCompletenessTests(unittest.TestCase):
         bad = self.disk.Snapshot(incomplete=True)
         self.assertIn("disk_config_incomplete", self.disk.config_problems(self.root, bad, good)[0])
         self.assertIn("disk_temp_incomplete", self.disk.temp_problems(self.root, good, bad)[0])
+
+    def test_an_optional_root_that_exists_but_cannot_be_looked_up_is_incomplete_not_absent(self):
+        with deny_stat_of(self.root):
+            snap = self.disk.snapshot(self.root, optional=True)
+        self.assertTrue(snap.incomplete, "a denied lookup of an existing optional root was taken as 'absent'")
+        self.assertEqual(self.disk.cache_problems(self.root, snap, snap)[0], ["disk_cache_incomplete"])
+
+    def test_only_a_not_found_root_is_absent(self):
+        absent = self.root / "absent"
+        self.assertFalse(self.disk.snapshot(absent, optional=True).incomplete)
+        file_as_root = self.root / "sub" / "x.png"  # a path under a FILE: NotADirectoryError, also "not there"
+        self.assertFalse(self.disk.snapshot(file_as_root / "below", optional=True).incomplete)
 
     def test_an_absent_optional_root_is_complete_and_an_absent_required_one_is_not(self):
         self.assertFalse(self.disk.snapshot(self.root / "absent", optional=True).incomplete)
