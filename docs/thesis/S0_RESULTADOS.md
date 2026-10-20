@@ -1147,7 +1147,7 @@ La auditoría completa está en [la revisión de estado retenido](../reviews/202
 
 **Reproducir.** Desde la raíz del repositorio en `1c46b87` o posterior, con los dos ejecutables compilados desde ese commit (`S4_INSTALACION_Y_REVERSION.md` §3), una copia de la configuración del operador con `accessibility = "uia"` bajo `[models]` y la aplicación de prueba al frente de la pantalla (la herramienta no la trae al frente): `python tools/perf/soak.py --config <copia> --minutes 120 --max-pending-regions 510 --foreground-wait 300 --out "$env:LOCALAPPDATA\Ommatix\runs\soak-120.json"` (PowerShell). El informe bruto se guarda fuera del repositorio (ADR-0012).
 
-## 19. Casilla 7, ruta A: caché de íconos activa en el soak (1.0.108)
+## 19. Casilla 7, ruta A: caché de íconos activa en el soak (1.0.110)
 
 **Estado.** Preparación sin conexión, sin resultados de soak. Este apartado fija **antes de calcular y antes de correr** el protocolo de calibración (19.2) y la configuración de medición y los criterios del soak (19.4); los resultados se añaden después, en 19.3 y en un apartado de resultados del soak, sin tocar lo congelado. **La calibración no produjo umbrales (dos intentos, 19.3); el soak se prepara, por decisión del responsable, con una configuración de medición que no acepta nada (opción C), que no es una calibración ni muestra que la caché sea útil.** No marca ninguna casilla ni cambia ningún estado de requisito.
 

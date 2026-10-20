@@ -58,7 +58,8 @@ def per_image_ok(answer: str | None, count: int = SMOKE_IMAGES) -> list[bool]:
 def preconditions_missing(provider: str, preconditions: dict) -> list[str]:
     """Closed tokens for what must be recorded before this provider's smoke may run: the reading of the
     recipient's published data-use pages (OI-2, with URL and date, repeated if a page's date changes)
-    and, for Anthropic, the account's plan and model-improvement setting (OI-1)."""
+    and, for Anthropic, the account's plan and model-improvement setting (OI-1: answered by the owner on
+    2026-10-20, a consumer subscription with the setting off, so the Claude precondition is met)."""
     if provider not in PROVIDERS:
         return ["unknown_provider"]
     missing = []
