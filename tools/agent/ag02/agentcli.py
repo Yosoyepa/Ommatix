@@ -21,6 +21,7 @@ agent.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -179,9 +180,10 @@ class AgentCLI:
     # Whether this agent is the pinned Claude Code (``clipin``): its launches check the binary, the proof and the environment.
     checks_pinned_cli = False
 
-    def launch_problems(self, proof: dict) -> list[str]:
-        """What stops a launch of this agent with this proof (closed tokens); none for agents that are not Claude Code."""
-        return []
+    def launch_guard(self, proof: dict | None = None):
+        """A context manager around ONE launch: yields a ``clipin.Verified`` (``problems`` stop the launch; ``kwargs()`` is
+        what the command builder takes). Nothing to verify for agents that are not Claude Code."""
+        return contextlib.nullcontext(clipin.Verified())
 
     def __init__(self, args=None):
         self.args = args
@@ -254,16 +256,17 @@ class ClaudeCLI(AgentCLI):
             return None
         return route_key_problem(self.route, self.route_url(), self.read_key())
 
-    def build_argv(self, *, model, mcp_config, system_instruction, max_budget_usd):
-        return rg.build_claude_argv(claude=self.args.claude, model=model, mcp_config=mcp_config,
-                                    system_instruction=system_instruction,
+    def build_argv(self, *, model, mcp_config, system_instruction, max_budget_usd, claude=None):
+        return rg.build_claude_argv(claude=self.args.claude if claude is None else claude, model=model,
+                                    mcp_config=mcp_config, system_instruction=system_instruction,
                                     max_budget_usd=None if self.route else max_budget_usd)
 
     checks_pinned_cli = True
 
-    def launch_problems(self, proof):
-        """The CLI is not the pin, not the binary the proof was made with, or the proof is older than 24 hours."""
-        return clipin.launch_problems(getattr(self.args, "claude", "claude"), proof)
+    def launch_guard(self, proof=None):
+        """ONE launch of the pinned Claude Code (``clipin.verified``): the CLI is the pin, the proof (if any) names its bytes and is at
+        most 24 hours old, and the executable to launch is a verified private copy that lives while the block does."""
+        return clipin.verified(getattr(self.args, "claude", "claude"), proof)
 
     def env(self, extra=None):
         if not self.route:

@@ -2097,25 +2097,29 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
         config_dir = getattr(args, "claude_config_dir", None) if cli.uses_claude_config_dir else None
         if proof is not None:
             changed = cli.proof_problems(proof, args, config_dir, goals["system_instruction"]) + [
-                f"{t}" for t in ancestor_context(scratch, config_dir)] + cli.launch_problems(proof)
+                f"{t}" for t in ancestor_context(scratch, config_dir)]
             if changed:
                 result["aborted"] = "isolation proof does not cover this run: " + ",".join(changed)
                 return result
         metrics = StreamMetrics(goals["vocabulary"][goal["app"]], goal["choice"]["type_text"], proof,
                                 config_dir=config_dir)
-        sampler = deps.make_sampler(app.state)
-        sampler.start()
-        spent_before = proxy_module.read_ledger(ledger)["total"] if ledger else 0
-        env = cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None)
-        if cli.checks_pinned_cli and (lost := env_problems(env)):  # the environment the proof was made with
-            result["aborted"] = "the agent environment lost an invariant of the isolation proof: " + ",".join(lost)
-            return result
-        ran = deps.run_claude(
-            cli.build_argv(model=args.model, mcp_config=mcp_path,
-                           system_instruction=goals["system_instruction"],
-                           max_budget_usd=args.max_budget_usd),
-            build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
-            env=env, **token_cap_kwargs(args))
+        with cli.launch_guard(proof) as verified:  # the bytes that were verified are the bytes that run (R107-2)
+            if verified.problems:
+                result["aborted"] = "isolation proof does not cover this run: " + ",".join(verified.problems)
+                return result
+            sampler = deps.make_sampler(app.state)
+            sampler.start()
+            spent_before = proxy_module.read_ledger(ledger)["total"] if ledger else 0
+            env = cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None)
+            if cli.checks_pinned_cli and (lost := env_problems(env)):  # the environment the proof was made with
+                result["aborted"] = "the agent environment lost an invariant of the isolation proof: " + ",".join(lost)
+                return result
+            ran = deps.run_claude(
+                cli.build_argv(model=args.model, mcp_config=mcp_path,
+                               system_instruction=goals["system_instruction"],
+                               max_budget_usd=args.max_budget_usd, **verified.kwargs()),
+                build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
+                env=env, **token_cap_kwargs(args))
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)
@@ -2161,16 +2165,17 @@ def run_smoke(args, out: Path, goals: dict, deps=RealDeps, proof: dict | None = 
         sys.executable, proxy_args(args, 1, None, log, None),
         engine_argv(args, 1, args.config))), encoding="utf-8")
     agent = agent_cli(args)
-    if proof is not None and (lost := agent.launch_problems(proof)):
-        raise SystemExit("the smoke session is not launched: " + ",".join(lost))
     metrics = StreamMetrics([], None, proof, config_dir=getattr(args, "claude_config_dir", None) if proof else None)
-    cli = deps.run_claude(
-        agent.build_argv(model=args.model, mcp_config=mcp_path,
-                         system_instruction=goals["system_instruction"],
-                         max_budget_usd=args.max_budget_usd),
-        # The child's stderr is discarded here as it is for every goal: a provider error or a CLI diagnostic
-        # may echo the credential, a response or a label, and nothing filters it (the re-review of PR 93, N1).
-        SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env(), **token_cap_kwargs(args))
+    with agent.launch_guard(proof) as verified:  # the pin is needed whether or not the smoke has a proof (R107-3)
+        if verified.problems:
+            raise SystemExit("the smoke session is not launched: " + ",".join(verified.problems))
+        cli = deps.run_claude(
+            agent.build_argv(model=args.model, mcp_config=mcp_path,
+                             system_instruction=goals["system_instruction"],
+                             max_budget_usd=args.max_budget_usd, **verified.kwargs()),
+            # The child's stderr is discarded here as it is for every goal: a provider error or a CLI diagnostic
+            # may echo the credential, a response or a label, and nothing filters it (the re-review of PR 93, N1).
+            SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env(), **token_cap_kwargs(args))
     return {"smoke": True, "cli": cli, "provenance": metrics.provenance(args.model) | agent.provenance(),
             "metrics": metrics.summary(), "proxy": proxy_summary(log)}
 

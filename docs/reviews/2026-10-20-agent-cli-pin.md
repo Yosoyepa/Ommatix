@@ -52,3 +52,18 @@ for the pin where a fake CLI stands in for the 290 MB binary.
 * The read-only mark is a file attribute. Without the attribute (or an ACL) the folder could be written by the same user; the hash check
   before every launch is what detects a replacement.
 * AG-02's recorded results (9.11.1–9.11.4) were obtained before the switch and the pin and are not changed.
+
+## Review of PR 107 at `2bfbd9c` (independent, 2026-10-20): two P1 and one P2, resolved
+
+Regressions first (`step5fix_red\pin2\`: 17 tests, 7 failures and 8 errors against `2bfbd9c`), in `ag02/test_clipin_guard.py`.
+
+| # | Finding | Resolution | Regression tests |
+|---|---|---|---|
+| R107-1 (P1) | A rejected executable (another hash, or inside the repository) still reached `--version`, so it was executed | `clipin.verified` returns at the first failed scope or hash check: nothing is executed until the path is absolute, the file exists outside the repository and its SHA-256 is the pin's, and the version is then asked of the verified copy | `NothingRunsBeforeTheChecksPassTests` |
+| R107-2 (P1) | The verified bytes were not bound to the launched executable (a check, then a launch through the mutable path; one check for three preflight sessions) | The harness verifies and launches a **private copy**: `verified()` copies the pinned binary into a directory it creates, makes it read-only, holds it against writes on Windows (sharing mode: others cannot write, rename or delete it; it still runs, measured), hashes the COPY, asks the version of the COPY and yields the copy's path, which the caller launches inside the same `with`; the copy is removed afterwards. Replacing the configured file at any moment changes nothing that runs. Every launch is verified on its own: each preflight session (AG-02, AG-03), each probe session, each goal/attempt (`launch_guard` around the build of the command and the launch) and the smoke; the proof's hash must equal that of the verified binary | `VerifiedBytesAreTheBytesThatRunTests` (replacement during the version query, after the guard, a copy that differs, nothing left behind, proof hash and age, the Windows hold), `EachLaunchIsVerifiedOnItsOwnTests` (three guarded sessions of the AG-02 preflight; a refusing guard launches nothing; a goal whose configured file is replaced between the check and the child still launches the verified bytes) |
+| R107-3 (P2) | The native AG-02 smoke had no proof and so skipped the pin | `run_smoke` always opens the launch guard, with or without a proof | `SmokeNeedsThePinTests` (default `claude` refused, another hash refused, the pinned absolute path launches the verified copy) |
+
+Cost: one copy (0.1 s) and two hashes of ~290 MB per launch; 293 MB of temporary disk while a launch lives. The residual is a process
+of the same user that replaces the copy BEFORE the Windows hold is taken (the directory name is random and the window is the copy
+itself); on other platforms the copy is read-only in a 0700 directory. Real check (pinned CLI, loopback stand-in): the AG-03 and AG-02
+preflights still pass native and `--route deepseek` and leave no copy in TEMP.

@@ -107,6 +107,14 @@ class AgeAndLaunchTests(unittest.TestCase):
     def setUp(self):
         import clipin
         self.clipin = clipin
+        scratch = tempfile.TemporaryDirectory(prefix="ag-pin-age-")
+        self.addCleanup(scratch.cleanup)
+        self.exe = Path(scratch.name) / "claude.exe"
+        self.exe.write_bytes(b"MZ fake")
+
+    def launch(self, proof, *, sha=PIN_SHA, **kwargs):
+        return self.clipin.launch_problems(str(self.exe), proof, hasher=lambda path: sha,
+                                           version_runner=lambda exe: "2.1.304 (Claude Code)", **kwargs)
 
     def test_a_proof_is_valid_for_at_most_twenty_four_hours(self):
         self.assertEqual(self.clipin.PROOF_MAX_AGE_S, 24 * 3600)
@@ -119,13 +127,10 @@ class AgeAndLaunchTests(unittest.TestCase):
 
     def test_the_launch_check_joins_the_cli_the_hash_of_the_proof_and_the_age(self):
         proof = {"cli_sha256": PIN_SHA, "date_utc": fresh_date()}
-        with mock.patch.object(self.clipin, "check", return_value=([], PIN_SHA)):
-            self.assertEqual(self.clipin.launch_problems("x", proof), [])
-            self.assertEqual(self.clipin.launch_problems("x", proof | {"cli_sha256": "1" * 64}), ["cli_differs_from_proof"])
-            self.assertEqual(self.clipin.launch_problems("x", proof | {"date_utc": fresh_date(-90000)}), ["proof_expired"])
-        with mock.patch.object(self.clipin, "check", return_value=(["claude_hash_differs"], "2" * 64)):
-            self.assertEqual(self.clipin.launch_problems("x", proof),
-                             ["claude_hash_differs", "cli_differs_from_proof"])
+        self.assertEqual(self.launch(proof), [])
+        self.assertEqual(self.launch(proof | {"cli_sha256": "1" * 64}), ["cli_differs_from_proof"])
+        self.assertEqual(self.launch(proof | {"date_utc": fresh_date(-90000)}), ["proof_expired"])
+        self.assertEqual(self.launch(proof, sha="2" * 64), ["claude_hash_differs"])
 
 
 class AgentEnvironmentTests(unittest.TestCase):

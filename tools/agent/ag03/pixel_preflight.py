@@ -81,8 +81,18 @@ def script(request: dict, n: int) -> dict:
     return steps[n] if n < len(steps) else {"text": "VERDICT: DONE"}
 
 
-def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path, scratch_name: str,
-                memory_dir: Path | None) -> dict:
+def one_session(args, config_dir: Path, cwd: Path, **kwargs) -> dict:
+    """One session, launched from its OWN verified copy of the pinned CLI (the bytes that were verified are the bytes that
+    run; nothing is launched when the CLI is not the pin). See ``_one_session``."""
+    with clipin.verified(args.claude) as verified:
+        if verified.problems:
+            raise PixelRefused(verified.problems)
+        session = _one_session(args, config_dir, cwd, claude=verified.path, **kwargs)
+    return session | {"cli_sha256": verified.sha}
+
+
+def _one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path, scratch_name: str,
+                 memory_dir: Path | None, claude) -> dict:
     """One session. Production flags, or (control) the settings sources on and the CLAUDE.md switch off."""
     session_tmp = log.with_name(scratch_name + "-cli-tmp")  # the child's own TEMP/TMP/TMPDIR/CLAUDE_CODE_TMPDIR
     session_tmp.mkdir(parents=True, exist_ok=True)
@@ -90,7 +100,7 @@ def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path, 
     mcp_path = log.with_name(scratch_name + ".mcp.json")
     mcp_path.write_text(json.dumps(mcp), encoding="utf-8")
     route = getattr(args, "route", None)
-    argv = pa.build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
+    argv = pa.build_claude_argv(claude=claude, model=args.model, mcp_config=mcp_path,
                                 system_instruction=pa.SYSTEM_INSTRUCTION, max_budget_usd=None if route else 0.5,
                                 effort=None if route else "max")
     with fake_messages.ScriptedMessages(script) as api:
@@ -255,10 +265,6 @@ def run(args) -> dict:
     when the environment cannot honestly be called local."""
     if (reasons := ag02.refusals()):
         raise PixelRefused(reasons)
-    # The CLI the proof is made with must be the pinned one (``clipin``): nothing is launched otherwise.
-    cli_problems, cli_sha256 = clipin.check(args.claude)
-    if cli_problems:
-        raise PixelRefused(cli_problems)
     production_dir = Path(args.claude_config_dir)
     problems: list[str] = []
     with tempfile.TemporaryDirectory(prefix="ag03-canary-") as tmp:
@@ -335,6 +341,9 @@ def run(args) -> dict:
         problems.append("disk_cache_root_differs_between_sessions")
     disk_facts["cache_root_sha256"] = sorted(cache_roots)[0]
     disk_facts["temp_isolated"] = not any("child_temp_not_isolated" in s["disk_problems"] for s in (a, control, b))
+    cli_sha256 = a["cli_sha256"]  # every session was verified on its own; they must agree
+    if len({a["cli_sha256"], control["cli_sha256"], b["cli_sha256"]}) != 1:
+        problems.append("cli_differs_between_sessions")
     att_a, att_b = a["attestation"] or {}, b["attestation"] or {}
     for name, run_ in (("canary_session", a), ("production_dir_session", b)):
         if run_["cli"]["exit_code"] != 0 or run_["cli"]["killed"]:

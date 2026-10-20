@@ -188,7 +188,7 @@ decision O1; **nothing here deletes a screenshot remotely**. Outputs belong outs
   (Claude Code 2.1.304 win32-x64, SHA-256 `019e5174d5d954585edb1a946fe280e44a973050b4897034adf0e16306f85fdd`, identical to the
   `claude.exe` of `@anthropic-ai/claude-code-win32-x64@2.1.304`) in a private directory outside the repository
   (`%LOCALAPPDATA%\Ommatix\agent-cli\2.1.304\claude.exe`, read-only): `--claude` must be that absolute path (`claude` from PATH is
-  refused), the preflight and every launch check path, SHA-256 and `--version` (`ag02/clipin.py`), the agent environment sets
+  refused), each preflight session and every launch (goals, smoke, probe) verifies a private read-only copy of the binary - path and hash first, nothing executed before they pass, then the hash and `--version` of the copy - and launches that copy, so replacing the configured file cannot change what runs (`ag02/clipin.py`), the agent environment sets
   `ENABLE_TOOL_SEARCH=false` (AG-02 and AG-03), the proof records `cli_sha256` and `agent_env` and is valid for at most 24 hours
   (verifier revision 3; routes 2). Install: extract `claude.exe` from the npm package (`npm pack` into a temporary directory), check the
   hash, make the folder read-only; never touch the owner's own Claude Code, PATH or `~/.local`.

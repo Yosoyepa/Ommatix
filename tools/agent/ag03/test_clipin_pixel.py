@@ -7,6 +7,7 @@ with ``cli_sha256`` and its date, and the runner launches nothing with another C
 proof. Fakes only."""
 
 import argparse
+import contextlib
 import calendar
 import json
 import sys
@@ -109,9 +110,13 @@ class PixelLaunchTests(unittest.TestCase):
     def test_nothing_is_launched_with_an_expired_proof(self):
         from test_campaign import Series
         series = Series(self, patch_pin=False)
-        real = clipin.age_problems
         two_days_later = calendar.timegm(time.strptime("2026-10-22T10:00:00Z", "%Y-%m-%dT%H:%M:%SZ"))
-        with pinned(), mock.patch.object(clipin, "age_problems", lambda date, now=None: real(date, two_days_later)):
+
+        @contextlib.contextmanager
+        def aging(claude, proof=None, **kwargs):  # the guard of a pinned CLI, with the clock two days after the stand-in proof
+            problems = clipin.age_problems(proof.get("date_utc"), two_days_later) if proof else []
+            yield clipin.Verified(problems, PIN_SHA, None if problems else claude)
+        with mock.patch.object(clipin, "verified", aging):
             series.run()  # the stand-in proof is dated 2026-10-20T10:00:00Z: more than 24 h before "now"
         self.assertEqual(series.calls, [])
 

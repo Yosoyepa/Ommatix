@@ -78,8 +78,8 @@ class PixelCLI(agentcli.ClaudeCLI):
     # AG-03's own environment switch (the feedback survey off), on a route as on the native path; AG-02's is unchanged.
     agent_vars = pa.PIXEL_ENV
 
-    def build_argv(self, *, model, mcp_config, system_instruction, max_budget_usd):
-        return pa.build_claude_argv(claude=self.args.claude, model=model, mcp_config=mcp_config,
+    def build_argv(self, *, model, mcp_config, system_instruction, max_budget_usd, claude=None):
+        return pa.build_claude_argv(claude=self.args.claude if claude is None else claude, model=model, mcp_config=mcp_config,
                                     system_instruction=system_instruction,
                                     max_budget_usd=None if self.route else max_budget_usd,
                                     effort=None if self.route else EFFORT)
@@ -456,28 +456,28 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                 f"{t}" for t in rg.ancestor_context(scratch, config_dir)]
             if changed:
                 return aborted(result, "isolation proof does not cover this run: " + ",".join(changed))
-        argv = cli.build_argv(model=args.model, mcp_config=mcp_path, system_instruction=pa.SYSTEM_INSTRUCTION,
-                              max_budget_usd=args.max_budget_usd)
-        attempt_tmp = out / "cli-tmp"  # the child's own TEMP/TMP/TMPDIR/CLAUDE_CODE_TMPDIR, inside the attempt
-        attempt_tmp.mkdir(exist_ok=True)
-        env = cli.env({**({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else {}), **disk.child_temp_env(attempt_tmp)})
-        lost = pa.command_problems(argv) + pa.env_problems(env) + pa.temp_env_problems(env)  # invariants of the proof
-        if proof is not None:  # the CLI is the pin and the binary of the proof, and the proof is at most 24 h old
-            lost += cli.launch_problems(proof)
-        if proof is not None and disk.cache_root_fingerprint(env) != (proof.get("disk") or {}).get("cache_root_sha256"):
-            lost.append("cache_root_differs_from_proof")
-        if lost:
-            return aborted(result, "the production command or environment lost an invariant of the isolation proof: "
-                           + ",".join(sorted(set(lost))))
-        metrics = pa.PixelStream(args.vocabulary[goal["app"]], goal["choice"]["type_text"], proof,
-                                 config_dir=config_dir, provider=cli.provider)
-        sampler = deps.make_sampler(app.state)
-        sampler.start()
-        spent_before = proxy_module.read_ledger(ledger)["total"] if ledger else 0
-        ran = deps.run_claude(
-            argv, pa.build_prompt(goal, phase), scratch, metrics, args.goal_timeout, env=env,
-            should_stop=session_stop_hook(log, stop_file), ownership=getattr(args, "ownership", None),
-            **rg.token_cap_kwargs(args))
+        with cli.launch_guard(proof) as verified:  # the bytes that were verified are the bytes that run (R107-2)
+            argv = cli.build_argv(model=args.model, mcp_config=mcp_path, system_instruction=pa.SYSTEM_INSTRUCTION,
+                                  max_budget_usd=args.max_budget_usd, **verified.kwargs())
+            attempt_tmp = out / "cli-tmp"  # the child's own TEMP/TMP/TMPDIR/CLAUDE_CODE_TMPDIR, inside the attempt
+            attempt_tmp.mkdir(exist_ok=True)
+            env = cli.env({**({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else {}), **disk.child_temp_env(attempt_tmp)})
+            lost = pa.command_problems(argv) + pa.env_problems(env) + pa.temp_env_problems(env)  # invariants of the proof
+            lost += verified.problems  # the CLI is the pin and the binary of the proof, and the proof is at most 24 h old
+            if proof is not None and disk.cache_root_fingerprint(env) != (proof.get("disk") or {}).get("cache_root_sha256"):
+                lost.append("cache_root_differs_from_proof")
+            if lost:
+                return aborted(result, "the production command or environment lost an invariant of the isolation proof: "
+                               + ",".join(sorted(set(lost))))
+            metrics = pa.PixelStream(args.vocabulary[goal["app"]], goal["choice"]["type_text"], proof,
+                                     config_dir=config_dir, provider=cli.provider)
+            sampler = deps.make_sampler(app.state)
+            sampler.start()
+            spent_before = proxy_module.read_ledger(ledger)["total"] if ledger else 0
+            ran = deps.run_claude(
+                argv, pa.build_prompt(goal, phase), scratch, metrics, args.goal_timeout, env=env,
+                should_stop=session_stop_hook(log, stop_file), ownership=getattr(args, "ownership", None),
+                **rg.token_cap_kwargs(args))
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)

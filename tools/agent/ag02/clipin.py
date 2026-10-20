@@ -11,18 +11,27 @@ repository, that the file's SHA-256 is the pin and that ``<exe> --version`` says
 ``PATH`` is refused. A proof records the hash it was made with and is valid for at most 24 hours (the CLI can change its
 behaviour without changing its version).
 
-Nothing here installs, updates, writes or deletes anything: it reads and hashes the file and runs ``--version`` with a minimal
+Nothing is executed before the scope and hash checks pass, and what is verified is what runs (review of PR 107): ``verified``
+makes a PRIVATE COPY of the pinned binary in a directory it creates, holds it against writes where the platform allows
+(Windows sharing mode), hashes THE COPY, asks the version of THE COPY and yields the copy's path, which the caller launches;
+replacing the configured file at any moment changes nothing that runs. Every launch is verified on its own, and the copy is
+removed afterwards. It installs, updates and deletes nothing of the operator's; ``--version`` runs with a minimal
 environment (the CLI's automatic update off).
 """
 
 from __future__ import annotations
 
 import calendar
+import contextlib
 import hashlib
 import os
 import re
+import shutil
+import stat
 import subprocess
+import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 CLAUDE_CODE_PIN = {"version": "2.1.304",
@@ -62,42 +71,114 @@ def executable_of(claude) -> str | None:
     return claude if isinstance(claude, str) and claude else None
 
 
-def check(claude, *, repo_root=None, hasher=sha256_file, version_runner=run_version) -> tuple[list[str], str | None]:
-    """``(problems, sha256)`` for a ``--claude`` value: a single executable named by an absolute path that exists, outside the
-    repository, whose SHA-256 is the pin's and whose ``--version`` is the pinned version. ``sha256`` is the file's hash
-    when it was computed. Closed tokens; nothing about the file leaves in them."""
+@dataclass
+class Verified:
+    """What ``verified`` yields: ``problems`` (closed tokens; empty means the launch may go on), the SHA-256 of the binary and
+    ``path``, the executable to launch (the verified private copy; None when there are problems)."""
+    problems: list = field(default_factory=list)
+    sha: str | None = None
+    path: object = None
+
+    def kwargs(self) -> dict:
+        """The ``claude=`` argument for the command builders: the verified copy, or nothing for an agent that is not Claude Code."""
+        return {} if self.path is None else {"claude": self.path}
+
+
+def _hold_against_writes(path):
+    """On Windows, opens ``path`` with a sharing mode that denies others write, delete and rename (the file still runs and can
+    still be read); returns the function that releases it. Elsewhere nothing is held (the copy is in a 0700 directory and
+    read-only). Raises OSError when the hold cannot be taken on Windows."""
+    if os.name != "nt":
+        return lambda: None
+    import _winapi
+    handle = _winapi.CreateFile(str(path), 0x80000000, 0x1, 0, 3, 0, 0)  # GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING
+    return lambda: _winapi.CloseHandle(handle)
+
+
+@contextlib.contextmanager
+def verified(claude, proof: dict | None = None, *, repo_root=None, now: float | None = None, hasher=None,
+             version_runner=None, copier=None):
+    """Verifies ``claude`` and yields a ``Verified`` whose ``path`` is the private copy to launch; the copy lives while the
+    ``with`` block does. Order (nothing is executed until the copy has been hashed): a single executable named by an absolute
+    path that exists and is outside the repository; its SHA-256 is the pin's; the proof (if any) names that hash and is at most 24 h
+    old; a private copy is made, held against writes and hashed again; ``--version`` of the COPY is the pinned version."""
+    hasher = hasher or sha256_file
+    version_runner = version_runner or run_version
+    copier = copier or shutil.copyfile
     exe = executable_of(claude)
     if exe is None:
-        return ["claude_not_a_single_executable"], None
+        yield Verified(["claude_not_a_single_executable"])
+        return
     path = Path(exe)
     if not path.is_absolute():
-        return ["claude_not_an_absolute_path"], None
+        yield Verified(["claude_not_an_absolute_path"])
+        return
     if not path.is_file():
-        return ["claude_missing"], None
-    problems: list[str] = []
+        yield Verified(["claude_missing"])
+        return
     root = Path(REPO_ROOT if repo_root is None else repo_root).resolve()
     try:
         path.resolve().relative_to(root)
-        problems.append("claude_inside_repository")
+        inside = True
     except ValueError:
-        pass
+        inside = False
+    if inside:
+        yield Verified(["claude_inside_repository"])
+        return
     try:
         sha = hasher(path)
     except OSError:
-        return ["claude_unreadable"], None
+        yield Verified(["claude_unreadable"])
+        return
     if sha != CLAUDE_CODE_PIN["sha256"]:
-        problems.append("claude_hash_differs")
+        yield Verified(["claude_hash_differs"], sha)
+        return
+    if proof is not None:
+        problems = (["cli_differs_from_proof"] if sha != proof.get("cli_sha256") else []) + age_problems(
+            proof.get("date_utc"), now)
+        if problems:
+            yield Verified(problems, sha)
+            return
+    private = Path(tempfile.mkdtemp(prefix="ommatix-cli-"))
+    release = None
+    copy = private / path.name
     try:
-        output = version_runner(str(path))
-        first = output.split()[0] if isinstance(output, str) and output.split() else ""
-        version = first if re.fullmatch(r"\d+\.\d+\.\d+", first) else None
-    except (OSError, subprocess.SubprocessError):
-        version = None
-    if version is None:
-        problems.append("claude_version_unreadable")
-    elif version != CLAUDE_CODE_PIN["version"]:
-        problems.append("claude_version_differs")
-    return problems, sha
+        try:
+            copier(path, copy)
+            os.chmod(copy, stat.S_IREAD | stat.S_IEXEC)
+            release = _hold_against_writes(copy)
+            copy_sha = hasher(copy)
+        except OSError:
+            yield Verified(["claude_copy_failed"], sha)
+            return
+        if copy_sha != CLAUDE_CODE_PIN["sha256"]:
+            yield Verified(["claude_copy_differs"], sha)
+            return
+        try:
+            output = version_runner(str(copy))
+            first = output.split()[0] if isinstance(output, str) and output.split() else ""
+            version = first if re.fullmatch(r"\d+\.\d+\.\d+", first) else None
+        except (OSError, subprocess.SubprocessError):
+            version = None
+        if version is None:
+            yield Verified(["claude_version_unreadable"], sha)
+        elif version != CLAUDE_CODE_PIN["version"]:
+            yield Verified(["claude_version_differs"], sha)
+        else:
+            yield Verified([], sha, str(copy))
+    finally:
+        if release is not None:
+            with contextlib.suppress(OSError):
+                release()
+        with contextlib.suppress(OSError):
+            os.chmod(copy, stat.S_IWRITE | stat.S_IREAD)
+        shutil.rmtree(private, ignore_errors=True)
+
+
+def check(claude, **kwargs) -> tuple[list[str], str | None]:
+    """``(problems, sha256)`` for a ``--claude`` value (a verdict only: the private copy is made and removed again)."""
+    with verified(claude, **kwargs) as v:
+        return list(v.problems), v.sha
 
 
 def age_problems(date_utc, now: float | None = None) -> list[str]:
@@ -113,9 +194,6 @@ def age_problems(date_utc, now: float | None = None) -> list[str]:
 
 
 def launch_problems(claude, proof: dict, *, now: float | None = None, **kwargs) -> list[str]:
-    """What stops a launch: the CLI is not the pin, it is not the binary the proof was made with, or the proof is too old."""
-    problems, sha = check(claude, **kwargs)
-    problems = list(problems)  # never extend a list the checker handed back
-    if sha is not None and sha != proof.get("cli_sha256"):
-        problems.append("cli_differs_from_proof")
-    return problems + age_problems(proof.get("date_utc"), now)
+    """A verdict for a launch with this proof (see ``verified``); nothing stays running."""
+    with verified(claude, proof, now=now, **kwargs) as v:
+        return list(v.problems)
