@@ -1056,6 +1056,70 @@ fn proposal_toml(report: &Value) -> Option<String> {
     ))
 }
 
+// ---- a PNG writer (no dependency) ----
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFF_u32;
+    for &b in bytes {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+fn adler32(bytes: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for &x in bytes {
+        a = (a + u32::from(x)) % 65_521;
+        b = (b + a) % 65_521;
+    }
+    (b << 16) | a
+}
+
+fn chunk(out: &mut Vec<u8>, kind: [u8; 4], data: &[u8]) {
+    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    let start = out.len();
+    out.extend_from_slice(&kind);
+    out.extend_from_slice(data);
+    let crc = crc32(&out[start..]);
+    out.extend_from_slice(&crc.to_be_bytes());
+}
+
+/// An 8-bit greyscale PNG whose zlib stream is stored (not compressed): large, but valid and
+/// byte-for-byte reproducible, and it needs no image crate.
+fn png_gray(width: usize, height: usize, grey: &[u8]) -> Vec<u8> {
+    assert_eq!(grey.len(), width * height);
+    let mut raw = Vec::with_capacity(height * (width + 1));
+    for row in grey.chunks(width) {
+        raw.push(0); // filter: none
+        raw.extend_from_slice(row);
+    }
+    let mut zlib = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65_535).collect();
+    for (i, block) in blocks.iter().enumerate() {
+        zlib.push(u8::from(i + 1 == blocks.len()));
+        zlib.extend_from_slice(&(block.len() as u16).to_le_bytes());
+        zlib.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
+        zlib.extend_from_slice(block);
+    }
+    zlib.extend_from_slice(&adler32(&raw).to_be_bytes());
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut header = Vec::new();
+    header.extend_from_slice(&(width as u32).to_be_bytes());
+    header.extend_from_slice(&(height as u32).to_be_bytes());
+    header.extend_from_slice(&[8, 0, 0, 0, 0]); // 8 bits, greyscale, deflate, filter 0, no interlace
+    chunk(&mut out, *b"IHDR", &header);
+    chunk(&mut out, *b"IDAT", &zlib);
+    chunk(&mut out, *b"IEND", &[]);
+    out
+}
+
 // ---- the strip frames for the detector check ----
 
 const FRAME: (usize, usize) = (1920, 1080);
@@ -1089,7 +1153,7 @@ fn write_strips(out: &Path) -> Result<(), Box<dyn std::error::Error>> {
             STRIP_TOP as usize - 2,
             STRIP_TOP as usize + (CELL * scale).ceil() as usize + 2,
         );
-        let mut rgb = Vec::with_capacity(FRAME.0 * FRAME.1 * 3);
+        let mut grey = Vec::with_capacity(FRAME.0 * FRAME.1);
         for y in 0..FRAME.1 {
             for x in 0..FRAME.0 {
                 let v = if (x0..x1).contains(&x) && (y0..y1).contains(&y) {
@@ -1097,17 +1161,12 @@ fn write_strips(out: &Path) -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     WINDOW_GREY
                 };
-                rgb.extend_from_slice(&[v, v, v]);
+                grey.push(v);
             }
         }
+        let png = png_gray(FRAME.0, FRAME.1, &grey);
         for frame in ["000.png", "001.png"] {
-            image::save_buffer(
-                dir.join(frame),
-                &rgb,
-                FRAME.0 as u32,
-                FRAME.1 as u32,
-                image::ColorType::Rgb8,
-            )?;
+            std::fs::write(dir.join(frame), &png)?;
         }
     }
     Ok(())
@@ -1467,6 +1526,54 @@ mod tests {
         let without =
             json!({ "prototypes": { "sha256": "ab" }, "selection": { "proposal": null } });
         assert!(proposal_toml(&without).is_none());
+    }
+
+    /// The PNG writer's output is a valid PNG: signature, chunk CRCs, and a stored zlib stream
+    /// that holds exactly the filtered scanlines.
+    #[test]
+    fn the_png_writer_makes_a_valid_stored_png() {
+        let (w, h) = (300, 250); // more than one 65 535-byte block
+        let grey: Vec<u8> = (0..w * h).map(|i| (i * 7 % 251) as u8).collect();
+        let png = png_gray(w, h, &grey);
+        assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        let (mut at, mut idat, mut kinds) = (8, Vec::new(), Vec::new());
+        while at < png.len() {
+            let len = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
+            let kind: [u8; 4] = png[at + 4..at + 8].try_into().unwrap();
+            let data = &png[at + 8..at + 8 + len];
+            let crc = u32::from_be_bytes(png[at + 8 + len..at + 12 + len].try_into().unwrap());
+            assert_eq!(crc, crc32(&png[at + 4..at + 8 + len]), "CRC of {kind:?}");
+            if &kind == b"IDAT" {
+                idat.extend_from_slice(data);
+            }
+            kinds.push(kind);
+            at += 12 + len;
+        }
+        assert_eq!(kinds, [*b"IHDR", *b"IDAT", *b"IEND"]);
+        assert_eq!(&png[16..24], &[0, 0, 1, 44, 0, 0, 0, 250]);
+        // Walk the stored blocks and rebuild the scanlines.
+        assert_eq!(&idat[..2], &[0x78, 0x01]);
+        let (mut i, mut raw) = (2, Vec::new());
+        loop {
+            let last = idat[i] == 1;
+            let len = usize::from(u16::from_le_bytes([idat[i + 1], idat[i + 2]]));
+            let nlen = u16::from_le_bytes([idat[i + 3], idat[i + 4]]);
+            assert_eq!(nlen, !(len as u16));
+            raw.extend_from_slice(&idat[i + 5..i + 5 + len]);
+            i += 5 + len;
+            if last {
+                break;
+            }
+        }
+        assert_eq!(idat[i..], adler32(&raw).to_be_bytes());
+        let expected: Vec<u8> = grey
+            .chunks(w)
+            .flat_map(|row| std::iter::once(0).chain(row.iter().copied()))
+            .collect();
+        assert_eq!(raw, expected);
+        // Known values of the checksums.
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+        assert_eq!(adler32(b"Wikipedia"), 0x11E6_0398);
     }
 
     #[test]
