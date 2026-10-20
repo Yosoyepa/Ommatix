@@ -80,10 +80,7 @@ Fail-closed, in this order (`pixel_server._click` / `_type_text` / `_deliver`):
    `explorer.exe` or `applicationframehost.exe`), with a readable class that is not a helper window, not
    elevated, on the primary monitor, not iconified and still the window and geometry of the screenshot; the
    point is inside the client rectangle and `WindowFromPoint` resolves to the same top-level window
-   (`type_text`: the keyboard-focus window belongs to it); no modifier held. The key states count only when the
-   thread's desktop is **attested** to be the one that receives input (`OpenInputDesktop`, by name):
-   `GetAsyncKeyState` returns 0 both for a key that is up and for a read that failed, so an all-zero read without
-   that attestation is `MODIFIERS_UNREADABLE`, never "none held";
+   (`type_text`: the keyboard-focus window belongs to it); no modifier held. The key states count only with **positive evidence that the read could observe** them: `GetAsyncKeyState` returns 0 both for a key that is up and for a read that failed, so zero is "none held" only when this thread's desktop is, by name, the one that receives input, that input desktop could be opened with the hook and journal rights as well as read access (what reading another process's input needs), and this process runs at medium integrity or above (UIPI). Any of those missing is `MODIFIERS_UNREADABLE`, never "none held";
 6. then the read-only scoring hit test (inside that scope), the preparation of the native batch, and
 7. **the delivery check**: a fresh reading of the clock and the system immediately before the one `SendInput`
    call of all of the stop file, the age, the modifiers and the window evidence. For a click it also holds the
@@ -129,7 +126,7 @@ init, timeout, parse - earns a retry or discards a recorded terminal state), raw
 * **Interruption**: on every exit path (normal, exception, Ctrl+C, SIGTERM, Ctrl+Break) the owned job/tree is killed and
   verified gone **before** the lock is released, and the cleanup itself is best effort and idempotent (every step is attempted; **no signal is ignored or remapped
   during it** - a Ctrl+C that lands inside simply propagates and leaves the session unverified). The lock is released
-  **only on positive proof** of quiescence, and the owned tree lives in a Windows job object created with
+  **only on positive proof** of quiescence (an error out of `Popen` proves no child only when it is a refusal that cannot follow a creation - the program or directory is not there; any other error may come from `Popen`'s clean-up after a successful `CreateProcess`, so it keeps the lock), and the owned tree lives in a Windows job object created with
   `KILL_ON_JOB_CLOSE`, so the kernel ends it if the harness dies; **ownership is recorded before the CLI exists**
   (the counter is raised before `Popen`; the CLI is created suspended, put in the job and only then resumed), so an
   interruption at any point of the start - inside `Popen`, the job set-up, the native resume or the bookkeeping after

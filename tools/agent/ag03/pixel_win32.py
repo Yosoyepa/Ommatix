@@ -43,7 +43,14 @@ MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_ABSOLUTE = 0x4000, 0x8000
 KEYEVENTF_KEYUP, KEYEVENTF_UNICODE = 0x0002, 0x0004
 # Virtual keys whose async state means "a modifier is held".
 MODIFIER_VKS = (0x10, 0x11, 0x12, 0x5B, 0x5C)  # shift, control, alt, left and right Windows
-UOI_NAME, DESKTOP_READOBJECTS = 2, 0x0001  # GetUserObjectInformationW name index; OpenInputDesktop access
+UOI_NAME = 2  # GetUserObjectInformationW name index
+# OpenInputDesktop access: reading objects, and the hook and journal rights that observing another process's input
+# needs. A zero from GetAsyncKeyState also means "that access is missing", so the read counts only when the input desktop
+# could be opened with all three (R104-1).
+DESKTOP_READOBJECTS, DESKTOP_HOOKCONTROL, DESKTOP_JOURNALRECORD = 0x0001, 0x0008, 0x0010
+KEY_STATE_DESKTOP_ACCESS = DESKTOP_READOBJECTS | DESKTOP_HOOKCONTROL | DESKTOP_JOURNALRECORD
+TOKEN_QUERY, TOKEN_INTEGRITY_LEVEL = 0x0008, 25
+SECURITY_MANDATORY_MEDIUM_RID = 0x2000
 PW_CLIENTONLY, PW_RENDERFULLCONTENT = 0x1, 0x2
 GA_ROOT = 2
 
@@ -156,12 +163,21 @@ def decode_desktop_attestation(thread_desktop, input_desktop) -> bool:
             and isinstance(input_desktop, str) and thread_desktop == input_desktop)
 
 
-def decode_modifiers(states, desktop_attested) -> bool | None:
+def decode_integrity_ok(rid) -> bool:
+    """Whether the caller's mandatory integrity level (the last sub-authority of its integrity SID) was read and is at
+    least medium: the floor under which the user-interface privilege isolation can hide a foreground thread's input
+    state from the caller. Unreadable, not an integer or lower is False."""
+    return isinstance(rid, int) and not isinstance(rid, bool) and rid >= SECURITY_MANDATORY_MEDIUM_RID
+
+
+def decode_modifiers(states, access_attested) -> bool | None:
     """Whether a modifier is held, from the ``GetAsyncKeyState`` values of ``MODIFIER_VKS``, or None (unknown).
-    A zero from ``GetAsyncKeyState`` means BOTH "key up" and "the read failed" (an inactive desktop, no access):
-    all-zero states are evidence of "no modifier held" only when the input desktop was attested for this very
-    reading (``desktop_attested`` is True). Otherwise, and for any malformed value, the answer is unknown."""
-    if desktop_attested is not True:
+    A zero from ``GetAsyncKeyState`` means BOTH "key up" and "the read failed" (an inactive desktop, no cross-process
+    hook or journal access, blocked by UIPI): all-zero states are evidence of "no modifier held" only when the access
+    the read needs was positively attested for this very reading (``access_attested`` is True: the input desktop is
+    this thread's, was opened with the hook and journal rights, and the caller's integrity is at least medium).
+    Otherwise, and for any malformed value, the answer is unknown."""
+    if access_attested is not True:
         return None
     if (not isinstance(states, (tuple, list)) or len(states) != len(MODIFIER_VKS)
             or not all(isinstance(v, int) and not isinstance(v, bool) for v in states)):
@@ -369,6 +385,8 @@ def _dlls():
         "OpenProcessToken": (wintypes.BOOL, [wintypes.HANDLE, wintypes.DWORD, POINTER(wintypes.HANDLE)]),
         "GetTokenInformation": (wintypes.BOOL, [wintypes.HANDLE, c_int, c_void_p, wintypes.DWORD,
                                                 POINTER(wintypes.DWORD)]),
+        "GetSidSubAuthorityCount": (POINTER(ctypes.c_ubyte), [c_void_p]),
+        "GetSidSubAuthority": (POINTER(wintypes.DWORD), [c_void_p, wintypes.DWORD]),
     })
     _declare(gdi32, {
         "CreateCompatibleDC": (wintypes.HDC, [wintypes.HDC]),
@@ -523,18 +541,43 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
             return None
         return buffer.value or None
 
-    def _input_desktop_attested(self, user32, kernel32) -> bool:
-        """Whether this thread's desktop is the desktop that receives input right now. ``GetAsyncKeyState`` returns 0
-        both for a key that is up and for a read that failed (an inactive or secure desktop); the key states are
-        evidence only when this holds. Read only: ``OpenInputDesktop`` is the query, nothing is switched."""
-        mine = user32.GetThreadDesktop(kernel32.GetCurrentThreadId())  # a thread's desktop handle is not closed
-        theirs = user32.OpenInputDesktop(0, False, DESKTOP_READOBJECTS)
+    def _caller_integrity_ok(self, kernel32, advapi32) -> bool:
+        """Whether the integrity level of this process was read and is at least medium (``decode_integrity_ok``)."""
+        ctypes, wintypes = _ct()
+        token = wintypes.HANDLE()
+        if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(token)):
+            return False
         try:
-            return decode_desktop_attestation(self._desktop_name(user32, mine) if mine else None,
-                                              self._desktop_name(user32, theirs) if theirs else None)
+            buffer, needed = ctypes.create_string_buffer(512), wintypes.DWORD()
+            if not advapi32.GetTokenInformation(token, TOKEN_INTEGRITY_LEVEL, buffer, ctypes.sizeof(buffer),
+                                                ctypes.byref(needed)):
+                return False
+            sid = ctypes.c_void_p.from_buffer(buffer).value  # TOKEN_MANDATORY_LABEL: the SID pointer comes first
+            if not sid:
+                return False
+            count = int(advapi32.GetSidSubAuthorityCount(sid)[0])
+            if count < 1:
+                return False
+            return decode_integrity_ok(int(advapi32.GetSidSubAuthority(sid, count - 1)[0]))
+        finally:
+            kernel32.CloseHandle(token)
+
+    def _key_state_access_attested(self, user32, kernel32, advapi32) -> bool:
+        """Positive evidence that a ``GetAsyncKeyState`` read can observe the foreground application's keys. The call
+        returns 0 both for a key that is up and for a read that failed, so zero counts as "up" only when ALL of: this
+        thread's desktop is, by name, the desktop that receives input right now; that input desktop could be opened
+        with the hook and journal rights as well as read access (what reading another process's input needs); and this
+        process runs at medium integrity or above (below it, UIPI can hide a foreground thread's input state). Read
+        only: ``OpenInputDesktop`` is the query, nothing is switched (R104-1)."""
+        mine = user32.GetThreadDesktop(kernel32.GetCurrentThreadId())  # a thread's desktop handle is not closed
+        theirs = user32.OpenInputDesktop(0, False, KEY_STATE_DESKTOP_ACCESS)
+        try:
+            desktop_ok = decode_desktop_attestation(self._desktop_name(user32, mine) if mine else None,
+                                                    self._desktop_name(user32, theirs) if theirs else None)
         finally:
             if theirs:
                 user32.CloseDesktop(theirs)
+        return desktop_ok and self._caller_integrity_ok(kernel32, advapi32)
 
     def evidence(self, pid, point, want_focus):
         """One reading of the system. The slow facts (process, token, geometry) come first and the foreground window
@@ -543,7 +586,7 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
         window that may have been replaced. Between that last read and the operating system's dispatch of the
         input some time always remains; user mode cannot close it (step-5 review, S2)."""
         ctypes, wintypes = _ct()
-        user32, kernel32, *_ = _dlls()
+        user32, kernel32, advapi32, _gdi = _dlls()
         GUITHREADINFO = _structures()[3]
         first = user32.GetForegroundWindow()
         window = self._facts(first)
@@ -561,7 +604,7 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
                 top = decode_ancestor(user32.GetAncestor(info.hwndFocus, GA_ROOT))
                 focus = Focus(hwnd=int(info.hwndFocus), top_hwnd=top, pid=int(owner.value)) if top else None
         held = decode_modifiers([int(user32.GetAsyncKeyState(vk)) for vk in MODIFIER_VKS],
-                                self._input_desktop_attested(user32, kernel32))
+                                self._key_state_access_attested(user32, kernel32, advapi32))
         desktop = decode_virtual_screen(self.virtual_screen()) if point is not None else None
         stop = self.stop_present()
         last = user32.GetForegroundWindow()  # the closing read

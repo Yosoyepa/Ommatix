@@ -176,6 +176,9 @@ class NativeWorld:
         self.metrics = {76: 0, 77: 0, 78: 1920, 79: 1080}
         self.thread_desktop, self.input_desktop, self.names_readable = "Default", "Default", True
         self.gui_threads = []
+        self.open_desktop_access = []  # the access masks asked of OpenInputDesktop
+        self.denied_access_bits = 0  # access bits the fake input desktop refuses (a restricted desktop)
+        self.caller_integrity = 0x2000  # the runner's mandatory-integrity RID (medium); None: unreadable
         w = self
 
         def pid_of(hwnd):
@@ -212,9 +215,19 @@ class NativeWorld:
             return 1
 
         def token_info(handle, kind, output, size, returned):
+            if kind == 25:  # TokenIntegrityLevel of the caller: a TOKEN_MANDATORY_LABEL whose first field is the SID
+                if w.caller_integrity is None:
+                    return 0
+                ctypes.c_void_p.from_buffer(output).value = 0x1000  # a fake SID address, never dereferenced
+                returned._obj.value = 16
+                return 1
             output._obj.TokenIsElevated = 0
             returned._obj.value = 4
             return 1
+
+        def open_input_desktop(flags, inherit, access):
+            w.open_desktop_access.append(access)
+            return 11 if w.input_desktop and not access & w.denied_access_bits else 0
 
         def gui_info(thread, output):
             w.gui_threads.append(thread)
@@ -235,13 +248,16 @@ class NativeWorld:
             "GetAncestor": lambda h, flags: 100 if h in (100, 101) else 900, "WindowFromPoint": lambda *a: 100,
             "GetAsyncKeyState": lambda vk: -32768 if vk in w.held else 0,
             "GetSystemMetrics": lambda index: w.metrics[index],
-            "OpenInputDesktop": lambda flags, inherit, access: 11 if w.input_desktop else 0,
+            "OpenInputDesktop": open_input_desktop,
             "GetThreadDesktop": lambda tid: 10 if w.thread_desktop else 0,
             "GetUserObjectInformationW": user_object, "CloseDesktop": lambda h: 1})
         self.kernel = Dll(w, {"OpenProcess": lambda access, inherit, pid: pid, "QueryFullProcessImageNameW": image,
                               "CloseHandle": lambda h: 1, "GetCurrentThreadId": lambda: 5,
                               "GetCurrentProcess": lambda: -1})
-        self.advapi = Dll(w, {"OpenProcessToken": open_token, "GetTokenInformation": token_info})
+        self.advapi = Dll(w, {"OpenProcessToken": open_token, "GetTokenInformation": token_info,
+                              "GetSidSubAuthorityCount": lambda sid: ctypes.pointer(ctypes.c_ubyte(1)),
+                              "GetSidSubAuthority": lambda sid, index: ctypes.pointer(
+                                  ctypes.c_uint32(w.caller_integrity or 0))})
         self.gdi = Dll(w, {})
         self.shcore = Dll(w, {})
 
@@ -505,12 +521,14 @@ class JobWorld:
 
     def popen(self, argv, **kwargs):
         self.popen_calls += 1
-        if self.interrupt == "popen_oserror":
-            raise OSError("fake: cannot start the CLI")
+        if self.interrupt == "popen_oserror":  # CreateProcess refused: the program is not there
+            raise FileNotFoundError("fake: cannot start the CLI")
         self.exists = self.alive = True  # created suspended: alive but running no instruction
         self.proc = FakeProc(self)
         if self.interrupt == "popen":
             raise KeyboardInterrupt("synthetic interruption inside Popen")
+        if self.interrupt == "popen_post_create_oserror":  # the child exists; Popen own clean-up then fails
+            raise OSError("fake: failure AFTER a successful CreateProcess, before Popen returned")
         return self.proc
 
 
@@ -669,7 +687,7 @@ class S3LockDispositionTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(stderr):
             try:
                 pr.main(series.argv, deps=Deps, driver=object(), display=series.display)
-            except (KeyboardInterrupt, rg.OwnedSessionNotQuiescent) as error:
+            except (KeyboardInterrupt, rg.OwnedSessionNotQuiescent, OSError) as error:
                 return error, stderr.getvalue()
         return None, stderr.getvalue()
 

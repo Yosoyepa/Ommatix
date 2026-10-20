@@ -124,9 +124,10 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
    `tools/`, so it gets its own review before any live run (see the alternative B below).
 
    *Amendment, 2026-10-20 (first independent review of step 5, `docs/reviews/2026-10-20-ag03-step5.md`; the guards'
-   behaviour is refined, the decision is not changed).* Item 7 reads the key states only when the thread's desktop
-   is attested to be the one that receives input (`GetAsyncKeyState` returns 0 both for a key that is up and for a
-   read that failed): without the attestation the modifiers are unknown and refuse. Item 8 additionally holds, for a
+   behaviour is refined, the decision is not changed).* Item 7 reads the key states with positive evidence that the read
+   can observe them (`GetAsyncKeyState` returns 0 both for a key that is up and for a read that failed): the thread's
+   desktop is by name the input desktop, that desktop opens with the hook and journal rights as well as read access, and
+   the process runs at medium integrity or above; otherwise the modifiers are unknown and refuse. Item 8 additionally holds, for a
    `click`, the virtual-desktop geometry its absolute coordinates were normalised on (the delivery reading must
    report the same origin and size, or nothing is sent); the system reading takes its slow facts first and reads the
    foreground window again as its last query, asks keyboard focus of the current foreground thread, and is refused
@@ -708,3 +709,5 @@ de un clic se liga a la geometría del escritorio virtual con que se normalizó,
 última consulta, las teclas sólo cuentan con el escritorio de entrada atestiguado, la propiedad de la CLI se registra
 antes de crearla y todas las firmas nativas se declaran. Hace falta una nueva revisión independiente del código
 corregido; la carrera residual entre la última consulta y el envío y las condiciones nativas se validan en el paso 6.
+
+Segunda revisión del paso 5 (PR 104, sobre `23c43cc`): las teclas sólo cuentan con evidencia positiva de acceso (escritorio de entrada abierto con los derechos de lectura, ganchos y diario, e integridad media o superior), y una excepción de `Popen` sólo prueba la ausencia del hijo si el programa o el directorio no existen; cualquier otro error conserva la cerradura.

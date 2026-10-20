@@ -1453,6 +1453,11 @@ JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 # waits for the suspended or just-resumed CLI to exit (module constants so a test can shorten them).
 TREE_KILL_SETTLE_S = 5.0
 START_ABANDON_SETTLE_S = 10.0
+# The only errors out of ``Popen`` that show no child exists: the program or the working directory is not there, which
+# the operating system reports before it creates a process. Any other error - a plain OSError included - may come from
+# the clean-up that ``Popen`` runs AFTER a successful CreateProcess (or fork), before it hands the process over, so it
+# does not prove absence: ownership then stays raised and the campaign lock with it (R104-2).
+CREATION_REFUSED = (FileNotFoundError, NotADirectoryError)
 
 
 class OwnedSessionNotQuiescent(RuntimeError):
@@ -1727,7 +1732,7 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
     except BaseException as error:  # noqa: BLE001 - KeyboardInterrupt too: the start is part of the owned region
         gone = False
         if proc is None:
-            gone = isinstance(error, Exception)  # Popen refused: no child was created. A BaseException: unknown
+            gone = isinstance(error, CREATION_REFUSED)  # only a refusal that cannot follow a creation proves absence
             if gone and stderr_path:
                 stderr.close()
         else:
