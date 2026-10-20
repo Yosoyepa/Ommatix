@@ -148,6 +148,28 @@ def dpi_decision(effective) -> bool:
     return effective == DPI_V2
 
 
+def decode_display(rect, dpi) -> dict | None:
+    """The primary monitor's resolution and numeric scaling (percent) from its rectangle and its effective DPI
+    (96 is 100 %). Anything not positive or not a number is unknown (None): the display is then not measured."""
+    if (not isinstance(rect, (tuple, list)) or len(rect) != 4 or not all(isinstance(v, int) for v in rect)
+            or not isinstance(dpi, int) or isinstance(dpi, bool) or dpi <= 0):
+        return None
+    width, height = rect[2] - rect[0], rect[3] - rect[1]
+    if width <= 0 or height <= 0:
+        return None
+    return {"resolution": f"{width}x{height}", "scaling": round(dpi * 100 / 96)}
+
+
+def measure_primary_display(api) -> dict | None:
+    """What the series' display really is: the PRIMARY monitor's size and scaling, read through ``api``
+    (``primary_monitor_rect``, ``primary_effective_dpi``) - not the virtual desktop, whose size changes with a
+    secondary monitor, and not the process' DPI awareness, which says nothing about the scaling."""
+    try:
+        return decode_display(api.primary_monitor_rect(), api.primary_effective_dpi())
+    except Exception:  # noqa: BLE001 - an unreadable display is an unknown display
+        return None
+
+
 # ---- the shapes the server is written against (fakes implement them; nothing here runs in tests) ----
 
 class OsReader:
@@ -304,6 +326,35 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
         equals = bool(user32.AreDpiAwarenessContextsEqual(context, ctypes.c_void_p(-4)))
         awareness = int(user32.GetAwarenessFromDpiAwarenessContext(context))
         return dpi_decision(decode_dpi_awareness(equals, awareness))
+
+    def primary_monitor_rect(self):
+        """rcMonitor of the primary monitor (physical pixels under the verified per-monitor v2 context)."""
+        ctypes, wintypes = _ct()
+        user32, *_ = _dlls()
+        user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        user32.MonitorFromPoint.restype = wintypes.HANDLE
+        monitor = user32.MonitorFromPoint(wintypes.POINT(0, 0), 1)  # MONITOR_DEFAULTTOPRIMARY
+        info = (ctypes.c_byte * 40)()
+        ctypes.cast(info, ctypes.POINTER(wintypes.DWORD))[0] = 40
+        if not monitor or not user32.GetMonitorInfoW(monitor, info):
+            return None
+        values = ctypes.cast(info, ctypes.POINTER(wintypes.LONG))
+        return (int(values[1]), int(values[2]), int(values[3]), int(values[4]))
+
+    def primary_effective_dpi(self):
+        """The effective DPI of the primary monitor (``GetDpiForMonitor``, MDT_EFFECTIVE_DPI); None if unreadable."""
+        ctypes, wintypes = _ct()
+        user32, *_ = _dlls()
+        shcore = ctypes.WinDLL("shcore")
+        user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+        user32.MonitorFromPoint.restype = wintypes.HANDLE
+        monitor = user32.MonitorFromPoint(wintypes.POINT(0, 0), 1)
+        x, y = wintypes.UINT(), wintypes.UINT()
+        shcore.GetDpiForMonitor.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.POINTER(wintypes.UINT),
+                                            ctypes.POINTER(wintypes.UINT)]
+        if not monitor or shcore.GetDpiForMonitor(monitor, 0, ctypes.byref(x), ctypes.byref(y)) != 0:
+            return None
+        return int(x.value) if x.value and x.value == y.value else None
 
     def virtual_screen(self):
         ctypes, wintypes = _ct()

@@ -73,31 +73,43 @@ class Slot:
         return bool(self.primary and self.primary.success)
 
 
-def execute_slot(key: SlotKey, run_attempt) -> Slot:
+def settled(attempts) -> bool:
+    """Whether a slot with these attempts has nothing left to run: an attempt that ended the campaign, a valid
+    attempt (the primary outcome), or the retry already used."""
+    if not attempts:
+        return False
+    last = attempts[-1]
+    return last.ends_campaign or not last.invalid or len(attempts) >= 2
+
+
+def execute_slot(key: SlotKey, run_attempt, prior=()) -> Slot:
     """Runs a slot under the retry rule: one retry, inside the slot, only after an invalid attempt - and never
     after an attempt that ended the campaign (an operator stop or a safety event takes precedence over the one
-    permitted retry; review of PR 101, R6): the slot is then *interrupted*, its raw record is kept."""
-    slot = Slot(key=key, attempted=True)
-    for _ in range(2):
-        attempt = run_attempt(key)
-        slot.attempts.append(attempt)
-        if attempt.ends_campaign:
-            slot.interrupted = attempt.invalid or not attempt.model_called  # ended before the model was asked
-            break
-        if not attempt.invalid:
-            break
+    permitted retry; review of PR 101, R6): the slot is then *interrupted* when no model was asked, its raw
+    record is kept. ``prior`` are the attempts a restarted series already made (persisted claims): they count
+    against the same limits, so a restart never grants a new primary attempt or a second retry."""
+    slot = Slot(key=key, attempted=True, attempts=list(prior))
+    while True:
+        if slot.attempts:
+            last = slot.attempts[-1]
+            if last.ends_campaign:
+                slot.interrupted = last.invalid or not last.model_called  # ended before the model was asked
+                break
+            if not last.invalid or len(slot.attempts) >= 2:
+                break
+        slot.attempts.append(run_attempt(key))
     return slot
 
 
-def run_campaign(keys: list[SlotKey], run_attempt) -> list[Slot]:
+def run_campaign(keys: list[SlotKey], run_attempt, priors=None) -> list[Slot]:
     """The slots in order. Once any attempt ends the campaign (a safety event, the operator's stop), every
-    later slot is recorded as not attempted."""
+    later slot is recorded as not attempted. ``priors`` maps a slot key to the attempts already made."""
     slots, stopped = [], False
     for key in keys:
         if stopped:
             slots.append(Slot(key=key))
             continue
-        slot = execute_slot(key, run_attempt)
+        slot = execute_slot(key, run_attempt, (priors or {}).get(key, ()))
         slots.append(slot)
         stopped = any(a.ends_campaign for a in slot.attempts)
     return slots

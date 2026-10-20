@@ -36,7 +36,8 @@ class Series:
     ``timeout`` (the session is killed after DONE), ``safety``, ``operator_stop``, ``capture_refused``."""
 
     def __init__(self, test, *, root=None, phase=1, rep=1, model="Haiku", route=None, script=None, gate_status="passed",
-                 extra=()):
+                 extra=(), model_id=None, gate_requested=None, gate_resolved=None, gate_base_url=None, display=None,
+                 resolved_id=None):
         if root is None:
             scratch = tempfile.TemporaryDirectory(prefix="ag03-campaign-")
             test.addCleanup(scratch.cleanup)
@@ -48,19 +49,26 @@ class Series:
         (root / "cfg").mkdir(exist_ok=True)
         (root / "operator.toml").write_text('[safety]\nstop_file = "stop.flag"\n', encoding="utf-8")
         self.stop = root / "stop.flag"
-        model_id = "claude-haiku-5-5"
-        proof_model = model_id
+        import agentcli
+        model_id = model_id or (agentcli.CLAUDE_ROUTES[route]["model"] if route else "claude-haiku-5-5")
+        proof_model = resolved_id or model_id  # the attested (resolved) identity
+        self.model_id = model_id
+        self.display = display if display is not None else {"resolution": "2560x1440", "scaling": 100,
+                                                          "capture_backend": "printwindow"}
+        route_url = agentcli.CLAUDE_ROUTES[route]["base_urls"][0] if route else None
         gate_file = root / f"gate-{self.name}.json"
         provider = route or "anthropic"
         gate_file.write_text(json.dumps(
             gate.gate_record(self.name, provider, preflight_passed=gate_status != "failed_preflight", preconditions=PRE,
                              answer=GOOD_ANSWER if gate_status == "passed" else "no idea",
-                             provider_error="provider_rejected_image" if gate_status == "rejected" else None)),
+                             provider_error="provider_rejected_image" if gate_status == "rejected" else None,
+                             requested_model=gate_requested or model_id, resolved_model=gate_resolved or proof_model,
+                             route_base_url=gate_base_url if gate_base_url is not None else route_url)),
             encoding="utf-8")
         self.init = init_event(model=proof_model, memory={"auto": str(root / "cfg" / "projects" / "s" / "memory")})
         proof = {
             "schema": pf.PROOF_SCHEMA, "verifier_revision": pf.VERIFIER_REVISION, "passed": True,
-            "claude_code_version": "2.1.304", "model": model_id, "requested_model": model_id,
+            "claude_code_version": "2.1.304", "model": proof_model, "requested_model": model_id,
             "tools": sorted(pa.ALLOWED_TOOL_NAMES), "plugins": [], "agents": [], "plugin_hashes": [],
             "agent_hashes": [], "init_keys_sha256": rg.init_attestation(self.init)["init_keys_sha256"],
             "config_identity": rg.config_identity(root / "cfg"), "context_manifest": rg.config_manifest(root / "cfg"),
@@ -69,6 +77,10 @@ class Series:
                       "control_detected": ["extra_tool"], "control_blind": [],
                       "images_only_in_screenshot_result": True, "screenshot_result_images": 1},
             "real_capture_in_this_proof": False}
+        if route:
+            proof |= {"route": {"provider": route, "base_url": route_url, "model": model_id, "effort": "max",
+                                "auth": "bearer"}, "route_verifier_revision": pf.ROUTE_VERIFIER_REVISION}
+            (root / "key.txt").write_text("sk-test-0000000000000000", encoding="utf-8")
         (root / "proof.json").write_text(json.dumps(proof), encoding="utf-8")
         for exe in ("t.exe", "e.exe"):
             (root / exe).write_bytes(b"fake binary " + exe.encode())
@@ -80,6 +92,8 @@ class Series:
                      "--out", str(root / "out")]
         if phase == 2:
             self.argv += ["--live", "--max-live-session", "40", "--ledger", str(root / f"ledger-{rep}.json")]
+        if route:
+            self.argv += ["--route", route, "--route-base-url", route_url, "--key-file", str(root / "key.txt")]
         self.argv += list(extra)
         harness = self
 
@@ -112,11 +126,25 @@ class Series:
                 harness.calls.append((goal_id, n))
                 behaviour = harness.script.get((goal_id, n), "ok")
                 goal = BY_ID[goal_id]
+                if behaviour == "crash":
+                    raise RuntimeError("the runner process died")
                 events, records = harness.events_for(goal, behaviour)
-                for line in [harness.init, *events]:
+                lines = events if behaviour.startswith("noinit") else [harness.init, *events]
+                if behaviour == "bad_init":
+                    lines = [harness.init | {"tools": [*harness.init["tools"], "Bash"]}, *events]
+                for line in lines:
                     metrics.feed(json.dumps(line))
+                    if metrics.init_problems:  # the real runner ends the session at once
+                        break
                 (attempt_dir / f"{goal_id}.pixel.jsonl").write_text(
                     "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+                if behaviour == "safety_race":
+                    harness.stop.write_bytes(b"operator-marker")
+                hook = k.get("should_stop")
+                if hook is not None and ("safety" in behaviour or "uncertain" in behaviour or "operator" in behaviour):
+                    reason = hook()
+                    if reason:
+                        return {"exit_code": None, "killed": reason}
                 if behaviour == "timeout":
                     return {"exit_code": -1, "killed": "timeout"}
                 return {"exit_code": 0, "killed": None}
@@ -128,10 +156,13 @@ class Series:
         if goal.get("phase1_verdict") == "impossible":
             events = events[:-1] + [final("VERDICT: IMPOSSIBLE")]
         records = [shot(), *[click(label) for label in labels]]
-        if behaviour == "safety":
+        if behaviour in ("safety", "safety_race", "noinit_safety"):
             records.append(refused("click", "FOREGROUND_NOT_TARGET_PROCESS", reserved=True, terminal="safety"))
-        elif behaviour == "operator_stop":
+        elif behaviour in ("operator_stop", "noinit_operator_stop"):
             records.append(refused("click", "STOP_ENGAGED", terminal="operator_stop"))
+        elif behaviour == "noinit_uncertain":
+            records.append(refused("click", "INPUT_FAILED", reserved=True, delivered="uncertain", events_sent=1,
+                                   terminal="uncertain_delivery"))
         elif behaviour == "capture_refused":
             records.append(refused("screenshot", "CAPTURE_REFUSED", reason="BACKEND_FAILED"))
         return events, [*records, END]
@@ -140,8 +171,7 @@ class Series:
         stdout = io.StringIO()
         with mock.patch.object(rg, "ancestor_context", return_value=[]), contextlib.redirect_stdout(stdout):
             (self.root / "folders").mkdir(exist_ok=True)
-            code = pr.main([*self.argv, *extra], deps=self.deps, driver=object(),
-                           display={"resolution": "2560x1440", "scaling": "100%", "capture_backend": "printwindow"})
+            code = pr.main([*self.argv, *extra], deps=self.deps, driver=object(), display=self.display)
         return code
 
     @property
@@ -296,8 +326,11 @@ class CampaignEntryPointTests(unittest.TestCase):
         s = Series(self)
         s.run()
         again = Series(self, root=s.root)
-        with self.assertRaises(FileExistsError):
+        with self.assertRaises(SystemExit):  # the primary claims are settled (F5)
             again.run()
+        diagnostic = Series(self, root=s.root)
+        with self.assertRaises(FileExistsError):  # and a diagnostic run still never reuses an output directory
+            diagnostic.run(extra=["--diagnostic"])
 
     def test_a_series_is_always_the_eleven_goals(self):
         s = Series(self)

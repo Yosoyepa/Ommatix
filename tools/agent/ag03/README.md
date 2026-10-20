@@ -92,7 +92,7 @@ A refusal after the reservation **keeps it**. A failed Win32 read is unknown evi
 
 | Guard | Examples | Meaning |
 |---|---|---|
-| 5, 6, 7 and the window/foreground/focus/modifier parts of the delivery check; a click outside the window or the image; unreadable system evidence | `FOREGROUND_NOT_TARGET_PROCESS`, `POINT_WINDOW_MISMATCH`, `MODIFIER_HELD`, `POINT_OUTSIDE_CLIENT`, `OS_READ_FAILED` | **Terminal safety event**: the server latches (`SESSION_TERMINATED` to every later call, screenshots included), the runner stops the owned session tree at once, creates the stop file and ends the series |
+| 5, 6, 7 and the window/foreground/focus/modifier parts of the delivery check; a click outside the window or the image; unreadable system evidence | `FOREGROUND_NOT_TARGET_PROCESS`, `POINT_WINDOW_MISMATCH`, `MODIFIER_HELD`, `POINT_OUTSIDE_CLIENT`, `OS_READ_FAILED` | **Terminal safety event**: the server latches (`SESSION_TERMINATED` to every later call, screenshots included), an independent watcher (not the CLI's next output line) stops the owned session tree within a few hundred milliseconds, the stop file is created by exclusive create (never overwritten or deleted) and the series ends |
 | A failed, partial or uncertain `SendInput` | `INPUT_FAILED` | **Terminal, uncertain delivery**: logged `delivered: "uncertain"` with the inserted count, never reported as nothing sent, never retried |
 | Items 1 and the stop part of the delivery check (present or unreadable) | `STOP_ENGAGED`, `STOP_UNREADABLE` | **Operator stop**: the campaign ends; not a safety event; the runner neither creates nor deletes the operator's file |
 | Item 3 and the age part of the delivery check; item 4 (budget); arguments, caps, a capture refusal | `SCREENSHOT_STALE`, `LIVE_BUDGET_EXHAUSTED`, `CAPTURE_REFUSED` | Ordinary scored refusals: the session goes on |
@@ -101,16 +101,27 @@ A refusal after the reservation **keeps it**. A failed Win32 read is unknown evi
 
 `pixel_runner.py` runs **one series**: one model, one phase, one repetition (`--repetition`), one consent. It
 runs the 11 goals in the pre-registered order of `pixel_plan`, through `pixel_slots`: the primary slot, the one
-permitted retry of an attempt that failed before the first model call (a stop or a safety event takes
-precedence over the retry), raw artifacts per attempt (`<series>/<goal>/attempt<n>/`), technical failures,
-not-attempted slots after a campaign stop, and `series.json` with the counts. It refuses a model without a
-passing gate record (`--gate-record`), refuses a series whose effective fingerprint (built from the actual
-arguments: timeout, dollar or token cap, session budget, caps, effort, versions, instruction, backend) differs
-from the campaign's (`--campaign-dir`; the refusal is recorded in `not_pooled.jsonl`), and never overwrites an
-existing series directory. A terminated attempt (timeout, token cap, nonzero exit, provider error, capture
-refusal) cannot score a success; AG-02's raw answer is kept as `score_ag02` and the OS oracle as `oracle_only_ok`.
-Native Claude keeps the registered 0.50 USD cap and effort `max`; a provider route has the context-token cap
-and effort `max` in its child environment, and reports the image-token estimate as unavailable.
+permitted retry of an attempt that failed **before the session was launched** (a stop or a safety event takes
+precedence over the retry; after launch the model may have been asked, so no later classification - unclean
+init, timeout, parse - earns a retry or discards a recorded terminal state), raw artifacts per attempt
+(`<series>/<goal>/attempt<n>/`), technical failures, not-attempted slots after a campaign stop, and
+`series.json` with the counts.
+
+* **Gate**: `--gate-record` must be this model's passing record, bound to the requested model, its attested
+  (resolved) identity and, on a route, the endpoint; only the owner's accepted set runs (Haiku 5.5,
+  `deepseek-flash`, `mimo-v2.6-flash`). A mismatch is refused before any application or session.
+* **Claims**: every attempt is claimed atomically in `--campaign-dir` before it runs and settled after, so a
+  different `--out`, a restart or a second invocation never re-runs a settled primary slot nor grants a new
+  attempt; an interrupted series resumes from its claims (an attempt that never recorded an outcome counts as
+  consumed, of unknown progress); a settled or stopped series is refused. `--diagnostic` runs a series outside
+  the primary pool, recorded as such.
+* **Fingerprint**: built from the actual arguments (timeout, dollar or token cap, session budget, caps, effort,
+  versions, instruction, backend) and the **measured** primary-monitor resolution and numeric scaling (an
+  unmeasured display is refused); it must equal the campaign's (the refusal is recorded in `not_pooled.jsonl`).
+* A terminated attempt (timeout, token cap, nonzero exit, provider error, capture refusal) cannot score a
+  success; AG-02's raw answer is kept as `score_ag02` and the OS oracle as `oracle_only_ok`.
+* Native Claude keeps the registered 0.50 USD cap and effort `max`; a provider route has the context-token cap
+  and effort `max` in its child environment, and reports the image-token estimate as unavailable.
 
 ## Privacy
 

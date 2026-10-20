@@ -72,12 +72,14 @@ def preconditions_missing(provider: str, preconditions: dict) -> list[str]:
 
 
 def gate_record(model: str, provider: str, *, preflight_passed: bool, preconditions: dict,
-                answer: str | None = None, provider_error: str | None = None) -> dict:
+                answer: str | None = None, provider_error: str | None = None, requested_model: str | None = None,
+                resolved_model: str | None = None, route_base_url: str | None = None) -> dict:
     """The record of one model's gate: ``passed``, ``excluded`` (with a closed reason) or ``not_run``
     (preconditions missing, no provider was called). Booleans, counts and closed tokens only."""
     base = {"schema": GATE_SCHEMA, "model": model, "provider": provider if provider in PROVIDERS else "unknown",
             "date_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "images": SMOKE_IMAGES,
-            "preflight_passed": bool(preflight_passed), "scope": "transport and image-dependent answers; "
+            "preflight_passed": bool(preflight_passed), "requested_model": requested_model,
+            "resolved_model": resolved_model, "route_base_url": route_base_url, "scope": "transport and image-dependent answers; "
             "not competence at GUI tasks"}
     if (missing := preconditions_missing(provider, preconditions)):
         return base | {"status": "not_run", "reason": "preconditions_missing", "missing": missing,

@@ -1578,16 +1578,18 @@ class OwnedTree:
 
 def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
                timeout: float, stderr_path: Path | None = None, env: dict | None = None,
-               max_context_tokens: int | None = None, should_stop=None) -> dict:
+               max_context_tokens: int | None = None, should_stop=None, poll_s: float = 0.25) -> dict:
     """Runs the command; feeds every stdout line to `metrics`; ends the session on a timeout, when the first
     event shows a session other than the proven one, when the tool surface is wider than the three Ommatix tools,
     or (``max_context_tokens``, provider routes, where the CLI's dollar figure is invalid) when the
     ``ContextGuard`` finds the context over the cap (``token_cap``) or its consumption unknown or invalid
     (``usage_invalid``). It returns only once the session's whole process tree (the CLI, the budget proxy and
     the engine it started) has exited; ``tree_left`` is in the result when something could not be ended.
-    ``should_stop`` (AG-03, review of PR 101 R2): an optional callable checked after every stream line that
-    returns a closed reason when the session must end at once (a terminal state latched by the tool server),
-    else None; AG-02 does not pass it.
+    ``should_stop`` (AG-03, review of PR 101 R2 and F2): an optional callable that returns a closed reason when
+    the session must end at once (a terminal state latched by the tool server, the operator's stop), else None.
+    It is checked after every stream line AND by an independent watcher every ``poll_s`` seconds, so that a
+    CLI that goes silent cannot delay it; a hook that raises ends the session (fail closed). AG-02 does not
+    pass it.
     The child's stderr is discarded unless a test passes `stderr_path`: production never stores it (it can
     echo a credential or a response, and nothing filters it)."""
     stderr = open(stderr_path, "wb") if stderr_path else subprocess.DEVNULL
@@ -1609,10 +1611,13 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
     killed = {"reason": None}
     guard = None if max_context_tokens is None else ContextGuard(max_context_tokens)
 
+    stop_lock = threading.Lock()
+
     def stop(reason: str) -> None:
-        if killed["reason"] is None:
-            killed["reason"] = reason
-            proc.kill()  # the CLI alone: the proxy sees its input close and leaves with its engine
+        with stop_lock:  # the pump, the watcher and the timeout may all ask: the first reason wins
+            if killed["reason"] is None:
+                killed["reason"] = reason
+                proc.kill()  # the CLI alone: the proxy sees its input close and leaves with its engine
 
     def pump():
         for raw in proc.stdout:
@@ -1637,11 +1642,27 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
 
     reader = threading.Thread(target=pump, daemon=True)
     reader.start()
+    finished = threading.Event()
+
+    def watch():
+        while not finished.wait(poll_s):
+            try:
+                reason = should_stop()
+            except Exception:  # noqa: BLE001
+                reason = "should_stop_failed"
+            if reason:
+                stop(reason)
+                return
+    watcher = None
+    if should_stop is not None:
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         stop("timeout")
         proc.wait()
+    finished.set()
     left = tree.shutdown(kill_cli=False)
     reader.join(timeout=10)
     proc.stdout.close()
