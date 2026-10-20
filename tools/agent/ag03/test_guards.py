@@ -415,6 +415,57 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(rig.code(rig.call("click", x=1, y=1)), "NO_LIVE_BUDGET")
 
 
+class ScreenshotGuardTests(unittest.TestCase):
+    """The same checks gate ``screenshot`` where they apply (decision 4): the stop file, the foreground
+    window of item 5 and the capture conditions of decision 5. No image is returned on a refusal."""
+
+    def test_a_screenshot_of_the_wrong_process_is_refused_and_no_image_is_returned(self):
+        rig = Rig(self)
+        rig.os.foreground = dataclasses.replace(W, pid=1)
+        result = rig.call("screenshot")
+        self.assertEqual(rig.code(result), "FOREGROUND_NOT_TARGET_PROCESS")
+        self.assertEqual({c["type"] for c in result["content"]}, {"text"})
+
+    def test_a_screenshot_with_the_stop_file_present_is_refused(self):
+        rig = Rig(self)
+        rig.os.stop = True
+        self.assertEqual(rig.code(rig.call("screenshot")), "STOP_ENGAGED")
+
+    def test_a_backend_that_is_not_admitted_gives_capture_refused_and_no_image(self):
+        rig = Rig(self)
+        rig.server.deps.admission = None
+        result = rig.call("screenshot")
+        self.assertEqual(rig.code(result), "CAPTURE_REFUSED")
+        self.assertEqual({c["type"] for c in result["content"]}, {"text"})
+        self.assertEqual(rig.records[-1]["reason"], "BACKEND_NOT_ADMITTED")
+        self.assertEqual(rig.call("click", x=1, y=1)["isError"], True)  # and there is no screenshot to click on
+
+    def test_a_desktop_source_backend_is_refused_even_with_a_full_record(self):
+        rig = Rig(self)
+        rig.server.deps.backend = fake_os.SceneBackend("foreign_during_acquisition", app_rendered=False)
+        self.assertEqual(rig.code(rig.call("screenshot")), "CAPTURE_REFUSED")
+        self.assertEqual(rig.server.deps.backend.calls, 0)
+
+    def test_a_failing_printwindow_gives_capture_refused_with_its_reason(self):
+        rig = Rig(self)
+        rig.server.deps.backend = fake_os.FailingBackend("raise")
+        self.assertEqual(rig.code(rig.call("screenshot")), "CAPTURE_REFUSED")
+        self.assertEqual(rig.records[-1]["reason"], "BACKEND_FAILED")
+
+    def test_a_result_of_the_wrong_size_gives_capture_refused(self):
+        rig = Rig(self)
+        rig.server.deps.backend = fake_os.FailingBackend("wrong_size")
+        self.assertEqual(rig.code(rig.call("screenshot")), "CAPTURE_REFUSED")
+        self.assertEqual(rig.records[-1]["reason"], "WRONG_SIZE")
+
+    def test_the_screenshot_records_its_age_origin_so_a_later_click_can_be_judged(self):
+        rig = Rig(self)
+        rig.clock.t = 3.0
+        rig.shoot()
+        self.assertEqual(rig.server.shot.t, 3.0)
+        self.assertEqual(rig.server.shot.client, W.client)
+
+
 class CapTests(unittest.TestCase):
     def test_the_thirty_first_screenshot_is_refused(self):
         rig = Rig(self)
