@@ -10,6 +10,7 @@
   "scripts": {
     "build": "node build.mjs",
     "preview": "node preview.mjs",
+    "stills": "node demo-stills.mjs",
     "check": "python check.py",
     "test": "python -m unittest discover -s . -p test_*.py"
   },
