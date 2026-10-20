@@ -596,6 +596,8 @@ class LayoutAndHygieneTests(unittest.TestCase):
         self.assertEqual((ctypes.sizeof(mouse), ctypes.sizeof(key), ctypes.sizeof(input_)), (32, 24, 40))
         self.assertEqual(input_.u.offset, 8)
         self.assertEqual((mouse.dwExtraInfo.offset, key.dwExtraInfo.offset), (24, 16))
+        header = w32._structures()[4]  # noqa: SLF001
+        self.assertEqual(ctypes.sizeof(header), 40)  # BITMAPINFOHEADER
 
     def test_no_file_of_the_package_ends_in_a_blank_line_or_without_a_newline(self):
         for path in sorted(HERE.glob("*")):

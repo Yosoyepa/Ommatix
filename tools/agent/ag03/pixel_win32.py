@@ -202,20 +202,22 @@ def _ct():
 def _structures():
     """The ctypes structures, built on first use (no Win32 call; importing the module builds none)."""
     ctypes, wintypes = _ct()
+    # Fixed-width integers, not ``wintypes.DWORD``/``LONG``: on Windows they are the same 32-bit types, and the
+    # layout is then identical (and testable) on every platform - ``wintypes.LONG`` is 64-bit on Linux.
     class MOUSEINPUT(ctypes.Structure):
-        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
-                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
+        _fields_ = [("dx", ctypes.c_int32), ("dy", ctypes.c_int32), ("mouseData", ctypes.c_uint32),
+                    ("dwFlags", ctypes.c_uint32), ("time", ctypes.c_uint32),
                     ("dwExtraInfo", ctypes.c_size_t)]
 
     class KEYBDINPUT(ctypes.Structure):
-        _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
-                    ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+        _fields_ = [("wVk", ctypes.c_uint16), ("wScan", ctypes.c_uint16), ("dwFlags", ctypes.c_uint32),
+                    ("time", ctypes.c_uint32), ("dwExtraInfo", ctypes.c_size_t)]
 
     class _Union(ctypes.Union):
         _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
 
     class INPUT(ctypes.Structure):
-        _fields_ = [("type", wintypes.DWORD), ("u", _Union)]
+        _fields_ = [("type", ctypes.c_uint32), ("u", _Union)]
 
     class GUITHREADINFO(ctypes.Structure):
         _fields_ = [("cbSize", wintypes.DWORD), ("flags", wintypes.DWORD), ("hwndActive", wintypes.HWND),
@@ -224,14 +226,14 @@ def _structures():
                     ("hwndCaret", wintypes.HWND), ("rcCaret", wintypes.RECT)]
 
     class BITMAPINFOHEADER(ctypes.Structure):
-        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
-                    ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD),
-                    ("biCompression", wintypes.DWORD), ("biSizeImage", wintypes.DWORD),
-                    ("biXPelsPerMeter", wintypes.LONG), ("biYPelsPerMeter", wintypes.LONG),
-                    ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+        _fields_ = [("biSize", ctypes.c_uint32), ("biWidth", ctypes.c_int32), ("biHeight", ctypes.c_int32),
+                    ("biPlanes", ctypes.c_uint16), ("biBitCount", ctypes.c_uint16),
+                    ("biCompression", ctypes.c_uint32), ("biSizeImage", ctypes.c_uint32),
+                    ("biXPelsPerMeter", ctypes.c_int32), ("biYPelsPerMeter", ctypes.c_int32),
+                    ("biClrUsed", ctypes.c_uint32), ("biClrImportant", ctypes.c_uint32)]
 
     class TOKEN_ELEVATION(ctypes.Structure):
-        _fields_ = [("TokenIsElevated", wintypes.DWORD)]
+        _fields_ = [("TokenIsElevated", ctypes.c_uint32)]
 
     return MOUSEINPUT, KEYBDINPUT, INPUT, GUITHREADINFO, BITMAPINFOHEADER, TOKEN_ELEVATION
 
