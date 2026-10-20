@@ -56,3 +56,22 @@ request's tool list now carries a `DeferredToolPlaceholder` entry next to the th
 three). The disk checks of this change pass on 2.1.305 (config files touched 2/1/2, cache files 3, no image data). The verdict
 is the owner's rule and is **not** changed here: it needs a decision (accept the placeholder with a positive control, or pin the
 CLI to the version the proofs were made with). AG-02's preflight was not run (it needs the engine binary).
+
+## Review of PR 106 at `25079c0` (independent, 2026-10-20): changes required, three P2
+
+Resolved in the same PR, regressions first (`step5fix_red\disk2\`: 36 tests, 6 failures and 10 errors against `b316d50`).
+
+| # | Finding | Resolution | Regression tests (`test_disk_evidence.py`) |
+|---|---|---|---|
+| R106-1 | The snapshot covered only the configuration directory and a cache root derived from the PARENT's environment; the child's TEMP was not observed (an image left in `TEMP/claude/images/` passed) and the cache root could differ from the one the launched child uses | Every monitored location comes from the exact child environment: the harness supplies each session (preflight) and each attempt (runner) an isolated temp directory through `TEMP`, `TMP`, `TMPDIR` and `CLAUDE_CODE_TMPDIR`, scanned like the configuration directory (`disk_temp_*`); `cli_cache_root(environ=<child env>)`; the proof binds `cache_root_sha256` and `temp_isolated`; the three sessions must agree on the cache root; the runner refuses to launch with a child whose temp variables do not name one directory or whose cache root differs from the proof's | `ChildTempAndCacheTests`, `RunnerTempAndCacheTests` |
+| R106-2 | `os.walk` ignored enumeration errors and a failed `stat` was skipped, so an unreadable directory or file looked like an empty, clean scan | `snapshot` returns a `Snapshot` that carries `incomplete` (a directory that cannot be listed, a file whose metadata cannot be read, a required root that is missing; an absent OPTIONAL root, the CLI cache before its first run, is complete and empty); an incomplete before or after yields `disk_config_incomplete`, `disk_temp_incomplete` or `disk_cache_incomplete`, which refuses the proof; the proof records `scan_complete` and the loader requires it; no path or content goes in the verdict | `IncompleteScanTests`, `SnapshotCompletenessTests` |
+| R106-3 | CHANGELOG 1.0.110 is taken by merged PR 105 | `origin/main` merged (no rebase); this PR's entry is 1.0.111 | n/a |
+
+Verifier revision: the new coverage is part of revision 2, which had not been merged (no proof of a weaker revision 2 exists
+outside the author's own runs); any proof made before this change lacks `temp_isolated`, `scan_complete` and `cache_root_sha256` and
+the loader refuses it.
+
+Also from the review: the preflight records the missing `--no-session-persistence` only AFTER its synthetic launch (it is not a
+pre-launch guard there; the runner's check is). On `DeferredToolPlaceholder` the review agrees that the "exactly three tools" verdict
+stays unchanged, with no exception by name.
+

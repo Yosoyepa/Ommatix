@@ -14,17 +14,14 @@ is not JSON. The modes that break exactly one image rule: ``image_elsewhere`` (a
 ``image_in_click`` (the image is the result of ``click``), ``image_oversized``, ``image_wide``,
 ``image_jpeg``, ``image_text`` (the PNG base64 as text), ``no_image`` (no screenshot result at all).
 With ``ANTHROPIC_AUTH_TOKEN`` in its environment (a route) it also sends both credential headers and the
-effort. The on-disk modes write what the real CLI writes WITHOUT ``--no-session-persistence`` (or in its cache):
-``persist_tool_results`` (an image under ``projects/<cwd>/<session>/tool-results/``), ``persist_transcript`` (a project
-transcript carrying the image in base64), ``persist_clean_transcript`` (a transcript without one), ``cache_log_image`` and
-``cache_log_clean`` (a debug log of the MCP server under ``FAKE_CLAUDE_CACHE_ROOT``, with and without image data). The
-``route_*`` modes of ``ag02/fake_claude.py`` that apply (``route_other_model``,
+effort. The ``route_*`` modes of ``ag02/fake_claude.py`` that apply (``route_other_model``,
 ``route_key_in_body``, ``route_bad_effort``, ``route_x_api_key``, ``route_proxy_authorization``,
 ``route_cookie``) break one of those. The on-disk modes write what the real CLI writes WITHOUT
-``--no-session-persistence`` or in its cache: ``persist_tool_results`` (an image under
+``--no-session-persistence``, in its cache or in its temp directory: ``persist_tool_results`` (an image under
 ``projects/<cwd>/<session>/tool-results/``), ``persist_transcript`` (a project transcript carrying the image in base64),
 ``persist_clean_transcript`` (a transcript without one), ``cache_log_image`` and ``cache_log_clean`` (a debug log of the MCP
-server under ``FAKE_CLAUDE_CACHE_ROOT``, with and without image data). Records argv and environment names like the AG-02
+server under ``FAKE_CLAUDE_CACHE_ROOT``, with and without image data), ``temp_image`` / ``tmpdir_image`` / ``temp_clean``
+(an image, or a clean state file, under the child's ``TEMP`` / ``CLAUDE_CODE_TMPDIR``). Records argv and environment names like the AG-02
 stand-in.
 """
 
@@ -64,6 +61,14 @@ def write_disk_state(mode: str, home: Path) -> None:
         project.mkdir(parents=True, exist_ok=True)
         content = b64(png) if mode == "persist_transcript" else "hello"
         (project / "0ecf8087.jsonl").write_text(json.dumps({"message": content}) + "\n", encoding="utf-8")
+    elif mode in ("temp_image", "temp_clean", "tmpdir_image"):
+        variable = "CLAUDE_CODE_TMPDIR" if mode == "tmpdir_image" else "TEMP"
+        folder = Path(os.environ[variable]) / "claude" / ("state" if mode == "temp_clean" else "images")
+        folder.mkdir(parents=True, exist_ok=True)
+        if mode == "temp_clean":
+            (folder / "cache-break-state.json").write_text("{}", encoding="utf-8")
+        else:
+            (folder / "synthetic.png").write_bytes(png)
     elif mode in ("cache_log_image", "cache_log_clean") and os.environ.get("FAKE_CLAUDE_CACHE_ROOT"):
         log = Path(os.environ["FAKE_CLAUDE_CACHE_ROOT"]) / "C--scratch-cwd" / "mcp-logs-pixel"
         log.mkdir(parents=True, exist_ok=True)
@@ -83,7 +88,9 @@ def main() -> int:
         with open(env_file, "w", encoding="utf-8") as handle:
             json.dump({"names": sorted(os.environ), "base_url": os.environ.get("ANTHROPIC_BASE_URL"),
                        "api_key": os.environ.get("ANTHROPIC_API_KEY"),
-                       "feedback_survey": os.environ.get("CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY")}, handle)
+                       "feedback_survey": os.environ.get("CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"),
+                       "temp": {k: os.environ.get(k) for k in ("TEMP", "TMP", "TMPDIR", "CLAUDE_CODE_TMPDIR")},
+                       "xdg_cache_home": os.environ.get("XDG_CACHE_HOME")}, handle)
     prompt = sys.stdin.read()
     sources = flag(argv, "--setting-sources")
     home = Path(os.environ.get("CLAUDE_CONFIG_DIR", ""))

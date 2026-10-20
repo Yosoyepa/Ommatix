@@ -53,7 +53,12 @@ class PreflightHarness(unittest.TestCase):
         except ImportError:  # before the fix there is no module (and no cache check): the test then fails on its merits
             pixel_disk = None
         if pixel_disk is not None:
-            patches.append(mock.patch.object(pixel_disk, "cli_cache_root", return_value=self.cache))
+            self.cache_calls = []  # the environment each derivation of the cache root was made from
+
+            def cache_root(platform=None, environ=None):
+                self.cache_calls.append(environ)
+                return self.cache
+            patches.append(mock.patch.object(pixel_disk, "cli_cache_root", cache_root))
         if argv_filter is not None:
             real = pa.build_claude_argv
             patches.append(mock.patch.object(pa, "build_claude_argv",
@@ -265,6 +270,166 @@ class PixelDiskModuleTests(unittest.TestCase):
         self.assertEqual(self.disk.cli_cache_root("linux", env), Path("/home/u") / ".cache" / "claude-cli-nodejs")
         self.assertEqual(self.disk.cli_cache_root("linux", env | {"XDG_CACHE_HOME": "/x"}), Path("/x") / "claude-cli-nodejs")
         self.assertEqual(self.disk.cli_cache_root("darwin", env), Path("/home/u") / "Library" / "Caches" / "claude-cli-nodejs")
+
+
+class ChildTempAndCacheTests(PreflightHarness):
+    """Review of PR 106 (R106-1): the monitored locations come from the environment the CLI REALLY runs with, and the
+    child gets a temp directory of its own that is scanned like the configuration directory and the cache."""
+
+    TEMP_VARS = ("TEMP", "TMP", "TMPDIR", "CLAUDE_CODE_TMPDIR")
+
+    def test_an_image_in_the_childs_temp_directory_refuses_the_proof_in_every_session(self):
+        for mode in ("temp_image", "tmpdir_image"):
+            with self.subTest(mode=mode):
+                proof = self.preflight(mode)
+                self.assertFalse(proof["passed"], "an image left in the child's TEMP passed the preflight")
+                for name in ("canary", "control", "production_dir"):
+                    self.assertIn(f"{name}_disk_temp_image_data", proof["problems"])
+
+    def test_a_clean_state_file_in_the_childs_temp_directory_passes_and_is_counted(self):
+        proof = self.preflight("temp_clean")
+        self.assertTrue(proof["passed"], proof["problems"])
+        self.assertEqual(proof["disk"]["temp_files_touched"], {"canary": 1, "control": 1, "production_dir": 1})
+
+    def test_every_session_runs_with_its_own_isolated_temp_directory(self):
+        for route in (None, "deepseek"):
+            with self.subTest(route=route):
+                proof = self.preflight(route=route)
+                self.assertTrue(proof["passed"], proof["problems"])
+                temp = json.loads(self.env_file.read_text())["temp"]
+                self.assertEqual(set(temp), set(self.TEMP_VARS))
+                self.assertEqual(len(set(temp.values())), 1, "the four variables name one directory")
+                self.assertNotIn(os.path.normcase(tempfile.gettempdir()), [os.path.normcase(v) for v in temp.values()])
+                self.assertTrue(proof["disk"]["temp_isolated"])
+
+    def test_the_cache_root_is_derived_from_the_exact_child_environment(self):
+        with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": "/parent-only-cache"}):
+            proof = self.preflight()
+        self.assertTrue(proof["passed"], proof["problems"])
+        self.assertTrue(self.cache_calls, "the cache root was never derived")
+        for environ in self.cache_calls:
+            self.assertIsNotNone(environ, "derived from the parent's environment")
+            self.assertIn("CLAUDE_CONFIG_DIR", environ)
+            self.assertNotIn("XDG_CACHE_HOME", environ, "the child's environment has no parent-only cache location")
+
+    def test_the_proof_binds_the_cache_root_rule_and_the_loader_needs_the_new_facts(self):
+        import pixel_disk
+        proof = self.preflight()
+        self.assertEqual(len(proof["disk"]["cache_root_sha256"]), 64)
+        self.assertTrue(proof["disk"]["scan_complete"])
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, broken in {
+                    "no_scan_complete": proof | {"disk": {k: v for k, v in proof["disk"].items() if k != "scan_complete"}},
+                    "incomplete": proof | {"disk": proof["disk"] | {"scan_complete": False}},
+                    "no_temp": proof | {"disk": proof["disk"] | {"temp_isolated": False}},
+                    "no_cache_binding": proof | {"disk": {k: v for k, v in proof["disk"].items()
+                                                         if k != "cache_root_sha256"}}}.items():
+                with self.subTest(broken=name):
+                    path = Path(tmp) / f"{name}.json"
+                    path.write_text(json.dumps(broken), encoding="utf-8")
+                    with self.assertRaises(SystemExit):
+                        pf.load_isolation_proof(path)
+        self.assertEqual(pixel_disk.cache_root_fingerprint({"LOCALAPPDATA": "a"}),
+                         pixel_disk.cache_root_fingerprint({"LOCALAPPDATA": "a", "UNRELATED": "b"}))
+
+
+class IncompleteScanTests(PreflightHarness):
+    """Review of PR 106 (R106-2): a scan that could not be completed is a refusal, never an empty pass."""
+
+    def test_a_configuration_directory_that_cannot_be_listed_refuses_the_proof(self):
+        real = os.scandir
+
+        def scandir(path=".", *args, **kwargs):
+            if os.path.normcase(str(path)) == os.path.normcase(str(self.production)):
+                raise PermissionError("denied")
+            return real(path, *args, **kwargs)
+        with mock.patch.object(os, "scandir", scandir):
+            proof = self.preflight()
+        self.assertFalse(proof["passed"])
+        self.assertIn("production_dir_disk_config_incomplete", proof["problems"])
+        self.assertNotIn(str(self.production), json.dumps(proof["problems"]), "no path in the verdict")
+
+
+class SnapshotCompletenessTests(unittest.TestCase):
+    def setUp(self):
+        import pixel_disk
+        self.disk = pixel_disk
+        scratch = tempfile.TemporaryDirectory(prefix="ag03-snap-")
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        (self.root / "sub").mkdir()
+        (self.root / "sub" / "x.png").write_bytes(cap.synthetic_png(0, 64, 48)[0])
+
+    def test_a_complete_listing_is_complete_and_equals_a_plain_dict(self):
+        snap = self.disk.snapshot(self.root)
+        self.assertFalse(snap.incomplete)
+        self.assertEqual(len(snap), 1)
+
+    def test_a_directory_that_cannot_be_listed_makes_the_snapshot_incomplete(self):
+        real = os.scandir
+
+        def scandir(path=".", *args, **kwargs):
+            if os.path.normcase(str(path)) == os.path.normcase(str(self.root / "sub")):
+                raise PermissionError("denied")
+            return real(path, *args, **kwargs)
+        with mock.patch.object(os, "scandir", scandir):
+            snap = self.disk.snapshot(self.root)
+        self.assertTrue(snap.incomplete)
+        self.assertEqual(self.disk.config_problems(self.root, snap, snap)[0], ["disk_config_incomplete"])
+        self.assertEqual(self.disk.cache_problems(self.root, snap, snap)[0], ["disk_cache_incomplete"])
+        self.assertEqual(self.disk.temp_problems(self.root, snap, snap)[0], ["disk_temp_incomplete"])
+
+    def test_a_file_whose_metadata_cannot_be_read_makes_the_snapshot_incomplete(self):
+        real = Path.stat
+        target = os.path.normcase(str(self.root / "sub" / "x.png"))
+
+        def stat(self_, *args, **kwargs):
+            if os.path.normcase(str(self_)) == target:
+                raise PermissionError("denied")
+            return real(self_, *args, **kwargs)
+        with mock.patch.object(Path, "stat", stat):
+            snap = self.disk.snapshot(self.root)
+        self.assertTrue(snap.incomplete)
+        self.assertEqual(self.disk.config_problems(self.root, snap, snap)[0], ["disk_config_incomplete"])
+
+    def test_an_incomplete_before_is_as_bad_as_an_incomplete_after(self):
+        good = self.disk.snapshot(self.root)
+        bad = self.disk.Snapshot(incomplete=True)
+        self.assertIn("disk_config_incomplete", self.disk.config_problems(self.root, bad, good)[0])
+        self.assertIn("disk_temp_incomplete", self.disk.temp_problems(self.root, good, bad)[0])
+
+    def test_an_absent_optional_root_is_complete_and_an_absent_required_one_is_not(self):
+        self.assertFalse(self.disk.snapshot(self.root / "absent", optional=True).incomplete)
+        self.assertTrue(self.disk.snapshot(self.root / "absent").incomplete)
+
+
+class RunnerTempAndCacheTests(unittest.TestCase):
+    def test_the_child_of_a_real_attempt_gets_an_isolated_temp_directory_under_the_attempt(self):
+        from test_campaign import Series
+        series = Series(self)
+        series.run()
+        self.assertTrue(series.envs, "no session was launched")
+        for env in series.envs:
+            self.assertEqual(pa.temp_env_problems(env), [])
+            temp = Path(env["TEMP"])
+            self.assertTrue(temp.is_dir())
+            self.assertIn(str(series.root / "out"), str(temp), "the temp directory belongs to the attempt, outside the repo")
+
+    def test_nothing_is_launched_when_the_childs_temp_is_not_isolated(self):
+        from test_campaign import Series
+        import pixel_runner as pr
+        series = Series(self)
+        real = pr.PixelCLI.env
+        with mock.patch.object(pr.PixelCLI, "env", lambda self_, extra=None: {
+                k: v for k, v in real(self_, extra).items() if k not in pa.TEMP_ENV_NAMES}):
+            series.run()
+        self.assertEqual(series.calls, [], "a session was launched without an isolated temp directory")
+
+    def test_nothing_is_launched_when_the_cache_root_is_not_the_one_the_proof_binds(self):
+        from test_campaign import Series
+        series = Series(self, cache_root_sha256_override="0" * 64)
+        series.run()
+        self.assertEqual(series.calls, [], "a session was launched with another cache root than the proof's")
 
 
 if __name__ == "__main__":

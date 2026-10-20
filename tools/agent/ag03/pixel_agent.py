@@ -103,6 +103,16 @@ def command_problems(argv) -> list[str]:
     return [] if NO_PERSISTENCE_FLAG in list(argv) else ["production_command_persists_session"]
 
 
+TEMP_ENV_NAMES = ("TEMP", "TMP", "TMPDIR", "CLAUDE_CODE_TMPDIR")
+
+
+def temp_env_problems(env: dict) -> list[str]:
+    """Closed tokens for a child environment that does not give the session a temp directory of its own: the four variables
+    that decide where the CLI writes its temporary and image files must name ONE non-empty directory (R106-1)."""
+    values = {env.get(name) for name in TEMP_ENV_NAMES}
+    return [] if len(values) == 1 and next(iter(values)) else ["child_temp_not_isolated"]
+
+
 def env_problems(env: dict) -> list[str]:
     """Closed tokens for an environment that lacks the pixel agent's switches (``PIXEL_ENV``)."""
     return [] if all(env.get(k) == v for k, v in PIXEL_ENV.items()) else ["agent_environment_lacks_pixel_switches"]
