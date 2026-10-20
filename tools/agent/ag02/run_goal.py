@@ -50,7 +50,6 @@ section 9.11):
 from __future__ import annotations
 
 import argparse
-import contextlib
 import hashlib
 import importlib.util
 import json
@@ -1446,75 +1445,10 @@ IMMEDIATE_TREE_KILL = frozenset({"terminal", "operator_stop", "stop_unreadable",
 WATCHER_JOIN_S = 5.0
 
 
-@contextlib.contextmanager
-def _interrupts_ignored():
-    """SIGINT, SIGTERM and (Windows) SIGBREAK are ignored while the body runs and the previous handlers are restored
-    afterwards - only in the main thread, where Python delivers them; elsewhere a no-op.
-
-    Changing the mask is itself guarded (review of PR 101, J1). The previous handlers are read before anything changes;
-    a signal that lands while the mask is being installed or lifted (the handlers of the campaign raise
-    ``KeyboardInterrupt``) is remembered and the step is repeated, so the body - the session cleanup - always runs and
-    every handler is put back before the remembered interruption is raised. A handler that cannot be put back is an
-    error, not a success."""
-    if threading.current_thread() is not threading.main_thread():
-        yield
-        return
-    numbers = [number for number in (getattr(signal, name, None) for name in ("SIGINT", "SIGTERM", "SIGBREAK"))
-               if number is not None]
-    saved: dict[int, object] = {}
-    masked: set[int] = set()
-    restored: set[int] = set()
-    interrupted: list[BaseException] = []
-
-    def attempt(action) -> None:
-        """Repeats ``action`` (every one is idempotent) while a signal lands inside it."""
-        for _ in range(16):
-            try:
-                action()
-                return
-            except BaseException as error:  # noqa: BLE001 - a real second SIGINT/SIGTERM/SIGBREAK
-                interrupted.append(error)
-
-    def set_handler(number, handler) -> None:
-        try:
-            signal.signal(number, handler)
-        except (ValueError, OSError):
-            pass  # not settable here: nothing was changed, nothing to put back
-
-    def save_all() -> None:
-        for number in numbers:
-            if number not in saved:
-                saved[number] = signal.getsignal(number)
-
-    def mask_all() -> None:
-        for number in numbers:
-            if number in saved and number not in masked:  # a handler that could not even be read is never changed
-                set_handler(number, signal.SIG_IGN)
-                masked.add(number)
-
-    def restore_one(number) -> None:
-        set_handler(number, saved[number])
-        restored.add(number)
-
-    def restore_all() -> None:
-        for number in reversed(numbers):  # one handler that keeps failing must not keep the others from being put back
-            if number in saved and number not in restored:
-                attempt(lambda number=number: restore_one(number))
-
-    def setup() -> None:
-        save_all()
-        mask_all()
-
-    try:
-        attempt(setup)
-        yield
-    finally:
-        attempt(restore_all)
-    unrestored = [number for number in numbers if number in saved and number not in restored]
-    if unrestored:
-        raise RuntimeError(f"signal handlers {unrestored} could not be restored") from (interrupted or [None])[0]
-    if interrupted:
-        raise interrupted[0]
+# The owned CLI tree lives in a job object that is created with this limit: when the last handle to the job closes -
+# including when this process dies or is interrupted for good - the kernel kills every process in it. That, and a lock
+# that is released only on positive proof of quiescence, is what makes an interrupted cleanup safe; no signal is masked.
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 
 
 class OwnedSessionNotQuiescent(RuntimeError):
@@ -1581,7 +1515,7 @@ class OwnedTree:
         if not job:
             return
         info = Extended()
-        info.Basic.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        info.Basic.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE  # the kernel ends the tree if this process dies
         if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
             k32.CloseHandle(job)
             return
@@ -1785,18 +1719,19 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
     except BaseException as error:  # noqa: BLE001 - KeyboardInterrupt, SystemExit and every other exception
         failure = error  # the ``finally`` ends the whole owned tree at once (an exception always does) and verifies it
     finally:
-        # The cleanup is fail closed from its first statement to its last (review of PR 101, I1). Every step is
-        # attempted whatever an earlier step did - a failed fast termination must not skip the fallback shutdown and
-        # its verification - a further SIGINT/SIGTERM/SIGBREAK is ignored while it runs, and nothing below can
-        # raise out of it. The only thing that counts as proof is: the monitor shown finished AND the tree killed and
-        # verified gone. Without that proof ``ownership["unverified"]`` stays raised and the caller keeps its lock.
+        # The cleanup is best effort and idempotent, and fail closed (reviews of PR 101, I1 and J1). Every step is
+        # attempted whatever an earlier step did - a failed fast termination must not skip the fallback shutdown and its
+        # verification. No signal is ignored or remapped here: a Ctrl+C (or any BaseException) that lands inside simply
+        # propagates, ``ownership["unverified"]`` stays raised and the caller keeps its lock; if this process then dies,
+        # the job object kills the owned tree (KILL_ON_JOB_CLOSE). The only proof that counts is: the monitor shown
+        # finished AND the tree killed and verified gone; only that lowers the counter.
         cleanup_errors: list[BaseException] = []
         quiescent, left = True, 1
 
         def step(fn, default=None):
             try:
                 return fn()
-            except BaseException as error:  # noqa: BLE001 - a second Ctrl+C or an OSError inside the cleanup
+            except Exception as error:  # noqa: BLE001 - an OSError or a join that failed: the next step still runs
                 cleanup_errors.append(error)
                 return default
 
@@ -1809,44 +1744,22 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
                 return True
             return False
 
-        body_done = False
-
-        def cleanup_body() -> None:
-            nonlocal quiescent, left, body_done
-            quiescent = bool(step(close_gate, False))
-            step(finished.set)
-            if watcher is not None:
-                joined = step(lambda: (watcher.join(timeout=WATCHER_JOIN_S), not watcher.is_alive())[1], False)
-                quiescent = quiescent and bool(joined)
-            immediate = killed["reason"] in IMMEDIATE_TREE_KILL or failure is not None
-            if immediate:
-                step(tree._terminate)  # noqa: SLF001 - end the whole job NOW; ``shutdown`` would first wait for the CLI
-            left = step(lambda: tree.shutdown(kill_cli=False, grace=0.0 if immediate else None), 1)
-            if reader is not None:
-                pumped = step(lambda: (reader.join(timeout=10), not reader.is_alive())[1], False)
-                quiescent = quiescent and bool(pumped)
-            if reader is None or not reader.is_alive():
-                step(proc.stdout.close)  # closing under a blocked read would block here as well
-            if stderr_path:
-                step(stderr.close)
-            body_done = True
-
-        # The mask is part of the protected region (review of PR 101, J1): a signal that lands while it is installed or
-        # lifted never skips the cleanup. If the body did not complete (the mask could not be entered), it is run again -
-        # every step is idempotent - and the last attempt goes without the mask. Whatever escaped is kept for the end.
-        mask_error = None
-        for attempt_no in range(8):
-            try:
-                if attempt_no < 7:
-                    with _interrupts_ignored():
-                        cleanup_body()
-                else:
-                    cleanup_body()
-            except BaseException as error:  # noqa: BLE001 - a signal at a mask transition, or a handler not restored
-                cleanup_errors.append(error)
-                mask_error = mask_error or error
-            if body_done:
-                break
+        quiescent = bool(step(close_gate, False))
+        step(finished.set)
+        if watcher is not None:
+            joined = step(lambda: (watcher.join(timeout=WATCHER_JOIN_S), not watcher.is_alive())[1], False)
+            quiescent = quiescent and bool(joined)
+        immediate = killed["reason"] in IMMEDIATE_TREE_KILL or failure is not None
+        if immediate:
+            step(tree._terminate)  # noqa: SLF001 - end the whole job NOW; ``shutdown`` would first wait for the CLI
+        left = step(lambda: tree.shutdown(kill_cli=False, grace=0.0 if immediate else None), 1)
+        if reader is not None:
+            pumped = step(lambda: (reader.join(timeout=10), not reader.is_alive())[1], False)
+            quiescent = quiescent and bool(pumped)
+        if reader is None or not reader.is_alive():
+            step(proc.stdout.close)  # closing under a blocked read would block here as well
+        if stderr_path:
+            step(stderr.close)
         verified = quiescent and left == 0
         if verified and ownership is not None:
             ownership["unverified"] = ownership.get("unverified", 0) - 1
@@ -1857,8 +1770,6 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
             "lock must stay until the operator has checked") from (failure or (cleanup_errors or [None])[0])
     if failure is not None:
         raise failure
-    if mask_error is not None:
-        raise mask_error  # the session is verified gone and the mask is lifted: now the interruption may propagate
     if guard is not None and killed["reason"] is None:
         killed["reason"] = guard.reason  # e.g. a result event that reports more than the cap
     out = {"exit_code": proc.returncode, "killed": killed["reason"]}

@@ -114,9 +114,10 @@ init, timeout, parse - earns a retry or discards a recorded terminal state), raw
   (a series or a diagnostic) is refused outright - no waiting, no takeover, no guess about whether the owner is alive. A lock
   left by a hard crash is removed **by hand** by the operator, after checking that nothing of the campaign is still running.
 * **Interruption**: on every exit path (normal, exception, Ctrl+C, SIGTERM, Ctrl+Break) the owned job/tree is killed and
-  verified gone **before** the lock is released, and the cleanup itself is fail closed (every step is attempted, further
-  Ctrl+C / SIGTERM / Ctrl+Break are ignored while it runs, and installing and lifting that mask is itself guarded: a signal
-  at any point of it neither skips the cleanup nor leaves a handler ignored). The lock is released **only on positive proof**; if that cannot be verified, the lock is **kept** and the runner says so:
+  verified gone **before** the lock is released, and the cleanup itself is best effort and idempotent (every step is attempted; **no signal is ignored or remapped
+  during it** - a Ctrl+C that lands inside simply propagates and leaves the session unverified). The lock is released
+  **only on positive proof** of quiescence, and the owned tree lives in a Windows job object created with
+  `KILL_ON_JOB_CLOSE`, so the kernel ends it if the harness dies; if that cannot be verified, the lock is **kept** and the runner says so:
   check that nothing of the campaign is running, then remove it by hand. The watcher's effects (stop file, kill) go through
   one gate that is closed before `run_claude` returns, so nothing can act on an ended session.
 * **Logs**: a server log that cannot be read or parsed completely is a terminal **uncertain delivery** (deliveries unknown,

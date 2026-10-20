@@ -82,15 +82,31 @@ class I1CleanupFailClosedTests(unittest.TestCase):
             return rg.run_claude(child(tmp), "", tmp, rg.StreamMetrics([], None, None), 60.0, **kw)
 
     def test_a_failed_fast_termination_does_not_skip_the_fallback_shutdown_and_its_verification(self):
-        for error in (OSError("simulated termination failure"), KeyboardInterrupt()):
-            with tempfile.TemporaryDirectory() as tmp:
-                tmp = Path(tmp)
-                with mock.patch.object(rg.OwnedTree, "_terminate", first_call_raises(error)):
-                    with self.assertRaises((KeyboardInterrupt, rg.OwnedSessionNotQuiescent)):
-                        self.interrupted(tmp)
-                alive = beating(tmp)
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            owned = {"unverified": 0}
+            with mock.patch.object(rg.OwnedTree, "_terminate", first_call_raises(OSError("simulated termination failure"))):
+                with self.assertRaises(KeyboardInterrupt):  # the original interruption, after a verified cleanup
+                    self.interrupted(tmp, ownership=owned)
+            alive = beating(tmp)
+            end_child(tmp)
+            self.assertFalse(alive, "the owned CLI outlived a failed fast termination")
+            self.assertEqual(owned["unverified"], 0)
+
+    def test_a_second_interruption_inside_the_cleanup_propagates_and_leaves_the_session_unverified(self):
+        # No signal is ignored during the cleanup (architect decision after the seventh review of PR 101): a second
+        # Ctrl+C simply propagates, the session stays counted as unverified so the caller keeps the lock, and the job
+        # object (KILL_ON_JOB_CLOSE) is what ends the tree if the process dies.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            owned = {"unverified": 0}
+            with mock.patch.object(rg.OwnedTree, "_terminate", first_call_raises(KeyboardInterrupt())):
+                with self.assertRaises(KeyboardInterrupt):
+                    self.interrupted(tmp, ownership=owned)
+            try:
+                self.assertEqual(owned["unverified"], 1, "an interrupted cleanup was counted as verified")
+            finally:
                 end_child(tmp)
-                self.assertFalse(alive, f"the owned CLI outlived a failed fast termination ({error!r})")
 
     def test_when_nothing_can_end_the_tree_the_failure_is_typed_and_keeps_its_causes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -147,19 +163,21 @@ class I1CleanupFailClosedTests(unittest.TestCase):
             end_child(tmp)
             self.assertFalse(alive, "the tree was left alive although the monitor join failed")
 
-    def test_further_interrupt_signals_are_ignored_while_the_cleanup_runs_and_restored_after(self):
-        before = {n: signal.getsignal(n) for n in (signal.SIGINT, signal.SIGTERM)}
+    def test_the_cleanup_neither_ignores_nor_remaps_any_signal(self):
+        names = [n for n in ("SIGINT", "SIGTERM", "SIGBREAK") if hasattr(signal, n)]
+        before = {n: signal.getsignal(getattr(signal, n)) for n in names}
         seen = {}
         real_shutdown = rg.OwnedTree.shutdown
 
         def shutdown(self, *a, **k):
-            seen.update({n: signal.getsignal(n) for n in before})
+            seen.update({n: signal.getsignal(getattr(signal, n)) for n in names})
             return real_shutdown(self, *a, **k)
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(rg.OwnedTree, "shutdown", shutdown):
             with self.assertRaises(KeyboardInterrupt):
                 self.interrupted(Path(tmp))
-        self.assertEqual(seen, {signal.SIGINT: signal.SIG_IGN, signal.SIGTERM: signal.SIG_IGN})
-        self.assertEqual({n: signal.getsignal(n) for n in before}, before)
+        self.assertEqual(seen, before)
+        self.assertEqual({n: signal.getsignal(getattr(signal, n)) for n in names}, before)
+        self.assertFalse(hasattr(rg, "_interrupts_ignored"), "a signal mask is back")
 
     def test_the_lock_is_released_only_on_positive_proof_and_an_unproven_session_keeps_it(self):
         for proven, expected_lock in ((True, False), (False, True)):
