@@ -84,9 +84,16 @@ class RehearsalBase:
         allowed = {"t_ms", "dir", "bytes", "kind", "method", "tool", "action", "dry_run",
                    "element_id", "revision", "text_len", "live_counted", "is_error", "status",
                    "error_code", "input_delivered", "verified", "observed_effect", "elements",
-                   "rpc_error_code", "latency_ms", "reason", "engine_exit", "live_spent_here"}
+                   "rpc_error_code", "latency_ms", "reason", "engine_exit", "live_spent_here",
+                   # observation evidence (PE-13, PE-14): booleans, bounded numbers, closed names
+                   "request_index", "observe_index", "query_present", "limit", "cursor_present",
+                   "total_elements", "truncated", "timings_us", "plan"}
         for record in result["records"]:
             self.assertLessEqual(set(record), allowed, record)
+            for nested in (record.get("timings_us") or {}, record.get("plan") or {}):
+                for value in nested.values():
+                    self.assertTrue(value is None or isinstance(value, (bool, int))
+                                    or value in (proxy.PLAN_WORK | proxy.PLAN_REASONS | {"other"}), record)
         self.assertNotIn("ETIQUETA-SECRETA", result["log_text"])
 
     def check_dry_run_only(self):

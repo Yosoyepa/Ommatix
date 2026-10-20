@@ -31,8 +31,14 @@ vocabularies and numbers: the time, direction, kind, a method and tool from a fi
 (``other``/``unknown`` otherwise), byte size, the result status, error code and effect from the
 contract's enums, ``input_delivered``, the element id only when the engine itself issued it in
 an observation (``unknown`` otherwise), the revision, the length (never the text) of a ``type``
-and the element count of an observation. Never a label, a value, an error message, a typed text
-or any string the agent chose. The proxy never touches the operator's stop file.
+and the element count of an observation. For ``observe_screen`` it also logs whether the request
+filtered or paged (``query_present``, ``limit``, ``cursor_present``: never the query or the cursor),
+what the response says about its own completeness (``truncated``, ``total_elements``) and the
+numbers of ``_meta`` ``io.ommatix/timings`` and ``io.ommatix/plan`` under their closed field names
+(PE-13, PE-14 of the paper v0.4 review: a short element list is not proof of a poor detection, and a
+round trip is not the engine's time). Every request with an id gets a ``request_index`` (shared by its
+response) and every observation an ``observe_index``. Never a label, a value, an error message, a
+typed text or any string the agent chose. The proxy never touches the operator's stop file.
 """
 
 from __future__ import annotations
@@ -66,6 +72,15 @@ ACTIONS = frozenset({"click", "type", "scroll"})
 STATUSES = frozenset({"simulated", "rejected", "input_delivered", "effect_observed", "indeterminate"})
 EFFECTS = frozenset({"none", "focus_changed", "value_updated", "scroll_moved", "visual_change",
                      "unknown"})
+# `_meta` of an observation (docs/thesis/07 section 7.3): field names and the plan's names are closed.
+TIMING_FIELDS = ("capture_us", "plan_us", "detect_us", "recognize_us", "accessibility_us", "fuse_us",
+                 "track_us", "commit_us", "total_us", "response_build_us")
+PLAN_COUNTS = ("region_count", "region_area_px", "inference_count", "controls_n", "words_n",
+               "supports_n", "relations_n")
+PLAN_WORK = frozenset({"full", "regions", "idle"})
+PLAN_REASONS = frozenset({"no_committed_base", "geometry_changed", "closure_budget", "too_many_regions",
+                          "area_budget", "experimental_baseline", "adaptive_cost"})
+NUMBER_LIMIT = 10**15  # whole microseconds, pixels and counts: anything larger is not a measurement
 ERROR_CODES = frozenset({
     "STALE_SNAPSHOT", "STALE_TARGET", "TARGET_NOT_FOUND", "AMBIGUOUS_TARGET", "NOT_ACTIONABLE",
     "POLICY_DENIED", "PERMISSION_DENIED", "CAPTURE_UNAVAILABLE", "INFERENCE_FAILED",
@@ -308,6 +323,53 @@ def _bounded_int(value, low=1, high=10**9):
     return value if isinstance(value, int) and not isinstance(value, bool) and low <= value <= high else None
 
 
+def _count(value):
+    """A whole number the engine could have measured (``0 <= n <= NUMBER_LIMIT``), else None."""
+    return value if isinstance(value, int) and not isinstance(value, bool) \
+        and 0 <= value <= NUMBER_LIMIT else None
+
+
+def observation_request_meta(args) -> dict:
+    """Whether an ``observe_screen`` request filtered or paged, never what it asked for."""
+    args = args if isinstance(args, dict) else {}
+    meta = {"query_present": isinstance(args.get("query"), str) and bool(args["query"]),
+            "cursor_present": isinstance(args.get("cursor"), str) and bool(args["cursor"])}
+    limit = _bounded_int(args.get("limit"), 1, 200)
+    if limit is not None:
+        meta["limit"] = limit
+    return meta
+
+
+def observation_response_meta(result: dict, structured: dict) -> dict:
+    """What an ``observe_screen`` result says about its own completeness, and the numbers of its
+    ``_meta`` (stage timings, plan), each under a closed field name."""
+    meta: dict = {}
+    total = _count(structured.get("total_elements"))
+    if total is not None:
+        meta["total_elements"] = total
+    if isinstance(structured.get("truncated"), bool):
+        meta["truncated"] = structured["truncated"]
+    extra = result.get("_meta")
+    if not isinstance(extra, dict):
+        return meta
+    timings = extra.get("io.ommatix/timings")
+    if isinstance(timings, dict):
+        meta["timings_us"] = {name: _count(timings.get(name)) for name in TIMING_FIELDS}
+    plan = extra.get("io.ommatix/plan")
+    if isinstance(plan, dict):
+        work, reason = plan.get("work"), plan.get("full_refresh_reason")
+        shapes = plan.get("input_shapes")
+        truncated = plan.get("accessibility_truncated")
+        meta["plan"] = {
+            "work": work if isinstance(work, str) and work in PLAN_WORK else "other",
+            "full_refresh_reason": None if reason is None else (
+                reason if isinstance(reason, str) and reason in PLAN_REASONS else "other"),
+            **{name: _count(plan.get(name)) for name in PLAN_COUNTS},
+            "input_shapes_n": min(len(shapes), 1000) if isinstance(shapes, list) else None,
+            "accessibility_truncated": truncated if isinstance(truncated, bool) else None}
+    return meta
+
+
 def request_meta(message, known_ids=frozenset()) -> dict:
     """The loggable facts of an agent message: closed vocabularies and numbers only."""
     meta: dict = {"kind": "other"}
@@ -322,6 +384,8 @@ def request_meta(message, known_ids=frozenset()) -> dict:
         name = call[0]
         meta["tool"] = name if isinstance(name, str) and name in TOOLS else "unknown"
         args = call[1] if isinstance(call[1], dict) else {}
+        if name == "observe_screen":
+            meta.update(observation_request_meta(call[1]))
         if name == "execute_action":
             meta["action"] = args.get("action") if args.get("action") in ACTIONS else "invalid"
             dry_run = args.get("dry_run", True)
@@ -364,8 +428,10 @@ def response_meta(message, tool: str | None) -> dict:
         effect = structured.get("observed_effect")
         if isinstance(effect, str) and effect in EFFECTS:
             meta["observed_effect"] = effect
-        if tool == "observe_screen" and isinstance(structured.get("elements"), list):
-            meta["elements"] = len(structured["elements"])
+        if tool == "observe_screen":
+            if isinstance(structured.get("elements"), list):
+                meta["elements"] = len(structured["elements"])
+            meta.update(observation_response_meta(result, structured))
     return meta
 
 
@@ -389,7 +455,10 @@ class Proxy:
         self.out_lock = threading.Lock()
         self.log_lock = threading.Lock()
         self.state_lock = threading.Lock()  # pending ids and the engine-issued ids
-        self.pending: dict = {}  # id_key -> (tool or None, monotonic time sent)
+        # id_key -> (tool or None, monotonic time sent, request_index, observe_index or None)
+        self.pending: dict = {}
+        self.requests_seen = 0  # requests with an id that were forwarded: the session's request index
+        self.observes_seen = 0
         self.known_ids: set = set()
         self.live_spent_here = 0
         self.t0 = time.monotonic()
@@ -448,12 +517,21 @@ class Proxy:
                 self.log("agent->proxy", size, **meta)
                 self.refuse(request_id, refusal.reason, tool="execute_action")
                 return
-        self.log("agent->engine", size, live_counted=live, **meta)
+        indices: dict = {}
+        if is_request:
+            with self.state_lock:
+                self.requests_seen += 1
+                indices["request_index"] = self.requests_seen
+                if meta.get("tool") == "observe_screen":
+                    self.observes_seen += 1
+                    indices["observe_index"] = self.observes_seen
+        self.log("agent->engine", size, live_counted=live, **meta, **indices)
         if live:
             self.live_spent_here += 1
         if is_request:
             with self.state_lock:
-                self.pending[key] = (meta.get("tool"), time.monotonic())
+                self.pending[key] = (meta.get("tool"), time.monotonic(), indices["request_index"],
+                                     indices.get("observe_index"))
         engine_in.write(raw if raw.endswith(b"\n") else raw + b"\n")
         engine_in.flush()
 
@@ -464,12 +542,13 @@ class Proxy:
                 message = parse_line(raw)
             except ValueError:
                 message = None
-            tool, started = None, None
+            tool, started, request_index, observe_index = None, None, None, None
             if isinstance(message, dict) and "id" in message and "method" not in message:
                 key = id_key(message["id"])
                 if key is not None:
                     with self.state_lock:
-                        tool, started = self.pending.pop(key, (None, None))
+                        tool, started, request_index, observe_index = self.pending.pop(
+                            key, (None, None, None, None))
             if tool == "observe_screen":
                 issued = element_ids_of(message)
                 with self.state_lock:
@@ -478,6 +557,10 @@ class Proxy:
             meta = response_meta(message, tool)
             if tool:
                 meta["tool"] = tool
+            if request_index is not None:
+                meta["request_index"] = request_index
+            if observe_index is not None:
+                meta["observe_index"] = observe_index
             if started is not None:
                 meta["latency_ms"] = round((time.monotonic() - started) * 1000, 1)
             self.log("engine->agent", size, **meta)
