@@ -45,7 +45,7 @@ pub use freshness::{
     ActionFreshness, FreshnessProbeCounts, FreshnessProbeGroup, OccluderFallback,
     OccluderProbeCounts,
 };
-pub use icons::IconResolverConfig;
+pub use icons::{IconResolverConfig, grey_grid};
 pub use journal::JOURNAL_CAPACITY;
 
 use journal::Journal;

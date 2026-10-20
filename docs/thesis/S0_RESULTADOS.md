@@ -1146,3 +1146,68 @@ La auditoría completa está en [la revisión de estado retenido](../reviews/202
 **Qué queda.** (1) Una decisión del responsable sobre el paso de manejadores (cuenta como crecimiento según el criterio estricto, o fija tolerancia antes de la siguiente corrida), o un diagnóstico que lo atribuya. (2) La memoria viva de la caché de íconos, que requiere una corrida con la caché activa. (3) La variación entre corridas, que requiere repetir la corrida.
 
 **Reproducir.** Desde la raíz del repositorio en `1c46b87` o posterior, con los dos ejecutables compilados desde ese commit (`S4_INSTALACION_Y_REVERSION.md` §3), una copia de la configuración del operador con `accessibility = "uia"` bajo `[models]` y la aplicación de prueba al frente de la pantalla (la herramienta no la trae al frente): `python tools/perf/soak.py --config <copia> --minutes 120 --max-pending-regions 510 --foreground-wait 300 --out "$env:LOCALAPPDATA\Ommatix\runs\soak-120.json"` (PowerShell). El informe bruto se guarda fuera del repositorio (ADR-0012).
+
+## 19. Casilla 7, ruta A: caché de íconos activa en el soak (1.0.108)
+
+**Estado.** Preparación sin conexión, sin resultados de soak. Este apartado fija **antes de calcular y antes de correr** el protocolo de calibración y los criterios del soak (19.2 y 19.4); los resultados se añaden después, en 19.3 y en un apartado de resultados del soak, sin tocar lo congelado. No marca ninguna casilla ni cambia ningún estado de requisito.
+
+### 19.1 Qué se hace y por qué
+
+Decisión del responsable del 20 de octubre de 2026: cerrar la casilla 7 con evidencia por la ruta A. Faltaban dos cosas ([capítulo 06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md), reevaluación 1.0.93): la memoria viva de una caché de íconos **activa** y la variación entre corridas. Para eso hacen falta tres cosas, todas sintéticas y sin captura de pantalla:
+
+1. **Candidatos de ícono.** Ninguna de las dos aplicaciones de prueba tiene íconos sin texto (`testapp`: botones con texto, texto y un campo; `testeditor`: un campo, «Guardar» y una línea de estado), así que con la caché activa no habría ningún candidato (`icons::is_candidate`). `tools/s4/testapp` gana la bandera oculta `--icon-strip`, como `--animate`: una franja de ocho íconos pintados por código (`tools/s4/icon_spec.rs`), sin texto, sin imagen y **no interactivos** (sin `Sense::click`: no crean nodos de accesibilidad ni acciones; la etiqueta de un ícono nunca cambia la accionabilidad, AGENTS.md §1). Sin la bandera la ventana es la de siempre, así que AG-02 no cambia.
+2. **Prototipos curados por código.** `src/acceptance/examples/icon_calibration.rs` rasteriza esos ocho íconos en software (sólo `+ - * /` y comparaciones: los mismos bytes en cualquier plataforma), cuatro representaciones por clase (32 prototipos; `[cache] max_entries = 64`, la cota de §17), y escribe el archivo JSON-lines de `src/app/src/prototypes.rs` **fuera del repositorio**, para el contexto `ommatix-testapp.exe` y etiquetas de un vocabulario cerrado (`cache-icon-01` a `cache-icon-08`). El operador fija su SHA-256 en `[cache] prototypes_sha256`. El repositorio no versiona el archivo.
+3. **Umbrales por calibración sin conexión.** La misma herramienta propone `gradient_tau`, `max_distance` y `min_margin` sobre un corpus sintético, con la normalización del propio motor (`ommatix_application::grey_grid`, hecha pública para esto, sin cambio de comportamiento) y una prueba de que la regla de decisión de la barrida es `IconCache::lookup`. **Los umbrales son una propuesta para el responsable** (`cache-proposal.toml`, fuera del repositorio): no son valores por defecto ni constantes del código (AGENTS.md §1: la tesis los calibra), y entran en la configuración del operador sólo si el responsable los aprueba.
+
+**Qué dice la tesis sobre el objetivo de la caché.** Se buscó en los capítulos 01, 03, 04, 05, 08 y 09 un objetivo numérico y no hay ninguno. Sólo hay H4 ([capítulo 01](01_TESIS_Y_MARCO_TEORICO.md): la caché contextual reduce llamadas de clasificación «sin aumentar la aceptación de iconos desconocidos más allá del umbral fijado antes del test», con tema ideal invertido, temas reales e iconos fuera de distribución por separado), RF-08 («nunca autoetiquetar desconocidos como certeza») y el capítulo 04 §4.4 («estos parámetros no son calibraciones empíricas»). Por eso el límite de aceptación falsa de abajo es una elección del protocolo, fijada antes del test como pide H4, y no una cifra de la tesis.
+
+**Límites declarados de antemano.** El corpus lo dibuja el rasterizador de la herramienta, no el pintor de egui de la aplicación de prueba: el antialiasing, el gamma y el recuadro que propone el detector reales difieren. Lo que se calibra es la regla sobre ese corpus, y el soak dirá si el dibujo real se acepta; si no se acepta, eso es un hallazgo y **no se retoca ningún umbral con datos de pantalla**. Un solo descriptor (versión 1), un solo contexto, inversión ideal sólo (el tema oscuro sigue fuera del perfil del MVP).
+
+### 19.2 Protocolo de calibración, congelado antes de calcular
+
+Los parámetros son las constantes de `icon_calibration.rs` en el commit que contiene este texto.
+
+| Parámetro | Valor |
+|---|---|
+| Conjuntos | calibración, validación y prueba, **disjuntos por semilla** (`0x0C1A55E500000001`, `…02`, `…03`; una familia de pantalla sintética) |
+| Positivos por conjunto | 8 clases × 150 = 1 200; cada uno con escala 100/125/150 %, desplazamiento subpíxel de 0, 0,25, 0,5 o 0,75 px por eje, **recuadro del detector con ±2 px por lado**, estilo aleatorio (tinta 20–90, relleno 215–250, borde 100–190, fondo 230–255) y ruido gaussiano de σ ∈ {0, 1, 2, 3} niveles |
+| Fuera de distribución por conjunto | 16 formas × 40 (ocho **casi iguales** a una clase, con un cambio pequeño, y ocho distintas) + 4 clases procedurales × 40 (baldosa plana, ruido, bloques tipo texto, desorden de formas) = 800 |
+| Inversión ideal | cada positivo con `Y' = 255 − Y` en la rejilla, informado **por separado** (H4); no entra en la selección |
+| Prototipos | 8 clases × 4 representaciones: baldosa exacta al 100 %, recuadro 1 px mayor con medio píxel de desplazamiento, baldosa exacta al 125 % y al 150 %; estilo nominal, sin ruido |
+| Política de soporte | la inicial de la tesis, sin tocar: `min_support` 8, solape 0,70 |
+| Búsqueda | `gradient_tau` ∈ {2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64}; `max_distance` y `min_margin` ∈ {0,00 … 0,50} en pasos de 0,01 |
+
+**Regla de selección.** Sobre el conjunto de **calibración**, entre los ajustes con **cero etiquetas equivocadas** entre los positivos aceptados y **aceptación de fuera de distribución ≤ 1 %**, el de **más etiquetas correctas** (cobertura); desempates: menor `max_distance`, después mayor `min_margin`, después menor `gradient_tau`. Un ajuste que no acepta nada no es una propuesta. **Compuerta de validación:** el ajuste elegido debe cumplir en el conjunto de validación cero etiquetas equivocadas, aceptación fuera de distribución ≤ 1 % y cobertura ≥ 50 %. Si no hay ajuste elegible o la compuerta falla, **no se propone ningún umbral** y se informa tal cual. El conjunto de **prueba** se calcula y se informa una sola vez, con el ajuste ya elegido. Se informan, con intervalos de Wilson del 95 %: cobertura, etiquetas equivocadas, precisión de lo aceptado, razones de `unknown`, aceptación fuera de distribución (total y por grupo: casi iguales, otras formas, procedurales), cobertura por clase y la inversión ideal.
+
+**Contra el oráculo.** OR-29 a OR-33 (descriptor, distancia, inversión, soporte vacío) fijan el comportamiento del descriptor, que la herramienta no cambia; la tolerancia al ruido del dibujo real no la acredita el oráculo (capítulo 04 §4.4).
+
+### 19.3 Resultados de la calibración
+
+*Pendiente: se rellena tras la corrida de la herramienta, con el commit y los SHA-256.*
+
+### 19.4 Criterios del soak, preregistrados antes de correr
+
+Corridas, todas de 120 minutos (salvo R0) sobre el mismo commit, binario, configuración y máquina, con `tools/perf/soak.py --icon-strip --icon-probe-every 12 --max-pending-regions 510 --foreground-wait 300`, sin entrada de ningún tipo y con la configuración de §18 (`accessibility = "uia"`) más el bloque `[cache]` aprobado por el responsable:
+
+| Corrida | Qué es | Obligatoria |
+|---|---|---|
+| R0 | humo de 5 minutos, sólo para ver que hay candidatos y qué aceptan; sin veredicto | recomendada |
+| R1 y R2 | franja de íconos, caché **activa**; dan la variación entre corridas (casilla 7, punto 2) | sí (el mínimo) |
+| R3 | franja de íconos, **sin** `[cache]`: el mismo dibujo sin caché, para atribuir por diferencia | recomendada |
+
+Criterios, **por corrida**, con los valores y reglas ya usados en §18 y §9.7 (ninguno nuevo):
+
+| Criterio | Regla |
+|---|---|
+| C1 conjunto de trabajo | pendiente por hora, tras 10 minutos de calentamiento, ≤ 10 MiB/h |
+| C2 manejadores | tras el calentamiento, a lo sumo un cambio del recuento, de +1, y recuento constante en los últimos 60 minutos (`handle_rule` de `soak.py`; esta vez preregistrada, a diferencia de §18) |
+| C3 cola | `pending_regions` máximo ≤ 510 |
+| C4 corrida completa | `ended = completed`, al menos 1 400 de 1 440 observaciones, 0 errores de observación, `delivered_actions` = 0 |
+| C5 caché ejercida (sólo R1 y R2) | la nota de arranque del motor dice que hay prototipos curados (≤ `max_entries`) y la sonda ve al menos un elemento candidato (`curated_icon`, o sin etiqueta y de fuente `unknown`) en al menos el 95 % de las sondas. El número de etiquetas `curated_icon` se **informa sin criterio**: si el dibujo real de egui no se acepta con los umbrales calibrados sin conexión, es un hallazgo |
+| C6 memoria de la caché | cota estructural: prototipos cargados ≤ `max_entries` (32 ≤ 64; el archivo se rechaza entero por encima) y la estimación de almacenamiento retenido de §17.2 (5 592 B para 64); en vivo sólo se miden el conjunto de trabajo y los bytes privados del proceso, y la caché no se aísla en ellos: sólo se compara con R3 por diferencia de nivel y de pendiente, **sin criterio** |
+
+**Variación entre corridas** (informativa, sin criterio): pendiente, mediana del último décimo, máximos de conjunto de trabajo y de bytes privados, recuento final de manejadores y latencias de R1 frente a R2 (y frente a R3 si se corre). No se afirma ausencia de fugas. Una aceptación por cambio de alcance no marca la casilla.
+
+### 19.5 Reproducir
+
+*Pendiente: las órdenes exactas quedan en la guía de operador de la PR, tras la implementación.*

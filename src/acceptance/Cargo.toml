@@ -16,6 +16,7 @@ ommatix-application = { workspace = true }
 ommatix-domain = { workspace = true }
 cucumber = { workspace = true }
 futures = { workspace = true }
+image = { workspace = true }
 jsonschema = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
@@ -47,6 +48,13 @@ test = true
 [[example]]
 ## Offline RNF-06 evidence complementary to PERF-03; never captures or delivers input.
 name = "state_bounds"
+test = true
+
+[[example]]
+## Box 7 (S0 section 19): the offline calibration of the icon cache on a synthetic corpus and the
+## generator of the soak's curated prototypes. Its tests run with `cargo test`; the run needs
+## `--release`.
+name = "icon_calibration"
 test = true
 
 [lints]
