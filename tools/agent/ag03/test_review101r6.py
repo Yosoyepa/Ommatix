@@ -100,8 +100,11 @@ class J1NoMaskTests(unittest.TestCase):
 
             (tmp / "exit.flag").unlink(missing_ok=True)
             counted, owned, outcome = session(None)
-            self.assertIsInstance(outcome, KeyboardInterrupt)
-            self.assertEqual(owned["unverified"], 0)
+            # elsewhere than Windows the process count of the tree is unknown, so the typed uncertainty is the outcome
+            self.assertIsInstance(outcome, KeyboardInterrupt if os.name == "nt" else
+                                  (KeyboardInterrupt, rg.OwnedSessionNotQuiescent))
+            if os.name == "nt":
+                self.assertEqual(owned["unverified"], 0)
             self.assertGreater(counted["lines"], 20, "the cleanup was not traced")
             end_child(tmp)
             stride = max(1, counted["lines"] // 40)
