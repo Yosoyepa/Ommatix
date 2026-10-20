@@ -19,8 +19,9 @@ synthetic icons (dossier S0 §19), so that the icon cache has candidates; ``--ic
 adds, every N ticks, one more ``observe_screen`` (limit 200, outside the latency figures) that
 only *counts* the elements by label source and by the closed synthetic vocabulary of the strip,
 never keeping a label or a coordinate; ``--expect-cache`` judges that the engine started with
-curated prototypes and that the probes saw candidates (the number of curated labels is reported
-without a criterion). Without these flags the soak is the one of S0 §18.
+curated prototypes, that the probes saw candidates and that no label was accepted (the
+measurement configuration of S0 §19.4 accepts nothing, so an accepted label fails it). Without
+these flags the soak is the one of S0 §18.
 
 The report is JSON with no screen data: no frame, no element label, no coordinates. It carries
 the raw samples, the latency percentiles per window of time, and for each resource the first
@@ -275,16 +276,21 @@ def probe_summary(probes: list[dict], every: int) -> dict:
 
 
 def cache_criterion(note: dict | None, summary: dict) -> dict:
-    """S0 §19.4, C5: the engine started with curated prototypes and the probes saw candidates in
-    at least ``PROBE_SHARE_MIN`` of the probes. The curated labels are not judged: whether the
-    real drawing is accepted by thresholds calibrated offline is a finding, not a criterion."""
+    """S0 §19.4, C5 (option C, a measurement configuration whose thresholds accept nothing): the
+    engine started with curated prototypes, the probes saw candidates in at least
+    ``PROBE_SHARE_MIN`` of the probes, and **no** probe saw an accepted label. A label would mean
+    that the construction of the configuration is wrong, so it fails the criterion."""
     share = summary.get("share_with_candidate")
     loaded = note is not None and note["prototypes"] >= 1
-    return {"rule": f"curated prototypes loaded and candidates seen in >= {PROBE_SHARE_MIN:.0%} "
-                    "of the probes (the curated labels are reported without a criterion)",
+    curated = summary.get("curated_icon", {}).get("max")
+    vocabulary = summary.get("vocabulary_labelled_max")
+    accepted = None if curated is None else max(curated, vocabulary or 0)
+    return {"rule": f"curated prototypes loaded, candidates seen in >= {PROBE_SHARE_MIN:.0%} of "
+                    "the probes and zero accepted labels in every probe",
             "cache_note": note, "share_with_candidate": share,
-            "probes": summary.get("probes", 0),
-            "met": bool(loaded and share is not None and share >= PROBE_SHARE_MIN)}
+            "probes": summary.get("probes", 0), "accepted_labels_max": accepted,
+            "met": bool(loaded and share is not None and share >= PROBE_SHARE_MIN
+                        and accepted == 0)}
 
 
 def cache_settings(config_text: str) -> dict | None:

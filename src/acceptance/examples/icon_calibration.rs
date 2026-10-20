@@ -1232,6 +1232,7 @@ mod tests {
     use super::*;
     use ommatix_domain::appearance::{
         CachePolicy, DESCRIPTOR_VERSION, IconCache, IconMatch, Prototype, PrototypeSource,
+        UnknownReason,
     };
 
     fn cache_at(tau: u8) -> IconCache {
@@ -1320,6 +1321,34 @@ mod tests {
             let grid = object["grid"].as_array().unwrap();
             assert_eq!(grid.len(), GRID_LEN);
             assert!(grid.iter().all(|g| g.as_u64().is_some_and(|g| g <= 255)));
+        }
+    }
+
+    /// The measurement configuration of S0 §19.4 (option C, not a calibration): `gradient_tau`
+    /// 255, `max_distance` 0 and `min_margin` 1. A gradient is valid only between two cell means
+    /// that differ by 255, so no prototype of the strip (ink 40 on 248) has any support, no crop
+    /// of the corpus reaches the eight valid gradients the lookup needs, and the cache answers
+    /// `unknown` before it compares anything. These are test values, not defaults of any build.
+    #[test]
+    fn the_measurement_configuration_accepts_nothing_in_the_corpus() {
+        let (tau, policy) = (255, CachePolicy::new(0.0, 1.0).unwrap());
+        for (_, grid) in prototype_grids() {
+            assert_eq!(gradient_descriptor(&grid, tau).unwrap().support(), 0);
+        }
+        let cache = cache_at(tau);
+        let corpus = build_corpus(0xABCD, tiny());
+        let samples = corpus
+            .positives
+            .iter()
+            .map(|(_, g)| *g)
+            .chain(corpus.ood.iter().map(|(_, g)| *g))
+            .chain(prototype_grids().into_iter().map(|(_, g)| g));
+        for grid in samples {
+            let query = gradient_descriptor(&grid, tau).unwrap();
+            assert_eq!(
+                cache.lookup(&query, CONTEXT, policy).unwrap(),
+                IconMatch::Unknown(UnknownReason::InsufficientSupport)
+            );
         }
     }
 

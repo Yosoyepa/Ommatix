@@ -1149,7 +1149,7 @@ La auditoría completa está en [la revisión de estado retenido](../reviews/202
 
 ## 19. Casilla 7, ruta A: caché de íconos activa en el soak (1.0.108)
 
-**Estado.** Preparación sin conexión, sin resultados de soak. Este apartado fija **antes de calcular y antes de correr** el protocolo de calibración y los criterios del soak (19.2 y 19.4); los resultados se añaden después, en 19.3 y en un apartado de resultados del soak, sin tocar lo congelado. No marca ninguna casilla ni cambia ningún estado de requisito.
+**Estado.** Preparación sin conexión, sin resultados de soak. Este apartado fija **antes de calcular y antes de correr** el protocolo de calibración (19.2) y la configuración de medición y los criterios del soak (19.4); los resultados se añaden después, en 19.3 y en un apartado de resultados del soak, sin tocar lo congelado. **La calibración no produjo umbrales (dos intentos, 19.3); el soak se prepara, por decisión del responsable, con una configuración de medición que no acepta nada (opción C), que no es una calibración ni muestra que la caché sea útil.** No marca ninguna casilla ni cambia ningún estado de requisito.
 
 ### 19.1 Qué se hace y por qué
 
@@ -1158,6 +1158,8 @@ Decisión del responsable del 20 de octubre de 2026: cerrar la casilla 7 con evi
 1. **Candidatos de ícono.** Ninguna de las dos aplicaciones de prueba tiene íconos sin texto (`testapp`: botones con texto, texto y un campo; `testeditor`: un campo, «Guardar» y una línea de estado), así que con la caché activa no habría ningún candidato (`icons::is_candidate`). `tools/s4/testapp` gana la bandera oculta `--icon-strip`, como `--animate`: una franja de ocho glifos desnudos (tinta sobre el fondo, sin baldosa ni borde) pintados por código (`tools/s4/icon_spec.rs`), sin texto, sin imagen y **no interactivos** (sin `Sense::click`: no crean nodos de accesibilidad ni acciones; la etiqueta de un ícono nunca cambia la accionabilidad, AGENTS.md §1). Sin la bandera la ventana es la de siempre, así que AG-02 no cambia.
 2. **Prototipos curados por código.** `src/acceptance/examples/icon_calibration.rs` rasteriza esos ocho íconos en software (sólo `+ - * /` y comparaciones: los mismos bytes en cualquier plataforma), cuatro representaciones por clase (32 prototipos; `[cache] max_entries = 64`, la cota de §17), y escribe el archivo JSON-lines de `src/app/src/prototypes.rs` **fuera del repositorio**, para el contexto `ommatix-testapp.exe` y etiquetas de un vocabulario cerrado (`cache-icon-01` a `cache-icon-08`). El operador fija su SHA-256 en `[cache] prototypes_sha256`. El repositorio no versiona el archivo.
 3. **Umbrales por calibración sin conexión.** La misma herramienta propone `gradient_tau`, `max_distance` y `min_margin` sobre un corpus sintético, con la normalización del propio motor (`ommatix_application::grey_grid`, hecha pública para esto, sin cambio de comportamiento) y una prueba de que la regla de decisión de la barrida es `IconCache::lookup`. **Los umbrales son una propuesta para el responsable** (`cache-proposal.toml`, fuera del repositorio): no son valores por defecto ni constantes del código (AGENTS.md §1: la tesis los calibra), y entran en la configuración del operador sólo si el responsable los aprueba.
+
+**Decisión del responsable tras los dos intentos (20 de octubre de 2026, opción C).** Como la calibración no dio umbrales, el responsable aprobó correr los soaks de la casilla 7 con la caché **activa** (prototipos del intento 2 cargados, la franja encendida) y con umbrales que **no aceptan nada**, **únicamente como configuración de medición**: sirve para medir la memoria y la variación con la caché residente y su camino de descriptor ejercido en cada observación; **no es una calibración, no muestra que la caché sea útil y no se presenta como tal**. Los valores y por qué no aceptan nada están en 19.4.
 
 **Qué dice la tesis sobre el objetivo de la caché.** Se buscó en los capítulos 01, 03, 04, 05, 08 y 09 un objetivo numérico y no hay ninguno. Sólo hay H4 ([capítulo 01](01_TESIS_Y_MARCO_TEORICO.md): la caché contextual reduce llamadas de clasificación «sin aumentar la aceptación de iconos desconocidos más allá del umbral fijado antes del test», con tema ideal invertido, temas reales e iconos fuera de distribución por separado), RF-08 («nunca autoetiquetar desconocidos como certeza») y el capítulo 04 §4.4 («estos parámetros no son calibraciones empíricas»). Por eso el límite de aceptación falsa de abajo es una elección del protocolo, fijada antes del test como pide H4, y no una cifra de la tesis.
 
@@ -1200,17 +1202,36 @@ El intento 1 se congeló en el commit `6e561f7` y su resultado está en 19.3. Es
 
 **Dos intentos de dos.** Siguiendo las condiciones del coordinador, **no hay un tercer intento ni un cambio de regla sin el responsable**. Los números que explican el fallo salen de la semilla de desarrollo (`--diagnose`, exploratoria, no es el conjunto de calibración): (a) con `gradient_tau` hasta 16 no existe ningún ajuste con cero etiquetas equivocadas y alguna correcta; (b) con `gradient_tau` de 24 a 48, la menor aceptación de fuera de distribución con cero equivocadas y cobertura de al menos el 50 % es del 4,3 al 4,5 % (`gradient_tau` 32: cobertura 52,7 %, aceptación 4,3 %, de ellas casi iguales 6,2 %, otras formas 4,4 %, procedurales 0 %); (c) con cero equivocadas y **sin** el límite de aceptación, la mayor cobertura es del 79,2 % (`gradient_tau` 24, `max_distance` 0,34, `min_margin` 0,15) con una aceptación de fuera de distribución del 8,9 %; (d) ningún ajuste cumple el límite del 1 % con alguna etiqueta aceptada.
 
+**Hallazgo sobre el Algoritmo 3A.** (1) El descriptor son signos de gradientes **horizontales** de una rejilla de 9×8: una forma plana en ese eje (las barras horizontales) no tiene soporte y no se puede representar. (2) Dos clases cuya diferencia cae en pocas celdas se **empatan a distancia 0** (el anillo y el anillo con un disco central), y un empate es `unknown` para cualquier margen mayor que 0 (la ambigüedad que exige el capítulo 04 §4.4 es, en este descriptor, una pérdida de cobertura). (3) Una coincidencia exacta sobre el **soporte común** se acepta aunque el recorte tenga otra forma, porque la distancia sólo compara donde ambos descriptores tienen gradiente: con el soporte mínimo de 8 y el solape de 0,70 se aceptan formas ajenas a toda clase aun con `max_distance = 0` (4–5 % de «otras formas» en la semilla de desarrollo). (4) El margen sólo se consulta si hay una segunda etiqueta con distancia: con una única etiqueta a distancia 0 se acepta. Los cuatro puntos acotan la lectura al corpus sintético y al descriptor de la versión 1; no son una medición con íconos reales.
+
 **Lectura.** Con el descriptor de la versión 1 (64 signos de gradientes horizontales y su máscara, soporte mínimo de 8 y solape de 0,70) sobre una rejilla de 9×8, incluso a distancia 0 se aceptan formas que no son de ninguna clase. H4 pide no aumentar la aceptación de íconos desconocidos más allá de un umbral fijado antes del test; el 1 % es una elección del protocolo (la tesis no fija ninguno, 19.1) y con este descriptor no se alcanza con una cobertura útil. Es un hallazgo sobre el Algoritmo 3A bajo esta política de soporte (inicial en la tesis y hoy no configurable), acotado a un corpus sintético dibujado por esta herramienta; no es una medición con íconos reales. Qué hacer con él es del responsable: no se hizo ningún ajuste con la intención de que el resultado saliera.
 
-### 19.4 Criterios del soak, preregistrados antes de correr
+### 19.4 Configuración de medición y criterios del soak (opción C), preregistrados antes de correr
 
-Corridas, todas de 120 minutos (salvo R0) sobre el mismo commit, binario, configuración y máquina, con `tools/perf/soak.py --icon-strip --icon-probe-every 12 --max-pending-regions 510 --foreground-wait 300`, sin entrada de ningún tipo y con la configuración de §18 (`accessibility = "uia"`) más el bloque `[cache]` aprobado por el responsable:
+**Configuración de medición** (decisión del responsable del 20 de octubre de 2026; **no es una calibración**, no muestra que la caché sea útil, y así se registra donde se informe):
+
+| Clave de `[cache]` | Valor |
+|---|---|
+| `max_entries` | 64 |
+| `prototypes` / `prototypes_sha256` | los 32 prototipos del intento 2, SHA-256 `d43a784c8376772f89d63c997cc99fa7df458cea5d78324c5727f2dec71d14a8` (fijado por una prueba) |
+| `context` | `ommatix-testapp.exe` |
+| `gradient_tau` | **255** |
+| `max_distance` | 0,0 |
+| `min_margin` | 1,0 |
+
+**Por qué no acepta nada, y el límite de esa garantía.** `IconCache::lookup` compara con los prototipos sólo si el recorte tiene al menos 8 gradientes válidos. Con `gradient_tau = 255` un gradiente es válido sólo entre dos medias de celda que difieren en 255, una de 0 y otra de 255. Ningún prototipo de la franja (tinta 40 sobre fondo 248, diferencia de 208) tiene un solo gradiente válido, y la prueba `the_measurement_configuration_accepts_nothing_in_the_corpus` comprueba que ni los 32 prototipos ni las muestras del corpus llegan a 8: la caché responde `unknown` antes de comparar nada. **Los otros dos valores no bastan por sí solos**: con `max_distance = 0` se acepta una coincidencia exacta, y `min_margin = 1,0` no se consulta cuando sólo hay una etiqueta con distancia (19.3, punto 4); por eso la garantía viene de `gradient_tau`, y esos dos valores son un refuerzo. Con los tres mandos de la configuración no hay una combinación que impida la aceptación para **toda** pantalla y a la vez haga comparar con los prototipos: un recorte con ocho pares de celdas de negro y blanco puros (y distancia exacta 0, sin ambigüedad) seguiría pudiendo aceptarse. En la escena del banco (aplicación egui de tema claro, sin negro ni blanco puros en bloques de celda) no ocurre, y el criterio C5 lo comprueba en vivo: una sola etiqueta aceptada en cualquier sonda lo hace fallar, porque significaría que la construcción es errónea.
+
+**Qué ejerce y qué no.** Ejerce: la detección de candidatos de ícono, el recorte y la rejilla de 9×8 (`grey_grid`) de cada candidato en cada observación, el descriptor, la comprobación de soporte y la caché **residente** (32 prototipos cargados y fijados por SHA-256). **No ejerce** el recorrido de la comparación contra los 32 prototipos (el motor sale antes), ni ninguna etiqueta aceptada, ni el efecto de etiquetar sobre el resto del motor. Por tanto **no mide** la memoria de ese recorrido ni la de una caché que acepta, **no aísla** el coste de la caché dentro del conjunto de trabajo (S0 §17.2: 5 592 B frente a unos 294 MiB) y **no demuestra utilidad**.
+
+**Comprobación sin conexión con el binario real (sólo PNG sintéticos, sin pantalla ni entrada).** Con esta configuración el motor arranca con la nota `[cache] 32 curated icon prototypes, 32 for context "ommatix-testapp.exe"`, verifica el SHA-256 y, sobre la franja a 100 %, observa 17 elementos sin etiqueta (`label_source: unknown 17`). Control positivo, con umbrales permisivos **descartables** (`gradient_tau` 24, `max_distance` 0,5, `min_margin` 0), que no son una calibración ni se propondrán: 7 de los 17 salen `curated_icon`. La cadena etiqueta cuando se le permite; con la configuración de medición no etiqueta nada.
+
+**Corridas**, todas de 120 minutos (salvo R0), sobre el mismo commit, binario, máquina y configuración base (la de §18, `accessibility = "uia"`), con `tools/perf/soak.py --icon-strip --icon-probe-every 12 --max-pending-regions 510 --foreground-wait 300`, sin entrada de ningún tipo:
 
 | Corrida | Qué es | Obligatoria |
 |---|---|---|
-| R0 | humo de 5 minutos, sólo para ver que hay candidatos y qué aceptan; sin veredicto | recomendada |
-| R1 y R2 | franja de íconos, caché **activa**; dan la variación entre corridas (casilla 7, punto 2) | sí (el mínimo) |
-| R3 | franja de íconos, **sin** `[cache]`: el mismo dibujo sin caché, para atribuir por diferencia | recomendada |
+| R0 | humo de 5 minutos con la configuración de medición, sólo para ver que hay candidatos y que ninguna sonda ve una etiqueta; sin veredicto | recomendada |
+| R1 y R2 | franja de íconos, caché **activa** con la configuración de medición; dan la variación entre corridas (casilla 7, punto 2) | sí (el mínimo) |
+| R3 | franja de íconos, **sin** `[cache]`: el mismo dibujo sin caché, el control | recomendada |
 
 Criterios, **por corrida**, con los valores y reglas ya usados en §18 y §9.7 (ninguno nuevo):
 
@@ -1220,10 +1241,10 @@ Criterios, **por corrida**, con los valores y reglas ya usados en §18 y §9.7 (
 | C2 manejadores | tras el calentamiento, a lo sumo un cambio del recuento, de +1, y recuento constante en los últimos 60 minutos (`handle_rule` de `soak.py`; esta vez preregistrada, a diferencia de §18) |
 | C3 cola | `pending_regions` máximo ≤ 510 |
 | C4 corrida completa | `ended = completed`, al menos 1 400 de 1 440 observaciones, 0 errores de observación, `delivered_actions` = 0 |
-| C5 caché ejercida (sólo R1 y R2) | la nota de arranque del motor dice que hay prototipos curados (≤ `max_entries`) y la sonda ve al menos un elemento candidato (`curated_icon`, o sin etiqueta y de fuente `unknown`) en al menos el 95 % de las sondas. El número de etiquetas `curated_icon` se **informa sin criterio**: si el dibujo real de egui no se acepta con los umbrales calibrados sin conexión, es un hallazgo |
-| C6 memoria de la caché | cota estructural: prototipos cargados ≤ `max_entries` (32 ≤ 64; el archivo se rechaza entero por encima) y la estimación de almacenamiento retenido de §17.2 (5 592 B para 64); en vivo sólo se miden el conjunto de trabajo y los bytes privados del proceso, y la caché no se aísla en ellos: sólo se compara con R3 por diferencia de nivel y de pendiente, **sin criterio** |
+| C5 caché ejercida (sólo R1 y R2) | la nota de arranque del motor dice que hay prototipos curados cargados (≥ 1, ≤ `max_entries`), la sonda ve al menos un elemento candidato (`curated_icon`, o sin etiqueta y de fuente `unknown`) en al menos el 95 % de las sondas, y **cero etiquetas aceptadas** (`curated_icon` y vocabulario sintético) en **todas** las sondas; una sola etiqueta aceptada falla el criterio |
+| C6 memoria de la caché | cota estructural: prototipos cargados ≤ `max_entries` (32 ≤ 64; el archivo se rechaza entero por encima) y la estimación de almacenamiento retenido de §17.2 (5 592 B para 64); en vivo sólo se miden el conjunto de trabajo y los bytes privados del proceso, y la caché no se aísla en ellos: se compara R1 y R2 con R3 por diferencia de nivel y de pendiente, **sin criterio** |
 
-**Variación entre corridas** (informativa, sin criterio): pendiente, mediana del último décimo, máximos de conjunto de trabajo y de bytes privados, recuento final de manejadores y latencias de R1 frente a R2 (y frente a R3 si se corre). No se afirma ausencia de fugas. Una aceptación por cambio de alcance no marca la casilla.
+**Variación entre corridas** (informativa, sin criterio): pendiente, mediana del último décimo, máximos de conjunto de trabajo y de bytes privados, recuento final de manejadores y latencias de R1 frente a R2 (y frente a R3 si se corre). No se afirma ausencia de fugas, ni utilidad de la caché, ni calibración. Una aceptación por cambio de alcance no marca la casilla.
 
 ### 19.5 Reproducir
 
@@ -1235,10 +1256,10 @@ cargo run --release -p ommatix-acceptance --example icon_calibration -- --out-di
 
 Escribe `icons.jsonl` (su SHA-256 es el que se fija en `[cache] prototypes_sha256`; la prueba `the_prototype_file_has_the_pinned_digest` lo fija en el repositorio), `calibration.json`, `cache-proposal.toml` **sólo si hay propuesta** (en los dos intentos no la hubo) y las secuencias `seq_100`, `seq_125` y `seq_150` de PNG sintéticos. Con `--diagnose` escribe `diagnosis.json` (exploratorio, sólo la semilla de desarrollo) y con `--strips-only` sólo los PNG. El intento 1 se reproduce en el commit `6e561f7` y el 2 en `1fa369e`. La compuerta del detector, también sin pantalla: `ommatix demo --source images --images <seq_100> --config <configuración del operador> --observations 2` con el binario compilado con los modelos.
 
-La aplicación de prueba con la franja (sólo para una sesión con el responsable presente; esta PR no corrió ninguna): `tools/s4/testapp` con `--animate 100 --animate-labels 2 --icon-strip`, que lanza `tools/perf/soak.py` con `--icon-strip`. El soak con sonda y criterio de caché, **que exige una propuesta de umbrales aprobada por el responsable**:
+El soak con la configuración de medición (sólo con el responsable presente; esta PR no corrió ninguno): la guía del responsable da la configuración completa y las órdenes de R0, R1, R2 y R3. En esencia, la aplicación de prueba se lanza con `--animate 100 --animate-labels 2 --icon-strip` (lo hace `soak.py`) y:
 
 ```powershell
-python tools/perf/soak.py --config <copia con [cache] aprobado> --icon-strip --icon-probe-every 12 --expect-cache `
+python tools/perf/soak.py --config <copia de §18 con el [cache] de 19.4> --icon-strip --icon-probe-every 12 --expect-cache `
     --minutes 120 --max-pending-regions 510 --foreground-wait 300 --out "$env:LOCALAPPDATA\Ommatix\runs\soak-icons-R1.json"
 ```
 

@@ -702,10 +702,18 @@ class CacheCriterion(Case):
         self.assertTrue(criterion["met"])
         self.assertEqual(criterion["share_with_candidate"], 1.0)
 
-    def test_zero_curated_labels_is_not_a_failure_but_a_finding(self):
+    def test_zero_accepted_labels_is_what_the_measurement_configuration_expects(self):
         report = self.run_expecting(IconEngine(curated=0))
-        self.assertTrue(report["criteria"]["icon_cache_exercised"]["met"])
+        criterion = report["criteria"]["icon_cache_exercised"]
+        self.assertTrue(criterion["met"])
+        self.assertEqual(criterion["accepted_labels_max"], 0)
         self.assertEqual(report["icon_probe"]["curated_icon"]["max"], 0)
+
+    def test_an_accepted_label_fails_it_because_the_construction_was_wrong(self):
+        criterion = self.run_expecting(IconEngine(curated=1))["criteria"]["icon_cache_exercised"]
+        self.assertFalse(criterion["met"])
+        self.assertEqual(criterion["accepted_labels_max"], 1)
+        self.assertEqual(criterion["share_with_candidate"], 1.0)
 
     def test_no_candidate_at_all_does_not_meet_it(self):
         report = self.run_expecting(IconEngine(curated=0, candidates=0))
@@ -723,12 +731,13 @@ class CacheCriterion(Case):
             self.run_expecting(IconEngine(note=None))["criteria"]["icon_cache_exercised"]["met"])
 
     def test_the_share_of_probes_with_candidates_has_a_floor(self):
+        none = {"curated_icon": {"min": 0, "max": 0, "median": 0}, "vocabulary_labelled_max": 0}
         self.assertTrue(soak.cache_criterion(
             {"prototypes": 32, "for_context": 32},
-            {"probes": 20, "share_with_candidate": 0.95})["met"])
+            {"probes": 20, "share_with_candidate": 0.95, **none})["met"])
         self.assertFalse(soak.cache_criterion(
             {"prototypes": 32, "for_context": 32},
-            {"probes": 20, "share_with_candidate": 0.9})["met"])
+            {"probes": 20, "share_with_candidate": 0.9, **none})["met"])
         self.assertFalse(soak.cache_criterion(
             {"prototypes": 32, "for_context": 32}, {"probes": 0})["met"])
 
