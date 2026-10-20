@@ -14,6 +14,15 @@ import time
 
 SECRET_LABEL = "ETIQUETA-SECRETA"
 # The input schemas the real engine lists (Ommatix 1.0), copied so the agent's validator is tested on them.
+# The numbers-only `_meta` of a real observation (`io.ommatix/timings`, `io.ommatix/plan`).
+OBSERVE_META = {
+    "io.ommatix/timings": {"capture_us": 1000, "plan_us": 10, "detect_us": 2000, "recognize_us": 3000,
+                           "accessibility_us": 4000, "fuse_us": 50, "track_us": 20, "commit_us": 30,
+                           "total_us": 10110, "response_build_us": 40},
+    "io.ommatix/plan": {"work": "full", "full_refresh_reason": "no_committed_base", "region_count": 0,
+                        "region_area_px": 0, "inference_count": 1, "input_shapes": None,
+                        "accessibility_truncated": False, "controls_n": 1, "words_n": 0,
+                        "supports_n": 0, "relations_n": 0}}
 REAL_SCHEMAS = {
     "observe_screen": {
         "additionalProperties": False, "type": "object", "required": [],
@@ -82,7 +91,9 @@ def main() -> int:
             reply = {"jsonrpc": "2.0", "id": rid, "result": {"isError": False, "structuredContent": {
                 "schema_version": "1.0", "session_id": "fake", "snapshot_id": "s1", "geometry_epoch": 1,
                 "elements": [{"target_id": "e1", "revision": 1, "label": SECRET_LABEL,
-                              "actionability": "confirmed"}]}}}
+                              "actionability": "confirmed"}],
+                "total_elements": 1, "truncated": False},
+                "_meta": OBSERVE_META}}
         elif params.get("name") == "execute_action":
             live = (params.get("arguments") or {}).get("dry_run") is False
             time.sleep(args.delay_action_ms / 1000)
