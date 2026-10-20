@@ -164,27 +164,48 @@ def observation_figures(entries: list[dict]) -> dict:
 
 def loop_counts(records: list[dict]) -> dict:
     """The observation loop of the dossier's method (chapter 09 section 9.11.1): of the actions that
-    reached the engine, how many came right after an ``observe_screen`` that arrived without error,
-    and how many were followed right away by one. Every ``tools/call`` of the agent in the log is a
-    call of the sequence, those the proxy refused included."""
-    calls = []  # (tool, forwarded, request_index or position)
+    reached the engine, how many came right after an ``observe_screen`` whose response had **arrived
+    without error before the action was sent**, and how many were followed right away by one. Every
+    ``tools/call`` of the agent in the log is a call of the sequence, those the proxy refused included.
+
+    The proxy lets an agent send a call while another is pending, so a response is paired with its
+    request by ``request_index`` when the log has it, keeping the position at which it arrived; a log
+    from before the indices pairs them in order. Either way the response must precede the action."""
+    calls = []
     for position, r in enumerate(records):
         if r.get("dir") in ("agent->engine", "agent->proxy") and r.get("method") == "tools/call" \
                 and r.get("kind") == "request":
             calls.append({"tool": r.get("tool"), "forwarded": r["dir"] == "agent->engine",
                           "position": position, "request_index": r.get("request_index")})
-    responses = [r for r in records if r.get("dir") == "engine->agent" and r.get("tool") == "observe_screen"]
-    errors = [bool(r.get("is_error")) or "rpc_error_code" in r for r in responses]
-    forwarded_observes = [c for c in calls if c["tool"] == "observe_screen" and c["forwarded"]]
-    arrived_ok = {}
-    for i, call in enumerate(forwarded_observes):
-        arrived_ok[call["position"]] = i < len(errors) and not errors[i]
+    by_index, sequential = {}, []  # observation responses: (position, error?) by index, or in order
+    for position, r in enumerate(records):
+        if r.get("dir") == "engine->agent" and r.get("tool") == "observe_screen":
+            answer = (position, bool(r.get("is_error")) or "rpc_error_code" in r)
+            index = r.get("request_index")
+            if isinstance(index, int) and not isinstance(index, bool):
+                by_index[index] = answer
+            else:
+                sequential.append(answer)
+    arrived_at = {}  # request position -> position of its response, when that response was no error
+    queue = iter(sequential)
+    for call in calls:
+        if call["tool"] != "observe_screen" or not call["forwarded"]:
+            continue
+        index = call["request_index"]
+        if isinstance(index, int) and not isinstance(index, bool):
+            answer = by_index.get(index)
+        else:
+            answer = next(queue, None)
+        if answer is not None and not answer[1]:
+            arrived_at[call["position"]] = answer[0]
     actions = after = followed = 0
     for i, call in enumerate(calls):
         if call["tool"] != "execute_action" or not call["forwarded"]:
             continue
         actions += 1
-        if i > 0 and calls[i - 1]["tool"] == "observe_screen" and arrived_ok.get(calls[i - 1]["position"]):
+        previous = calls[i - 1] if i > 0 else None
+        if previous is not None and previous["tool"] == "observe_screen" \
+                and arrived_at.get(previous["position"], call["position"]) < call["position"]:
             after += 1
         if i + 1 < len(calls) and calls[i + 1]["tool"] == "observe_screen":
             followed += 1

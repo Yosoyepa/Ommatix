@@ -190,6 +190,31 @@ class Loop(unittest.TestCase):
         self.assertEqual(logstats.loop_counts(records),
                          {"actions": 3, "after_observation": 1, "followed_by_observation": 2})
 
+    def test_an_action_sent_before_the_observation_answered_does_not_follow_a_received_observation(self):
+        # R1 of the review of PR 102: the agent may send a call while another is pending.
+        records = [request(1, "observe_screen", 543, 1), request(2, "execute_action", 600),
+                   response(1, "observe_screen", elements=3), response(2, "execute_action", status="simulated")]
+        self.assertEqual(logstats.loop_counts(records),
+                         {"actions": 1, "after_observation": 0, "followed_by_observation": 0})
+        # the same log from before the indices: sequential pairing, same arrival rule
+        self.assertEqual(logstats.loop_counts([old(r) for r in records]),
+                         {"actions": 1, "after_observation": 0, "followed_by_observation": 0})
+
+    def test_responses_pair_with_their_request_by_index_not_by_arrival_order(self):
+        records = [request(1, "observe_screen", 543, 1), request(2, "observe_screen", 543, 2),
+                   response(2, "observe_screen", elements=3),
+                   {**response(1, "observe_screen"), "rpc_error_code": -32602},
+                   request(3, "execute_action", 600), response(3, "execute_action", status="simulated")]
+        self.assertEqual(logstats.loop_counts(records),
+                         {"actions": 1, "after_observation": 1, "followed_by_observation": 0})
+
+    def test_an_action_right_after_an_observation_answered_with_an_error_is_not_after_one(self):
+        records = [request(1, "observe_screen", 543, 1), request(2, "observe_screen", 543, 2),
+                   {**response(2, "observe_screen"), "rpc_error_code": -32602},
+                   response(1, "observe_screen", elements=3),
+                   request(3, "execute_action", 600), response(3, "execute_action", status="simulated")]
+        self.assertEqual(logstats.loop_counts(records)["after_observation"], 0)
+
     def test_a_call_the_proxy_refused_is_an_intermediate_call_and_is_not_an_action_counted(self):
         refused = {"dir": "agent->proxy", "kind": "request", "method": "tools/call", "tool": "execute_action",
                    "bytes": 600, "live_counted": False}
