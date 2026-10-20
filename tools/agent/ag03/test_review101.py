@@ -29,8 +29,20 @@ import pixel_slots as sl  # noqa: E402
 import pixel_win32 as w32  # noqa: E402
 import run_goal as rg  # noqa: E402
 from test_guards import ATT, Rig, W  # noqa: E402
-from test_preflight import Base  # noqa: E402
 from test_runner import END, GOALS, Harness, assistant, click, final, refused, result, session, shot, text_part, use  # noqa: E402
+
+
+def _load_ag03_test_preflight():
+    """AG-02 also has a ``test_preflight``: under the CI discovery that bare name is already taken, so this
+    package's one is loaded by path."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ag03_test_preflight", HERE / "test_preflight.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+Base = _load_ag03_test_preflight().Base
 
 
 def traced(rig):
