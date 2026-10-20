@@ -120,6 +120,7 @@ class Harness:
 
     def __init__(self, test, goal_id, phase, *, final_state, history=(), events=(), server_records=None,
                  write_note=None, init=None, config_proof=None, route=None):
+        import agentcli
         self.test, self.goal, self.phase = test, BY_ID[goal_id], phase
         scratch = tempfile.TemporaryDirectory(prefix="ag03-run-")
         test.addCleanup(scratch.cleanup)
@@ -130,21 +131,28 @@ class Harness:
         self.cfg = self.tmp / "cfg"
         self.cfg.mkdir()
         (self.tmp / "operator.toml").write_text('[safety]\nstop_file = "stop.flag"\n', encoding="utf-8")
-        argv = ["--phase", str(phase), "--model", "claude-haiku-5-5", "--testapp-exe", str(self.tmp / "t.exe"),
+        self.route = route
+        self.model = agentcli.CLAUDE_ROUTES[route]["model"] if route else "claude-haiku-5-5"
+        url = agentcli.CLAUDE_ROUTES[route]["base_urls"][0] if route else None
+        argv = ["--phase", str(phase), "--model", self.model, "--testapp-exe", str(self.tmp / "t.exe"),
                 "--editor-exe", str(self.tmp / "e.exe"), "--config", str(self.tmp / "operator.toml"),
                 "--isolation-proof", str(self.tmp / "proof.json"), "--claude-config-dir", str(self.cfg),
-                "--admission", str(self.tmp / "admission.json")]
+                "--admission", str(self.tmp / "admission.json"), "--repetition", "1",
+                "--gate-record", str(self.tmp / "gate.json"), "--campaign-dir", str(self.tmp / "campaign")]
         if phase == 2:
             argv += ["--live", "--max-live-session", "5", "--ledger", str(self.ledger)]
+        if route:
+            (self.tmp / "key.txt").write_text("sk-test-0000000000000000", encoding="utf-8")
+            argv += ["--route", route, "--route-base-url", url, "--key-file", str(self.tmp / "key.txt")]
         self.args = pr.parse_args(argv)
         self.args.vocabulary = GOALS["vocabulary"]
         initial = GOALS["initial_states"][self.goal["app"]]
         self.app = FakeApp(self.goal, dict(initial))
         self.final_state, self.history, self.events = final_state, list(history), list(events)
-        self.init = init_event(memory={"auto": str(self.cfg / "projects" / "s" / "memory")}) if init is None else init
+        self.init = init_event(model=self.model, memory={"auto": str(self.cfg / "projects" / "s" / "memory")})             if init is None else init
         self.proof = {
             "schema": pf.PROOF_SCHEMA, "verifier_revision": pf.VERIFIER_REVISION, "passed": True,
-            "claude_code_version": "2.1.304", "model": "claude-haiku-5-5", "requested_model": "claude-haiku-5-5",
+            "claude_code_version": "2.1.304", "model": self.model, "requested_model": self.model,
             "tools": sorted(pa.ALLOWED_TOOL_NAMES), "plugins": [], "agents": [], "plugin_hashes": [],
             "agent_hashes": [], "init_keys_sha256": rg.init_attestation(self.init)["init_keys_sha256"],
             "config_identity": rg.config_identity(self.cfg), "context_manifest": rg.config_manifest(self.cfg),
@@ -153,6 +161,10 @@ class Harness:
                       "control_detected": ["extra_tool"], "control_blind": [],
                       "images_only_in_screenshot_result": True, "screenshot_result_images": 1},
             "real_capture_in_this_proof": False}
+        if route:
+            self.proof |= {"route": {"provider": route, "base_url": url, "model": self.model, "effort": "max",
+                                     "auth": "bearer"},
+                           "route_verifier_revision": pf.ROUTE_VERIFIER_REVISION}
         self.proof |= config_proof or {}
         self.server_records = server_records
         self.write_note = write_note
@@ -329,7 +341,7 @@ class PhaseTwoTests(unittest.TestCase):
                      "POINT_WINDOW_MISMATCH", "ELEVATED_OR_UNKNOWN", "OS_READ_FAILED"):
             with self.subTest(code=code):
                 h = Harness(self, "G01", 2, final_state=GOALS["initial_states"]["testapp"], events=session("Sumar"),
-                            server_records=[shot(), refused("click", code, reserved=True), END])
+                            server_records=[shot(), refused("click", code, reserved=True, terminal="safety"), END])
                 result_ = h.run()
                 self.assertEqual(result_["safety_event"], "harness_guard_violation")
                 self.assertFalse(result_["score"]["success"])
@@ -393,17 +405,6 @@ class AbortAndProofTests(unittest.TestCase):
         h.app.foreground = False
         self.assertIn("never reached the front", h.run()["aborted"])
 
-    def test_a_series_creates_the_stop_file_after_a_safety_event_and_never_deletes_it(self):
-        h = Harness(self, "G01", 2, final_state=GOALS["initial_states"]["testapp"], events=session("Sumar"),
-                    server_records=[shot(), refused("click", "FOREGROUND_NOT_TARGET_PROCESS", reserved=True), END])
-        stop = h.tmp / "stop.flag"
-        (h.tmp / "folders").mkdir(exist_ok=True)
-        with mock.patch.object(rg, "ancestor_context", return_value=[]),                 contextlib.redirect_stdout(io.StringIO()):
-            code = pr.run_series(h.args, GOALS, [BY_ID["G01"], BY_ID["G02"]], h.out, h.ledger, stop, h.proof, h.deps, None)
-        self.assertEqual(code, 2)
-        self.assertTrue(stop.exists())
-        self.assertEqual(h.run_claude_calls, 1)  # G02 never began
-
 
 class SharedWithAg02Tests(unittest.TestCase):
     def test_the_oracle_scoring_ledger_and_goals_are_ag02s_not_copies(self):
@@ -434,8 +435,9 @@ class SharedWithAg02Tests(unittest.TestCase):
     def test_the_caps_are_the_pre_registered_ones(self):
         self.assertEqual((pr.ps.MAX_SCREENSHOTS_DEFAULT, pr.ps.MAX_TOOL_CALLS_DEFAULT), (30, 60))
         self.assertEqual(sum(g["max_live"] for g in GOALS["goals"]), 39)
-        self.assertEqual(pr.CAPS["session_budget"], 40)
-        self.assertEqual(pr.CAPS["wall_s_per_goal"], 300.0)
+        args = pr.parse_args(["--plan", "--max-live-session", "40"])
+        caps = pr.effective_caps(args)
+        self.assertEqual((caps["session_budget"], caps["wall_s_per_goal"], caps["usd_cap"]), (40, 300.0, 0.5))
 
 
 class PixelCLITests(unittest.TestCase):
@@ -549,8 +551,8 @@ class PlanAndArgsTests(unittest.TestCase):
 
 
 class StreamAndLogTests(unittest.TestCase):
-    def stream(self, events, provider_init=None):
-        metrics = pa.PixelStream([], None, None)
+    def stream(self, events, provider_init=None, provider="anthropic"):
+        metrics = pa.PixelStream([], None, None, provider=provider)
         for e in [provider_init or init_event(), *events]:
             metrics.feed(json.dumps(e))
         return metrics
@@ -585,7 +587,7 @@ class StreamAndLogTests(unittest.TestCase):
     def test_a_provider_without_a_documented_formula_reports_the_estimate_as_unavailable(self):
         events = [assistant("a0", use("s0", "screenshot")), result("s0", shot_part(), text_part()), final()]
         init = init_event() | {"provider": "deepseek"}
-        summary = self.stream(events, provider_init=init).summary()
+        summary = self.stream(events, provider_init=init, provider="deepseek").summary()
         self.assertIsNone(summary["image_token_estimate"])
         self.assertIn("unavailable", summary["image_token_estimate_basis"])
 

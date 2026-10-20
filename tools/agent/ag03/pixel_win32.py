@@ -91,6 +91,63 @@ def build_text_inputs(text: str) -> list[dict]:
     return events
 
 
+# ---- pure decoders of Win32 results: a failed read is unknown, never affirmative evidence ----------------
+
+HGDI_ERROR = 0xFFFFFFFF  # SelectObject's failure value for a region; 0 / NULL for a bitmap
+DPI_V2 = "per_monitor_v2"
+
+
+def read_stop(path, stat=None) -> bool | None:
+    """The operator's stop file: True if present, False only if genuinely absent, None when it cannot be
+    told (a permission error, an I/O error, anything unexpected). ``os.path.exists`` is not used: it turns
+    every failure into False. Read only: the file is never written, removed or cleared by this module."""
+    try:
+        (stat or os.stat)(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except Exception:  # noqa: BLE001 - unknown is a refusal
+        return None
+    return True
+
+
+def decode_sendinput(inserted, expected: int) -> str:
+    """``all``, ``partial`` or ``none`` from SendInput's count of inserted events. Only ``all`` is a clean
+    delivery; ``partial`` and ``none`` are an uncertain delivery that is never retried."""
+    if inserted == expected:
+        return "all"
+    return "none" if inserted == 0 else "partial"
+
+
+def decode_class_name(copied, value) -> str | None:
+    """GetClassNameW returns the number of characters copied; zero (or negative) is a failure."""
+    return value if isinstance(copied, int) and copied > 0 and isinstance(value, str) and value else None
+
+
+def decode_ancestor(handle) -> int | None:
+    """GetAncestor returns NULL on failure: unknown, never the handle it was asked about."""
+    return int(handle) if handle else None
+
+
+def decode_select_object(result) -> bool:
+    """SelectObject returns NULL (or HGDI_ERROR) when it fails to select the bitmap."""
+    return bool(result) and result != HGDI_ERROR
+
+
+def decode_dpi_awareness(equals_v2, awareness) -> str:
+    """The effective DPI context as a word, from ``AreDpiAwarenessContextsEqual(ctx, per-monitor-v2)`` and
+    ``GetAwarenessFromDpiAwarenessContext(ctx)`` (0 unaware, 1 system, 2 per-monitor; anything else, or a
+    missing reading, is unknown)."""
+    if equals_v2 is True:
+        return DPI_V2
+    return {2: "per_monitor", 1: "system", 0: "unaware"}.get(awareness, "unknown") if equals_v2 is False else "unknown"
+
+
+def dpi_decision(effective) -> bool:
+    """Only the explicitly compatible context (per-monitor v2) may proceed. ``SetProcessDpiAwarenessContext``
+    failing with access denied only says that some default was set earlier: it proves nothing."""
+    return effective == DPI_V2
+
+
 # ---- the shapes the server is written against (fakes implement them; nothing here runs in tests) ----
 
 class OsReader:
@@ -114,9 +171,14 @@ class OsReader:
 
 
 class Sender:
-    """Sends one batch of events with ONE operating-system call."""
+    """Sends one batch of events with ONE operating-system call. ``prepare`` does all the native work (loading
+    the DLL, building the event array) so that it is inside the delivery recheck's boundary; ``send`` then does
+    nothing but the call and returns how many events the operating system inserted."""
 
-    def send(self, inputs: list[dict]) -> bool:  # pragma: no cover - interface
+    def prepare(self, inputs: list[dict]):  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def send(self, prepared) -> int:  # pragma: no cover - interface
         raise NotImplementedError
 
 
@@ -217,24 +279,29 @@ def _dlls():
     return user32, kernel32, advapi32, gdi32
 
 
-class RealOs(OsReader):  # pragma: no cover - never executed by the tests
-    def __init__(self, stop_path):
-        self.stop_path = stop_path
+class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed by the tests
+    def __init__(self, stop_path, stat=None):
+        self.stop_path, self._stat = stop_path, stat
 
     def stop_present(self):
-        try:
-            return os.path.exists(self.stop_path)
-        except OSError:
-            return None
+        return read_stop(self.stop_path, self._stat)
 
     def ensure_dpi_aware(self):
+        """Asks for per-monitor v2 and then READS the context the rectangle reads and the point mapping run
+        under; only that reading decides (``dpi_decision``), never the call's result or its error code."""
         ctypes, wintypes = _ct()
         user32, *_ = _dlls()
         user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
-        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is (HANDLE)-4. A process-level switch of this
-        # script only; no user setting is touched. 0 with ERROR_ACCESS_DENIED means "already set".
-        ok = bool(user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)))
-        return ok or ctypes.get_last_error() == 5
+        user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        user32.AreDpiAwarenessContextsEqual.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        user32.GetAwarenessFromDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        context = user32.GetThreadDpiAwarenessContext()
+        if not context:
+            return False
+        equals = bool(user32.AreDpiAwarenessContextsEqual(context, ctypes.c_void_p(-4)))
+        awareness = int(user32.GetAwarenessFromDpiAwarenessContext(context))
+        return dpi_decision(decode_dpi_awareness(equals, awareness))
 
     def virtual_screen(self):
         ctypes, wintypes = _ct()
@@ -279,8 +346,8 @@ class RealOs(OsReader):  # pragma: no cover - never executed by the tests
             return None
         pid = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        cls = ctypes.create_unicode_buffer(257)
-        user32.GetClassNameW(hwnd, cls, 257)
+        buffer = ctypes.create_unicode_buffer(257)
+        cls = decode_class_name(user32.GetClassNameW(hwnd, buffer, 257), buffer.value)  # None: unreadable
         rect, origin = wintypes.RECT(), wintypes.POINT(0, 0)
         if not user32.GetClientRect(hwnd, ctypes.byref(rect)) or not user32.ClientToScreen(hwnd, ctypes.byref(origin)):
             return None
@@ -289,7 +356,7 @@ class RealOs(OsReader):  # pragma: no cover - never executed by the tests
         ctypes.cast(info, ctypes.POINTER(wintypes.DWORD))[0] = 40
         primary = bool(monitor) and bool(user32.GetMonitorInfoW(monitor, info)) and bool(
             ctypes.cast(info, ctypes.POINTER(wintypes.DWORD))[9] & 1)
-        return Window(hwnd=int(hwnd), pid=int(pid.value), exe=self._exe(kernel32, pid.value), cls=cls.value,
+        return Window(hwnd=int(hwnd), pid=int(pid.value), exe=self._exe(kernel32, pid.value), cls=cls,
                       client=(origin.x, origin.y, origin.x + rect.right, origin.y + rect.bottom),
                       primary_monitor=primary, iconic=bool(user32.IsIconic(hwnd)),
                       elevated=self._elevated(kernel32, advapi32, pid.value))
@@ -309,7 +376,7 @@ class RealOs(OsReader):  # pragma: no cover - never executed by the tests
 
         user32.EnumWindows(visit, 0)
         windows = [w for w in (self._facts(h) for h in found) if w is not None]
-        main = [w for w in windows if not is_helper_class(w.cls)]
+        main = [w for w in windows if w.cls and not is_helper_class(w.cls)]
         return max(main, key=lambda w: (w.client[2] - w.client[0]) * (w.client[3] - w.client[1])) if main else None
 
     def evidence(self, pid, point, want_focus):
@@ -320,7 +387,7 @@ class RealOs(OsReader):  # pragma: no cover - never executed by the tests
         root = None
         if point is not None:
             hit = user32.WindowFromPoint(wintypes.POINT(int(point[0]), int(point[1])))
-            root = int(user32.GetAncestor(hit, GA_ROOT) or hit) if hit else None
+            root = decode_ancestor(user32.GetAncestor(hit, GA_ROOT)) if hit else None  # NULL: unknown, not `hit`
         focus = None
         if want_focus and window is not None:
             info = GUITHREADINFO()
@@ -329,15 +396,16 @@ class RealOs(OsReader):  # pragma: no cover - never executed by the tests
             if user32.GetGUIThreadInfo(tid, ctypes.byref(info)) and info.hwndFocus:
                 owner = wintypes.DWORD()
                 user32.GetWindowThreadProcessId(info.hwndFocus, ctypes.byref(owner))
-                focus = Focus(hwnd=int(info.hwndFocus), top_hwnd=int(user32.GetAncestor(info.hwndFocus, GA_ROOT)
-                                                                     or info.hwndFocus), pid=int(owner.value))
+                top = decode_ancestor(user32.GetAncestor(info.hwndFocus, GA_ROOT))
+                focus = Focus(hwnd=int(info.hwndFocus), top_hwnd=top, pid=int(owner.value)) if top else None
         held = any(user32.GetAsyncKeyState(vk) & 0x8000 for vk in MODIFIER_VKS)
         return Evidence(stop_present=self.stop_present(), foreground=window, root_at_point=root,
                         modifiers_held=held, focus=focus)
 
 
 class RealSender(Sender):  # pragma: no cover - never executed by the tests
-    def send(self, inputs):
+    def prepare(self, inputs):
+        """Loads the DLL and builds the event array: all native work, before the final recheck."""
         ctypes, wintypes = _ct()
         MOUSEINPUT, KEYBDINPUT, INPUT, *_ = _structures()
         user32, *_ = _dlls()
@@ -350,7 +418,13 @@ class RealSender(Sender):  # pragma: no cover - never executed by the tests
             else:
                 slot.type = INPUT_KEYBOARD
                 slot.u.ki = KEYBDINPUT(event["vk"], event["scan"], event["flags"], 0, 0)
-        return user32.SendInput(len(inputs), array, ctypes.sizeof(INPUT)) == len(inputs)
+        return user32, array, len(inputs), ctypes.sizeof(INPUT)
+
+    def send(self, prepared):
+        """Nothing but the call; returns the number of events the operating system inserted (the caller
+        decodes it: a partial insertion is an uncertain delivery, never a success)."""
+        user32, array, count, size = prepared
+        return int(user32.SendInput(count, array, size))
 
 
 class RealGdi(Gdi):  # pragma: no cover - never executed by the tests
@@ -368,13 +442,15 @@ class RealGdi(Gdi):  # pragma: no cover - never executed by the tests
             gdi32.DeleteDC(memory)
             return None
         old = gdi32.SelectObject(memory, bitmap)
+        selected = decode_select_object(old)
         try:
+            if not selected:  # the bitmap is not the destination: no image, whatever PrintWindow would do
+                return None
             if not user32.PrintWindow(hwnd, memory, PW_CLIENTONLY | PW_RENDERFULLCONTENT):
                 return None
             return ctypes.string_at(bits, width * height * 4)
         finally:
-            gdi32.SelectObject(memory, old)
+            if selected:
+                gdi32.SelectObject(memory, old)
             gdi32.DeleteObject(bitmap)
             gdi32.DeleteDC(memory)
-
-

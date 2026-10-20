@@ -18,7 +18,7 @@ provider**, and the first three lines below are the reason the rest is not yet a
 | 2 fidelity and isolation of `PrintWindow` on synthetic windows | **not done, not allowed yet** | Needs the owner: it puts synthetic windows on the screen. Without its admission record the server returns **no image** |
 | 3 preflight and proof (native and routes) | implemented, tested against the stand-in | Run `pixel_preflight.py` with the owner; no provider is reached |
 | 3b gate smoke per model | **not done, not allowed yet** | A real provider call with synthetic images: needs the owner's go-ahead, OI-2 reading recorded for the provider, and OI-1 (the Claude account's plan and model-improvement setting) before the Claude smoke |
-| 4 runner | implemented, tested with a fake application, sampler and Claude | Phase 2 needs `--live`, the owner present, a consent per series |
+| 4 runner | implemented and connected to the slot, plan, fingerprint and gate machinery; tested through `main()` with a fake application, sampler and Claude | One run is one series (a model, a phase, a repetition); phase 2 needs `--live`, the owner present, a consent per series |
 | 5 independent review of the `SendInput` helper and the guards | **not done: blocks every live run** | A Codex review in a visible Orca terminal; file in `docs/reviews/` |
 | 6 owner-run phase 1, then phase 2 | **not done** | The plan rows `AG-03` and `AG-02R` stay `NO_EJECUTADO` |
 
@@ -35,7 +35,7 @@ Do not run `pixel_runner.py` without `--plan` until steps 2, 3b and 5 are record
 | `pixel_agent.py` | The command, the pinned instruction (SHA-256), the request verdict (images only in the `screenshot` result), the stream reader |
 | `pixel_preflight.py` | The isolation proof `ag03-isolation-proof-1`, native and `--route mimo|deepseek`, with positive controls |
 | `pixel_gate.py` | The records of the per-model gate smoke (pass, fail, exclusion); never calls a provider |
-| `pixel_runner.py` | The `run_goal.py`-style runner; AG-02's oracle and scoring unchanged |
+| `pixel_runner.py` | The `run_goal.py`-style runner and the production entry point of one series (slots, retry, gate, pool); AG-02's oracle and scoring unchanged |
 | `pixel_plan.py`, `pixel_stats.py`, `pixel_slots.py` | The pre-registered orders and fingerprint rule; the interval and exact-test helpers; the slot, retry and campaign-stop rules |
 | `probe_image.py` | Step 0: does Claude Code forward an MCP image block? |
 | `fake_*.py`, `test_*.py` | Fakes (clock, operating system, sender, capture backends, Messages API, `claude`) and the tests |
@@ -68,16 +68,49 @@ This says nothing about whether a *provider* accepts the image or the model read
 at most 1568 px on the long edge; the server maps it back). `type_text(text)` is 1 to 16 printable ASCII
 characters. Nothing else can be expressed: no double or right click, drag, wheel, Enter, Tab or shortcut.
 
-Fail-closed, in this order (`pixel_server._click` / `_type_text` / `_deliver`): the stop file is absent;
-the phase allows it (phase 1: `simulated`, no operating-system call, the hit test labels the click);
-a screenshot of at most 10 s exists; **the ledger reserves** (AG-02's `proxy.reserve`: same file, per-goal
-and per-session caps, an unreadable ledger refuses everything); the foreground window is the process this
-run started, one of the two test executables (never `explorer.exe` or `applicationframehost.exe`), not a
-helper window, not elevated, on the primary monitor, not iconified, and still the window and geometry of the
-screenshot; the point is inside the client rectangle and `WindowFromPoint` resolves to the same top-level
-window (`type_text`: the keyboard-focus window belongs to it); no modifier held; then **the delivery check**,
-a fresh reading of the clock and the system immediately before the batch of all of the stop file, the age,
-the modifiers and the window evidence. A refusal after the reservation **keeps it**.
+Fail-closed, in this order (`pixel_server._click` / `_type_text` / `_deliver`):
+
+1. the operator's stop file is absent (**unreadable is a refusal**; only a genuine absence passes);
+2. the phase allows it (phase 1: `simulated`, no input; the read-only scoring hit test runs only after the
+   target is attested);
+3. a screenshot of at most 10 s exists;
+4. **the ledger reserves** (AG-02's `proxy.reserve`: same file, per-goal and per-session caps, an unreadable
+   ledger refuses everything);
+5. to 7. the foreground window is the process this run started, one of the two test executables (never
+   `explorer.exe` or `applicationframehost.exe`), with a readable class that is not a helper window, not
+   elevated, on the primary monitor, not iconified and still the window and geometry of the screenshot; the
+   point is inside the client rectangle and `WindowFromPoint` resolves to the same top-level window
+   (`type_text`: the keyboard-focus window belongs to it); no modifier held;
+6. then the read-only scoring hit test (inside that scope), the preparation of the native batch, and
+7. **the delivery check**: a fresh reading of the clock and the system immediately before the one `SendInput`
+   call of all of the stop file, the age, the modifiers and the window evidence.
+
+A refusal after the reservation **keeps it**. A failed Win32 read is unknown evidence, never affirmative
+(an empty class name, a NULL ancestor, a failed bitmap selection each refuse).
+
+### What a refusal means (decided by the architect, 2026-10-20; classified by guard and stage)
+
+| Guard | Examples | Meaning |
+|---|---|---|
+| 5, 6, 7 and the window/foreground/focus/modifier parts of the delivery check; a click outside the window or the image; unreadable system evidence | `FOREGROUND_NOT_TARGET_PROCESS`, `POINT_WINDOW_MISMATCH`, `MODIFIER_HELD`, `POINT_OUTSIDE_CLIENT`, `OS_READ_FAILED` | **Terminal safety event**: the server latches (`SESSION_TERMINATED` to every later call, screenshots included), the runner stops the owned session tree at once, creates the stop file and ends the series |
+| A failed, partial or uncertain `SendInput` | `INPUT_FAILED` | **Terminal, uncertain delivery**: logged `delivered: "uncertain"` with the inserted count, never reported as nothing sent, never retried |
+| Items 1 and the stop part of the delivery check (present or unreadable) | `STOP_ENGAGED`, `STOP_UNREADABLE` | **Operator stop**: the campaign ends; not a safety event; the runner neither creates nor deletes the operator's file |
+| Item 3 and the age part of the delivery check; item 4 (budget); arguments, caps, a capture refusal | `SCREENSHOT_STALE`, `LIVE_BUDGET_EXHAUSTED`, `CAPTURE_REFUSED` | Ordinary scored refusals: the session goes on |
+
+## One run is one series
+
+`pixel_runner.py` runs **one series**: one model, one phase, one repetition (`--repetition`), one consent. It
+runs the 11 goals in the pre-registered order of `pixel_plan`, through `pixel_slots`: the primary slot, the one
+permitted retry of an attempt that failed before the first model call (a stop or a safety event takes
+precedence over the retry), raw artifacts per attempt (`<series>/<goal>/attempt<n>/`), technical failures,
+not-attempted slots after a campaign stop, and `series.json` with the counts. It refuses a model without a
+passing gate record (`--gate-record`), refuses a series whose effective fingerprint (built from the actual
+arguments: timeout, dollar or token cap, session budget, caps, effort, versions, instruction, backend) differs
+from the campaign's (`--campaign-dir`; the refusal is recorded in `not_pooled.jsonl`), and never overwrites an
+existing series directory. A terminated attempt (timeout, token cap, nonzero exit, provider error, capture
+refusal) cannot score a success; AG-02's raw answer is kept as `score_ag02` and the OS oracle as `oracle_only_ok`.
+Native Claude keeps the registered 0.50 USD cap and effort `max`; a provider route has the context-token cap
+and effort `max` in its child environment, and reports the image-token estimate as unavailable.
 
 ## Privacy
 
@@ -89,16 +122,13 @@ applications to Anthropic, DeepSeek and Xiaomi (only after a model passes its ga
 decision O1; **nothing here deletes a screenshot remotely**. Outputs belong outside the checkout
 (`%LOCALAPPDATA%\Ommatix\runs\ag03`).
 
-## Interpretations the implementation made (the architect should confirm them)
+## Implementation readings, as decided by the architect
 
-1. **Safety events** (decision 8): the refusals of guards 5 to 8 and a click outside the window
-   (`pixel_runner.GUARD_VIOLATION_CODES`) end the series and create the operator's stop file; a stop, a stale
-   or missing screenshot, an exhausted budget, a cap, a bad argument and a capture refusal do not.
-2. The ledger reservation happens after the cheap checks (stop, phase, age) and **before** the window
-   evidence is read, so a refusal at guards 5 to 7 also keeps it.
-3. The pooling key excludes the start time and the proof's date (`pixel_plan.RECORDED_ONLY`): the route proof is
-   regenerated before each run and the repetitions span days.
-4. The screenshot is the client area (`PW_CLIENTONLY`); a window moved or resized after the screenshot refuses
-   (`GEOMETRY_CHANGED`) instead of clicking at a stale mapping.
-5. The read-only hit test (UI Automation point lookup of the control's name, reduced to the vocabulary) is
-   also run in phase 2 when available, for the wrong-target-click metric; it never reaches the agent.
+1. Safety events, operator stops and ordinary refusals: the table above (terminal, classified by guard and stage).
+2. The ledger reservation happens after the cheap checks and **before** the window evidence is read, so a refusal at
+   guards 5 to 7 also keeps it; the order of the live path is pinned by `test_review101.R5OrderTests`.
+3. The pooling key excludes the start time and the proof's date (`pixel_plan.RECORDED_ONLY`); everything
+   experimental is in the key, built from the effective arguments.
+4. The screenshot is the client area (`PW_CLIENTONLY`), at most 1568 px on the long edge; a window moved or resized
+   after the screenshot refuses (`GEOMETRY_CHANGED`). This is conditional on a **verified** per-monitor v2 DPI context
+   (read, never inferred from an error code) and on the future real step 2.

@@ -1578,13 +1578,16 @@ class OwnedTree:
 
 def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
                timeout: float, stderr_path: Path | None = None, env: dict | None = None,
-               max_context_tokens: int | None = None) -> dict:
+               max_context_tokens: int | None = None, should_stop=None) -> dict:
     """Runs the command; feeds every stdout line to `metrics`; ends the session on a timeout, when the first
     event shows a session other than the proven one, when the tool surface is wider than the three Ommatix tools,
     or (``max_context_tokens``, provider routes, where the CLI's dollar figure is invalid) when the
     ``ContextGuard`` finds the context over the cap (``token_cap``) or its consumption unknown or invalid
     (``usage_invalid``). It returns only once the session's whole process tree (the CLI, the budget proxy and
     the engine it started) has exited; ``tree_left`` is in the result when something could not be ended.
+    ``should_stop`` (AG-03, review of PR 101 R2): an optional callable checked after every stream line that
+    returns a closed reason when the session must end at once (a terminal state latched by the tool server),
+    else None; AG-02 does not pass it.
     The child's stderr is discarded unless a test passes `stderr_path`: production never stores it (it can
     echo a credential or a response, and nothing filters it)."""
     stderr = open(stderr_path, "wb") if stderr_path else subprocess.DEVNULL
@@ -1624,6 +1627,13 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
                 continue
             if metrics.init_problems or metrics.unexpected_tools:
                 stop("init" if metrics.init_problems else "tool_surface")
+            if should_stop is not None:
+                try:
+                    reason = should_stop()
+                except Exception:  # noqa: BLE001 - a hook that cannot answer ends the session, fail closed
+                    reason = "should_stop_failed"
+                if reason:
+                    stop(reason)
 
     reader = threading.Thread(target=pump, daemon=True)
     reader.start()

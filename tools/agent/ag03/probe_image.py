@@ -55,7 +55,7 @@ def analyse(requests: list[dict], width: int, height: int) -> dict:
     """The verdict facts for one session's captured requests (pure; the tests call it directly)."""
     source = cap.synthetic_png(0, width, height)[0]
     per_request, first = [], None
-    as_text = False
+    as_text, efforts = False, set()
     for request in requests:
         try:
             body = json.loads(request["body"])
@@ -65,11 +65,12 @@ def analyse(requests: list[dict], width: int, height: int) -> dict:
             continue
         images = [i for i in pa.image_blocks(body) if i["where"] == "tool_result:screenshot"]
         per_request.append(len(images))
+        efforts.add(str((body.get("output_config") or {}).get("effort")))
         as_text = as_text or bool(pa.PNG_IN_TEXT.search(pa.decoded_text(body)))
         if images and first is None:
             first = (body, images[0])
     out = {"requested_size": [width, height], "requests_with_tools": len(per_request),
-           "images_per_request": per_request, "image_as_text": as_text, "forwarded": first is not None}
+           "images_per_request": per_request, "request_efforts": sorted(efforts), "image_as_text": as_text, "forwarded": first is not None}
     if first is not None:
         body, image = first
         data = _first_image_bytes(body)

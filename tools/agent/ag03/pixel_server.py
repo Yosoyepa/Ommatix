@@ -57,7 +57,8 @@ RESULT_CODES = frozenset({
     "POINT_WINDOW_MISMATCH", "MODIFIER_HELD", "MODIFIERS_UNREADABLE", "FOCUS_UNREADABLE",
     "FOCUS_OUTSIDE_WINDOW", "LIVE_BUDGET_EXHAUSTED", "LEDGER_LOCKED", "LEDGER_UNREADABLE",
     "LEDGER_UNWRITABLE", "CAPTURE_REFUSED", "LIMIT_EXCEEDED", "INVALID_ARGUMENT", "UNKNOWN_TOOL",
-    "OS_READ_FAILED", "INPUT_FAILED", "NO_LIVE_BUDGET"})
+    "OS_READ_FAILED", "INPUT_FAILED", "NO_LIVE_BUDGET", "SESSION_TERMINATED", "WINDOW_CLASS_UNREADABLE",
+    "INPUT_NOT_PREPARED"})
 CAPTURE_REASONS = frozenset({"BACKEND_NOT_ADMITTED", "BACKEND_FAILED", "WRONG_SIZE", "IMAGE_TOO_LARGE"})
 
 
@@ -86,11 +87,14 @@ class Deps:
 
 
 class Refused(Exception):
-    """A tool call that fails closed: an error result, nothing sent. ``code`` is a closed token."""
+    """A tool call that fails closed: an error result. ``code`` is a closed token; ``kind`` says whether the
+    refusal ends the session (``safety``, ``operator_stop``, ``uncertain_delivery``) - by default decided by the
+    guard that produced the token (``pixel_guards.kind_of``) - or not (None: an ordinary scored refusal)."""
 
-    def __init__(self, code: str, **meta):
+    def __init__(self, code: str, kind: str | None = None, **meta):
         super().__init__(code)
         self.code, self.meta = code, meta
+        self.kind = kind if kind is not None else g.kind_of(code)
 
 
 def tool_definitions() -> list[dict]:
@@ -124,6 +128,7 @@ class PixelServer:
         self.calls = 0
         self.shots = 0
         self.shot: g.Shot | None = None
+        self.terminal: str | None = None  # latched at the first terminal refusal; nothing is actuated after it
         self.t0 = deps.clock()
 
     # ---- JSON-RPC ----------------------------------------------------------------------------
@@ -162,8 +167,11 @@ class PixelServer:
         started = self.deps.clock()
         tool = name if name in TOOLS else "unknown"
         meta: dict = {}
+        kind = None
         try:
             self.calls += 1
+            if self.terminal is not None:  # the latch: no tool does anything once a terminal refusal happened
+                raise Refused("SESSION_TERMINATED", after=self.terminal)
             if self.calls > self.cfg.max_tool_calls:
                 raise Refused("LIMIT_EXCEEDED", limit="tool_calls")
             if name not in TOOLS:
@@ -174,10 +182,12 @@ class PixelServer:
             result = getattr(self, "_" + name)(args, meta)
             code = None
         except Refused as refusal:
-            code, meta = refusal.code, meta | refusal.meta
+            code, meta, kind = refusal.code, meta | refusal.meta, refusal.kind
+            if kind is not None and self.terminal is None:
+                self.terminal = kind
             result = {"isError": True, "content": [{"type": "text", "text": json.dumps({"error": {"code": code}})}]}
         self.deps.log({"t_ms": round((started - self.t0) * 1000, 1), "tool": tool, "ok": code is None,
-                       **({"code": code} if code else {}), **meta,
+                       **({"code": code} if code else {}), **meta, **({"terminal": kind} if kind else {}),
                        "latency_ms": round((self.deps.clock() - started) * 1000, 1)})
         return result
 
@@ -194,6 +204,8 @@ class PixelServer:
             raise Refused("OS_READ_FAILED") from None
 
     def _stop(self):
+        """Item 1: only the genuine absence of the operator's file lets the call go on; present or
+        unreadable refuses (the reader returns None for anything but a clean absence)."""
         if self.cfg.synthetic:
             return
         try:
@@ -201,7 +213,7 @@ class PixelServer:
         except Refused:
             raise
         except Exception:  # noqa: BLE001
-            raise Refused("OS_READ_FAILED") from None
+            stop = None
         if (token := g.guard_stop(stop)):
             raise Refused(token)
 
@@ -237,6 +249,16 @@ class PixelServer:
     def _text_result(self, status: str) -> dict:
         return {"content": [{"type": "text", "text": json.dumps({"status": status})}]}
 
+    def _hit(self, point) -> str:
+        """The scoring hit test: read only, its label never reaches the agent."""
+        label = None
+        if self.deps.hit_test is not None and not self.cfg.synthetic:
+            try:
+                label = self.deps.hit_test(*point)
+            except Exception:  # noqa: BLE001 - a missing reading is "unknown", never a crash
+                label = None
+        return label_of(label, self.cfg.vocabulary)
+
     def _click(self, args: dict, meta: dict) -> dict:
         if set(args) != {"x", "y"} or not _is_int(args["x"]) or not _is_int(args["y"]):
             raise Refused("INVALID_ARGUMENT")
@@ -245,20 +267,20 @@ class PixelServer:
         shot = self.shot
         if shot is None:
             raise Refused("SCREENSHOT_MISSING")
-        if not (0 <= x < shot.width and 0 <= y < shot.height):
-            raise Refused("POINT_OUTSIDE_CLIENT")
+        if not (0 <= x < shot.width and 0 <= y < shot.height):  # a click outside the image is outside the window
+            raise Refused("POINT_OUTSIDE_CLIENT", stage="precheck")
         point = g.screen_point(shot, x, y)
-        label = None
-        if self.deps.hit_test is not None and not self.cfg.synthetic:
-            try:
-                label = self.deps.hit_test(*point)
-            except Exception:  # noqa: BLE001 - a missing reading is "unknown", never a crash
-                label = None
-        meta |= {"label": label_of(label, self.cfg.vocabulary)}
-        if self.cfg.phase == 1 or self.cfg.synthetic:  # 2: simulated, no operating-system call
+        if self.cfg.phase == 1 or self.cfg.synthetic:  # 2: simulated; the only OS reads are the read-only ones
+            if self.deps.hit_test is not None and not self.cfg.synthetic:
+                attested = self._need_os()[1]
+                if (token := g.check_evidence(self._read(point, False), shot, attested, point)):
+                    raise Refused(token, stage="attest")
+                meta |= {"label": self._hit(point)}  # the target is attested first: no other application is queried
+            else:
+                meta |= {"label": "unknown"}
             return self._text_result("simulated")
         return self._deliver("click", point, shot, meta, lambda: w32.build_click_inputs(
-            point[0], point[1], self._need_os()[0].virtual_screen()))
+            point[0], point[1], self._need_os()[0].virtual_screen()), scoring=True)
 
     def _type_text(self, args: dict, meta: dict) -> dict:
         if set(args) != {"text"} or w32.text_problem(args["text"]) is not None:
@@ -270,9 +292,14 @@ class PixelServer:
             return self._text_result("simulated")
         return self._deliver("type_text", None, self.shot, meta, lambda: w32.build_text_inputs(text))
 
-    def _deliver(self, kind: str, point, shot, meta: dict, build: Callable[[], list[dict]]) -> dict:
-        os_, attested = self._need_os()
-        if (token := g.guard_shot_age(self.deps.clock(), shot)):  # 3
+    def _deliver(self, kind: str, point, shot, meta: dict, build: Callable[[], list[dict]],
+                 scoring: bool = False) -> dict:
+        """Items 3 to 8 in the order of ADR-0038 decision 4 and the review of PR 101 (R5): the cheap refusals
+        (age), the reservation, the attestation of the target (items 5 to 7), only then the read-only scoring
+        hit test, the preparation of the native batch, and the full recheck of item 8 immediately before the
+        one ``SendInput`` call. A refusal after the reservation keeps it."""
+        attested = self._need_os()[1]
+        if (token := g.guard_shot_age(self.deps.clock(), shot)):  # 3: an ordinary scored refusal
             raise Refused(token)
         if self.deps.reserve is None:
             raise Refused("NO_LIVE_BUDGET")
@@ -283,17 +310,25 @@ class PixelServer:
         meta |= {"reserved": True}
         if (token := g.check_evidence(self._read(point, kind == "type_text"), shot, attested, point)):  # 5-7
             raise Refused(token, stage="initial")
+        if scoring:
+            meta |= {"label": self._hit(point)}  # inside the attested scope, before the recheck
         inputs = build()
+        try:
+            prepared = self.deps.sender.prepare(inputs)  # all native work happens before the recheck
+        except Exception:  # noqa: BLE001
+            raise Refused("INPUT_NOT_PREPARED", stage="prepare", delivered=False) from None
         # 8: the delivery check, a fresh reading of the clock and of the system, immediately before the batch.
         fresh = self._read(point, kind == "type_text")
         if (token := g.check_batch(fresh, self.deps.clock(), shot, attested, point)):
             raise Refused(token, stage="delivery")
         try:
-            sent = self.deps.sender.send(inputs)
+            inserted = self.deps.sender.send(prepared)
         except Exception:  # noqa: BLE001
-            sent = False
-        if not sent:
-            raise Refused("INPUT_FAILED", stage="send")
+            inserted = None
+        if inserted is None or w32.decode_sendinput(inserted, len(inputs)) != "all":
+            # failed, partial or uncertain: reported as an uncertain delivery, never as nothing sent, never retried
+            raise Refused("INPUT_FAILED", kind="uncertain_delivery", stage="send", delivered="uncertain",
+                          **({"events_sent": inserted} if isinstance(inserted, int) else {}))
         meta |= {"delivered": True, "events": len(inputs)}
         return self._text_result("input_delivered")
 
@@ -362,7 +397,7 @@ def build_real_deps(args, log) -> Deps:  # pragma: no cover - the owner's sessio
         raise SystemExit("real mode runs on Windows only")
     os_ = w32.RealOs(args.stop_file)
     if not os_.ensure_dpi_aware():
-        raise SystemExit("could not make this process DPI aware")
+        raise SystemExit("this thread does not run under the per-monitor v2 DPI context (verified, not assumed)")
     record = cap.load_admission(args.admission)
     backend = cap.PrintWindowBackend(w32.RealGdi())
     if record is None or not record.admits(backend):

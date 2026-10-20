@@ -40,6 +40,7 @@ class Attempt:
     capture_refused: bool = False           # an outcome, never a reason to retry
     gate_refused: bool = False              # likewise
     excluded_model: bool = False            # likewise
+    harness_halt: bool = False              # the harness cannot go on safely (its process tree is not verified gone)
 
     @property
     def invalid(self) -> bool:
@@ -48,7 +49,7 @@ class Attempt:
 
     @property
     def ends_campaign(self) -> bool:
-        return self.safety_event or self.operator_stop
+        return self.safety_event or self.operator_stop or self.harness_halt
 
 
 @dataclass
@@ -56,6 +57,7 @@ class Slot:
     key: SlotKey
     attempts: list[Attempt] = field(default_factory=list)
     attempted: bool = False
+    interrupted: bool = False  # an invalid attempt ended the campaign: no retry, no primary outcome, not in n
 
     @property
     def primary(self) -> Attempt | None:
@@ -64,7 +66,7 @@ class Slot:
 
     @property
     def technical_failure(self) -> bool:
-        return self.attempted and self.primary is None
+        return self.attempted and self.primary is None and not self.interrupted
 
     @property
     def success(self) -> bool:
@@ -72,11 +74,16 @@ class Slot:
 
 
 def execute_slot(key: SlotKey, run_attempt) -> Slot:
-    """Runs a slot under the retry rule: one retry, inside the slot, only after an invalid attempt."""
+    """Runs a slot under the retry rule: one retry, inside the slot, only after an invalid attempt - and never
+    after an attempt that ended the campaign (an operator stop or a safety event takes precedence over the one
+    permitted retry; review of PR 101, R6): the slot is then *interrupted*, its raw record is kept."""
     slot = Slot(key=key, attempted=True)
     for _ in range(2):
         attempt = run_attempt(key)
         slot.attempts.append(attempt)
+        if attempt.ends_campaign:
+            slot.interrupted = attempt.invalid or not attempt.model_called  # ended before the model was asked
+            break
         if not attempt.invalid:
             break
     return slot
@@ -100,12 +107,13 @@ def tally(slots: list[Slot], model: str, arm: str, phase: int, goal: str) -> dic
     """k of n for one goal: n counts primary slots attempted (a technical failure counts as a
     non-success); raw attempts and technical failures are reported on their own lines."""
     mine = [s for s in slots if s.key[0] == model and s.key[1] == arm and s.key[2] == phase and s.key[4] == goal]
-    attempted = [s for s in mine if s.attempted]
+    attempted = [s for s in mine if s.attempted and not s.interrupted]
     n, k = len(attempted), sum(1 for s in attempted if s.success)
     return {"k": k, "n": n, "wilson95": stats.wilson(k, n) if n else None,
-            "raw_attempts": sum(len(s.attempts) for s in attempted),
+            "raw_attempts": sum(len(s.attempts) for s in mine),
             "technical_failures": sum(1 for s in attempted if s.technical_failure),
-            "not_attempted": len(mine) - n}
+            "interrupted": sum(1 for s in mine if s.interrupted),
+            "not_attempted": sum(1 for s in mine if not s.attempted)}
 
 
 def series_slots(slots: list[Slot], model: str, arm: str, phase: int, rep: int) -> list[Slot]:
@@ -114,7 +122,7 @@ def series_slots(slots: list[Slot], model: str, arm: str, phase: int, rep: int) 
 
 def series_complete(slots: list[Slot], model: str, arm: str, phase: int, rep: int) -> bool:
     mine = series_slots(slots, model, arm, phase, rep)
-    return len(mine) == len(plan.GOAL_IDS) and all(s.attempted for s in mine)
+    return len(mine) == len(plan.GOAL_IDS) and all(s.attempted and not s.interrupted for s in mine)
 
 
 def series_score(slots: list[Slot], model: str, arm: str, phase: int, rep: int) -> int | None:

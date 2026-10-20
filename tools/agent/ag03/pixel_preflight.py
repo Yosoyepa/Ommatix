@@ -87,7 +87,8 @@ def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path, 
     mcp_path.write_text(json.dumps(mcp), encoding="utf-8")
     route = getattr(args, "route", None)
     argv = pa.build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
-                                system_instruction=pa.SYSTEM_INSTRUCTION, max_budget_usd=None if route else 0.5)
+                                system_instruction=pa.SYSTEM_INSTRUCTION, max_budget_usd=None if route else 0.5,
+                                effort=None if route else "max")
     with fake_messages.ScriptedMessages(script) as api:
         if route:
             env = agentcli.route_env(route, api.url, ag02.ROUTE_DUMMY_TOKEN, args.model, config_dir) | getattr(
@@ -256,7 +257,8 @@ def run(args) -> dict:
     route = getattr(args, "route", None)
     production_requests = a["requests"] + b["requests"]
     sentinel_values = list(world["sentinels"].values())
-    found, facts = pa.check_pixel_requests(production_requests, sentinels=sentinel_values)
+    found, facts = pa.check_pixel_requests(production_requests, sentinels=sentinel_values,
+                                           effort=None if route else "max")
     problems += [f"pixel_{p}" for p in found]
     if not facts.get("screenshot_result_images"):
         problems.append("pixel_no_screenshot_result_in_requests")

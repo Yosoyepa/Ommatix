@@ -75,9 +75,11 @@ def build_mcp_config(python: str, server_args: list[str]) -> dict:
 
 
 def build_claude_argv(*, claude, model: str, mcp_config: Path, system_instruction: str,
-                      max_budget_usd: float | None) -> list[str]:
+                      max_budget_usd: float | None, effort: str | None = "max") -> list[str]:
     """AG-02's command with the pixel tools allowed (``run_goal.build_claude_argv`` allows the Ommatix
-    ones). Prompt through stdin; every settings source off; no unrestricted mode."""
+    ones). Prompt through stdin; every settings source off; no unrestricted mode. ``effort`` is the registered
+    ``max`` on the native path (a provider route pins it in its child environment instead and passes None);
+    ``max_budget_usd`` is the registered 0.50 USD cap on the native path and None on a provider route."""
     head = list(claude) if isinstance(claude, (list, tuple)) else [claude]
     return [*head, "-p", "--model", model, "--output-format", "stream-json", "--verbose",
             "--mcp-config", str(mcp_config), "--strict-mcp-config",
@@ -85,7 +87,8 @@ def build_claude_argv(*, claude, model: str, mcp_config: Path, system_instructio
             "--permission-mode", "dontAsk", "--permission-prompts", "none",
             "--system-prompt", system_instruction, "--no-session-persistence",
             "--disable-slash-commands", "--setting-sources", "",
-            *([] if max_budget_usd is None else ["--max-budget-usd", f"{max_budget_usd:g}"])]
+            *([] if max_budget_usd is None else ["--max-budget-usd", f"{max_budget_usd:g}"]),
+            *([] if effort is None else ["--effort", effort])]
 
 
 # ---- images in a request -----------------------------------------------------------------------
@@ -166,7 +169,7 @@ def short_tool(full: str | None) -> str:
     return full.removeprefix(f"mcp__{SERVER_NAME}__") if isinstance(full, str) else "unknown"
 
 
-def check_pixel_requests(requests: list[dict], *, sentinels=()) -> tuple[list[str], dict]:
+def check_pixel_requests(requests: list[dict], *, sentinels=(), effort: str | None = None) -> tuple[list[str], dict]:
     """(closed problem tokens, facts) for the Messages requests a pixel session sent: the tool list is
     exactly the three pixel tools, images appear only inside the result of ``screenshot`` as PNG within
     the limits, no image travels as text and no canary sentinel is in any request."""
@@ -175,6 +178,7 @@ def check_pixel_requests(requests: list[dict], *, sentinels=()) -> tuple[list[st
         return ["no_request_captured"], {"requests": 0}
     wanted = sorted(ALLOWED_TOOL_NAMES)
     offered, screenshot_results, max_dim, max_bytes, per_request = False, 0, 0, 0, []
+    efforts: set = set()
     for request in requests:
         try:
             body = json.loads(request["body"])
@@ -186,6 +190,7 @@ def check_pixel_requests(requests: list[dict], *, sentinels=()) -> tuple[list[st
             continue
         if "tools" in body:
             offered = True
+            efforts.add(str((body.get("output_config") or {}).get("effort")))
             names = sorted(str(t.get("name")) for t in body["tools"] if isinstance(t, dict)) \
                 if isinstance(body["tools"], list) else []
             if names != wanted:
@@ -212,6 +217,8 @@ def check_pixel_requests(requests: list[dict], *, sentinels=()) -> tuple[list[st
             problems.append("sentinel_in_request")
     if not offered:
         problems.append("no_request_offers_tools")
+    if effort is not None and efforts != {effort}:
+        problems.append("effort_differs")
     return sorted(set(problems)), {"requests": len(requests), "request_tools": wanted if offered else [],
                                    "screenshot_result_images": screenshot_results,
                                    "max_image_edge": max_dim, "max_image_bytes": max_bytes,
@@ -311,8 +318,11 @@ class PixelStream(rg.StreamMetrics):
     """``StreamMetrics`` for the pixel tools. Keeps counts, closed codes, token numbers, timings,
     screenshot dimensions and booleans; never a pixel, a hash of one, a coordinate list or a text."""
 
-    def __init__(self, *a, **k):
+    def __init__(self, *a, provider: str | None = None, **k):
         super().__init__(*a, **k)
+        # The recipient of the pixels, from the configured route (``PixelCLI.provider``), never from the init
+        # event (whose decoder defaults a missing provider to Anthropic) and never from a model name.
+        self.recipient = provider
         self.screenshots: list[dict] = []
         self.primitives = {"click": 0, "type_text": 0}
         self.refusals: dict[str, int] = {}
@@ -385,7 +395,7 @@ class PixelStream(rg.StreamMetrics):
 
     def summary(self) -> dict:
         base = super().summary()
-        provider = (self.attestation or {}).get("provider") or "anthropic"
+        provider = self.recipient
         base |= {
             "tools_listed": [tool_short_name(t) for t in (self.attestation or {}).get("tools") or []],
             "unexpected_tool_count": len(self.unexpected_tools),
@@ -396,7 +406,8 @@ class PixelStream(rg.StreamMetrics):
             "refusal_codes": dict(sorted(self.refusals.items())),
             "image_token_estimate": image_token_estimate(self.images_per_message, provider),
             "image_token_estimate_basis": ("every retained appearance per request, Anthropic formula"
-                                           if provider == "anthropic" else "unavailable: no documented formula"),
+                                           if provider == "anthropic" else
+                                           "unavailable: no documented formula for this recipient"),
         }
         base.pop("chosen_labels", None)
         base.pop("actions_observed_after", None)

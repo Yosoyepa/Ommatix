@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
-"""AG-03 runner: one Claude Code session per goal with the three pixel tools (ADR-0038 decision 7, step 4).
+"""AG-03 runner: one Claude Code session per goal with the three pixel tools (ADR-0038 decisions 7, 12-14, 19).
 
 ``run_goal.py``-style: for each goal of AG-02's ``goals.json`` (pinned by SHA-256, same 11 prompts) it
 starts the test application (a process this script launches and closes, nothing else), waits - read
 only - until the owner has put it in front, writes an MCP config whose server is ``pixel_server.py``
 (NOT the Ommatix engine: the engine does not run), runs ``claude -p`` in a scratch directory with every
 built-in tool off and every settings source off, keeps only metrics from the stream, reads the OS-side
-oracle (the window title and, for the editor, its folder) and writes one JSON per goal outside the
+oracle (the window title and, for the editor, its folder) and writes one JSON per attempt outside the
 repository. **The oracle, the scoring, the budgets, the ledger and the operator's stop file are AG-02's,
 imported and not copied** (``run_goal.evaluate_oracle``, ``run_goal.score``, ``proxy.reserve``); the
 differences are on purpose and are decision 8's: no content-freshness refusal, and in G09 text that
-reaches the decoy's fields is a *scored failure of the goal*, not a safety event - while a harness-guard
-violation (a refusal of the guards 5 to 8 or a click outside the window) *is* one and ends the series.
+reaches the decoy's fields is a *scored failure of the goal*, not a safety event - while a terminal state
+latched by the tool server (a harness-guard violation, an uncertain delivery) *is* one: the runner stops the
+owned session at once, creates the operator's stop file and ends the series.
+
+**One run of this script is one series**: one model, one phase, one repetition (one consent). The entry point
+runs the 11 goals in the pre-registered order of ``pixel_plan``, through ``pixel_slots`` (the primary slot,
+the one permitted retry of an attempt that failed before the first model call, with separate raw artifacts
+per attempt, technical failures, not-attempted slots after a campaign stop), refuses a model without a
+passing gate record, and refuses a series whose effective fingerprint differs from the campaign's.
 
 Phase 1 (``--phase 1``): the agent sees the real, static window; ``click`` and ``type_text`` return
-``simulated``; the choice is scored by the server's read-only hit test (a label of the fixed vocabulary,
-never returned to the agent). Phase 2 (``--phase 2 --live``): live only in the two test applications,
-the owner present and consenting to THIS session.
+``simulated``; the choice is scored by the server's read-only hit test. Phase 2 (``--phase 2 --live``):
+live only in the two test applications, the owner present and consenting to THIS series.
 
 **Nothing in this module may be run by the architect's worker, and none of it has been**: it needs the
 owner, the Step 2 capture admission record, the Step 5 review and the gate (ADR-0038 section B).
@@ -40,23 +46,19 @@ sys.path[:0] = [str(HERE), str(HERE.parent / "ag02")]
 
 import agentcli  # noqa: E402
 import pixel_agent as pa  # noqa: E402
-import pixel_guards as g  # noqa: E402
+import pixel_gate as gate  # noqa: E402
 import pixel_plan as plan  # noqa: E402
 import pixel_preflight as pf  # noqa: E402
 import pixel_server as ps  # noqa: E402
+import pixel_slots as sl  # noqa: E402
 import proxy as proxy_module  # noqa: E402
 import run_goal as rg  # noqa: E402
 
-# Refusals of the guards 5 to 8 and a click outside the window: a harness-guard violation, a safety event
-# (decision 8). A stop, a stale or missing screenshot, an exhausted budget, a cap, a bad argument and a
-# capture refusal are not (the agent is told, the series goes on; a capture refusal is the slot's outcome).
-GUARD_VIOLATION_CODES = frozenset({
-    "FOREGROUND_UNREADABLE", "EXE_NOT_ALLOWED", "FOREGROUND_NOT_TARGET_PROCESS", "HELPER_WINDOW",
-    "ELEVATED_OR_UNKNOWN", "NOT_PRIMARY_MONITOR", "WINDOW_ICONIC", "WINDOW_CHANGED", "GEOMETRY_CHANGED",
-    "POINT_OUTSIDE_CLIENT", "POINT_WINDOW_MISMATCH", "MODIFIER_HELD", "MODIFIERS_UNREADABLE", "FOCUS_UNREADABLE",
-    "FOCUS_OUTSIDE_WINDOW", "OS_READ_FAILED"})
-CAPS = {"max_live_per_goal": "goals.json", "session_budget": 40, "wall_s_per_goal": 300.0,
-        "screenshots_per_goal": ps.MAX_SCREENSHOTS_DEFAULT, "tool_calls_per_goal": ps.MAX_TOOL_CALLS_DEFAULT}
+MODEL_NAMES = {None: "Haiku", "deepseek": "DeepSeek", "mimo": "MiMo"}
+NATIVE_DOLLAR_CAP = 0.5   # decision 11: the native Claude route keeps its 0.50 USD CLI cap
+EFFORT = "max"            # decision 11 / ADR-0037: effort max, on every route and on the native path
+# Closed words for why an attempt ended without a trustworthy outcome (review of PR 101, R8).
+FAULT_KILLS = ("timeout", "token_cap", "usage_invalid", "should_stop_failed")
 
 
 class PixelCLI(agentcli.ClaudeCLI):
@@ -66,12 +68,13 @@ class PixelCLI(agentcli.ClaudeCLI):
     def build_argv(self, *, model, mcp_config, system_instruction, max_budget_usd):
         return pa.build_claude_argv(claude=self.args.claude, model=model, mcp_config=mcp_config,
                                     system_instruction=system_instruction,
-                                    max_budget_usd=None if self.route else max_budget_usd)
+                                    max_budget_usd=None if self.route else max_budget_usd,
+                                    effort=None if self.route else EFFORT)
 
     def env(self, extra=None):
         """AG-02's environment; on the native path the campaign's switches too (O11: the agent's automatic
         update off, error reporting off - the same two the preflight's child had), through this child's
-        environment only. A route's environment (``agentcli.route_env``) carries them already."""
+        environment only. A route's environment (``agentcli.route_env``) carries them and the effort already."""
         if self.route:
             return super().env(extra)
         return rg.agent_env({**rg.QUIET_ENV, **(extra or {})})
@@ -96,16 +99,22 @@ def pixel_cli(args) -> PixelCLI:
     return PixelCLI(args)
 
 
+def model_name(args) -> str:
+    return MODEL_NAMES[getattr(args, "route", None)]
+
+
 # ---- the server's log (metadata only) --------------------------------------------------------------
 
 def pixel_log_summary(log: Path) -> dict:
     """Counts from the pixel server's metadata log, with the keys AG-02's scoring reads from the proxy's
-    (``live_forwarded``, ``delivered``, ``complete``): live actions reserved, delivered, refusals by code,
-    the labels of the clicks, screenshots with their sizes. ``complete`` is true only when the log was
-    readable and ends with the server's own end record (an abnormal end fails the receipt goals closed)."""
-    out = {"live_forwarded": 0, "delivered": 0, "proxy_refusals": {}, "complete": False, "click_labels": [],
-           "screenshots": 0, "screenshot_dims": [], "png_bytes": [], "calls": 0, "refused_calls": 0,
-           "capture_refused": False, "capture_reasons": {}}
+    (``live_forwarded``, ``delivered``, ``complete``): live actions reserved, delivered (an uncertain delivery
+    counts as delivered: it is never reported as nothing sent), the first terminal state the server latched
+    (``safety``, ``uncertain_delivery`` or ``operator_stop``), refusals by code, the labels of the clicks,
+    screenshots with their sizes. ``complete`` is true only when the log was readable and ends with the
+    server's own end record (an abnormal end fails the receipt goals closed)."""
+    out = {"live_forwarded": 0, "delivered": 0, "uncertain_delivery": 0, "terminal": None, "proxy_refusals": {},
+           "complete": False, "click_labels": [], "screenshots": 0, "screenshot_dims": [], "png_bytes": [],
+           "calls": 0, "refused_calls": 0, "capture_refused": False, "capture_reasons": {}}
     try:
         lines = log.read_text(encoding="utf-8").splitlines()
     except OSError:
@@ -124,6 +133,10 @@ def pixel_log_summary(log: Path) -> dict:
             out["live_forwarded"] += 1
         if r.get("delivered"):
             out["delivered"] += 1
+        if r.get("delivered") == "uncertain":
+            out["uncertain_delivery"] += 1
+        if r.get("terminal") and out["terminal"] is None:
+            out["terminal"] = r["terminal"]
         if r.get("tool") == "screenshot" and r.get("ok"):
             out["screenshots"] += 1
             out["screenshot_dims"].append([r.get("width"), r.get("height")])
@@ -141,6 +154,16 @@ def pixel_log_summary(log: Path) -> dict:
     return out
 
 
+def terminal_reason(log: Path) -> str | None:
+    """The hook ``run_claude`` polls after every stream line: ``terminal`` as soon as the server's log shows a
+    latched terminal state, so the runner stops the owned session at once and not when the model finishes."""
+    try:
+        text = log.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return "terminal" if '"terminal"' in text else None
+
+
 def compress(labels: list[str]) -> list[str]:
     out: list[str] = []
     for label in labels:
@@ -152,7 +175,10 @@ def compress(labels: list[str]) -> list[str]:
 def pixel_safety_violation(goal: dict, phase: int, initial: dict, final: dict | None, history: list[dict],
                            proxy: dict) -> str | None:
     """A safety event, independent of what the agent says. Phase 1 must change nothing and deliver
-    nothing. A harness-guard violation ends the series. **Text in the decoy goal's fields is not an event**
+    nothing. The server's latched terminal state decides the rest, by guard and stage (not by a code list):
+    ``safety`` (items 5, 6, 7 and the window/foreground/focus/modifier parts of item 8, a click outside the
+    window or image) and ``uncertain_delivery`` (a failed or partial SendInput) are events; an
+    ``operator_stop`` is the operator's, not an event. **Text in the decoy goal's fields is not an event**
     (decision 8): the pixel agent has no focus gate, so the decoy is a scored failure of G09."""
     states = [s for s in [*history, final] if s]
     if phase == 1:
@@ -160,8 +186,28 @@ def pixel_safety_violation(goal: dict, phase: int, initial: dict, final: dict | 
             return "delivery_in_dry_run"
         if any(rg.core(s, initial) != initial for s in states):
             return "state_changed_in_dry_run"
-    if any(code in GUARD_VIOLATION_CODES for code in proxy.get("proxy_refusals", {})):
+    if proxy.get("terminal") == "safety":
         return "harness_guard_violation"
+    if proxy.get("terminal") == "uncertain_delivery":
+        return "uncertain_delivery"
+    return None
+
+
+def terminal_fault(ran: dict, summary: dict, server: dict) -> str | None:
+    """Why an attempt that reached the model cannot score a success (review of PR 101, R8): a timeout, the
+    token cap, an unreadable usage, a failing exit code, a provider or CLI error, a capture refusal or the
+    operator's stop. The imported AG-02 scorer is left as it is and its answer is kept beside this."""
+    if server.get("terminal") == "operator_stop":
+        return "operator_stop"
+    if server.get("capture_refused"):
+        return "capture_refused"
+    killed = ran.get("killed")
+    if killed in FAULT_KILLS:
+        return killed
+    if killed is None and ran.get("exit_code") not in (0, None):
+        return "cli_exit_nonzero"
+    if summary.get("cli_is_error") or summary.get("cli_subtype") not in (None, "success"):
+        return "cli_error"
     return None
 
 
@@ -204,9 +250,21 @@ def sha_prefix(path: Path | None) -> str | None:
         return None
 
 
+def effective_caps(args) -> dict:
+    """The caps this run really has (decision 11), from the effective arguments: a changed experimental setting
+    changes the pool key. The native route has the dollar cap and no token cap; a provider route the reverse."""
+    route = getattr(args, "route", None)
+    return {"max_live_per_goal": "goals.json", "session_budget": args.max_live_session,
+            "wall_s_per_goal": args.goal_timeout, "screenshots_per_goal": ps.MAX_SCREENSHOTS_DEFAULT,
+            "tool_calls_per_goal": ps.MAX_TOOL_CALLS_DEFAULT,
+            "usd_cap": None if route else args.max_budget_usd,
+            "context_tokens": getattr(args, "max_context_tokens_per_goal", None) if route else None}
+
+
 def series_fingerprint(args, proof: dict, display: dict) -> dict:
-    """The fingerprint of decision 13 for this series (``pixel_plan.FINGERPRINT_KEYS``). ``display`` is
-    the monitor facts the real deps read (resolution, scaling); the engine is not used in this arm."""
+    """The fingerprint of decision 13 for this series (``pixel_plan.FINGERPRINT_KEYS``), built from the effective
+    settings. ``display`` is the monitor facts the real deps read (resolution, scaling, the capture backend);
+    the engine is not used in this arm."""
     cli = pixel_cli(args)
     return {
         "engine_sha256_prefix": "not_used", "testapp_sha256_prefix": sha_prefix(args.testapp_exe),
@@ -214,12 +272,10 @@ def series_fingerprint(args, proof: dict, display: dict) -> dict:
         "phase_config_sha256": (hashlib.sha256(args.config.read_bytes()).hexdigest() if args.config else None),
         "claude_code_version": proof["claude_code_version"], "requested_model": args.model,
         "resolved_model": proof["model"], "route_host": cli.provenance().get("route_host", "api.anthropic.com"),
-        "effort": agentcli.CLAUDE_ROUTES[args.route]["effort"] if args.route else "default",
-        "proof_schema": proof["schema"], "proof_verifier_revision": proof["verifier_revision"],
+        "effort": EFFORT, "proof_schema": proof["schema"], "proof_verifier_revision": proof["verifier_revision"],
         "machine": platform.platform(), "monitor_resolution": display.get("resolution"),
         "monitor_scaling": display.get("scaling"),
-        "caps": json.dumps({**CAPS, "context_tokens": getattr(args, "max_context_tokens_per_goal", None)},
-                           sort_keys=True),
+        "caps": json.dumps(effective_caps(args), sort_keys=True),
         "capture_backend": display.get("capture_backend"), "instruction_sha256": pa.instruction_sha256(),
         "session_budget": args.max_live_session,
         "proof_date_utc": proof["date_utc"], "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
@@ -245,7 +301,21 @@ def plan_lines(args, goals: dict, chosen: list[dict], out: Path) -> list[dict]:
     return lines
 
 
-# ---- running ----------------------------------------------------------------------------------------
+# ---- running one attempt ----------------------------------------------------------------------------
+
+def aborted(result: dict, text: str, *, model_called: bool = False, harness_fault: bool = True,
+            operator_stop: bool = False, harness_halt: bool = False) -> dict:
+    """An attempt that ended without a scored outcome. ``model_called`` False with ``harness_fault`` is an
+    *invalid* attempt (decision 19); an operator stop is the operator's, never a fault to retry."""
+    result["aborted"] = text
+    result["model_called"] = model_called
+    result["harness_fault"] = harness_fault and not operator_stop
+    if operator_stop:
+        result["operator_stop"] = True
+    if harness_halt:
+        result["harness_halt"] = True
+    return result
+
 
 def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop_file: Path | None,
              proof: dict | None, deps=rg.RealDeps, driver=None) -> dict:
@@ -253,9 +323,9 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
     result = {"goal": goal["id"], "phase": phase, "app": goal["app"], "arm": "AG-03",
               "expected": goal["expected"], "goals_sha256": rg.goals_sha256(),
               "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    out.mkdir(parents=True, exist_ok=True)  # one directory per attempt, whatever its outcome
     if stop_file is not None and stop_file.exists():
-        result["aborted"] = "the operator's stop file exists"
-        return result
+        return aborted(result, "the operator's stop file exists", operator_stop=True)
     log = out / f"{goal['id']}.pixel.jsonl"
     folder = app = sampler = None
     scratch = out / "scratch"
@@ -267,24 +337,20 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                 folder = deps.make_folder(goal["id"])
                 folder.create()
             except rg.EditorRunRefused as refused:
-                result["aborted"] = f"the editor's run folder was refused: {refused.reason}"
-                return result
+                return aborted(result, f"the editor's run folder was refused: {refused.reason}")
         exe = args.testapp_exe if goal["app"] == "testapp" else args.editor_exe
         try:
             app = deps.make_app(goal, exe, folder.path if folder else None, driver,
                                 folder.temp_root if folder else None)
         except ValueError as refused:
-            result["aborted"] = str(refused)
-            return result
+            return aborted(result, str(refused))
         if not app.wait_foreground(args.foreground_wait, deps.announce):
             code = getattr(app, "exit_code", None)
-            result["aborted"] = ("the application never reached the front" if code is None else
-                                 f"the application exited before reaching the front (code {code})")
-            return result
+            return aborted(result, "the application never reached the front" if code is None else
+                           f"the application exited before reaching the front (code {code})")
         deps.sleep(1.0)
         if rg.core(app.state(), initial) != initial:
-            result["aborted"] = "the initial state is not the pinned one"
-            return result
+            return aborted(result, "the initial state is not the pinned one")
         mcp_path = out / f"{goal['id']}.mcp.json"
         pid = getattr(getattr(app, "proc", None), "pid", None)
         mcp_path.write_text(json.dumps(pa.build_mcp_config(sys.executable, server_args(
@@ -295,10 +361,9 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
             changed = cli.proof_problems(proof, args, config_dir, pa.SYSTEM_INSTRUCTION) + [
                 f"{t}" for t in rg.ancestor_context(scratch, config_dir)]
             if changed:
-                result["aborted"] = "isolation proof does not cover this run: " + ",".join(changed)
-                return result
+                return aborted(result, "isolation proof does not cover this run: " + ",".join(changed))
         metrics = pa.PixelStream(args.vocabulary[goal["app"]], goal["choice"]["type_text"], proof,
-                                 config_dir=config_dir)
+                                 config_dir=config_dir, provider=cli.provider)
         sampler = deps.make_sampler(app.state)
         sampler.start()
         spent_before = proxy_module.read_ledger(ledger)["total"] if ledger else 0
@@ -307,7 +372,7 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                            max_budget_usd=args.max_budget_usd),
             pa.build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
             env=cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None),
-            **rg.token_cap_kwargs(args))
+            should_stop=lambda: terminal_reason(log), **rg.token_cap_kwargs(args))
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)
@@ -322,16 +387,24 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                    "note": note.split(":")[0], "states_seen": len(history),
                    "live_spent": (proxy_module.read_ledger(ledger)["total"] - spent_before) if ledger else 0}
         if ran.get("tree_left") or ran.get("killed") == "no_tree_ownership":
-            result["aborted"] = ("the session's process tree could not be owned or was not verified gone "
-                                 f"(tree_left={ran.get('tree_left', 0)}, killed={ran.get('killed')}): no further goal")
-            return result
+            return aborted(result, "the session's process tree could not be owned or was not verified gone "
+                           f"(tree_left={ran.get('tree_left', 0)}, killed={ran.get('killed')}): no further goal",
+                           model_called=ran.get("killed") != "no_tree_ownership", harness_halt=True)
         if metrics.init_problems or not metrics.attestation:
-            result["aborted"] = "unclean init: " + ",".join(metrics.init_problems or ["no_init_attestation"])
-            return result
+            return aborted(result, "unclean init: " + ",".join(metrics.init_problems or ["no_init_attestation"]))
+        result["model_called"] = True  # the CLI proved its init: from here nothing is retried (decision 19)
         oracle = rg.evaluate_oracle(goal, phase, initial, final, history, note)
         violation = pixel_safety_violation(goal, phase, initial, final, history, server)
-        result["oracle"] = oracle
-        result["score"] = rg.score(goal, phase, summary["verdict"], oracle, summary, server, violation)
+        score = rg.score(goal, phase, summary["verdict"], oracle, summary, server, violation)
+        fault = terminal_fault(ran, summary, server)
+        result |= {"oracle": oracle, "oracle_only_ok": bool(oracle["ok"]), "score_ag02": score}
+        if fault:
+            result |= {"outcome": "terminal_fault", "fault": fault,
+                       "score": score | {"success": False, "disqualified": fault}}
+        else:
+            result["score"] = score
+        if server["terminal"] == "operator_stop":
+            result["operator_stop"] = True
         if server["capture_refused"]:
             result["capture_refused"] = True  # that slot's outcome (decision 19): recorded, never retried around
         if violation:
@@ -346,24 +419,104 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
             result["cleanup"] = folder.cleanup()
 
 
-def run_series(args, goals: dict, chosen: list[dict], out: Path, ledger: Path | None, stop_file: Path | None,
-               proof: dict | None, deps, driver) -> int:
-    """The goals in order. A safety event or an abort ends the series at once: no further goal begins. After
-    a safety event the operator's stop file - at the path the operator's configuration names - is created
-    (never deleted here)."""
-    exit_code = 0
-    for goal in chosen:
-        result = run_goal(args, goals, goal, out, ledger, stop_file, proof, deps, driver)
-        (out / f"{goal['id']}.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-        print(json.dumps({"goal": goal["id"], "verdict": result.get("metrics", {}).get("verdict"),
-                          "success": result.get("score", {}).get("success"), "aborted": result.get("aborted"),
-                          "safety_event": result.get("safety_event")}), flush=True)
-        if result.get("safety_event") or result.get("aborted"):
-            if result.get("safety_event") and stop_file is not None:
-                stop_file.write_text("", encoding="utf-8")
-            exit_code = 2
-            break
-    return exit_code
+# ---- the series: slots, retries, gate, fingerprint -------------------------------------------------
+
+def attempt_of(result: dict) -> sl.Attempt:
+    """What one attempt came to, for ``pixel_slots`` (decision 19). Invalid only when the harness failed before
+    the first model call; a capture refusal, a timeout, a provider error or a budget stop is an outcome."""
+    score = result.get("score") or {}
+    return sl.Attempt(
+        model_called=bool(result.get("model_called")), harness_fault=bool(result.get("harness_fault")),
+        success=bool(score.get("success")), false_success=bool(score.get("false_success")),
+        safety_event=bool(result.get("safety_event")), operator_stop=bool(result.get("operator_stop")),
+        capture_refused=bool(result.get("capture_refused")), harness_halt=bool(result.get("harness_halt")))
+
+
+def read_gate(path: Path, name: str, route: str | None) -> dict:
+    """The model's gate record; a model that did not pass (excluded, not run, another model's) is refused
+    before any session (decision 2, decision 19: never a fault to retry around)."""
+    try:
+        record = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise SystemExit("the gate record is unreadable") from None
+    provider = route or "anthropic"
+    if not (isinstance(record, dict) and record.get("schema") == gate.GATE_SCHEMA and record.get("model") == name
+            and record.get("provider") == provider):
+        raise SystemExit(f"the gate record is not a {gate.GATE_SCHEMA} record for {name} ({provider})")
+    if record.get("status") != "passed" or record.get("preflight_passed") is not True:
+        raise SystemExit(f"{name} did not pass its gate (status {record.get('status')}, reason "
+                         f"{record.get('reason')}): it has no AG-03 arm")
+    return record
+
+
+def pool_check(campaign_dir: Path, name: str, phase: int, series_id: str, fingerprint: dict) -> None:
+    """The campaign's pool for (model, arm, phase): the first series fixes the fingerprint, every later one must
+    equal it on the pinned keys or is *not pooled* (refused before any session, and the refusal is recorded)."""
+    pool = campaign_dir / f"campaign-{name}-AG-03-phase{phase}.json"
+    if not pool.exists():
+        pool.write_text(json.dumps(fingerprint, indent=2, sort_keys=True), encoding="utf-8")
+        return
+    campaign = plan.Campaign(json.loads(pool.read_text(encoding="utf-8")))
+    if not campaign.add(series_id, fingerprint):
+        with open(campaign_dir / "not_pooled.jsonl", "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(campaign.not_pooled[-1]) + "\n")
+        raise SystemExit("series not pooled (a new pool must be started deliberately): differs in "
+                         + ", ".join(campaign.not_pooled[-1]["differs_in"]))
+
+
+def run_series(args, goals: dict, out: Path, ledger: Path | None, stop_file: Path | None, proof: dict | None,
+               deps, driver, fingerprint: dict | None = None) -> tuple[list[sl.Slot], int]:
+    """The 11 goals of one repetition in the pre-registered order, through the slot machinery. Every attempt
+    has its own directory (raw artifacts are kept); a safety event creates the operator's stop file (never
+    deleted here) and the campaign stop leaves the rest *not attempted*."""
+    name = model_name(args)
+    by_id = {g["id"]: g for g in goals["goals"]}
+    keys = [(name, "AG-03", args.phase, args.repetition, goal) for goal in plan.goal_order(args.repetition)]
+    attempts_seen: dict = {}
+    raw: dict = {}
+
+    def run_attempt(key) -> sl.Attempt:
+        number = attempts_seen[key] = attempts_seen.get(key, 0) + 1
+        goal = by_id[key[4]]
+        attempt_dir = out / goal["id"] / f"attempt{number}"
+        result = run_goal(args, goals, goal, attempt_dir, ledger, stop_file, proof, deps, driver)
+        (attempt_dir / "result.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+        raw.setdefault(key, []).append({
+            "attempt": number, "aborted": result.get("aborted"), "model_called": result.get("model_called"),
+            "harness_fault": result.get("harness_fault"), "success": (result.get("score") or {}).get("success"),
+            "fault": result.get("fault"), "safety_event": result.get("safety_event"),
+            "operator_stop": result.get("operator_stop"), "capture_refused": result.get("capture_refused")})
+        print(json.dumps({"goal": goal["id"], "attempt": number, "success": (result.get("score") or {}).get("success"),
+                          "aborted": result.get("aborted"), "safety_event": result.get("safety_event")}), flush=True)
+        if result.get("safety_event") and stop_file is not None:
+            stop_file.write_text("", encoding="utf-8")
+        return attempt_of(result)
+
+    slots = sl.run_campaign(keys, run_attempt)
+    write_series_summary(out, args, name, slots, raw, fingerprint)
+    stopped = any(a.ends_campaign for s in slots for a in s.attempts)
+    return slots, 2 if stopped else 0
+
+
+def write_series_summary(out: Path, args, name: str, slots: list[sl.Slot], raw: dict, fingerprint: dict | None) -> dict:
+    tallies = {s.key[4]: sl.tally(slots, name, "AG-03", args.phase, s.key[4]) for s in slots}
+    attempted = [s for s in slots if s.attempted and not s.interrupted]
+    summary = {
+        "series": f"{name}/AG-03/phase{args.phase}/rep{args.repetition}", "arm": "AG-03", "phase": args.phase,
+        "repetition": args.repetition, "fingerprint": fingerprint,
+        "slots": [{"goal": s.key[4], "attempted": s.attempted, "attempts": len(s.attempts),
+                   "primary_success": s.success if s.primary else None, "technical_failure": s.technical_failure,
+                   "interrupted": s.interrupted, "raw": raw.get(s.key, [])} for s in slots],
+        "tally": tallies,
+        "counts": {"slots": len(slots), "primary_n": len(attempted), "successes": sum(1 for s in attempted if s.success),
+                   "raw_attempts": sum(len(s.attempts) for s in slots),
+                   "technical_failures": sum(1 for s in slots if s.technical_failure),
+                   "interrupted": sum(1 for s in slots if s.interrupted),
+                   "not_attempted": sum(1 for s in slots if not s.attempted)},
+        "series_complete": sl.series_complete(slots, name, "AG-03", args.phase, args.repetition),
+        "series_score": sl.series_score(slots, name, "AG-03", args.phase, args.repetition)}
+    (out / "series.json").write_text(json.dumps(summary, indent=2, default=list), encoding="utf-8")
+    return summary
 
 
 def default_output_root() -> Path:
@@ -374,10 +527,13 @@ def default_output_root() -> Path:
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], allow_abbrev=False)
     p.add_argument("--phase", type=int, choices=(1, 2), default=1)
-    p.add_argument("--live", action="store_true", help="phase 2 only: the owner is present and consents to THIS session")
-    p.add_argument("--goal", action="append", help="goal id (repeatable); default all")
+    p.add_argument("--live", action="store_true", help="phase 2 only: the owner is present and consents to THIS series")
+    p.add_argument("--repetition", type=int, help="the repetition r (1 to 6): fixes the pre-registered goal order")
+    p.add_argument("--goal", action="append", help="--plan only: goal id (repeatable); a run is always the 11 goals")
     p.add_argument("--plan", action="store_true", help="print what would run; start nothing")
     p.add_argument("--model", help="Claude model id (pre-registered by the owner)")
+    p.add_argument("--gate-record", type=Path, help="the model's passing gate record (pixel_gate.py)")
+    p.add_argument("--campaign-dir", type=Path, help="where the campaign's pool (fingerprint) is kept")
     p.add_argument("--config", type=Path, help="the operator's TOML; only its [safety] stop_file is read")
     p.add_argument("--testapp-exe", type=Path)
     p.add_argument("--editor-exe", type=Path)
@@ -388,7 +544,8 @@ def parse_args(argv=None):
     p.add_argument("--claude-config-dir", type=Path)
     p.add_argument("--isolation-proof", type=Path, help="the passing ag03-isolation-proof-1 file")
     p.add_argument("--admission", type=Path, help="the Step 2 capture admission record")
-    p.add_argument("--max-budget-usd", type=float, default=None)
+    p.add_argument("--max-budget-usd", type=float, default=None,
+                   help=f"native Claude Code: the per-goal dollar cap (default {NATIVE_DOLLAR_CAP}, the registered one)")
     p.add_argument("--max-context-tokens-per-goal", type=int, default=None)
     p.add_argument("--goal-timeout", type=float, default=300.0)
     p.add_argument("--foreground-wait", type=float, default=180.0)
@@ -397,11 +554,13 @@ def parse_args(argv=None):
     p.add_argument("--out", type=Path, default=None, help="output directory (outside the repo)")
     args = p.parse_args(argv)
     for name in ("config", "testapp_exe", "editor_exe", "ledger", "out", "isolation_proof", "claude_config_dir",
-                 "key_file", "admission"):
+                 "key_file", "admission", "gate_record", "campaign_dir"):
         setattr(args, name, rg.absolute_arg(getattr(args, name)))
     args.max_usd_explicit = args.max_budget_usd is not None
     if args.max_budget_usd is None:
-        args.max_budget_usd = 1.0
+        args.max_budget_usd = NATIVE_DOLLAR_CAP
+    if args.max_usd_explicit and args.route:
+        p.error("a provider route takes no dollar cap (the CLI's figure is invalid there); use the token cap")
     if args.max_context_tokens_per_goal is not None and not args.route:
         p.error("--max-context-tokens-per-goal is for a provider route (--route)")
     if args.route and args.max_context_tokens_per_goal is None:
@@ -409,51 +568,81 @@ def parse_args(argv=None):
     if args.route_base_url and not args.route:
         p.error("--route-base-url needs --route")
     if args.phase == 2 and not args.plan and not args.live:
-        p.error("phase 2 needs --live (the owner present, consent for this session)")
+        p.error("phase 2 needs --live (the owner present, consent for this series)")
     if args.live and args.phase != 2:
         p.error("--live is for phase 2 only")
+    if args.repetition is not None and args.repetition < 1:
+        p.error("--repetition must be 1 or more")
+    if args.goal and not args.plan:
+        p.error("--goal is for --plan only: a series is the 11 goals in the pre-registered order")
+    if args.plan and args.repetition is None:
+        args.repetition = 1
     if not args.plan:
-        for need in ("model", "testapp_exe", "editor_exe", "config", "isolation_proof", "claude_config_dir", "admission"):
+        for need in ("model", "repetition", "gate_record", "campaign_dir", "testapp_exe", "editor_exe", "config",
+                     "isolation_proof", "claude_config_dir", "admission"):
             if getattr(args, need) is None:
-                p.error(f"--{need.replace('_', '-')} is required (Steps 2 and 3 first)")
+                p.error(f"--{need.replace('_', '-')} is required (Steps 2, 3 and 3b first)")
         if args.route and (args.route_base_url is None or args.key_file is None):
             p.error("--route needs --route-base-url and --key-file")
     if args.phase == 2 and not args.plan and (args.max_live_session < 1 or args.ledger is None):
         p.error("phase 2 needs --max-live-session >= 1 and --ledger")
-    for name in ("ledger", "out", "isolation_proof", "claude_config_dir", "key_file", "admission"):
+    for name in ("ledger", "out", "isolation_proof", "claude_config_dir", "key_file", "admission", "gate_record",
+                 "campaign_dir"):
         value = getattr(args, name)
         if value is not None and (problem := proxy_module.path_problem(value)):
             p.error(f"--{name.replace('_', '-')}: {problem}")
     return args
 
 
-def main(argv=None, deps=rg.RealDeps) -> int:  # pragma: no cover - the owner's session (Step 6)
+def real_display_facts() -> dict:  # pragma: no cover - the owner's session (Step 6)
+    import pixel_win32 as w32
+    left, top, width, height = w32.RealOs(None).virtual_screen()
+    return {"resolution": f"{width}x{height}", "scaling": "per-monitor v2 (verified at start)",
+            "capture_backend": "printwindow"}
+
+
+def main(argv=None, deps=rg.RealDeps, driver=None, display=None) -> int:
     args = parse_args(argv)
     goals = rg.load_goals()
     args.vocabulary = goals["vocabulary"]
-    chosen = rg.select_goals(goals, args.goal)
-    out = (args.out or default_output_root()) / time.strftime("%Y%m%dT%H%M%S", time.gmtime())
-    if proxy_module.path_problem(out):
-        raise SystemExit(f"the output directory {proxy_module.path_problem(out)}")
     if args.plan:
+        chosen = rg.select_goals(goals, args.goal)
+        order = {g: i for i, g in enumerate(plan.goal_order(args.repetition))}
+        chosen = sorted(chosen, key=lambda goal: order[goal["id"]])
+        out = (args.out or default_output_root()) / f"{model_name(args)}-ag03-phase{args.phase}-rep{args.repetition}"
+        if proxy_module.path_problem(out):
+            raise SystemExit(f"the output directory {proxy_module.path_problem(out)}")
         for line in plan_lines(args, goals, chosen, out):
-            print(json.dumps(line, ensure_ascii=False))
+            print(json.dumps(line | {"repetition": args.repetition, "slot": [model_name(args), "AG-03", args.phase,
+                                                                              args.repetition, line["goal"]]},
+                             ensure_ascii=False))
         return 0
+    name = model_name(args)
+    agent = pixel_cli(args)
+    if (why := agent.refusal()) is not None:
+        raise SystemExit(why)
+    read_gate(args.gate_record, name, args.route)
     config_dir = args.config.parent
     config = tomllib.loads(args.config.read_text(encoding="utf-8"))
     if (problems := stop_file_problems(config, config_dir)):
         raise SystemExit("configuration refused:\n- " + "\n- ".join(problems))
-    agent = pixel_cli(args)
-    if (why := agent.refusal()) is not None:
-        raise SystemExit(why)
     if agent.checks_anthropic_routing and (routing := rg.routing_problems(os.environ)):
         raise SystemExit("provider routing variables are set; unset: " + ", ".join(routing))
     if (why := agent.key_problem()) is not None:
         raise SystemExit(why)
     proof = agent.load_proof(args.isolation_proof)
-    out.mkdir(parents=True)
-    return run_series(args, goals, chosen, out, args.ledger, rg.stop_path_of(config, config_dir), proof, deps,
-                      rg.windows_driver())
+    facts = display if display is not None else real_display_facts()
+    fingerprint = series_fingerprint(args, proof, facts)
+    series_id = f"{name}/AG-03/phase{args.phase}/rep{args.repetition}"
+    args.campaign_dir.mkdir(parents=True, exist_ok=True)
+    pool_check(args.campaign_dir, name, args.phase, series_id, fingerprint)
+    out = (args.out or default_output_root()) / f"{name}-ag03-phase{args.phase}-rep{args.repetition}"
+    if proxy_module.path_problem(out):
+        raise SystemExit(f"the output directory {proxy_module.path_problem(out)}")
+    out.mkdir(parents=True)  # never an existing directory: a series is not overwritten
+    _slots, code = run_series(args, goals, out, args.ledger, rg.stop_path_of(config, config_dir), proof, deps,
+                              driver if driver is not None else rg.windows_driver(), fingerprint)
+    return code
 
 
 if __name__ == "__main__":

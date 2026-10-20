@@ -201,14 +201,16 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(len(rig.sender.batches[0]), 8)
         self.assertEqual(rig.spent(), 1)
 
-    def test_phase_one_makes_no_operating_system_call_and_spends_nothing(self):
+    def test_phase_one_sends_no_input_spends_nothing_and_only_reads_to_score(self):
         rig = Rig(self, phase=1)
         rig.shoot()
         calls = rig.os.evidence_calls
         result = rig.call("click", x=2, y=1)
         self.assertEqual(json.loads(result["content"][0]["text"]), {"status": "simulated"})
         self.assertEqual(rig.call("type_text", text="hola")["content"][0]["text"], '{"status": "simulated"}')
-        self.assertEqual(rig.os.evidence_calls, calls)
+        # R5: the only operating-system reads are the read-only ones - the click's attestation of the target
+        # before the scoring hit test (type_text reads nothing) - and nothing is reserved or sent
+        self.assertEqual(rig.os.evidence_calls, calls + 1)
         self.assertEqual(rig.sender.batches, [])
         self.assertFalse(rig.ledger.exists())
         self.assertEqual(rig.records[1]["label"], "Sumar")  # the read-only hit test, for scoring and the log
@@ -257,12 +259,13 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(rig.spent(), 1)
         self.assertEqual(rig.sender.batches, [])
 
-    def test_click_coordinates_outside_the_image_are_refused_without_spending(self):
-        rig = Rig(self)
-        rig.shoot()
+    def test_click_coordinates_outside_the_image_are_refused_without_spending_and_end_the_session(self):
         for x, y in ((4, 0), (0, 3), (-1, 0), (99, 99)):
+            rig = Rig(self)  # the refusal is terminal (R2), so each case needs its own session
+            rig.shoot()
             self.assertEqual(rig.code(rig.call("click", x=x, y=y)), "POINT_OUTSIDE_CLIENT")
-        self.assertFalse(rig.ledger.exists())
+            self.assertEqual(rig.code(rig.call("click", x=1, y=1)), "SESSION_TERMINATED")
+            self.assertFalse(rig.ledger.exists())
 
     def test_malformed_arguments_are_refused(self):
         rig = Rig(self)
@@ -372,7 +375,7 @@ class DeliveryRecheckTests(unittest.TestCase):
         rig.sender.ok = False
         rig.shoot()
         self.assertEqual(rig.code(rig.call("click", x=1, y=1)), "INPUT_FAILED")
-        self.assertNotIn("delivered", rig.records[-1])
+        self.assertEqual(rig.records[-1]["delivered"], "uncertain")  # never claimed as delivered nor as nothing sent
 
 
 class LedgerTests(unittest.TestCase):

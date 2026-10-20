@@ -86,13 +86,34 @@ class FakeOs(w32.OsReader):
 
 
 class FakeSender(w32.Sender):
-    def __init__(self, ok: bool = True):
-        self.batches: list[list[dict]] = []
-        self.ok = ok
+    """Records batches; nothing is ever sent. ``prepare`` builds the native batch (``on_prepare`` may take
+    time on the fake clock); ``send`` returns how many events the operating system inserted: all of them,
+    ``inserted`` of them (a partial send) or raises when ``raises`` is set."""
 
-    def send(self, inputs):
-        self.batches.append(list(inputs))
-        return self.ok
+    def __init__(self, ok: bool = True, inserted: int | None = None, raises: bool = False):
+        self.batches: list[list[dict]] = []
+        self.prepared: list[list[dict]] = []
+        self.ok, self.inserted, self.raises = ok, inserted, raises
+        self.on_prepare = None
+        self.trace = None
+
+    def prepare(self, inputs):
+        if self.trace is not None:
+            self.trace.append("prepare")
+        if self.on_prepare is not None:
+            self.on_prepare()
+        self.prepared.append(list(inputs))
+        return list(inputs)
+
+    def send(self, prepared):
+        if self.trace is not None:
+            self.trace.append("send")
+        self.batches.append(list(prepared))
+        if self.raises:
+            raise OSError("fake SendInput failure")
+        if not self.ok:
+            return 0
+        return len(prepared) if self.inserted is None else self.inserted
 
 
 # ---- capture fakes ---------------------------------------------------------------------------------

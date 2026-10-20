@@ -122,10 +122,11 @@ def main() -> int:
                                 *extra_messages]}
         headers = {"content-type": "application/json"}
         token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        effort = flag(argv, "--effort") or os.environ.get("CLAUDE_CODE_EFFORT_LEVEL")
+        payload["output_config"] = {"effort": "low" if mode == "native_bad_effort" else effort}
         if token:
             payload |= {"thinking": {"type": "adaptive"},
-                        "output_config": {"effort": "low" if mode == "route_bad_effort"
-                                          else os.environ.get("CLAUDE_CODE_EFFORT_LEVEL")}}
+                        "output_config": {"effort": "low" if mode == "route_bad_effort" else effort}}
             if mode == "route_other_model":
                 payload["model"] = "claude-haiku-5-5"
             if mode == "route_key_in_body":

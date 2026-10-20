@@ -123,7 +123,7 @@ class ResultAndSourceTests(unittest.TestCase):
                                              "", text)))
         self.assertNotIn("stderr", text)
         kwargs = h.captured["kwargs"]
-        self.assertLessEqual(set(kwargs), {"env", "max_context_tokens"})  # no stderr_path: production stores none
+        self.assertLessEqual(set(kwargs), {"env", "max_context_tokens", "should_stop"})  # no stderr_path: production stores none
         self.assertEqual(len(h.captured["args"]), 0)
 
     def test_the_directory_of_a_run_holds_no_image_file(self):
@@ -137,7 +137,7 @@ class ResultAndSourceTests(unittest.TestCase):
     def test_no_module_writes_a_file_except_the_reviewed_sites(self):
         # The only writers of the ag03 package: the server's metadata log, the runner's per-goal result,
         # MCP config and stop file, the probe's and the preflight's result files. Nothing writes pixels.
-        allowed = {"pixel_server.py": 1, "pixel_runner.py": 3, "pixel_preflight.py": 2, "probe_image.py": 2}
+        allowed = {"pixel_server.py": 1, "pixel_runner.py": 6, "pixel_preflight.py": 2, "probe_image.py": 2}
         pattern = re.compile(r"\.write_text\(|\.write_bytes\(|open\([^)]*[\"'](?:w|a|wb|ab|w\+|a\+)[\"']")
         for path in sorted(HERE.glob("*.py")):
             if path.name.startswith(("test_", "fake_")):

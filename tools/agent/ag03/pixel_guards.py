@@ -7,16 +7,22 @@ the snapshot, reserving in the ledger, sending the input - live in ``pixel_serve
 injected, so every guard is unit-tested with a fake clock and a fake operating-system state and no
 input is ever sent by a test (AGENTS.md section 6).
 
-The order of decision 4, which ``pixel_server`` follows and ``test_guards`` pins:
+The order of decision 4 as `pixel_server` follows it (review of PR 101, R5):
 
-1. the operator's stop file is absent; 2. the phase allows it (phase 1: ``simulated``);
-3. a screenshot taken in this goal is at most ``SCREENSHOT_MAX_AGE_S`` old; 4. the ledger reserves
-the live action; 5. the foreground window belongs to the process this run started; 6. the point
-maps inside its client rectangle and nothing is in front of it; 7. no modifier is held;
-8. the *delivery check*: just before the input batch, with a fresh clock reading and a fresh read of
-the operating system, items 1, 3, 5, 6 (7 too) again - and for ``type_text``, which has no point,
-the keyboard-focus window of the attested foreground thread. A refusal at 5-8 keeps the
-reservation of 4 (the budget is spent, as a refused engine action keeps its reservation).
+1. the operator's stop file is absent (unreadable is a refusal); 2. the phase allows it (phase 1: ``simulated``);
+3. a screenshot taken in this goal is at most ``SCREENSHOT_MAX_AGE_S`` old; 4. the ledger reserves the live
+action; 5. the foreground window belongs to the process this run started; 6. the point maps inside its client
+rectangle and nothing is in front of it; 7. no modifier is held; then the read-only scoring hit test (inside
+the attested scope), the preparation of the native batch, and 8. the *delivery check*: with a fresh clock
+reading and a fresh read of the operating system, immediately before the one ``SendInput`` call, items 1, 3,
+5, 6 (7 too) again - and for ``type_text``, which has no point, the keyboard-focus window of the attested
+foreground thread. A refusal at 5-8 keeps the reservation of 4 (the budget is spent, as a refused engine
+action keeps its reservation).
+
+What a refusal means is decided by the guard that produced it (``kind_of``): items 5, 6, 7 and the
+window/foreground/focus/modifier parts of item 8 are terminal safety refusals; item 1 and the stop part of
+item 8 end the campaign as an operator stop; item 3 and the age part of item 8, and item 4, are ordinary
+scored refusals.
 """
 
 from __future__ import annotations
@@ -42,7 +48,7 @@ class Window:
     hwnd: int
     pid: int
     exe: str | None
-    cls: str
+    cls: str | None  # None or empty: the class could not be read
     client: Rect  # client rectangle in screen coordinates
     primary_monitor: bool
     iconic: bool
@@ -91,6 +97,31 @@ class Shot:
     height: int
 
 
+# What a refusal means for the campaign, by GUARD (the tokens are one-to-one with the guards of decision 4;
+# the stage - precheck, attest or delivery - travels beside the token in the metadata):
+#   operator stop - items 1 and 8-stop (the operator's file present, or unreadable): the campaign ends as an
+#                   operator stop, not as a safety event;
+#   safety        - items 5, 6, 7 and the window/foreground/focus/modifier parts of item 8, a click outside the
+#                   window or outside the image, unreadable system evidence: terminal, the session is latched;
+#   (none)        - item 3 and the age part of item 8, item 4 (the budget), argument and cap refusals, a capture
+#                   refusal: ordinary scored refusals, the session goes on.
+# ``INPUT_FAILED`` (a failed, partial or uncertain SendInput) is an uncertain delivery, terminal, decided where
+# the batch is sent.
+OPERATOR_STOP_TOKENS = frozenset({"STOP_ENGAGED", "STOP_UNREADABLE"})
+SAFETY_TOKENS = frozenset({
+    "FOREGROUND_UNREADABLE", "EXE_NOT_ALLOWED", "FOREGROUND_NOT_TARGET_PROCESS", "WINDOW_CLASS_UNREADABLE",
+    "HELPER_WINDOW", "ELEVATED_OR_UNKNOWN", "NOT_PRIMARY_MONITOR", "WINDOW_ICONIC", "WINDOW_CHANGED",
+    "GEOMETRY_CHANGED", "POINT_OUTSIDE_CLIENT", "POINT_WINDOW_MISMATCH", "MODIFIER_HELD", "MODIFIERS_UNREADABLE",
+    "FOCUS_UNREADABLE", "FOCUS_OUTSIDE_WINDOW", "OS_READ_FAILED", "INPUT_NOT_PREPARED"})
+
+
+def kind_of(token: str) -> str | None:
+    """``operator_stop``, ``safety`` or None (an ordinary refusal) for a guard's refusal token."""
+    if token in OPERATOR_STOP_TOKENS:
+        return "operator_stop"
+    return "safety" if token in SAFETY_TOKENS else None
+
+
 def is_helper_class(class_name: str) -> bool:
     return any(marker in class_name for marker in HELPER_WINDOW_MARKERS)
 
@@ -122,6 +153,8 @@ def guard_window(window: Window | None, attested: Attested, shot: Shot | None = 
         return "EXE_NOT_ALLOWED"
     if window.pid != attested.pid:
         return "FOREGROUND_NOT_TARGET_PROCESS"
+    if not window.cls:  # a failed read is not evidence that the window is not a helper window
+        return "WINDOW_CLASS_UNREADABLE"
     if is_helper_class(window.cls):
         return "HELPER_WINDOW"
     if window.elevated is None or window.elevated:
