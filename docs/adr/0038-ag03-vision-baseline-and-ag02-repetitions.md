@@ -122,6 +122,16 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
    window snapshot**, so they are unit-tested without sending any input (AGENTS.md §6: never a test that
    injects real input). Sending uses `SendInput` through `ctypes`; this is new input-injection code in
    `tools/`, so it gets its own review before any live run (see the alternative B below).
+
+   *Amendment, 2026-10-20 (first independent review of step 5, `docs/reviews/2026-10-20-ag03-step5.md`; the guards'
+   behaviour is refined, the decision is not changed).* Item 7 reads the key states only when the thread's desktop
+   is attested to be the one that receives input (`GetAsyncKeyState` returns 0 both for a key that is up and for a
+   read that failed): without the attestation the modifiers are unknown and refuse. Item 8 additionally holds, for a
+   `click`, the virtual-desktop geometry its absolute coordinates were normalised on (the delivery reading must
+   report the same origin and size, or nothing is sent); the system reading takes its slow facts first and reads the
+   foreground window again as its last query, asks keyboard focus of the current foreground thread, and is refused
+   if it took more than 1 s on the injected clock. A residual race between the last query and the operating system's
+   dispatch remains, cannot be closed from user mode, and is reported by the step-6 session.
 5. **Privacy: a new, bounded exception to ADR-0012, accepted by the owner (O1) on these bounds.**
    AG-02's exception covers synthetic **labels**. AG-03 sends **pixels** of the two synthetic test
    applications to the provider of each vision model that passed its gate: **Anthropic** (the owner's
@@ -308,7 +318,7 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
 | 3 | Preflight and proof (decision 6) for the native route and for each provider route, with positive controls (a request with an extra tool, with an image outside `screenshot`, with a sentinel) | Preflight fails on each broken copy |
 | 3b | **Gate smoke** per model (decision 6): one real session on a synthetic image, with the owner's go-ahead for the provider call | Passed or excluded-and-recorded, per model; no screen, no input |
 | 4 | Runner: `run_goal.py` with an `AgentCLI` for pixels, the AG-02 oracle and scoring unchanged, hit test for phase 1 | AG-02 tests still pass; new tests with a fake window and sampler |
-| 5 | Independent review of the `SendInput` helper and the guards (a Codex review in a visible Orca terminal), before any live run | Review file in `docs/reviews/` |
+| 5 | Independent review of the `SendInput` helper and the guards (a Codex review in a visible Orca terminal), before any live run | Review file in `docs/reviews/`. First independent review (2026-10-20, on `f16bb60`): not released, S1-S5 resolved in `docs/reviews/2026-10-20-ag03-step5.md` with fake-only tests; a new independent review of the corrected code is still required, and the native conditions (active input desktop, topology change, the residual query-to-dispatch race) are validated in step 6 |
 | 6 | Owner-run phase 1, then phase 2 (section C schedule) | Results as a dated addition to §9.12; the plan row stays `NO_EJECUTADO` until evidence exists |
 
 ### C. AG-02R: repetitions of AG-02
@@ -690,3 +700,11 @@ n, y la serie incompleta sale de los contrastes de puntuación de serie.
 de modelos (el responsable lo comprobará; debe registrarse antes de la prueba real de la puerta de Claude).
 OI-2, respondida sí y hecha el 19 de octubre de 2026: los términos y políticas públicos de DeepSeek y de
 Xiaomi están leídos y registrados arriba. OI-3, respondida: el responsable cambió O7 a n = 6.
+
+**Paso 5 (20 de octubre de 2026).** La primera revisión independiente del ayudante de `SendInput`, de las guardas y
+del arnés de procesos (sobre `f16bb60`, sólo con falsos) concluyó «no liberado» con cinco hallazgos (S1-S5), que se
+resuelven con pruebas escritas antes de corregir y se registran en `docs/reviews/2026-10-20-ag03-step5.md`: el lote
+de un clic se liga a la geometría del escritorio virtual con que se normalizó, el primer plano se vuelve a leer como
+última consulta, las teclas sólo cuentan con el escritorio de entrada atestiguado, la propiedad de la CLI se registra
+antes de crearla y todas las firmas nativas se declaran. Hace falta una nueva revisión independiente del código
+corregido; la carrera residual entre la última consulta y el envío y las condiciones nativas se validan en el paso 6.

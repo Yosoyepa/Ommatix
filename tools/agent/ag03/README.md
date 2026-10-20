@@ -80,10 +80,23 @@ Fail-closed, in this order (`pixel_server._click` / `_type_text` / `_deliver`):
    `explorer.exe` or `applicationframehost.exe`), with a readable class that is not a helper window, not
    elevated, on the primary monitor, not iconified and still the window and geometry of the screenshot; the
    point is inside the client rectangle and `WindowFromPoint` resolves to the same top-level window
-   (`type_text`: the keyboard-focus window belongs to it); no modifier held;
+   (`type_text`: the keyboard-focus window belongs to it); no modifier held. The key states count only when the
+   thread's desktop is **attested** to be the one that receives input (`OpenInputDesktop`, by name):
+   `GetAsyncKeyState` returns 0 both for a key that is up and for a read that failed, so an all-zero read without
+   that attestation is `MODIFIERS_UNREADABLE`, never "none held";
 6. then the read-only scoring hit test (inside that scope), the preparation of the native batch, and
 7. **the delivery check**: a fresh reading of the clock and the system immediately before the one `SendInput`
-   call of all of the stop file, the age, the modifiers and the window evidence.
+   call of all of the stop file, the age, the modifiers and the window evidence. For a click it also holds the
+   **virtual-desktop geometry** (origin and size) the batch's absolute coordinates were normalised on: the
+   delivery reading must report exactly that, or nothing is sent (`DESKTOP_CHANGED`, `DESKTOP_UNREADABLE`).
+   The system reading takes its slow facts first and reads the **foreground window again as its very last
+   query**, so a window that lost the foreground during the acquisition is refused; keyboard focus is asked of the
+   current foreground thread (thread id 0), not of the thread of a window that may have been replaced; and a
+   reading that took more than 1 s on the injected clock is `EVIDENCE_STALE`.
+
+**What remains, stated plainly.** No sequence of user-mode queries makes the operating system's dispatch atomic:
+some time always passes between the last query and the `SendInput` call. These checks narrow that window; they do
+not close it, and the step-6 owner session must report it (ADR-0038, review of step 5).
 
 A refusal after the reservation **keeps it**. A failed Win32 read is unknown evidence, never affirmative
 (an empty class name, a NULL ancestor, a failed bitmap selection each refuse).
@@ -92,7 +105,7 @@ A refusal after the reservation **keeps it**. A failed Win32 read is unknown evi
 
 | Guard | Examples | Meaning |
 |---|---|---|
-| 5, 6, 7 and the window/foreground/focus/modifier parts of the delivery check; a click outside the window or the image; unreadable system evidence | `FOREGROUND_NOT_TARGET_PROCESS`, `POINT_WINDOW_MISMATCH`, `MODIFIER_HELD`, `POINT_OUTSIDE_CLIENT`, `OS_READ_FAILED` | **Terminal safety event**: the server latches (`SESSION_TERMINATED` to every later call, screenshots included), an independent watcher (not the CLI's next output line) kills the **whole owned job/tree at once, with no grace**, within a few hundred milliseconds, the stop file is created by exclusive create (never overwritten or deleted) and the series ends |
+| 5, 6, 7 and the window/foreground/focus/modifier parts of the delivery check; a click outside the window or the image; unreadable system evidence | `FOREGROUND_NOT_TARGET_PROCESS`, `POINT_WINDOW_MISMATCH`, `MODIFIER_HELD`, `MODIFIERS_UNREADABLE`, `POINT_OUTSIDE_CLIENT`, `DESKTOP_CHANGED`, `DESKTOP_UNREADABLE`, `EVIDENCE_STALE`, `OS_READ_FAILED` | **Terminal safety event**: the server latches (`SESSION_TERMINATED` to every later call, screenshots included), an independent watcher (not the CLI's next output line) kills the **whole owned job/tree at once, with no grace**, within a few hundred milliseconds, the stop file is created by exclusive create (never overwritten or deleted) and the series ends |
 | A failed, partial or uncertain `SendInput` | `INPUT_FAILED` | **Terminal, uncertain delivery**: logged `delivered: "uncertain"` with the inserted count, never reported as nothing sent, never retried |
 | Items 1 and the stop part of the delivery check (present or unreadable) | `STOP_ENGAGED`, `STOP_UNREADABLE` | **Operator stop**: the campaign ends; not a safety event; the runner neither creates nor deletes the operator's file |
 | Item 3 and the age part of the delivery check; item 4 (budget); arguments, caps, a capture refusal | `SCREENSHOT_STALE`, `LIVE_BUDGET_EXHAUSTED`, `CAPTURE_REFUSED` | Ordinary scored refusals: the session goes on |
@@ -117,7 +130,10 @@ init, timeout, parse - earns a retry or discards a recorded terminal state), raw
   verified gone **before** the lock is released, and the cleanup itself is best effort and idempotent (every step is attempted; **no signal is ignored or remapped
   during it** - a Ctrl+C that lands inside simply propagates and leaves the session unverified). The lock is released
   **only on positive proof** of quiescence, and the owned tree lives in a Windows job object created with
-  `KILL_ON_JOB_CLOSE`, so the kernel ends it if the harness dies; if that cannot be verified, the lock is **kept** and the runner says so:
+  `KILL_ON_JOB_CLOSE`, so the kernel ends it if the harness dies; **ownership is recorded before the CLI exists**
+  (the counter is raised before `Popen`; the CLI is created suspended, put in the job and only then resumed), so an
+  interruption at any point of the start - inside `Popen`, the job set-up, the native resume or the bookkeeping after
+  it - keeps the lock unless the CLI is positively shown gone; if that cannot be verified, the lock is **kept** and the runner says so:
   check that nothing of the campaign is running, then remove it by hand. The watcher's effects (stop file, kill) go through
   one gate that is closed before `run_claude` returns, so nothing can act on an ended session.
 * **Logs**: a server log that cannot be read or parsed completely is a terminal **uncertain delivery** (deliveries unknown,

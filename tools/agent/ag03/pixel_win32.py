@@ -15,11 +15,15 @@ Everything a test may exercise is pure:
   them as arguments; ``fake_os`` implements them for the tests).
 
 Review before any live run (Step 5): the structure layouts below (``INPUT`` is 40 bytes on x64),
-the elevation read, the ``PrintWindow`` flags and the DPI call.
+the elevation read, the ``PrintWindow`` flags and the DPI call. The first independent review (2026-10-20,
+``docs/reviews/2026-10-20-ag03-step5.md``) found, and this module now handles: the virtual-desktop geometry a click is
+normalised on (S1), the foreground window re-read as the last query of an evidence reading (S2), key states that count
+only with an attested input desktop (S4) and every native signature declared (S5). Still never executed by a test.
 """
 
 from __future__ import annotations
 
+import functools
 import os
 import sys
 from pathlib import Path
@@ -39,6 +43,7 @@ MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_ABSOLUTE = 0x4000, 0x8000
 KEYEVENTF_KEYUP, KEYEVENTF_UNICODE = 0x0002, 0x0004
 # Virtual keys whose async state means "a modifier is held".
 MODIFIER_VKS = (0x10, 0x11, 0x12, 0x5B, 0x5C)  # shift, control, alt, left and right Windows
+UOI_NAME, DESKTOP_READOBJECTS = 2, 0x0001  # GetUserObjectInformationW name index; OpenInputDesktop access
 PW_CLIENTONLY, PW_RENDERFULLCONTENT = 0x1, 0x2
 GA_ROOT = 2
 
@@ -131,6 +136,37 @@ def decode_ancestor(handle) -> int | None:
 def decode_select_object(result) -> bool:
     """SelectObject returns NULL (or HGDI_ERROR) when it fails to select the bitmap."""
     return bool(result) and result != HGDI_ERROR
+
+
+def decode_virtual_screen(values) -> tuple[int, int, int, int] | None:
+    """(left, top, width, height) of the virtual desktop from ``GetSystemMetrics``, or None when it was not read:
+    four integers with a width and a height of at least 2 (``GetSystemMetrics`` returns 0 on failure)."""
+    if (not isinstance(values, (tuple, list)) or len(values) != 4
+            or not all(isinstance(v, int) and not isinstance(v, bool) for v in values)
+            or values[2] < 2 or values[3] < 2):
+        return None
+    return tuple(values)
+
+
+def decode_desktop_attestation(thread_desktop, input_desktop) -> bool:
+    """True only when the desktop this thread runs on is, by name, the desktop that receives input: both names were
+    read (non-empty text) and they are equal. Anything else - a desktop that cannot be opened (the secure desktop),
+    a name that cannot be read, another desktop - is not an attestation."""
+    return (isinstance(thread_desktop, str) and bool(thread_desktop)
+            and isinstance(input_desktop, str) and thread_desktop == input_desktop)
+
+
+def decode_modifiers(states, desktop_attested) -> bool | None:
+    """Whether a modifier is held, from the ``GetAsyncKeyState`` values of ``MODIFIER_VKS``, or None (unknown).
+    A zero from ``GetAsyncKeyState`` means BOTH "key up" and "the read failed" (an inactive desktop, no access):
+    all-zero states are evidence of "no modifier held" only when the input desktop was attested for this very
+    reading (``desktop_attested`` is True). Otherwise, and for any malformed value, the answer is unknown."""
+    if desktop_attested is not True:
+        return None
+    if (not isinstance(states, (tuple, list)) or len(states) != len(MODIFIER_VKS)
+            or not all(isinstance(v, int) and not isinstance(v, bool) for v in states)):
+        return None
+    return any(v & 0x8000 for v in states)
 
 
 def decode_dpi_awareness(equals_v2, awareness) -> str:
@@ -226,8 +262,10 @@ def _ct():
     return ctypes, wintypes
 
 
+@functools.lru_cache(maxsize=None)
 def _structures():
-    """The ctypes structures, built on first use (no Win32 call; importing the module builds none)."""
+    """The ctypes structures, built on first use (no Win32 call; importing the module builds none). Cached, so the
+    same classes serve every call."""
     ctypes, wintypes = _ct()
     # Fixed-width integers, not ``wintypes.DWORD``/``LONG``: on Windows they are the same 32-bit types, and the
     # layout is then identical (and testable) on every platform - ``wintypes.LONG`` is 64-bit on Linux.
@@ -265,47 +303,91 @@ def _structures():
     return MOUSEINPUT, KEYBDINPUT, INPUT, GUITHREADINFO, BITMAPINFOHEADER, TOKEN_ELEVATION
 
 
+def _enum_proc():
+    """The callback type of ``EnumWindows``."""
+    ctypes, wintypes = _ct()
+    return getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+
+def _declare(dll, signatures) -> None:
+    """Declares the exact signature of every native function used: ``{name: (restype, argtypes)}``. Nothing is left
+    to the defaults of ctypes (a signed int return, a 32-bit handle argument): step-5 review, S5."""
+    for name, (restype, argtypes) in signatures.items():
+        function = getattr(dll, name)
+        function.restype = restype
+        function.argtypes = argtypes
+
+
 def _dlls():
     ctypes, wintypes = _ct()
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
     gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
-    for fn, restype in ((user32.GetForegroundWindow, wintypes.HWND), (user32.WindowFromPoint, wintypes.HWND),
-                        (user32.GetAncestor, wintypes.HWND), (kernel32.OpenProcess, wintypes.HANDLE),
-                        (gdi32.CreateCompatibleDC, wintypes.HDC), (gdi32.SelectObject, wintypes.HGDIOBJ)):
-        fn.restype = restype
-    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
-    user32.WindowFromPoint.argtypes = [wintypes.POINT]
-    user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
-    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-    user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
-    user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
-    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-    user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
-    user32.MonitorFromWindow.restype = wintypes.HANDLE
-    user32.IsIconic.argtypes = [wintypes.HWND]
-    user32.IsWindowVisible.argtypes = [wintypes.HWND]
-    user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
-    user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.c_void_p]
-    user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
-    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
-    # Handles are pointer-sized: without argtypes ctypes would pass them as 32-bit ints.
-    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
-                                                    ctypes.POINTER(wintypes.DWORD)]
-    advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
-    advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
-                                             ctypes.POINTER(wintypes.DWORD)]
-    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
-    gdi32.CreateDIBSection.argtypes = [wintypes.HDC, ctypes.c_void_p, wintypes.UINT, ctypes.POINTER(ctypes.c_void_p),
-                                       wintypes.HANDLE, wintypes.DWORD]
-    gdi32.CreateDIBSection.restype = wintypes.HANDLE
-    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
-    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
-    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    c_int, c_void_p, POINTER = ctypes.c_int, ctypes.c_void_p, ctypes.POINTER
+    # Handles are pointer-sized (HWND, HANDLE, HDC, HGDIOBJ are ``c_void_p``): without a declaration ctypes would
+    # pass and return them as 32-bit ints. Wide (W) entry points only.
+    _declare(user32, {
+        "GetForegroundWindow": (wintypes.HWND, []),
+        "WindowFromPoint": (wintypes.HWND, [wintypes.POINT]),
+        "GetAncestor": (wintypes.HWND, [wintypes.HWND, wintypes.UINT]),
+        "GetWindowThreadProcessId": (wintypes.DWORD, [wintypes.HWND, POINTER(wintypes.DWORD)]),
+        "GetClassNameW": (c_int, [wintypes.HWND, wintypes.LPWSTR, c_int]),
+        "GetClientRect": (wintypes.BOOL, [wintypes.HWND, POINTER(wintypes.RECT)]),
+        "ClientToScreen": (wintypes.BOOL, [wintypes.HWND, POINTER(wintypes.POINT)]),
+        "MonitorFromWindow": (wintypes.HANDLE, [wintypes.HWND, wintypes.DWORD]),
+        "MonitorFromPoint": (wintypes.HANDLE, [wintypes.POINT, wintypes.DWORD]),
+        "GetMonitorInfoW": (wintypes.BOOL, [wintypes.HANDLE, c_void_p]),
+        "IsIconic": (wintypes.BOOL, [wintypes.HWND]),
+        "IsWindowVisible": (wintypes.BOOL, [wintypes.HWND]),
+        "EnumWindows": (wintypes.BOOL, [_enum_proc(), wintypes.LPARAM]),
+        "GetGUIThreadInfo": (wintypes.BOOL, [wintypes.DWORD, c_void_p]),
+        "GetAsyncKeyState": (ctypes.c_short, [c_int]),
+        "GetSystemMetrics": (c_int, [c_int]),
+        "SendInput": (wintypes.UINT, [wintypes.UINT, c_void_p, c_int]),
+        "PrintWindow": (wintypes.BOOL, [wintypes.HWND, wintypes.HDC, wintypes.UINT]),
+        "OpenInputDesktop": (wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]),
+        "GetThreadDesktop": (wintypes.HANDLE, [wintypes.DWORD]),
+        "GetUserObjectInformationW": (wintypes.BOOL, [wintypes.HANDLE, c_int, c_void_p, wintypes.DWORD,
+                                                      POINTER(wintypes.DWORD)]),
+        "CloseDesktop": (wintypes.BOOL, [wintypes.HANDLE]),
+        "SetProcessDpiAwarenessContext": (wintypes.BOOL, [c_void_p]),
+        "GetThreadDpiAwarenessContext": (c_void_p, []),
+        "GetDpiAwarenessContextForProcess": (c_void_p, [c_void_p]),
+        "AreDpiAwarenessContextsEqual": (wintypes.BOOL, [c_void_p, c_void_p]),
+        "GetAwarenessFromDpiAwarenessContext": (c_int, [c_void_p]),
+    })
+    _declare(kernel32, {
+        "OpenProcess": (wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]),
+        "CloseHandle": (wintypes.BOOL, [wintypes.HANDLE]),
+        "QueryFullProcessImageNameW": (wintypes.BOOL, [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                       POINTER(wintypes.DWORD)]),
+        "GetCurrentProcess": (c_void_p, []),
+        "GetCurrentThreadId": (wintypes.DWORD, []),
+    })
+    _declare(advapi32, {
+        "OpenProcessToken": (wintypes.BOOL, [wintypes.HANDLE, wintypes.DWORD, POINTER(wintypes.HANDLE)]),
+        "GetTokenInformation": (wintypes.BOOL, [wintypes.HANDLE, c_int, c_void_p, wintypes.DWORD,
+                                                POINTER(wintypes.DWORD)]),
+    })
+    _declare(gdi32, {
+        "CreateCompatibleDC": (wintypes.HDC, [wintypes.HDC]),
+        "CreateDIBSection": (wintypes.HANDLE, [wintypes.HDC, c_void_p, wintypes.UINT, POINTER(c_void_p),
+                                               wintypes.HANDLE, wintypes.DWORD]),
+        "SelectObject": (wintypes.HGDIOBJ, [wintypes.HDC, wintypes.HGDIOBJ]),
+        "DeleteObject": (wintypes.BOOL, [wintypes.HGDIOBJ]),
+        "DeleteDC": (wintypes.BOOL, [wintypes.HDC]),
+    })
     return user32, kernel32, advapi32, gdi32
+
+
+def _shcore():
+    ctypes, wintypes = _ct()
+    shcore = ctypes.WinDLL("shcore")
+    _declare(shcore, {"GetDpiForMonitor": (ctypes.c_long, [wintypes.HANDLE, ctypes.c_int,
+                                                          ctypes.POINTER(wintypes.UINT),
+                                                          ctypes.POINTER(wintypes.UINT)])})  # HRESULT
+    return shcore
 
 
 class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed by the tests
@@ -323,14 +405,7 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
         fixed as unaware (review of PR 101, H3)."""
         ctypes, wintypes = _ct()
         user32, kernel32, *_ = _dlls()
-        user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
         user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
-        user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
-        user32.GetDpiAwarenessContextForProcess.argtypes = [ctypes.c_void_p]
-        user32.GetDpiAwarenessContextForProcess.restype = ctypes.c_void_p
-        user32.AreDpiAwarenessContextsEqual.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        user32.GetAwarenessFromDpiAwarenessContext.argtypes = [ctypes.c_void_p]
-        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
         levels = []
         for context in (user32.GetDpiAwarenessContextForProcess(kernel32.GetCurrentProcess()),
                         user32.GetThreadDpiAwarenessContext()):
@@ -344,27 +419,21 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
         """rcMonitor of the primary monitor (physical pixels under the verified per-monitor v2 context)."""
         ctypes, wintypes = _ct()
         user32, *_ = _dlls()
-        user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
-        user32.MonitorFromPoint.restype = wintypes.HANDLE
         monitor = user32.MonitorFromPoint(wintypes.POINT(0, 0), 1)  # MONITOR_DEFAULTTOPRIMARY
         info = (ctypes.c_byte * 40)()
-        ctypes.cast(info, ctypes.POINTER(wintypes.DWORD))[0] = 40
+        ctypes.cast(info, ctypes.POINTER(ctypes.c_uint32))[0] = 40
         if not monitor or not user32.GetMonitorInfoW(monitor, info):
             return None
-        values = ctypes.cast(info, ctypes.POINTER(wintypes.LONG))
+        values = ctypes.cast(info, ctypes.POINTER(ctypes.c_int32))
         return (int(values[1]), int(values[2]), int(values[3]), int(values[4]))
 
     def primary_effective_dpi(self):
         """The effective DPI of the primary monitor (``GetDpiForMonitor``, MDT_EFFECTIVE_DPI); None if unreadable."""
         ctypes, wintypes = _ct()
         user32, *_ = _dlls()
-        shcore = ctypes.WinDLL("shcore")
-        user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
-        user32.MonitorFromPoint.restype = wintypes.HANDLE
+        shcore = _shcore()
         monitor = user32.MonitorFromPoint(wintypes.POINT(0, 0), 1)
         x, y = wintypes.UINT(), wintypes.UINT()
-        shcore.GetDpiForMonitor.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.POINTER(wintypes.UINT),
-                                            ctypes.POINTER(wintypes.UINT)]
         if not monitor or shcore.GetDpiForMonitor(monitor, 0, ctypes.byref(x), ctypes.byref(y)) != 0:
             return None
         return int(x.value) if x.value and x.value == y.value else None
@@ -419,9 +488,9 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
             return None
         monitor = user32.MonitorFromWindow(hwnd, 0)
         info = (ctypes.c_byte * 40)()  # MONITORINFO: cbSize, rcMonitor, rcWork, dwFlags
-        ctypes.cast(info, ctypes.POINTER(wintypes.DWORD))[0] = 40
+        ctypes.cast(info, ctypes.POINTER(ctypes.c_uint32))[0] = 40
         primary = bool(monitor) and bool(user32.GetMonitorInfoW(monitor, info)) and bool(
-            ctypes.cast(info, ctypes.POINTER(wintypes.DWORD))[9] & 1)
+            ctypes.cast(info, ctypes.POINTER(ctypes.c_uint32))[9] & 1)
         return Window(hwnd=int(hwnd), pid=int(pid.value), exe=self._exe(kernel32, pid.value), cls=cls,
                       client=(origin.x, origin.y, origin.x + rect.right, origin.y + rect.bottom),
                       primary_monitor=primary, iconic=bool(user32.IsIconic(hwnd)),
@@ -432,7 +501,7 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
         user32, *_ = _dlls()
         found = []
 
-        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        @_enum_proc()
         def visit(hwnd, _):
             owner = wintypes.DWORD()
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
@@ -445,11 +514,39 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
         main = [w for w in windows if w.cls and not is_helper_class(w.cls)]
         return max(main, key=lambda w: (w.client[2] - w.client[0]) * (w.client[3] - w.client[1])) if main else None
 
-    def evidence(self, pid, point, want_focus):
+    def _desktop_name(self, user32, desktop) -> str | None:
         ctypes, wintypes = _ct()
-        user32, *_ = _dlls()
+        buffer = ctypes.create_unicode_buffer(256)
+        needed = wintypes.DWORD()
+        if not user32.GetUserObjectInformationW(desktop, UOI_NAME, buffer, ctypes.sizeof(buffer),
+                                                ctypes.byref(needed)):
+            return None
+        return buffer.value or None
+
+    def _input_desktop_attested(self, user32, kernel32) -> bool:
+        """Whether this thread's desktop is the desktop that receives input right now. ``GetAsyncKeyState`` returns 0
+        both for a key that is up and for a read that failed (an inactive or secure desktop); the key states are
+        evidence only when this holds. Read only: ``OpenInputDesktop`` is the query, nothing is switched."""
+        mine = user32.GetThreadDesktop(kernel32.GetCurrentThreadId())  # a thread's desktop handle is not closed
+        theirs = user32.OpenInputDesktop(0, False, DESKTOP_READOBJECTS)
+        try:
+            return decode_desktop_attestation(self._desktop_name(user32, mine) if mine else None,
+                                              self._desktop_name(user32, theirs) if theirs else None)
+        finally:
+            if theirs:
+                user32.CloseDesktop(theirs)
+
+    def evidence(self, pid, point, want_focus):
+        """One reading of the system. The slow facts (process, token, geometry) come first and the foreground window
+        is read AGAIN as the very last query: a window that lost the foreground at any point of the acquisition is
+        refused, and keyboard focus is asked of the CURRENT foreground thread (thread id 0), not of the thread of a
+        window that may have been replaced. Between that last read and the operating system's dispatch of the
+        input some time always remains; user mode cannot close it (step-5 review, S2)."""
+        ctypes, wintypes = _ct()
+        user32, kernel32, *_ = _dlls()
         GUITHREADINFO = _structures()[3]
-        window = self._facts(user32.GetForegroundWindow())
+        first = user32.GetForegroundWindow()
+        window = self._facts(first)
         root = None
         if point is not None:
             hit = user32.WindowFromPoint(wintypes.POINT(int(point[0]), int(point[1])))
@@ -458,15 +555,20 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
         if want_focus and window is not None:
             info = GUITHREADINFO()
             info.cbSize = ctypes.sizeof(info)
-            tid = user32.GetWindowThreadProcessId(window.hwnd, None)
-            if user32.GetGUIThreadInfo(tid, ctypes.byref(info)) and info.hwndFocus:
+            if user32.GetGUIThreadInfo(0, ctypes.byref(info)) and info.hwndFocus:  # 0: the foreground thread
                 owner = wintypes.DWORD()
                 user32.GetWindowThreadProcessId(info.hwndFocus, ctypes.byref(owner))
                 top = decode_ancestor(user32.GetAncestor(info.hwndFocus, GA_ROOT))
                 focus = Focus(hwnd=int(info.hwndFocus), top_hwnd=top, pid=int(owner.value)) if top else None
-        held = any(user32.GetAsyncKeyState(vk) & 0x8000 for vk in MODIFIER_VKS)
-        return Evidence(stop_present=self.stop_present(), foreground=window, root_at_point=root,
-                        modifiers_held=held, focus=focus)
+        held = decode_modifiers([int(user32.GetAsyncKeyState(vk)) for vk in MODIFIER_VKS],
+                                self._input_desktop_attested(user32, kernel32))
+        desktop = decode_virtual_screen(self.virtual_screen()) if point is not None else None
+        stop = self.stop_present()
+        last = user32.GetForegroundWindow()  # the closing read
+        if window is not None and (not last or int(last) != window.hwnd):
+            window = None  # the foreground changed during the acquisition: the facts above are not about it
+        return Evidence(stop_present=stop, foreground=window, root_at_point=root, modifiers_held=held, focus=focus,
+                        desktop=desktop)
 
 
 class RealSender(Sender):  # pragma: no cover - never executed by the tests
@@ -475,7 +577,6 @@ class RealSender(Sender):  # pragma: no cover - never executed by the tests
         ctypes, wintypes = _ct()
         MOUSEINPUT, KEYBDINPUT, INPUT, *_ = _structures()
         user32, *_ = _dlls()
-        user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
         array = (INPUT * len(inputs))()
         for slot, event in zip(array, inputs):
             if event["kind"] == "mouse":

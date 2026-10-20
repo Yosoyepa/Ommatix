@@ -1449,6 +1449,10 @@ WATCHER_JOIN_S = 5.0
 # including when this process dies or is interrupted for good - the kernel kills every process in it. That, and a lock
 # that is released only on positive proof of quiescence, is what makes an interrupted cleanup safe; no signal is masked.
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+# How long a killed tree is polled before it counts as "not shown gone", and how long an interrupted or refused start
+# waits for the suspended or just-resumed CLI to exit (module constants so a test can shorten them).
+TREE_KILL_SETTLE_S = 5.0
+START_ABANDON_SETTLE_S = 10.0
 
 
 class OwnedSessionNotQuiescent(RuntimeError):
@@ -1465,19 +1469,45 @@ class OwnedTree:
     ``PROCESS_TREE_GRACE_S`` to write its receipts and close its engine), killing what is left after that; a
     tree whose state cannot be queried is never taken as gone. It never touches a process outside the tree."""
 
-    def __init__(self, proc):
+    def __init__(self, proc, start: bool = True):
         self.proc = proc
         self.job = None
         self.owned = True
-        if os.name == "nt":
+        self.resumed = False  # set BEFORE the native resume is called: from then on the CLI may be running
+        if start:
+            self.start()
+
+    def start(self) -> bool:
+        """On Windows: puts the suspended CLI in the job and resumes it; True when it is owned and running. The object
+        exists before this runs, so a caller whose start is interrupted still holds the job and the process to end
+        (``abandon``); only ``OSError`` is handled here, anything else propagates to that caller."""
+        if os.name != "nt":
+            return True
+        self.owned = False
+        try:
+            self._open_job()
+            self.owned = self.job is not None and self._assign() and self._resume()
+        except OSError:
             self.owned = False
-            try:
-                self._open_job()
-                self.owned = self.job is not None and self._assign() and self._resume()
-            except OSError:
-                self.owned = False
-            if not self.owned:
-                self._terminate()  # the CLI never ran an instruction: this ends it and the job
+        if not self.owned:
+            self._terminate()  # the CLI never ran an instruction: this ends it and the job
+        return self.owned
+
+    def abandon(self) -> bool:
+        """Ends a CLI whose start was refused or interrupted. True only on positive proof that nothing of it is left:
+        the CLI exited and, if a job could have run it, the job has no process. A False answer means the caller keeps
+        its ownership (the campaign lock)."""
+        try:
+            self._terminate()
+        except Exception:  # noqa: BLE001 - the verification below decides, not the kill
+            pass
+        try:
+            self.proc.wait(timeout=START_ABANDON_SETTLE_S)
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+        if os.name == "nt" and self.job is None and not self.resumed:
+            return True  # no job and never resumed: the suspended CLI never ran, and it has exited
+        return self.shutdown(kill_cli=False, grace=0.0) == 0
 
     def _open_job(self) -> None:
         import ctypes
@@ -1504,22 +1534,29 @@ class OwnedTree:
                         ("TotalProcesses", wintypes.DWORD), ("ActiveProcesses", wintypes.DWORD),
                         ("TotalTerminatedProcesses", wintypes.DWORD)]
 
-        k32.CreateJobObjectW.restype = wintypes.HANDLE
-        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
-        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-        k32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
-                                                  ctypes.c_void_p]
-        k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        # Every function this class calls has its whole signature declared (step-5 review, S5): handles are
+        # pointer-sized, so CloseHandle and the job calls take ``HANDLE``, never ctypes' default 32-bit int.
+        for name, (restype, argtypes) in {
+                "CreateJobObjectW": (wintypes.HANDLE, [ctypes.c_void_p, wintypes.LPCWSTR]),
+                "SetInformationJobObject": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                            wintypes.DWORD]),
+                "AssignProcessToJobObject": (wintypes.BOOL, [wintypes.HANDLE, wintypes.HANDLE]),
+                "QueryInformationJobObject": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                              wintypes.DWORD, ctypes.c_void_p]),
+                "TerminateJobObject": (wintypes.BOOL, [wintypes.HANDLE, wintypes.UINT]),
+                "CloseHandle": (wintypes.BOOL, [wintypes.HANDLE])}.items():
+            function = getattr(k32, name)
+            function.restype, function.argtypes = restype, argtypes
         self._k32, self._accounting = k32, Accounting
         job = k32.CreateJobObjectW(None, None)
         if not job:
             return
+        self.job = job  # held from here on, so an interruption still leaves the handle to close
         info = Extended()
         info.Basic.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE  # the kernel ends the tree if this process dies
         if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            self.job = None
             k32.CloseHandle(job)
-            return
-        self.job = job
 
     def _assign(self) -> bool:
         return bool(self._k32.AssignProcessToJobObject(self.job, int(self.proc._handle)))  # noqa: SLF001
@@ -1528,7 +1565,8 @@ class OwnedTree:
         import ctypes
         from ctypes import wintypes
         resume = ctypes.WinDLL("ntdll").NtResumeProcess
-        resume.argtypes = [wintypes.HANDLE]
+        resume.restype, resume.argtypes = ctypes.c_long, [wintypes.HANDLE]  # NTSTATUS
+        self.resumed = True  # before the call: if it is interrupted, the CLI may already be running
         return resume(int(self.proc._handle)) == 0  # noqa: SLF001
 
     def _query_active(self):
@@ -1584,7 +1622,7 @@ class OwnedTree:
             time.sleep(0.1)
         if running():
             self._terminate()
-            deadline = time.monotonic() + 5
+            deadline = time.monotonic() + TREE_KILL_SETTLE_S
             while running() and time.monotonic() < deadline:
                 time.sleep(0.1)
         left = running()
@@ -1592,6 +1630,19 @@ class OwnedTree:
             self._k32.CloseHandle(self.job)  # KILL_ON_JOB_CLOSE: nothing outlives the handle
             self.job = None
         return left
+
+
+def _close_streams(proc, stderr, stderr_path, gone: bool) -> None:
+    """Closes the pipes of a CLI whose start was refused or interrupted (best effort; the child's end of a pipe closes
+    with it, so only a child shown gone has its streams closed here)."""
+    if not gone:
+        return
+    for stream in (proc.stdin, proc.stdout, stderr if stderr_path else None):
+        try:
+            if stream is not None:
+                stream.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
@@ -1612,24 +1663,12 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
     The child's stderr is discarded unless a test passes `stderr_path`: production never stores it (it can
     echo a credential or a response, and nothing filters it)."""
     stderr = open(stderr_path, "wb") if stderr_path else subprocess.DEVNULL
-    # CREATE_NO_WINDOW | CREATE_SUSPENDED on Windows: the CLI does not run until the job owns it.
-    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=stderr, cwd=cwd, creationflags=0x08000004 if os.name == "nt" else 0,
-                            start_new_session=os.name != "nt",
-                            env=env if env is not None else agent_env())
-    tree = OwnedTree(proc)
-    if not tree.owned:  # ownership of the tree could not be established: the session is not run
-        proc.wait()
-        proc.stdin.close()
-        proc.stdout.close()
-        if stderr_path:
-            stderr.close()
-        return {"exit_code": proc.returncode, "killed": "no_tree_ownership"}
-    # From here the owned job exists and EVERY exit path - normal, timeout, exception, KeyboardInterrupt - ends in
-    # the ``finally`` below: monitoring closed, the whole tree killed and verified gone. Only then does the
-    # function return or let the exception go on (review of PR 101, H1/H2).
+    # Ownership is recorded BEFORE the CLI can exist (step-5 review, S3): from here until the cleanup (or the start's
+    # own proof) lowers it, an interruption anywhere - inside Popen, the job set-up, the native resume or the
+    # bookkeeping after it - leaves the counter raised and the caller keeps its campaign lock.
     if ownership is not None:
-        ownership["unverified"] = ownership.get("unverified", 0) + 1  # until the cleanup below proves it gone
+        ownership["unverified"] = ownership.get("unverified", 0) + 1
+    proc = tree = None
     killed = {"reason": None}
     stop_lock = threading.Lock()
     gate_lock = threading.Lock()   # the one gate through which the monitor may act
@@ -1677,6 +1716,46 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
             if killed["reason"] is not None:
                 return
 
+    try:
+        # CREATE_NO_WINDOW | CREATE_SUSPENDED on Windows: the CLI does not run until the job owns it.
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=stderr, cwd=cwd, creationflags=0x08000004 if os.name == "nt" else 0,
+                                start_new_session=os.name != "nt",
+                                env=env if env is not None else agent_env())
+        tree = OwnedTree(proc, start=False)
+        started = tree.start()
+    except BaseException as error:  # noqa: BLE001 - KeyboardInterrupt too: the start is part of the owned region
+        gone = False
+        if proc is None:
+            gone = isinstance(error, Exception)  # Popen refused: no child was created. A BaseException: unknown
+            if gone and stderr_path:
+                stderr.close()
+        else:
+            try:
+                gone = (tree or OwnedTree(proc, start=False)).abandon()
+            except BaseException:  # noqa: BLE001 - a second interruption: nothing is proven
+                gone = False
+            _close_streams(proc, stderr, stderr_path, gone)
+        if gone:
+            if ownership is not None:
+                ownership["unverified"] = ownership.get("unverified", 0) - 1
+            raise
+        raise OwnedSessionNotQuiescent(
+            "the owned session could not be shown to be gone after an interrupted start: the campaign lock must stay "
+            "until the operator has checked") from error
+    if not started:  # ownership of the tree could not be established: the session is not run
+        gone = tree.abandon()
+        _close_streams(proc, stderr, stderr_path, gone)
+        if not gone:
+            raise OwnedSessionNotQuiescent(
+                "the CLI of a refused start could not be shown to be gone: the campaign lock must stay until the "
+                "operator has checked")
+        if ownership is not None:
+            ownership["unverified"] = ownership.get("unverified", 0) - 1
+        return {"exit_code": proc.returncode, "killed": "no_tree_ownership"}
+    # From here the owned job exists and EVERY exit path - normal, timeout, exception, KeyboardInterrupt - ends in
+    # the ``finally`` below: monitoring closed, the whole tree killed and verified gone. Only then does the
+    # function return or let the exception go on (review of PR 101, H1/H2).
     guard = None
     try:
         proc.stdin.write(prompt.encode("utf-8"))
