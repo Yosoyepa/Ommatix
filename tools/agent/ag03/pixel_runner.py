@@ -51,6 +51,7 @@ import agentcli  # noqa: E402
 import pixel_agent as pa  # noqa: E402
 import pixel_gate as gate  # noqa: E402
 import pixel_capture as cap  # noqa: E402
+import pixel_disk as disk  # noqa: E402
 import pixel_plan as plan  # noqa: E402
 import pixel_preflight as pf  # noqa: E402
 import pixel_server as ps  # noqa: E402
@@ -74,6 +75,9 @@ class PixelCLI(agentcli.ClaudeCLI):
     """Claude Code confined as AG-02's (``agentcli.ClaudeCLI``: the same environment, key and route
     rules), with the pixel command, the AG-03 isolation proof and the pixel server's code bound."""
 
+    # AG-03's own environment switch (the feedback survey off), on a route as on the native path; AG-02's is unchanged.
+    agent_vars = pa.PIXEL_ENV
+
     def build_argv(self, *, model, mcp_config, system_instruction, max_budget_usd):
         return pa.build_claude_argv(claude=self.args.claude, model=model, mcp_config=mcp_config,
                                     system_instruction=system_instruction,
@@ -85,8 +89,8 @@ class PixelCLI(agentcli.ClaudeCLI):
         update off, error reporting off - the same two the preflight's child had), through this child's
         environment only. A route's environment (``agentcli.route_env``) carries them and the effort already."""
         if self.route:
-            return super().env(extra)
-        return rg.agent_env({**rg.QUIET_ENV, **(extra or {})})
+            return super().env(extra) | {k: v for k, v in (extra or {}).items() if k in pa.TEMP_ENV_NAMES}
+        return rg.agent_env({**rg.QUIET_ENV, **pa.PIXEL_ENV, **(extra or {})})
 
     def load_proof(self, path):
         proof = pf.load_isolation_proof(path)
@@ -452,16 +456,24 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                 f"{t}" for t in rg.ancestor_context(scratch, config_dir)]
             if changed:
                 return aborted(result, "isolation proof does not cover this run: " + ",".join(changed))
+        argv = cli.build_argv(model=args.model, mcp_config=mcp_path, system_instruction=pa.SYSTEM_INSTRUCTION,
+                              max_budget_usd=args.max_budget_usd)
+        attempt_tmp = out / "cli-tmp"  # the child's own TEMP/TMP/TMPDIR/CLAUDE_CODE_TMPDIR, inside the attempt
+        attempt_tmp.mkdir(exist_ok=True)
+        env = cli.env({**({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else {}), **disk.child_temp_env(attempt_tmp)})
+        lost = pa.command_problems(argv) + pa.env_problems(env) + pa.temp_env_problems(env)  # invariants of the proof
+        if proof is not None and disk.cache_root_fingerprint(env) != (proof.get("disk") or {}).get("cache_root_sha256"):
+            lost.append("cache_root_differs_from_proof")
+        if lost:
+            return aborted(result, "the production command or environment lost an invariant of the isolation proof: "
+                           + ",".join(sorted(set(lost))))
         metrics = pa.PixelStream(args.vocabulary[goal["app"]], goal["choice"]["type_text"], proof,
                                  config_dir=config_dir, provider=cli.provider)
         sampler = deps.make_sampler(app.state)
         sampler.start()
         spent_before = proxy_module.read_ledger(ledger)["total"] if ledger else 0
         ran = deps.run_claude(
-            cli.build_argv(model=args.model, mcp_config=mcp_path, system_instruction=pa.SYSTEM_INSTRUCTION,
-                           max_budget_usd=args.max_budget_usd),
-            pa.build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
-            env=cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None),
+            argv, pa.build_prompt(goal, phase), scratch, metrics, args.goal_timeout, env=env,
             should_stop=session_stop_hook(log, stop_file), ownership=getattr(args, "ownership", None),
             **rg.token_cap_kwargs(args))
         history = sampler.stop()

@@ -64,6 +64,13 @@ def final(text="VERDICT: DONE"):
     return assistant("final", {"type": "text", "text": text})
 
 
+def cache_root_sha256(environ=None, override=None):
+    """The cache-root binding a stand-in proof carries (tolerant of a checkout without ``pixel_disk``'s fingerprint)."""
+    import os
+    import pixel_disk
+    return override or getattr(pixel_disk, "cache_root_fingerprint", lambda env: "0" * 64)(os.environ if environ is None else environ)
+
+
 class FakeEditorRun:
     def __init__(self, temp_root: Path, goal_id: str):
         self.temp_root = Path(temp_root)
@@ -160,7 +167,9 @@ class Harness:
             "pixel": {"server_sha256": pf.file_sha256(pf.SERVER_PATH), "instruction_sha256": pa.instruction_sha256(),
                       "control_detected": ["extra_tool"], "control_blind": [],
                       "images_only_in_screenshot_result": True, "screenshot_result_images": 1},
-            "real_capture_in_this_proof": False}
+            "real_capture_in_this_proof": False,
+            "disk": {"no_session_persistence_flag": True, "image_data_found": False, "scan_complete": True,
+                     "temp_isolated": True, "cache_root_sha256": cache_root_sha256()}, "agent_env": dict(pa.PIXEL_ENV)}
         if route:
             self.proof |= {"route": {"provider": route, "base_url": url, "model": self.model, "effort": "max",
                                      "auth": "bearer"},

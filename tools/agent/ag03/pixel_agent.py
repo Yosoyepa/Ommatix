@@ -39,8 +39,13 @@ TOOLS = ps.TOOLS
 ALLOWED_TOOL_NAMES = ps.ALLOWED_TOOL_NAMES
 PROOF_SCHEMA = "ag03-isolation-proof-1"
 # Raised whenever this verifier is made stricter; a proof of an older revision is refused. AG-02's
-# proofs (``ag02-isolation-proof-3``) are a different schema and stay valid.
-VERIFIER_REVISION = 1
+# proofs (``ag02-isolation-proof-3``) are a different schema and stay valid. Revision 2: the proof records and checks what the
+# synthetic sessions leave on disk (``pixel_disk``), the ``--no-session-persistence`` invariant and the agent's environment.
+VERIFIER_REVISION = 2
+# The pixel agent's own environment switch (AG-02's ``QUIET_ENV`` and so its proofs are unchanged): the CLI's feedback survey
+# off, so that no survey prompt, and nothing it would write for one, can touch a session. Part of the proof.
+PIXEL_ENV = {"CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1"}
+NO_PERSISTENCE_FLAG = "--no-session-persistence"
 
 SYSTEM_INSTRUCTION = (
     "You control a desktop only through three tools: screenshot, click and type_text. You see the "
@@ -89,6 +94,28 @@ def build_claude_argv(*, claude, model: str, mcp_config: Path, system_instructio
             "--disable-slash-commands", "--setting-sources", "",
             *([] if max_budget_usd is None else ["--max-budget-usd", f"{max_budget_usd:g}"]),
             *([] if effort is None else ["--effort", effort])]
+
+
+def command_problems(argv) -> list[str]:
+    """Closed tokens for a pixel command that no longer holds the invariant of ADR-0038 O5: without
+    ``--no-session-persistence`` Claude Code writes every MCP image result in clear under the configuration directory
+    (measured 2026-10-20, ``pixel_disk``). Checked by the preflight and again before every launch."""
+    return [] if NO_PERSISTENCE_FLAG in list(argv) else ["production_command_persists_session"]
+
+
+TEMP_ENV_NAMES = ("TEMP", "TMP", "TMPDIR", "CLAUDE_CODE_TMPDIR")
+
+
+def temp_env_problems(env: dict) -> list[str]:
+    """Closed tokens for a child environment that does not give the session a temp directory of its own: the four variables
+    that decide where the CLI writes its temporary and image files must name ONE non-empty directory (R106-1)."""
+    values = {env.get(name) for name in TEMP_ENV_NAMES}
+    return [] if len(values) == 1 and next(iter(values)) else ["child_temp_not_isolated"]
+
+
+def env_problems(env: dict) -> list[str]:
+    """Closed tokens for an environment that lacks the pixel agent's switches (``PIXEL_ENV``)."""
+    return [] if all(env.get(k) == v for k, v in PIXEL_ENV.items()) else ["agent_environment_lacks_pixel_switches"]
 
 
 # ---- images in a request -----------------------------------------------------------------------
