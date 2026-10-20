@@ -80,9 +80,13 @@ class FakeOs(w32.OsReader):
         if (hook := self.hooks.get(self.evidence_calls)) is not None:
             hook(self)
         self._apply_timeline()
+        try:
+            desktop = self.virtual_screen() if point is not None else None
+        except Exception:  # noqa: BLE001 - an unreadable geometry is an unknown one
+            desktop = None
         return g.Evidence(stop_present=self.stop, foreground=self.foreground,
                           root_at_point=self.root if point is not None else None,
-                          modifiers_held=self.modifiers, focus=self.focus if want_focus else None)
+                          modifiers_held=self.modifiers, focus=self.focus if want_focus else None, desktop=desktop)
 
 
 class FakeSender(w32.Sender):

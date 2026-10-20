@@ -58,7 +58,7 @@ RESULT_CODES = frozenset({
     "FOCUS_OUTSIDE_WINDOW", "LIVE_BUDGET_EXHAUSTED", "LEDGER_LOCKED", "LEDGER_UNREADABLE",
     "LEDGER_UNWRITABLE", "CAPTURE_REFUSED", "LIMIT_EXCEEDED", "INVALID_ARGUMENT", "UNKNOWN_TOOL",
     "OS_READ_FAILED", "INPUT_FAILED", "NO_LIVE_BUDGET", "SESSION_TERMINATED", "WINDOW_CLASS_UNREADABLE",
-    "INPUT_NOT_PREPARED"})
+    "INPUT_NOT_PREPARED", "DESKTOP_UNREADABLE", "DESKTOP_CHANGED", "EVIDENCE_STALE"})
 CAPTURE_REASONS = frozenset({"BACKEND_NOT_ADMITTED", "BACKEND_FAILED", "WRONG_SIZE", "IMAGE_TOO_LARGE"})
 
 
@@ -279,8 +279,8 @@ class PixelServer:
             else:
                 meta |= {"label": "unknown"}
             return self._text_result("simulated")
-        return self._deliver("click", point, shot, meta, lambda: w32.build_click_inputs(
-            point[0], point[1], self._need_os()[0].virtual_screen()), scoring=True)
+        return self._deliver("click", point, shot, meta, lambda desktop: w32.build_click_inputs(
+            point[0], point[1], desktop), scoring=True)
 
     def _type_text(self, args: dict, meta: dict) -> dict:
         if set(args) != {"text"} or w32.text_problem(args["text"]) is not None:
@@ -290,14 +290,18 @@ class PixelServer:
         self._stop()  # 1
         if self.cfg.phase == 1 or self.cfg.synthetic:
             return self._text_result("simulated")
-        return self._deliver("type_text", None, self.shot, meta, lambda: w32.build_text_inputs(text))
+        return self._deliver("type_text", None, self.shot, meta, lambda desktop: w32.build_text_inputs(text))
 
-    def _deliver(self, kind: str, point, shot, meta: dict, build: Callable[[], list[dict]],
+    def _deliver(self, kind: str, point, shot, meta: dict, build: Callable[[g.Rect | None], list[dict]],
                  scoring: bool = False) -> dict:
         """Items 3 to 8 in the order of ADR-0038 decision 4 and the review of PR 101 (R5): the cheap refusals
         (age), the reservation, the attestation of the target (items 5 to 7), only then the read-only scoring
         hit test, the preparation of the native batch, and the full recheck of item 8 immediately before the
-        one ``SendInput`` call. A refusal after the reservation keeps it."""
+        one ``SendInput`` call. A refusal after the reservation keeps it.
+
+        A click's absolute coordinates are normalised on the virtual-desktop geometry of the initial reading (the
+        ``desktop`` handed to ``build``); the delivery reading must report exactly that geometry, or nothing is sent
+        (step-5 review, S1). The final reading is also timed on the injected clock (S2)."""
         attested = self._need_os()[1]
         if (token := g.guard_shot_age(self.deps.clock(), shot)):  # 3: an ordinary scored refusal
             raise Refused(token)
@@ -308,18 +312,28 @@ class PixelServer:
         except proxy.Refusal as refusal:
             raise Refused(refusal.reason if refusal.reason in RESULT_CODES else "LEDGER_UNREADABLE") from None
         meta |= {"reserved": True}
-        if (token := g.check_evidence(self._read(point, kind == "type_text"), shot, attested, point)):  # 5-7
+        initial = self._read(point, kind == "type_text")
+        if (token := g.check_evidence(initial, shot, attested, point)):  # 5-7
             raise Refused(token, stage="initial")
+        desktop = initial.desktop if kind == "click" else None
+        if kind == "click" and desktop is None:
+            raise Refused("DESKTOP_UNREADABLE", stage="initial")
         if scoring:
             meta |= {"label": self._hit(point)}  # inside the attested scope, before the recheck
-        inputs = build()
+        try:
+            inputs = build(desktop)
+        except w32.InputRefused:  # e.g. a point the desktop cannot hold: a refusal, never a crash
+            raise Refused("INPUT_NOT_PREPARED", stage="build", delivered=False) from None
         try:
             prepared = self.deps.sender.prepare(inputs)  # all native work happens before the recheck
         except Exception:  # noqa: BLE001
             raise Refused("INPUT_NOT_PREPARED", stage="prepare", delivered=False) from None
         # 8: the delivery check, a fresh reading of the clock and of the system, immediately before the batch.
+        read_started = self.deps.clock()
         fresh = self._read(point, kind == "type_text")
-        if (token := g.check_batch(fresh, self.deps.clock(), shot, attested, point)):
+        now = self.deps.clock()
+        if (token := g.guard_read_duration(read_started, now) or g.check_batch(fresh, now, shot, attested, point,
+                                                                              desktop=desktop)):
             raise Refused(token, stage="delivery")
         try:
             inserted = self.deps.sender.send(prepared)

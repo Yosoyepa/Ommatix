@@ -30,6 +30,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 SCREENSHOT_MAX_AGE_S = 10.0
+# How long the final reading of the operating system may take, on the injected monotonic clock: the foreground is
+# read first and re-read last, and a slow acquisition widens the window between those two reads (step-5 review, S2).
+EVIDENCE_MAX_READ_S = 1.0
 # The only executables a pixel click or key may reach (decision 4 item 5): a two-name constant.
 # ``explorer.exe`` and ``applicationframehost.exe`` are deliberately not in it (AGENTS.md rule 6).
 TESTAPP_EXE = "ommatix-testapp.exe"
@@ -73,6 +76,7 @@ class Evidence:
     root_at_point: int | None = None  # top-level hwnd at the click point (click only)
     modifiers_held: bool | None = None
     focus: Focus | None = None  # type_text only
+    desktop: Rect | None = None  # left, top, width, height of the virtual desktop (click only; step-5 review, S1)
 
 
 @dataclass(frozen=True)
@@ -112,7 +116,8 @@ SAFETY_TOKENS = frozenset({
     "FOREGROUND_UNREADABLE", "EXE_NOT_ALLOWED", "FOREGROUND_NOT_TARGET_PROCESS", "WINDOW_CLASS_UNREADABLE",
     "HELPER_WINDOW", "ELEVATED_OR_UNKNOWN", "NOT_PRIMARY_MONITOR", "WINDOW_ICONIC", "WINDOW_CHANGED",
     "GEOMETRY_CHANGED", "POINT_OUTSIDE_CLIENT", "POINT_WINDOW_MISMATCH", "MODIFIER_HELD", "MODIFIERS_UNREADABLE",
-    "FOCUS_UNREADABLE", "FOCUS_OUTSIDE_WINDOW", "OS_READ_FAILED", "INPUT_NOT_PREPARED"})
+    "FOCUS_UNREADABLE", "FOCUS_OUTSIDE_WINDOW", "OS_READ_FAILED", "INPUT_NOT_PREPARED", "DESKTOP_UNREADABLE",
+    "DESKTOP_CHANGED", "EVIDENCE_STALE"})
 
 
 def kind_of(token: str) -> str | None:
@@ -192,6 +197,22 @@ def guard_modifiers(held: bool | None) -> str | None:
     return "MODIFIER_HELD" if held else None
 
 
+def guard_desktop(current: Rect | None, expected: Rect | None) -> str | None:
+    """A click's absolute coordinates are normalised on the virtual desktop that was read when the batch was built:
+    the final reading must find exactly that geometry (origin and size). Unreadable is a refusal; so is any change
+    (a display attached, removed or moved changes what the same normalised point means)."""
+    if current is None or expected is None:
+        return "DESKTOP_UNREADABLE"
+    return None if tuple(current) == tuple(expected) else "DESKTOP_CHANGED"
+
+
+def guard_read_duration(started: float, ended: float, max_s: float = EVIDENCE_MAX_READ_S) -> str | None:
+    """The final reading of the operating system must not have taken longer than ``max_s`` on the injected clock
+    (a backwards clock is not evidence either)."""
+    duration = ended - started
+    return "EVIDENCE_STALE" if duration < 0 or duration > max_s else None
+
+
 def guard_focus(focus: Focus | None, window: Window) -> str | None:
     """``type_text`` has no point: the keyboard-focus window must be the attested top-level window
     or one of its descendants, in the same process. It does not say which field has focus; that is
@@ -220,9 +241,11 @@ def check_evidence(evidence: Evidence, shot: Shot | None, attested: Attested,
 
 
 def check_batch(evidence: Evidence, now: float, shot: Shot | None, attested: Attested,
-                point: tuple[int, int] | None) -> str | None:
+                point: tuple[int, int] | None, desktop: Rect | None = None) -> str | None:
     """The delivery check (item 8): items 1 and 3 and ``check_evidence``, against ONE fresh reading of
     the operating system and ONE fresh reading of the injected monotonic clock, immediately before
-    the input batch and after the reservation and any blocking work."""
+    the input batch and after the reservation and any blocking work. ``desktop`` is the virtual-desktop geometry
+    the click's coordinates were normalised on (``None`` for ``type_text``): the same reading must report it."""
     return (guard_stop(evidence.stop_present) or guard_shot_age(now, shot)
-            or check_evidence(evidence, shot, attested, point))
+            or check_evidence(evidence, shot, attested, point)
+            or (guard_desktop(evidence.desktop, desktop) if desktop is not None else None))
