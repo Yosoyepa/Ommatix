@@ -22,6 +22,7 @@ sys.path.insert(0, str(HERE))
 
 import agentcli  # noqa: E402
 import run_goal as rg  # noqa: E402
+from pin_support import PIN_SHA  # noqa: E402
 from test_prreview93 import DEEPSEEK_URL, MIMO_URL, THREE  # noqa: E402
 
 TOKEN = "tp-dummy-secret-route-token-0002"
@@ -174,6 +175,7 @@ class FakeCliTests(unittest.TestCase):
                  "init_keys_sha256": att["init_keys_sha256"], "config_identity": rg.config_identity(cfg),
                  "context_manifest": rg.config_manifest(cfg), "canary_kinds": ["user_claude_md"],
                  "control_leaked_kinds": ["user_claude_md"], "date_utc": "2026-10-19T00:00:00Z",
+                 "cli_sha256": PIN_SHA, "agent_env": dict(rg.QUIET_ENV),
                  "route": {"provider": "mimo", "base_url": MIMO_URL, "model": "mimo-v2.6-flash", "effort": "max",
                            "auth": "bearer"},
                  "route_verifier_revision": agentcli.ROUTE_VERIFIER_REVISION, "request_tools": THREE}

@@ -20,6 +20,7 @@ sys.path.insert(0, str(HERE))
 import fake_api  # noqa: E402
 import preflight  # noqa: E402
 import run_goal as rg  # noqa: E402
+from pin_support import pinned  # noqa: E402
 
 PROVIDER_ENV = {
     "CLAUDE_CODE_USE_BEDROCK": "1", "CLAUDE_CODE_USE_VERTEX": "1", "CLAUDE_CODE_USE_FOUNDRY": "1",
@@ -48,7 +49,7 @@ class PreflightBase(unittest.TestCase):
         args = argparse.Namespace(exe=Path(sys.executable), model="claude-haiku-5-5",
                                   claude=[sys.executable, str(HERE / "fake_claude.py")], timeout=60,
                                   claude_config_dir=self.production, extra_env=extra)
-        with mock.patch.dict(os.environ, parent_env or {}), \
+        with mock.patch.dict(os.environ, parent_env or {}), pinned(), \
                 mock.patch.object(preflight, "refusals", return_value=list(refusals)):
             return preflight.run(args)
 

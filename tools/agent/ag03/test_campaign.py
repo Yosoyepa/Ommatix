@@ -24,6 +24,7 @@ import pixel_plan as plan  # noqa: E402
 import pixel_preflight as pf  # noqa: E402
 import pixel_runner as pr  # noqa: E402
 import run_goal as rg  # noqa: E402
+from pin_support import PIN_SHA, launch_ok  # noqa: E402
 from test_runner import (END, GOALS, BY_ID, FakeApp, FakeEditorRun, FakeSampler, click, final, init_event,  # noqa: E402
                          refused, session, shot)
 
@@ -38,7 +39,8 @@ class Series:
 
     def __init__(self, test, *, root=None, phase=1, rep=1, model="Haiku", route=None, script=None, gate_status="passed",
                  extra=(), model_id=None, gate_requested=None, gate_resolved=None, gate_base_url=None, display=None,
-                 resolved_id=None):
+                 resolved_id=None, patch_pin=True):
+        self.patch_pin = patch_pin  # the stand-in proof is old and there is no real binary
         if root is None:
             scratch = tempfile.TemporaryDirectory(prefix="ag03-campaign-")
             test.addCleanup(scratch.cleanup)
@@ -74,6 +76,7 @@ class Series:
             "agent_hashes": [], "init_keys_sha256": rg.init_attestation(self.init)["init_keys_sha256"],
             "config_identity": rg.config_identity(root / "cfg"), "context_manifest": rg.config_manifest(root / "cfg"),
             "canary_kinds": ["x"], "control_leaked_kinds": ["x"], "date_utc": "2026-10-20T10:00:00Z",
+            "cli_sha256": PIN_SHA, "agent_env": dict(pa.AGENT_ENV),
             "pixel": {"server_sha256": pf.file_sha256(pf.SERVER_PATH), "instruction_sha256": pa.instruction_sha256(),
                       "control_detected": ["extra_tool"], "control_blind": [],
                       "images_only_in_screenshot_result": True, "screenshot_result_images": 1},
@@ -197,7 +200,7 @@ class Series:
     def run(self, extra=()):
         stdout = io.StringIO()
         with mock.patch.object(rg, "ancestor_context", return_value=[]), contextlib.redirect_stdout(stdout), \
-                self.denying_read_text():
+                self.denying_read_text(), (launch_ok() if self.patch_pin else contextlib.nullcontext()):
             (self.root / "folders").mkdir(exist_ok=True)
             code = pr.main([*self.argv, *extra], deps=self.deps, driver=object(), display=self.display)
         return code

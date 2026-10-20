@@ -22,6 +22,7 @@ import pixel_preflight as pf  # noqa: E402
 import pixel_runner as pr  # noqa: E402
 import proxy  # noqa: E402
 import run_goal as rg  # noqa: E402
+from pin_support import PIN_SHA  # noqa: E402
 
 GOALS = rg.load_goals()
 BY_ID = {g["id"]: g for g in GOALS["goals"]}
@@ -157,6 +158,7 @@ class Harness:
             "agent_hashes": [], "init_keys_sha256": rg.init_attestation(self.init)["init_keys_sha256"],
             "config_identity": rg.config_identity(self.cfg), "context_manifest": rg.config_manifest(self.cfg),
             "canary_kinds": ["x"], "control_leaked_kinds": ["x"], "date_utc": "2026-10-20T10:00:00Z",
+            "cli_sha256": PIN_SHA, "agent_env": dict(pa.AGENT_ENV),
             "pixel": {"server_sha256": pf.file_sha256(pf.SERVER_PATH), "instruction_sha256": pa.instruction_sha256(),
                       "control_detected": ["extra_tool"], "control_blind": [],
                       "images_only_in_screenshot_result": True, "screenshot_result_images": 1},

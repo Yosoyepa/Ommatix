@@ -26,6 +26,7 @@ import minimal_agent as ma  # noqa: E402
 import preflight  # noqa: E402
 import preflight_cli as pc  # noqa: E402
 import run_goal as rg  # noqa: E402
+from pin_support import PIN_SHA, pinned  # noqa: E402
 from test_multimodel import FAKE_ENGINE, INSTRUCTION, PROMPT, AgentRun, EndToEndTests  # noqa: E402
 
 GOALS = rg.load_goals()
@@ -759,6 +760,7 @@ class RouteRunnerTests(unittest.TestCase):
                  "init_keys_sha256": att["init_keys_sha256"], "config_identity": rg.config_identity(self.cfg),
                  "context_manifest": rg.config_manifest(self.cfg), "canary_kinds": ["user_claude_md"],
                  "control_leaked_kinds": ["user_claude_md"], "date_utc": "2026-10-18T00:00:00Z",
+                 "cli_sha256": PIN_SHA, "agent_env": dict(rg.QUIET_ENV),
                  "route": {"provider": "mimo", "base_url": MIMO_URL, "model": "mimo-v2.6-flash", "effort": "max",
                            "auth": "bearer"},
                  "route_verifier_revision": agentcli.ROUTE_VERIFIER_REVISION, "request_tools": THREE}
@@ -902,6 +904,7 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "re
                  "init_keys_sha256": att["init_keys_sha256"], "config_identity": rg.config_identity(cfg),
                  "context_manifest": rg.config_manifest(cfg), "canary_kinds": ["user_claude_md"],
                  "control_leaked_kinds": ["user_claude_md"], "date_utc": "2026-10-18T00:00:00Z",
+                 "cli_sha256": PIN_SHA, "agent_env": dict(rg.QUIET_ENV),
                  "route": {"provider": "mimo", "base_url": MIMO_URL, "model": "mimo-v2.6-flash", "effort": "max",
                            "auth": "bearer"},
                  "route_verifier_revision": agentcli.ROUTE_VERIFIER_REVISION, "request_tools": THREE}
@@ -947,7 +950,7 @@ class RoutePreflightTests(unittest.TestCase):
             claude=[sys.executable, str(HERE / "fake_claude.py")], timeout=60, claude_config_dir=cfg,
             route=route, route_base_url=url,
             extra_env={"FAKE_CLAUDE_MODE": mode, "FAKE_CLAUDE_LEAK_DIR": str(cfg)})
-        with mock.patch.object(preflight, "refusals", return_value=[]):
+        with mock.patch.object(preflight, "refusals", return_value=[]), pinned():
             return preflight.run(args)
 
     def test_a_confined_route_session_passes_and_the_proof_carries_the_route(self):

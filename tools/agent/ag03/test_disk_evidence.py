@@ -28,6 +28,7 @@ import pixel_agent as pa  # noqa: E402
 import pixel_capture as cap  # noqa: E402
 import pixel_preflight as pf  # noqa: E402
 import run_goal as rg  # noqa: E402
+from pin_support import pinned  # noqa: E402
 
 FAKE_CLI = [sys.executable, str(HERE / "fake_claude_pixel.py")]
 SURVEY = "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"
@@ -47,7 +48,7 @@ class PreflightHarness(unittest.TestCase):
             if route else ("claude-haiku-5-5", None)
         args = argparse.Namespace(exe=Path(sys.executable), model=model, claude=FAKE_CLI, timeout=60,
                                   claude_config_dir=self.production, extra_env=extra, route=route, route_base_url=url)
-        patches = [mock.patch.object(pf.ag02, "refusals", return_value=[])]
+        patches = [mock.patch.object(pf.ag02, "refusals", return_value=[]), pinned()]
         try:
             import pixel_disk  # noqa: PLC0415
         except ImportError:  # before the fix there is no module (and no cache check): the test then fails on its merits

@@ -1,5 +1,6 @@
 """Tests of the AG-02 runner (no Claude, no network, no Windows): pure parts and full-runner fakes."""
 
+import contextlib
 import io
 import json
 import os
@@ -15,6 +16,7 @@ sys.path.insert(0, str(HERE))
 
 import proxy as proxy_module  # noqa: E402
 import run_goal as rg  # noqa: E402
+from pin_support import PIN_SHA, launch_ok  # noqa: E402
 
 GOALS = rg.load_goals()
 BY_ID = {g["id"]: g for g in GOALS["goals"]}
@@ -38,7 +40,8 @@ def make_proof(**changes):
              "plugins": att["plugins"], "agents": att["agents"], "plugin_hashes": att["plugin_hashes"],
              "agent_hashes": att["agent_hashes"], "init_keys_sha256": att["init_keys_sha256"],
              "config_identity": "0" * 64, "context_manifest": {}, "canary_kinds": ["user_claude_md"],
-             "control_leaked_kinds": ["user_claude_md"], "date_utc": "2026-10-17T00:00:00Z"}
+             "control_leaked_kinds": ["user_claude_md"], "date_utc": "2026-10-17T00:00:00Z",
+             "cli_sha256": PIN_SHA, "agent_env": dict(rg.QUIET_ENV)}
     return proof | changes
 
 
@@ -875,10 +878,11 @@ class Harness:
                 return {"exit_code": 0, "killed": None}
         self.deps = Deps
         self.folder = None
+        self.patch_pin = True  # the stand-in proof has an old date and there is no real binary
 
     def run(self, stop_file=None, ancestors=()):
         (self.tmp / "folders").mkdir(exist_ok=True)
-        with mock.patch.object(rg, "ancestor_context", return_value=list(ancestors)):
+        with mock.patch.object(rg, "ancestor_context", return_value=list(ancestors)),                 (launch_ok() if self.patch_pin else contextlib.nullcontext()):
             return rg.run_goal(self.args, GOALS, self.goal, self.out,
                                self.ledger if self.phase == 2 else None, stop_file, self.proof, self.deps)
 
