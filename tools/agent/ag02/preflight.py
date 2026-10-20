@@ -64,6 +64,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import agentcli  # noqa: E402
+import clipin  # noqa: E402
 import proxy as proxy_module  # noqa: E402
 import run_goal as rg  # noqa: E402
 from fake_api import FakeApi  # noqa: E402
@@ -387,6 +388,10 @@ def run(args) -> dict:
     ``PreflightRefused`` when the environment cannot be called local."""
     if (reasons := refusals()):
         raise PreflightRefused(reasons)
+    # The CLI the proof is made with must be the pinned one (``clipin``): nothing is launched otherwise.
+    cli_problems, cli_sha256 = clipin.check(args.claude)
+    if cli_problems:
+        raise PreflightRefused(cli_problems)
     production_dir = Path(args.claude_config_dir)
     problems = []
     with tempfile.TemporaryDirectory(prefix="ag02-canary-") as tmp:
@@ -465,6 +470,7 @@ def run(args) -> dict:
         "date_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "claude_code_version": att_b.get("claude_code_version"), "model": att_b.get("model"),
         "requested_model": args.model, "tools": att_b.get("tools") or [],
+        "cli_sha256": cli_sha256, "agent_env": dict(rg.QUIET_ENV),
         "plugins": att_b.get("plugins") or [], "agents": att_b.get("agents") or [],
         "plugin_hashes": att_b.get("plugin_hashes") or [], "agent_hashes": att_b.get("agent_hashes") or [],
         "init_keys_sha256": att_b.get("init_keys_sha256") or "",

@@ -179,7 +179,8 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
      Claude Code auto-updated to 2.1.305 on 2026-10-20, so every proof must be regenerated with the version used before a
      live series (O11); 2.1.305 adds a `DeferredToolPlaceholder` entry to every request's tool list, which the
      "exactly three tools" verdict refuses (`pixel_tools_not_the_three`), so no proof can be issued with it until the owner or
-     architect decides how the verdict treats that entry or the version is pinned.
+     architect decides how the verdict treats that entry or the version is pinned. *(Superseded the same day: see the amendment
+     "the pinned agent CLI and the tool-search switch" below.)*
    - **provider retention and training** are a separate matter. This machine does not control them, they
      are part of the data-use scope the owner accepted under O1, and **nothing here deletes a screenshot
      remotely**: once sent, it is held under each recipient's own policy. What the published policies say
@@ -684,6 +685,25 @@ Owner items opened by the review of PR 97 and their answers (2026-10-19; OI-1 on
 - **OI-3** The consequence of n = 5 (no paired contrast could reach p < 0.05). **Answered:** the owner
   changed O7 to n = 6, which this ADR now uses (smallest two-sided p 0.03125).
 
+## Amendment (2026-10-20): the pinned agent CLI and the tool-search switch
+
+Decided by the coordinator after the AG-03 preflight finding of 2026-10-20 (`docs/reviews/2026-10-20-agent-cli-pin.md`); it
+applies to AG-02 (native and routes), AG-02R and AG-03 alike.
+
+1. **`ENABLE_TOOL_SEARCH=false` is part of the agent environment** (with `DISABLE_AUTOUPDATER=1` and
+   `DISABLE_ERROR_REPORTING=1`, now also in AG-02's production environment, which only its preflight child had) and of every proof.
+   Without it Claude Code puts a `DeferredToolPlaceholder` entry in the tool list of every request: measured on 2.1.304 and on
+   2.1.305, and the *same* 2.1.304 binary did not do it the day before, so the behaviour follows the CLI's own configuration, not its
+   version. The "exactly the three tools" verdicts are unchanged and refuse that entry; there is no exception by name (an exception
+   would need the owner and an ADR). With the switch the request tool lists were exactly the harness's three tools on both versions.
+2. **The CLI is pinned**: Claude Code 2.1.304 for win32-x64, SHA-256 `019e5174d5d954585edb1a946fe280e44a973050b4897034adf0e16306f85fdd` (byte-identical to the `claude.exe` of
+   `@anthropic-ai/claude-code-win32-x64@2.1.304` and to the binary the owner's installer kept), in the private directory
+   `%LOCALAPPDATA%\Ommatix\agent-cli\2.1.304` (read-only), named by an absolute `--claude` path outside the repository. `claude` from
+   `PATH` is refused. Each preflight and every launch check the path, the SHA-256 and `--version` (`tools/agent/ag02/clipin.py`); the
+   proof records `cli_sha256` and `agent_env`, and is valid for at most 24 hours (the CLI can change its behaviour without changing
+   its version). The owner's own Claude Code, its updates, `PATH` and `~/.local` are never touched. Verifier revisions: AG-02 4
+   (routes 3), AG-03 3 (routes 2); older proofs are refused.
+
 ## Resumen (ES)
 
 **Aceptada el 19 de octubre de 2026 (responsable: O1, O2, O5 y O7, con O7 revisada de n = 5 a n = 6 más
@@ -810,3 +830,5 @@ Segunda revisión del paso 5 (PR 104, sobre `23c43cc`): las teclas sólo cuentan
 **Medición en disco (20 de octubre de 2026).** «Sólo en memoria» vale para el servidor de píxeles y, en el agente, sólo mientras la orden de producción conserve `--no-session-persistence`: medido con Claude Code 2.1.304 (CLI real, sustituto local, servidor sintético, sin proveedor), sin esa opción la CLI escribe en claro cada imagen de resultado MCP en `<config>/projects/<cwd>/<sesión>/tool-results/*.png` y cada transcripción con la imagen en base64; con ella, el directorio de configuración aislado no contiene `projects/`, transcripciones ni datos de imagen. La opción pasa a ser un invariante comprobado (una prueba, el preflight y una comprobación antes de cada lanzamiento), el preflight rechaza la prueba si sus sesiones sintéticas dejan algo de eso, y el entorno del agente fija `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` (sólo AG-03). La CLI guarda además un registro de depuración de cada servidor MCP **fuera** del directorio de configuración (`<caché>/claude-cli-nodejs/Cache/<cwd>/mcp-logs-pixel/`): el arnés no lo borra, el preflight busca imágenes en lo que una sesión le añade, y lo que contendría con una pantalla real **no está medido**. Claude Code se actualizó solo a la 2.1.305 el 20 de octubre de 2026, así que toda prueba debe regenerarse con la versión que se use antes de una serie en vivo (O11); la 2.1.305 añade `DeferredToolPlaceholder` a la lista de herramientas de cada petición y el veredicto de «exactamente tres herramientas» la rechaza.
 
 En la revisión del PR 106 el preflight pasa a observar también el directorio temporal propio del hijo (`TEMP`, `TMP`, `TMPDIR`, `CLAUDE_CODE_TMPDIR`, uno por sesión y por intento), a derivar todas las ubicaciones del entorno que la CLI realmente usa, a enlazar en la prueba una huella de la raíz de la caché y a rechazar un listado que no pudo completarse; un instante limpio tras la sesión no prueba que nunca se escribiera algo de forma transitoria.
+
+**CLI fijada e interruptor de búsqueda de herramientas (20 de octubre de 2026).** Por decisión del coordinador, a raíz del hallazgo del preflight de AG-03, para AG-02 (nativo y rutas), AG-02R y AG-03: (1) el entorno del agente fija `ENABLE_TOOL_SEARCH=false` (con `DISABLE_AUTOUPDATER=1` y `DISABLE_ERROR_REPORTING=1`, ahora también en el entorno de producción de AG-02) y va en cada prueba: sin él Claude Code añade `DeferredToolPlaceholder` a la lista de herramientas de cada petición (medido en la 2.1.304 y en la 2.1.305; el mismo binario 2.1.304 no lo hacía el día anterior, así que depende de la configuración de la CLI y no de la versión); los veredictos de «exactamente tres herramientas» no cambian y no hay excepción por nombre. (2) La CLI está fijada: Claude Code 2.1.304 win32-x64, SHA-256 `019e5174d5d954585edb1a946fe280e44a973050b4897034adf0e16306f85fdd` (idéntico al `claude.exe` del paquete npm `@anthropic-ai/claude-code-win32-x64@2.1.304`), en el directorio privado `%LOCALAPPDATA%\Ommatix\agent-cli\2.1.304` (sólo lectura), con una ruta absoluta en `--claude` fuera del repositorio; `claude` del `PATH` se rechaza; cada preflight y cada lanzamiento comprueban ruta, SHA-256 y `--version`; la prueba registra `cli_sha256` y `agent_env` y vale como máximo 24 horas. La CLI propia del responsable nunca se toca.

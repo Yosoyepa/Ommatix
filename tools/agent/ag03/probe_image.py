@@ -32,6 +32,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent / "ag02")]
 
+import clipin  # noqa: E402
 import fake_messages  # noqa: E402
 import pixel_agent as pa  # noqa: E402
 import pixel_capture as cap  # noqa: E402
@@ -141,6 +142,8 @@ def run_session(args, width: int, height: int, config_dir: Path) -> dict:
 def run(args) -> dict:
     if (reasons := ag02_preflight.refusals()):
         raise ag02_preflight.PreflightRefused(reasons)
+    if (cli_problems := clipin.check(args.claude)[0]):  # the probe runs the pinned CLI too
+        raise ag02_preflight.PreflightRefused(cli_problems)
     sessions = [run_session(args, w, h, args.claude_config_dir) for w, h in SIZES]
     verdict, problems = verdict_of(sessions)
     versions = sorted({s["claude_code_version"] for s in sessions if s["claude_code_version"]})

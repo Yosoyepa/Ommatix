@@ -84,3 +84,5 @@ and empty when optional); any other failure to look it up makes the snapshot inc
 `scan_complete: false`). Regressions first (`step5fix_red\disk3\`: 2 failures): `SnapshotCompletenessTests`
 (`test_an_optional_root_that_exists_but_cannot_be_looked_up_is_incomplete_not_absent`, `test_only_a_not_found_root_is_absent`) and
 `DeniedOptionalRootTests` (a full preflight with the cache root lookup denied refuses; a really missing cache root still passes).
+
+> Superseded the same day by `docs/reviews/2026-10-20-agent-cli-pin.md`: the placeholder is not specific to 2.1.305, `ENABLE_TOOL_SEARCH=false` removes it, and the experiments run on a pinned CLI.

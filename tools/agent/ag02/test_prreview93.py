@@ -26,7 +26,7 @@ import minimal_agent as ma  # noqa: E402
 import preflight  # noqa: E402
 import preflight_cli as pc  # noqa: E402
 import run_goal as rg  # noqa: E402
-from pin_support import PIN_SHA, pinned  # noqa: E402
+from pin_support import PIN_SHA, launch_ok, pinned  # noqa: E402
 from test_multimodel import FAKE_ENGINE, INSTRUCTION, PROMPT, AgentRun, EndToEndTests  # noqa: E402
 
 GOALS = rg.load_goals()
@@ -865,7 +865,7 @@ class RouteRequestVerdictTests(unittest.TestCase):
 class RouteVerifierRevisionTests(unittest.TestCase):
     def test_a_stricter_route_verifier_invalidates_the_route_proofs_of_the_weaker_one(self):
         self.assertGreaterEqual(agentcli.ROUTE_VERIFIER_REVISION, 2)
-        self.assertEqual(rg.VERIFIER_REVISION, 3, "the native ADR-0036 verifier revision is not touched")
+        self.assertEqual(rg.VERIFIER_REVISION, 4, "the native ADR-0036 verifier revision is 4 since the pinned CLI (2026-10-20)")
         self.assertEqual(rg.PROOF_SCHEMA, "ag02-isolation-proof-3")
 
 
@@ -873,6 +873,9 @@ class RouteSmokeStderrTests(unittest.TestCase):
     """N1: a route smoke never persists the child's stderr, which can echo the credential or a response."""
     TOKEN = "tp-dummy-secret-route-token-0001"
     MARKER = "SYNTHETIC-RESPONSE-MARKER-7"
+
+    def setUp(self):
+        self.enterContext(launch_ok())  # the stand-in proof is old and there is no real binary
 
     FAKE_CLI = """import json, os, sys
 sys.stdin.read()

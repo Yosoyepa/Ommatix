@@ -31,12 +31,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import clipin  # noqa: E402
 import run_goal as rg  # noqa: E402
 
 AGENT_CLIS = ("claude", "minimal", "codex", "opencode")
 # The revision of the route preflight's request-level rules (a Claude Code route proof carries it).
 #   2: re-review of PR 93 (N3) - only the reviewed request header names, whatever their values
-ROUTE_VERIFIER_REVISION = 2
+ROUTE_VERIFIER_REVISION = 3
 ROUTE_CONTEXT_TOKENS_DEFAULT = rg.ROUTE_CONTEXT_TOKENS_DEFAULT
 # A key with one of these prefixes is a Xiaomi MiMo Token Plan key, whatever provider label or route it
 # is offered to: coding tools only, and only with the Token Plan hosts of the MiMo route.
@@ -175,6 +176,12 @@ class AgentCLI:
     checks_anthropic_routing = False
     # Environment switches of this agent beyond ``rg.QUIET_ENV`` (AG-03's feedback-survey switch); empty for AG-02.
     agent_vars: dict = {}
+    # Whether this agent is the pinned Claude Code (``clipin``): its launches check the binary, the proof and the environment.
+    checks_pinned_cli = False
+
+    def launch_problems(self, proof: dict) -> list[str]:
+        """What stops a launch of this agent with this proof (closed tokens); none for agents that are not Claude Code."""
+        return []
 
     def __init__(self, args=None):
         self.args = args
@@ -252,9 +259,15 @@ class ClaudeCLI(AgentCLI):
                                     system_instruction=system_instruction,
                                     max_budget_usd=None if self.route else max_budget_usd)
 
+    checks_pinned_cli = True
+
+    def launch_problems(self, proof):
+        """The CLI is not the pin, not the binary the proof was made with, or the proof is older than 24 hours."""
+        return clipin.launch_problems(getattr(self.args, "claude", "claude"), proof)
+
     def env(self, extra=None):
         if not self.route:
-            return rg.agent_env(extra)
+            return rg.agent_env({**rg.QUIET_ENV, **self.agent_vars, **(extra or {})})
         env = route_env(self.route, self.route_url(), self.read_key(), self.args.model,
                         (extra or {}).get("CLAUDE_CONFIG_DIR") or self.args.claude_config_dir) | self.agent_vars
         if (problems := route_env_problems(env, self.route, self.spec()["base_urls"], self.agent_vars)):

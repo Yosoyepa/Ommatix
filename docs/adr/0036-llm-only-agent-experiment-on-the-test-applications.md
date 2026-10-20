@@ -259,6 +259,25 @@ The implementation follows from those choices:
 - The owner's phase 1 and phase 2 sessions are the evidence of the experiment; until they are run
   and recorded, AG-02 stays `NO_EJECUTADO`.
 
+## Amendment (2026-10-20): the pinned agent CLI and the tool-search switch
+
+Decided by the coordinator after the AG-03 preflight finding of 2026-10-20 (`docs/reviews/2026-10-20-agent-cli-pin.md`); it
+applies to AG-02 (native and routes), AG-02R and AG-03 alike.
+
+1. **`ENABLE_TOOL_SEARCH=false` is part of the agent environment** (with `DISABLE_AUTOUPDATER=1` and
+   `DISABLE_ERROR_REPORTING=1`, now also in AG-02's production environment, which only its preflight child had) and of every proof.
+   Without it Claude Code puts a `DeferredToolPlaceholder` entry in the tool list of every request: measured on 2.1.304 and on
+   2.1.305, and the *same* 2.1.304 binary did not do it the day before, so the behaviour follows the CLI's own configuration, not its
+   version. The "exactly the three tools" verdicts are unchanged and refuse that entry; there is no exception by name (an exception
+   would need the owner and an ADR). With the switch the request tool lists were exactly the harness's three tools on both versions.
+2. **The CLI is pinned**: Claude Code 2.1.304 for win32-x64, SHA-256 `019e5174d5d954585edb1a946fe280e44a973050b4897034adf0e16306f85fdd` (byte-identical to the `claude.exe` of
+   `@anthropic-ai/claude-code-win32-x64@2.1.304` and to the binary the owner's installer kept), in the private directory
+   `%LOCALAPPDATA%\Ommatix\agent-cli\2.1.304` (read-only), named by an absolute `--claude` path outside the repository. `claude` from
+   `PATH` is refused. Each preflight and every launch check the path, the SHA-256 and `--version` (`tools/agent/ag02/clipin.py`); the
+   proof records `cli_sha256` and `agent_env`, and is valid for at most 24 hours (the CLI can change its behaviour without changing
+   its version). The owner's own Claude Code, its updates, `PATH` and `~/.local` are never touched. Verifier revisions: AG-02 4
+   (routes 3), AG-03 3 (routes 2); older proofs are refused.
+
 ## Resumen (ES)
 
 **Decisión del responsable (17 de octubre de 2026).** Se ejecuta AG-02: un agente sólo LLM (Claude,
@@ -315,3 +334,5 @@ se niega si hay variables de enrutamiento, porque las observaciones sólo pueden
 de Anthropic. Las formas ambiguas de ruta en la configuración (`C:STOP`, relativa a la raíz, UNC...)
 se rechazan en vez de emularse; ninguna opción puede abreviarse; y el ejecutor guarda sólo nombres
 de herramienta, servidor y códigos de vocabularios cerrados.
+
+**CLI fijada e interruptor de búsqueda de herramientas (20 de octubre de 2026).** Por decisión del coordinador, a raíz del hallazgo del preflight de AG-03, para AG-02 (nativo y rutas), AG-02R y AG-03: (1) el entorno del agente fija `ENABLE_TOOL_SEARCH=false` (con `DISABLE_AUTOUPDATER=1` y `DISABLE_ERROR_REPORTING=1`, ahora también en el entorno de producción de AG-02) y va en cada prueba: sin él Claude Code añade `DeferredToolPlaceholder` a la lista de herramientas de cada petición (medido en la 2.1.304 y en la 2.1.305; el mismo binario 2.1.304 no lo hacía el día anterior, así que depende de la configuración de la CLI y no de la versión); los veredictos de «exactamente tres herramientas» no cambian y no hay excepción por nombre. (2) La CLI está fijada: Claude Code 2.1.304 win32-x64, SHA-256 `019e5174d5d954585edb1a946fe280e44a973050b4897034adf0e16306f85fdd` (idéntico al `claude.exe` del paquete npm `@anthropic-ai/claude-code-win32-x64@2.1.304`), en el directorio privado `%LOCALAPPDATA%\Ommatix\agent-cli\2.1.304` (sólo lectura), con una ruta absoluta en `--claude` fuera del repositorio; `claude` del `PATH` se rechaza; cada preflight y cada lanzamiento comprueban ruta, SHA-256 y `--version`; la prueba registra `cli_sha256` y `agent_env` y vale como máximo 24 horas. La CLI propia del responsable nunca se toca.

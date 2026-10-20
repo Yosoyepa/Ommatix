@@ -49,6 +49,7 @@ HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent / "ag02")]
 
 import agentcli  # noqa: E402
+import clipin  # noqa: E402
 import fake_messages  # noqa: E402
 import pixel_agent as pa  # noqa: E402
 import pixel_capture as cap  # noqa: E402
@@ -61,7 +62,7 @@ from preflight_cli import decoded_strings  # noqa: E402
 PROOF_SCHEMA = pa.PROOF_SCHEMA
 VERIFIER_REVISION = pa.VERIFIER_REVISION
 # The route verdict's own revision (separate from AG-02's ``agentcli.ROUTE_VERIFIER_REVISION``).
-ROUTE_VERIFIER_REVISION = 1
+ROUTE_VERIFIER_REVISION = 2
 PixelRefused = ag02.PreflightRefused
 SERVER_PATH = HERE / "pixel_server.py"
 
@@ -254,6 +255,10 @@ def run(args) -> dict:
     when the environment cannot honestly be called local."""
     if (reasons := ag02.refusals()):
         raise PixelRefused(reasons)
+    # The CLI the proof is made with must be the pinned one (``clipin``): nothing is launched otherwise.
+    cli_problems, cli_sha256 = clipin.check(args.claude)
+    if cli_problems:
+        raise PixelRefused(cli_problems)
     production_dir = Path(args.claude_config_dir)
     problems: list[str] = []
     with tempfile.TemporaryDirectory(prefix="ag03-canary-") as tmp:
@@ -396,7 +401,7 @@ def run(args) -> dict:
             "production_command_persists_session" in s["disk_problems"] for s in (a, control, b)),
             "debug_log_location": "<cache>/claude-cli-nodejs/Cache/<cwd>/mcp-logs-pixel/ (outside the configuration directory)",
             "debug_log_deleted_by_harness": False},
-        "agent_env": dict(pa.PIXEL_ENV),
+        "cli_sha256": cli_sha256, "agent_env": dict(pa.AGENT_ENV),
     }
     if route:
         proof |= {"route": {"provider": route, "base_url": args.route_base_url, "model": args.model,
@@ -436,7 +441,7 @@ def load_isolation_proof(path: Path) -> dict:
           and proof["disk"].get("image_data_found") is False and proof["disk"].get("scan_complete") is True
           and proof["disk"].get("temp_isolated") is True
           and isinstance(proof["disk"].get("cache_root_sha256"), str) and len(proof["disk"]["cache_root_sha256"]) == 64
-          and proof.get("agent_env") == pa.PIXEL_ENV)
+          and proof.get("cli_sha256") == clipin.CLAUDE_CODE_PIN["sha256"] and proof.get("agent_env") == pa.AGENT_ENV)
     if not ok:
         raise SystemExit(f"the isolation proof is not a passing {PROOF_SCHEMA} file with verifier revision "
                          f"{VERIFIER_REVISION}; run pixel_preflight.py again")
@@ -452,7 +457,7 @@ def proof_problems(proof: dict, args, config_dir: Path | None, route_facts: dict
         problems.append("pixel_server_differs_from_proof")
     if pixel.get("instruction_sha256") != pa.instruction_sha256():
         problems.append("instruction_differs_from_proof")
-    if proof.get("agent_env") != pa.PIXEL_ENV:
+    if proof.get("agent_env") != pa.AGENT_ENV:
         problems.append("agent_env_differs_from_proof")
     if route_facts is None:
         if proof.get("route") is not None:

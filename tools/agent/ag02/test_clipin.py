@@ -31,6 +31,7 @@ import run_goal as rg  # noqa: E402
 from pin_support import PIN_SHA, launch_refused, pinned  # noqa: E402
 
 SWITCH = "ENABLE_TOOL_SEARCH"
+NOT_GIVEN = object()
 
 
 
@@ -50,7 +51,7 @@ class CheckTests(unittest.TestCase):
         self.exe = Path(scratch.name) / "claude.exe"
         self.exe.write_bytes(b"MZ fake")
 
-    def check(self, claude=None, *, sha=PIN_SHA, version="2.1.304 (Claude Code)", **kwargs):
+    def check(self, claude=NOT_GIVEN, *, sha=PIN_SHA, version="2.1.304 (Claude Code)", **kwargs):
         def hasher(path):
             return sha
 
@@ -58,7 +59,7 @@ class CheckTests(unittest.TestCase):
             if isinstance(version, Exception):
                 raise version
             return version
-        return self.clipin.check(str(self.exe) if claude is None else claude, hasher=hasher, version_runner=runner,
+        return self.clipin.check(str(self.exe) if claude is NOT_GIVEN else claude, hasher=hasher, version_runner=runner,
                                  **kwargs)
 
     def test_the_pin_is_the_binary_of_the_owners_npm_verified_download(self):
@@ -170,7 +171,6 @@ class Ag02ProofTests(unittest.TestCase):
         for name, broken in {
                 "no hash": {k: v for k, v in good.items() if k != "cli_sha256"},
                 "other hash": good | {"cli_sha256": "0" * 64},
-                "other version": good | {"claude_code_version": "2.1.305"},
                 "no env": {k: v for k, v in good.items() if k != "agent_env"},
                 "other env": good | {"agent_env": {"DISABLE_AUTOUPDATER": "1"}}}.items():
             with self.subTest(broken=name), self.assertRaises(SystemExit):
@@ -187,6 +187,7 @@ class Ag02PreflightTests(unittest.TestCase):
         run = Run()
         run.setUp()
         run.addCleanup(run.doCleanups)
+        run.pin = False  # the harness would otherwise answer for the pin itself
         with pinned():
             proof = run.run_preflight()
         self.assertEqual(proof["cli_sha256"], PIN_SHA)

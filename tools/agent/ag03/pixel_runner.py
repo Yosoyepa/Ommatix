@@ -90,7 +90,7 @@ class PixelCLI(agentcli.ClaudeCLI):
         environment only. A route's environment (``agentcli.route_env``) carries them and the effort already."""
         if self.route:
             return super().env(extra) | {k: v for k, v in (extra or {}).items() if k in pa.TEMP_ENV_NAMES}
-        return rg.agent_env({**rg.QUIET_ENV, **pa.PIXEL_ENV, **(extra or {})})
+        return rg.agent_env({**pa.AGENT_ENV, **(extra or {})})
 
     def load_proof(self, path):
         proof = pf.load_isolation_proof(path)
@@ -462,6 +462,8 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
         attempt_tmp.mkdir(exist_ok=True)
         env = cli.env({**({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else {}), **disk.child_temp_env(attempt_tmp)})
         lost = pa.command_problems(argv) + pa.env_problems(env) + pa.temp_env_problems(env)  # invariants of the proof
+        if proof is not None:  # the CLI is the pin and the binary of the proof, and the proof is at most 24 h old
+            lost += cli.launch_problems(proof)
         if proof is not None and disk.cache_root_fingerprint(env) != (proof.get("disk") or {}).get("cache_root_sha256"):
             lost.append("cache_root_differs_from_proof")
         if lost:

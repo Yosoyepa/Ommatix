@@ -2,6 +2,7 @@
 local stand-in for the API (no real model, no network beyond 127.0.0.1, no screen)."""
 
 import argparse
+import contextlib
 import io
 import json
 import os
@@ -33,6 +34,8 @@ PROVIDER_ENV = {
 
 
 class PreflightBase(unittest.TestCase):
+    pin = True  # a fake CLI is not the pinned binary: the harness answers for the pin unless a test is about it
+
     def run_preflight(self, mode="normal", *, files=None, refusals=(), parent_env=None):
         scratch = tempfile.TemporaryDirectory(prefix="ag02-pf-")
         self.addCleanup(scratch.cleanup)
@@ -49,7 +52,7 @@ class PreflightBase(unittest.TestCase):
         args = argparse.Namespace(exe=Path(sys.executable), model="claude-haiku-5-5",
                                   claude=[sys.executable, str(HERE / "fake_claude.py")], timeout=60,
                                   claude_config_dir=self.production, extra_env=extra)
-        with mock.patch.dict(os.environ, parent_env or {}), pinned(), \
+        with mock.patch.dict(os.environ, parent_env or {}), (pinned() if self.pin else contextlib.nullcontext()), \
                 mock.patch.object(preflight, "refusals", return_value=list(refusals)):
             return preflight.run(args)
 

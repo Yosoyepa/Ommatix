@@ -15,6 +15,7 @@ sys.path.insert(0, str(HERE))
 
 import preflight  # noqa: E402
 import run_goal as rg  # noqa: E402
+from pin_support import pinned  # noqa: E402
 from test_preflight import PreflightBase  # noqa: E402
 from test_run_goal import GOALS, Harness, final, make_proof, observation  # noqa: E402
 
@@ -243,8 +244,7 @@ class ManifestCapTests(unittest.TestCase):
         args = argparse.Namespace(exe=Path(sys.executable), model="claude-haiku-5-5",
                                   claude=[sys.executable, str(HERE / "fake_claude.py")], timeout=60,
                                   claude_config_dir=production, extra_env={})
-        with mock.patch.object(rg, "MANIFEST_FILE_CAP", 2), mock.patch.object(preflight, "refusals",
-                                                                              return_value=[]):
+        with mock.patch.object(rg, "MANIFEST_FILE_CAP", 2), pinned(),                 mock.patch.object(preflight, "refusals", return_value=[]):
             proof = preflight.run(args)
         self.assertFalse(proof["passed"])
         self.assertIn("context_manifest_refused_too_many_files", proof["problems"])

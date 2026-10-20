@@ -7,9 +7,11 @@ with ``cli_sha256`` and its date, and the runner launches nothing with another C
 proof. Fakes only."""
 
 import argparse
+import calendar
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -21,6 +23,7 @@ import agentcli  # noqa: E402
 import pixel_agent as pa  # noqa: E402
 import pixel_preflight as pf  # noqa: E402
 import run_goal as rg  # noqa: E402
+import clipin  # noqa: E402
 from pin_support import PIN_SHA, launch_refused, pinned  # noqa: E402
 from test_disk_evidence import PreflightHarness  # noqa: E402
 
@@ -76,7 +79,7 @@ class PixelPreflightTests(PreflightHarness):
         launched = mock.Mock(side_effect=AssertionError("a session was launched with an unpinned claude"))
         with pinned(None, ["claude_not_an_absolute_path"]), mock.patch.object(rg, "run_claude", launched):
             with self.assertRaises(pf.PixelRefused) as refused:
-                super().preflight()
+                super().preflight(pin=False)
         self.assertIn("claude_not_an_absolute_path", refused.exception.reasons)
 
     def test_the_loader_needs_the_pin_facts_and_proof_problems_compare_them(self):
@@ -84,8 +87,7 @@ class PixelPreflightTests(PreflightHarness):
         with tempfile.TemporaryDirectory() as tmp:
             for name, broken in {"no_hash": {k: v for k, v in proof.items() if k != "cli_sha256"},
                                  "other_hash": proof | {"cli_sha256": "0" * 64},
-                                 "other_env": proof | {"agent_env": dict(pa.PIXEL_ENV)},
-                                 "other_version": proof | {"claude_code_version": "2.1.305"}}.items():
+                                 "other_env": proof | {"agent_env": dict(pa.PIXEL_ENV)}}.items():
                 with self.subTest(broken=name):
                     path = Path(tmp) / f"{name}.json"
                     path.write_text(json.dumps(broken), encoding="utf-8")
@@ -107,8 +109,10 @@ class PixelLaunchTests(unittest.TestCase):
     def test_nothing_is_launched_with_an_expired_proof(self):
         from test_campaign import Series
         series = Series(self, patch_pin=False)
-        with pinned():
-            series.run()  # the stand-in proof is dated 2026-10-20T10:00:00Z: far more than 24 h ago
+        real = clipin.age_problems
+        two_days_later = calendar.timegm(time.strptime("2026-10-22T10:00:00Z", "%Y-%m-%dT%H:%M:%SZ"))
+        with pinned(), mock.patch.object(clipin, "age_problems", lambda date, now=None: real(date, two_days_later)):
+            series.run()  # the stand-in proof is dated 2026-10-20T10:00:00Z: more than 24 h before "now"
         self.assertEqual(series.calls, [])
 
 
