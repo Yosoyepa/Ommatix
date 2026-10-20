@@ -2,8 +2,10 @@
 """AG-02 summary: reads the per-goal JSON files of one or more run directories and reports
 success by goal and phase, false-success claims (the agent says DONE, the OS oracle says no),
 abstention correctness, live actions spent, refusals by code, tokens per step and per goal and
-latency. It reads metrics only (the runner never writes screen text) and prints to stdout;
-``--out`` writes the same summary as JSON (outside the repository)."""
+latency, and what the proxy's log beside each result says about the observations (how many carried a
+query, limit or cursor, how many answers were short or truncated, the request sizes: PE-13, PE-14). It
+reads metrics only (the runner never writes screen text) and prints to stdout; ``--out`` writes the same
+summary as JSON (outside the repository)."""
 
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import logstats  # noqa: E402
 import proxy as proxy_module  # noqa: E402
 
 
@@ -31,6 +34,9 @@ def load_results(paths: list[Path]) -> list[dict]:
             except (OSError, ValueError):
                 continue
             if isinstance(data, dict) and "goal" in data and "phase" in data:
+                log = file.with_name(file.name[:-len(".json")] + ".proxy.jsonl")
+                if log.exists():
+                    data["_proxy_log"] = str(log)  # in memory only: the summary never holds a path
                 results.append(data)
     return results
 
@@ -101,6 +107,7 @@ def summarise(results: list[dict]) -> dict:
 def _summarise(results: list[dict]) -> dict:
     by_goal: dict = {}
     phases: dict = {}
+    observed: dict = {}
     for r in results:
         phase = str(r["phase"])
         entry = by_goal.setdefault(r["goal"], {}).setdefault(phase, {
@@ -120,6 +127,9 @@ def _summarise(results: list[dict]) -> dict:
             total["aborted"] += 1
             continue
         total["completed"] += 1
+        if isinstance(r.get("_proxy_log"), str):
+            records, _ = logstats.read_jsonl(Path(r["_proxy_log"]))
+            observed.setdefault(phase, []).extend(logstats.observations(records))
         score = r.get("score", {})
         entry["success"] += bool(score.get("success"))
         entry["false_success"] += bool(score.get("false_success"))
@@ -164,7 +174,7 @@ def _summarise(results: list[dict]) -> dict:
             total["tool_ms"].setdefault(step["tool"], []).append(step["ms"])
         if isinstance(r.get("metrics", {}).get("wall_s"), (int, float)):
             total["wall_s"].append(r["metrics"]["wall_s"])
-    for total in phases.values():
+    for phase, total in phases.items():
         context, output = total.pop("context_per_goal"), total.pop("output_per_goal")
         uncached, costs = total.pop("uncached_per_goal"), total.pop("cost_usd_values")
         per_message = total.pop("context_per_message")
@@ -184,6 +194,7 @@ def _summarise(results: list[dict]) -> dict:
             for tool, v in sorted(total.pop("tool_ms").items())}
         wall = total.pop("wall_s")
         total["wall_s_median"] = statistics.median(wall) if wall else None
+        total["observations"] = logstats.observation_figures(observed.get(phase, []))
     for phase_map in by_goal.values():
         for entry in phase_map.values():
             context, output, uncached = entry.pop("context"), entry.pop("output"), entry.pop("uncached")
@@ -247,7 +258,38 @@ def _render(summary: dict) -> str:
                   f"  wall s (median) {t['wall_s_median']}"]
         for tool, v in t["tool_latency_ms"].items():
             lines.append(f"  {tool}: n={v['n']} median {v['median']} ms p95 {v['p95']} ms")
+        lines += _observation_lines(t["observations"])
     return "\n".join(lines)
+
+
+def _observation_lines(o: dict) -> list[str]:
+    """What the proxy log says about the observations of a phase. A log from before the evidence
+    fields says nothing about the request's arguments: that is reported as not recorded."""
+    if not o["requests"]:
+        return []
+    classes = o["request_size_classes"]
+    lines = [f"  observations: {o['requests']} requests, {o['responses']} responses "
+             f"({o['unanswered']} unanswered, {o['error_responses']} errors); elements per answer "
+             f"{o['elements_distribution']}",
+             f"  request sizes (indirect: bare <= {logstats.BARE_MAX_BYTES} bytes, with arguments >= "
+             f"{logstats.WITH_ARGS_MIN_BYTES}): {classes}"]
+    if o["request_args_recorded"] == 0:
+        lines.append(f"  request arguments not recorded in {o['requests']} of {o['requests']} requests "
+                     f"(logs from before PE-14); truncation not recorded in {o['truncated_unrecorded']} answers")
+    else:
+        lines.append(f"  request arguments recorded in {o['request_args_recorded']} of {o['requests']} requests: "
+                     f"with a query {o['with_query']}, with a limit {o['with_limit']}, with a cursor "
+                     f"{o['with_cursor']}; truncated: {o['truncated_true']} true, {o['truncated_false']} false, "
+                     f"{o['truncated_unrecorded']} not recorded")
+    small = o["small_responses_by_request_size_class"]
+    lines.append(f"  small answers (0 to {logstats.SMALL_RESPONSE_MAX_ELEMENTS} elements): {sum(small.values())}, "
+                 f"by request size class {small}")
+    rtt = o["rtt_ms"]
+    lines.append(f"  proxy-to-engine round trip of observe_screen (not the model's time): n={rtt['n']} "
+                 f"median {rtt['median']} ms p95 {rtt['p95']} ms max {rtt['max']} ms")
+    if o["timings_us_median"]:
+        lines.append(f"  engine stage times, median us: {o['timings_us_median']}; plan work {o['plan_work']}")
+    return lines
 
 
 def main(argv=None) -> int:
