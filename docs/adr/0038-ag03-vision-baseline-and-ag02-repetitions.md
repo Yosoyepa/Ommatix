@@ -161,10 +161,7 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
    - the two synthetic test applications on the primary monitor, with every other window minimised by the
      owner by hand before a session (as in ADR-0036). This reduces what could appear; it is not the
      guarantee, which is the capture backend above;
-   - **local storage** (the owner's O5): the image is **held in memory only** to answer the call; it is not
-     written to disk, not logged and not hashed into any result. Results hold the number of screenshots,
-     their pixel dimensions and byte sizes, the latency and booleans, and the session is started with
-     `--no-session-persistence`. This controls what stays **on this machine** and nothing else;
+   - **local storage** (the owner's O5): the pixel server holds the image **in memory only** to answer the call; it writes nothing to disk, logs nothing and hashes nothing into any result. Results hold the number of screenshots, their pixel dimensions and byte sizes, the latency and booleans, and the session is started with `--no-session-persistence`, the CLI's documented control for session transcripts. Whether the CLI also keeps image copies on this machine under these flags is an open measurement (see the Anthropic reading and Required validation); until it is measured, this bullet's claim covers the pixel server only;
    - **provider retention and training** are a separate matter. This machine does not control them, they
      are part of the data-use scope the owner accepted under O1, and **nothing here deletes a screenshot
      remotely**: once sent, it is held under each recipient's own policy. What the published policies say
@@ -173,10 +170,92 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
        data-usage page says the user chooses whether data is used to improve future models; with the
        setting on, retention is 5 years, with it off, 30 days; the setting is changed at
        claude.ai/settings/data-privacy-controls. Commercial and API terms differ (30 days, no training
-       by default) and are not the owner's account type as far as is known. **The owner does not yet know his plan or
-       the current setting and will check them; they are an open owner item (OI-1), recorded as unknown, and
-       must be recorded before the Claude gate smoke**: until the owner states them,
-       remote retention (30 days or 5 years) and training use are explicitly **unknown** for this recipient.
+       by default) and are not the owner's account type as far as is known. **OI-1, answered by the owner on 2026-10-20:** the account is a consumer subscription with "Help improve our
+       AI models" **off**, as the owner checked that day (claude.ai → Settings → Privacy). Nothing else is
+       known about the account. The reading below is for that case only. It comes from public pages read on
+       2026-10-20 with a web-fetch tool that returns verbatim segments, not checked against a browser copy.
+       Each source gives its displayed date.
+       - *Setting.* The settings article
+         (https://privacy.claude.com/en/articles/12109829-how-do-i-change-my-model-improvement-privacy-settings;
+         displayed date August 3, 2026; read 2026-10-20) names the setting "Help Improve our AI models". It
+         says: "If you decide to turn off the model training setting, we will not use any new chats and coding
+         sessions you have with Claude for future model training", and "we will stop using your previously
+         stored chats and coding sessions in future model training runs". It also says "Your data will still
+         be included in model training that has already started and in models that have already been trained".
+         Its safety exception: "If our safety classifiers flag your conversations, they may still be used to
+         improve our internal trust and safety models, detect harmful content, enforce our policies, or
+         advance our safety research."
+       - *Routine retention.* The data-usage page (https://code.claude.com/docs/en/data-usage; no date
+         displayed; read 2026-10-20) states "Users who don't allow data use for model improvement: 30-day
+         retention period" for Claude Code data. The retention article
+         (https://privacy.claude.com/en/articles/10023548-how-long-do-you-store-my-data; displayed date July
+         1, 2026; read 2026-10-20) gives 30 days only for deleted conversations ("Deleted from our back-end
+         storage systems within 30 days") and no period for ordinary chats that are not deleted. The Privacy
+         Policy keeps personal data "for as long as reasonably necessary". The pages do not say how the 30-day
+         figures relate.
+       - *Flagged content and safety scores.* The retention article says that when a chat or session "is
+         flagged by our automated trust and safety systems as violating our Usage Policy", "We retain inputs
+         and outputs for up to 2 years and trust and safety classification scores for up to 7 years". The
+         training article (https://privacy.claude.com/en/articles/10023580-is-my-data-used-for-model-training;
+         displayed date March 16, 2026; read 2026-10-20) says flagged conversations may be used "to improve
+         our ability to detect and enforce our Usage Policy, including training models for use by our
+         Safeguards team".
+       - *Feedback.* The retention article says that for feedback "we retain data associated with that
+         submission for 5 years". The training article says feedback is stored "for up to 5 years" and that
+         Anthropic may "train our AI models as permitted under applicable laws". The data-usage page says
+         transcripts shared with `/feedback`, `/bug` or `/share` "are retained for 5 years".
+       - *Legal, disputes, enforcement and anonymized data.* The retention article says: "In all cases, we may
+         retain chats and coding sessions as required by law, to resolve disputes, … or as necessary to combat
+         violations of our Usage Policy." For anonymized or de-identified data it says "we may retain this
+         information for longer". Neither gives a period.
+       - *Opt-in programs.* The training article names an explicit opt-in, "By otherwise explicitly opting in
+         to training (e.g. joining our Trusted Tester Program)". None is known for this account.
+       - *Policies, landing page and Consumer Terms.* The Privacy Policy
+         (https://www.anthropic.com/legal/privacy; effective September 10, 2026 as read; read 2026-10-20) says
+         Inputs and Outputs may be used to train "unless you opt out through your account settings", and
+         points to its privacy center for the detailed periods. Its introduction covers "when you use our
+         website, Claude.ai, or other Anthropic products and services" and does not name Claude Code. The
+         retention article's scope note does: "This article is about our consumer products such as Claude
+         Free, Pro, Max and when accounts from those plans use Claude Code." The Privacy Center landing page
+         (https://privacy.claude.com/, reached by redirect from privacy.anthropic.com; read 2026-10-20) lists
+         the consumer articles and states no retention or training term itself. The Consumer Terms
+         (https://www.anthropic.com/legal/consumer-terms; effective October 8, 2025 as read; read 2026-10-20)
+         state no retention period in days or years for consumer data.
+       - *Recorded as.* With the setting off, Anthropic states that it will not use new or previously stored
+         chats and coding sessions for future model training, subject to the safety exception and to training
+         already in progress. The uses the pages still state for this case are safety-flagged conversations
+         and the feedback the user gives. Stated periods: 30 days for Claude Code data (data-usage page) and
+         for deleted conversations (retention article); up to 2 years for flagged inputs and outputs and 7
+         years for classification scores; 5 years for feedback data and for `/feedback`, `/bug` and `/share`
+         transcripts; up to 6 months for survey transcripts shared under the separate explicit step. Not
+         quantified: retention for legal, dispute and enforcement purposes, anonymized data, and ordinary
+         chats that are not deleted ("as long as reasonably necessary"). The setting can be changed at any
+         time (retention article: "You can change your privacy settings with respect to model training at any
+         time"). This is the owner's state on 2026-10-20; nothing here deletes a screenshot remotely.
+       - *Survey transcript upload, and this runner.* The data-usage page separates the rating from an
+         optional follow-up: "Nothing is uploaded unless you explicitly select Yes." It also says: "Your
+         responses to this survey, including session transcripts submitted after the rating prompt, do not
+         impact your data training preferences and cannot be used to train our AI models." The runner
+         (`tools/agent/ag03/pixel_agent.py`, lines 84-91) runs `claude -p` with one task prompt on stdin,
+         `--no-session-persistence`, `--disable-slash-commands`, `--permission-prompts none` and only the
+         three pixel tools, and gives no further input. From that code no upload is initiated by these runs.
+         This is an inference from the code, not a measurement, and no environment switch or code change is
+         added on that basis.
+       - *Local transcript cache.* The CLI reference (https://code.claude.com/docs/en/cli-reference; read
+         2026-10-20) says of `--no-session-persistence`: "Disable session persistence so sessions are not
+         saved to disk and cannot be resumed. Print mode only." The directory page
+         (https://code.claude.com/docs/en/claude-directory; read 2026-10-20) says that the environment
+         variable skips writing transcripts and prompt history in any mode, and that in non-interactive mode
+         one can "pass --no-session-persistence alongside -p"; it also says that `CLAUDE_CONFIG_DIR` moves
+         every `~/.claude` path under the chosen directory. The runner passes the flag and, on the Claude Code
+         route, sets `CLAUDE_CONFIG_DIR` to the directory given with `--claude-config-dir` (`pixel_runner.py`, line 752 for the flag and lines 449
+         and 464 for the use; `ClaudeCLI` sets `uses_claude_config_dir`, `tools/agent/ag02/agentcli.py`, line 205). The
+         same page lists under `projects/<project>/<session>/tool-results/` "full-size copies of images that
+         MCP tools return", removed by the cleanup sweep after `cleanupPeriodDays` ("The default is 30 days
+         and the minimum is 1"). Neither page says whether the flag keeps those copies out of that folder. The
+         design therefore does not claim that every CLI cache or log is absent. The on-disk result of the
+         pinned CLI with these flags is an open measurement (see Required validation); until it is measured,
+         "not written to disk" describes the pixel server only.
      - *DeepSeek*, API key. Read on 2026-10-19 (public pages, no key, no model call). The **Open Platform
        Terms of Service**
        (https://cdn.deepseek.com/policies/en-US/deepseek-open-platform-terms-of-service.html; released
@@ -238,7 +317,7 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
 
      These readings, with their URLs and the date read, are a **precondition of each provider's gate
      smoke**, and are repeated if a page's date changes before the smoke; the Claude gate smoke also needs
-     OI-1 recorded. Where a page is silent the entry stays *unknown*, inside the scope accepted under O1.
+     OI-1 recorded, which the owner did on 2026-10-20 (above). Where a page is silent the entry stays *unknown*, inside the scope accepted under O1.
 
      The inputs are the test applications' own windows (large Spanish labels, no personal data), which is
      the only reason the exception is acceptable whatever a recipient retains.
@@ -499,6 +578,7 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
 
 ## Required validation
 
+- **On-disk check of the pinned CLI, before the first series (added after the review of PR 103).** With the pinned CLI, the production flags (`--no-session-persistence`, `--strict-mcp-config`, `--tools ""`, the isolated configuration directory), and a synthetic-mode run with no capture and no provider (for example the Step 0 probe, `tools/agent/ag03/probe_image.py`), the isolated directory must be listed afterwards and the result recorded: whether any image bytes or image files appear under `projects/`, including `tool-results/`. If they do, decision 5's statement that the image is not written to disk does not hold for the CLI, and the owner decides the mitigation before any series. This change does not run the check.
 - Step 0's probe verdict, recorded before anything else is built.
 - `tools/agent/ag03/test_guards.py`: every guard of decision 4 as a pure function (a click with the wrong
   foreground, a helper class, an elevated window, a point outside the client rectangle, another window at
@@ -572,11 +652,13 @@ It does not supersede them.
 | O11 | Automatic update of the agent | Disabled for the campaign, through the agent's controlled environment only | Architect default |
 | O12 | Baseline prompt | No tuning | Architect default |
 
-Owner items opened by the review of PR 97 and their answers (2026-10-19):
+Owner items opened by the review of PR 97 and their answers (2026-10-19; OI-1 on 2026-10-20):
 
 - **OI-1** Tell us the Claude account's plan and its model-improvement setting
-  (claude.ai/settings/data-privacy-controls). **Open:** the owner does not know them yet and will check;
-  recorded as unknown, and it must be recorded before the Claude vision gate smoke.
+  (claude.ai/settings/data-privacy-controls). **Answered by the owner on 2026-10-20:** a consumer
+  subscription with "Help improve our AI models" off, as checked that day; nothing else is known about the
+  account. The reading of the policies for that case is in decision 5. This records OI-1, which the Claude vision
+  gate smoke needed; no other decision changes.
 - **OI-2** Read the public DeepSeek Open Platform terms and privacy policy and the Xiaomi MiMo Token Plan
   and API platform terms. **Answered yes and done** on 2026-10-19 (public pages only, no key, no model
   call): what they say, with URL and date, is in decision 5, with *unknown* kept where they are silent (the Xiaomi account was corrected after the third review, R6: the mainland and overseas policies have different scopes and do not contradict each other).
@@ -639,13 +721,8 @@ parada del operador, la edad de la captura (10 s), los modificadores y la eviden
 plano; para `type_text`, que no tiene punto, la ventana con el foco del teclado debe pertenecer a la ventana
 atestiguada. La reserva ya hecha se conserva si rechaza. El resto de guardas del actuador por coordenadas
 son las del diseño original (parada, fase, libro antes de cualquier llamada, primer plano del proceso
-lanzado, sin elevación, punto dentro de la ventana, sin modificadores). **Privacidad (R3):** el
-almacenamiento local (en memoria, nada en disco) se separa de la retención y el entrenamiento del
-proveedor, que esta máquina no controla y nada borra a distancia, y que forman parte del alcance de uso de
-datos que el responsable aceptó en O1. Anthropic (Claude Code con suscripción, planes de consumo): con la
-mejora de modelos activada, retención de 5 años; sin ella, 30 días; el responsable aún no conoce su plan ni
-su ajuste y los comprobará (tarea OI-1, abierta): queda como desconocido y debe registrarse antes de la
-prueba real de la puerta de Claude. DeepSeek (leído el 19 de octubre de 2026): los términos de la
+lanzado, sin elevación, punto dentro de la ventana, sin modificadores). **Privacidad (R3):** el servidor de píxeles mantiene la imagen **sólo en memoria** para responder a la llamada: no la escribe en disco, no la registra ni la somete a hash en ningún resultado. Si la propia CLI guarda copias de la imagen en este equipo con esas marcas (`--no-session-persistence` y el directorio de configuración aislado), es una medición abierta: quedan **pendientes de la comprobación en disco** antes de cualquier serie (decisión 5 y validación requerida); hasta medirla, esta afirmación cubre sólo al servidor de píxeles. La retención y el entrenamiento del proveedor, que esta máquina no controla y nada borra a distancia, son otra cuestión y forman parte del alcance de uso de datos que el responsable aceptó en O1. Anthropic (Claude Code con suscripción, planes de consumo): con la
+mejora de modelos activada, retención de 5 años; sin ella, 30 días; **OI-1, respondida por el responsable el 20 de octubre de 2026**: cuenta de suscripción de consumo con el ajuste de mejora de modelos desactivado («Help Improve our AI models», comprobado ese día); nada más se conoce de la cuenta. Lectura de las páginas públicas del 20 de octubre de 2026, con URL y fecha en la decisión 5: con el ajuste desactivado, Anthropic dice que no usará para entrenamientos futuros las conversaciones y sesiones de código nuevas ni las guardadas, con excepciones: el material marcado para revisión de seguridad y el que el usuario comunica (por ejemplo, con la retroalimentación); el entrenamiento ya en curso y los modelos ya entrenados no se ven afectados. Plazos declarados: 30 días para los datos de Claude Code según la página de uso de datos (el artículo de retención da 30 días sólo para las conversaciones borradas; las páginas no dicen cómo encajan); hasta 2 años para entradas y salidas marcadas y 7 años para las puntuaciones de clasificación de seguridad; 5 años para la retroalimentación y para las transcripciones de `/feedback`, `/bug` y `/share`; hasta 6 meses para transcripciones de encuesta compartidas tras un consentimiento explícito. Sin plazo declarado: la retención por ley, disputas o cumplimiento, y los datos anonimizados. La subida de la encuesta y la caché local se tratan en la decisión 5; queda abierta la medición de si la CLI guarda copias de imágenes en `tool-results/` con esas marcas. El ajuste puede cambiarse en cualquier momento, y este registro describe el estado del 20 de octubre de 2026. DeepSeek (leído el 19 de octubre de 2026): los términos de la
 plataforma abierta (vigentes desde el 29 de abril de 2026) dejan al cliente sus derechos sobre las entradas y
 permiten entrenar otros modelos con ellas, pero callan si DeepSeek entrena con las entradas de la API y no dan plazo de retención ni de borrado para las entradas de la API (la sección 3.3 sólo obliga al desarrollador a atender las solicitudes de los usuarios finales, como la de borrado, y remite a un contacto de DeepSeek) ni lugar de tratamiento; su política de privacidad (10 de febrero de 2026) permite
 entrenar con datos personales, incluidas entradas, con exclusión por correo, y almacena en China sin tratar
@@ -697,8 +774,8 @@ la exclusión de un modelo no son fallos que reintentar. Los intentos brutos y l
 informan por separado; las casillas no intentadas tras una parada de la campaña no son fallos ni entran en
 n, y la serie incompleta sale de los contrastes de puntuación de serie.
 
-**Tareas del responsable (PR 97).** OI-1, abierta: decir el plan de la cuenta de Claude y su ajuste de mejora
-de modelos (el responsable lo comprobará; debe registrarse antes de la prueba real de la puerta de Claude).
+**Tareas del responsable (PR 97).** OI-1, respondida el 20 de octubre de 2026: cuenta de suscripción de consumo con el ajuste de mejora de modelos
+desactivado (lectura en la decisión 5 y en el párrafo R3 de este resumen; la precondición de la prueba de Claude queda cumplida).
 OI-2, respondida sí y hecha el 19 de octubre de 2026: los términos y políticas públicos de DeepSeek y de
 Xiaomi están leídos y registrados arriba. OI-3, respondida: el responsable cambió O7 a n = 6.
 
