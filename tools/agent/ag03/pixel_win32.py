@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+"""AG-03 Win32 bindings behind an interface (ADR-0038 decisions 4 and 5, option O4).
+
+**None of the code in this module that calls Win32 is executed by the repository's tests or by the
+work that wrote it.** Importing the module calls no Win32 function and loads no DLL: the classes
+``RealOs``, ``RealSender`` and ``RealGdi`` load ``user32``/``kernel32``/``gdi32`` lazily, inside
+their methods, and only ``pixel_server`` in real mode (Step 6, the owner present) constructs them.
+Everything a test may exercise is pure:
+
+* ``build_click_inputs`` and ``build_text_inputs`` build the event lists of the two batches (one
+  ``SendInput`` call each; AGENTS.md section 6: the ``SendInput`` actuator is tested through its pure
+  helpers only);
+* ``normalise_absolute`` maps a screen point to the 0..65535 range of ``MOUSEEVENTF_ABSOLUTE``;
+* the ``OsReader``/``Sender``/``Gdi`` shapes the server is written against (``pixel_server`` takes
+  them as arguments; ``fake_os`` implements them for the tests).
+
+Review before any live run (Step 5): the structure layouts below (``INPUT`` is 40 bytes on x64),
+the elevation read, the ``PrintWindow`` flags and the DPI call.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path[:0] = [str(HERE), str(HERE.parent / "ag02")]
+
+from pixel_guards import Evidence, Focus, Window, is_helper_class  # noqa: E402
+from proxy import PRINTABLE_ASCII  # noqa: E402
+
+MAX_TEXT_LEN = 16
+
+# SendInput / INPUT constants (winuser.h).
+INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
+MOUSEEVENTF_MOVE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP = 0x0001, 0x0002, 0x0004
+MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_ABSOLUTE = 0x4000, 0x8000
+KEYEVENTF_KEYUP, KEYEVENTF_UNICODE = 0x0002, 0x0004
+# Virtual keys whose async state means "a modifier is held".
+MODIFIER_VKS = (0x10, 0x11, 0x12, 0x5B, 0x5C)  # shift, control, alt, left and right Windows
+PW_CLIENTONLY, PW_RENDERFULLCONTENT = 0x1, 0x2
+GA_ROOT = 2
+
+
+class InputRefused(ValueError):
+    """The text or the point of a batch is outside what the experiment allows (closed message)."""
+
+
+def normalise_absolute(x: int, y: int, virtual_screen: tuple[int, int, int, int]) -> tuple[int, int]:
+    """Screen point -> the 0..65535 coordinates of an absolute, virtual-desktop mouse event.
+    ``virtual_screen`` is (left, top, width, height) of the virtual desktop."""
+    left, top, width, height = virtual_screen
+    if width < 2 or height < 2:
+        raise InputRefused("virtual screen too small")
+    if not (left <= x < left + width and top <= y < top + height):
+        raise InputRefused("point outside the virtual screen")
+    return (round((x - left) * 65535 / (width - 1)), round((y - top) * 65535 / (height - 1)))
+
+
+def build_click_inputs(x: int, y: int, virtual_screen: tuple[int, int, int, int]) -> list[dict]:
+    """One left click at screen point (x, y) as the events of ONE ``SendInput`` call: move, press,
+    release. No double click, right click, drag or wheel exists in this module."""
+    dx, dy = normalise_absolute(x, y, virtual_screen)
+    move = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+    return [{"kind": "mouse", "dx": dx, "dy": dy, "flags": move},
+            {"kind": "mouse", "dx": 0, "dy": 0, "flags": MOUSEEVENTF_LEFTDOWN},
+            {"kind": "mouse", "dx": 0, "dy": 0, "flags": MOUSEEVENTF_LEFTUP}]
+
+
+def text_problem(text) -> str | None:
+    """Why ``text`` may not be typed: 1 to 16 printable ASCII characters, as the AG-02 proxy limits
+    ``type``. No Enter, Tab, shortcut or special key can be expressed (control characters are not
+    printable ASCII)."""
+    if not isinstance(text, str) or not 1 <= len(text) <= MAX_TEXT_LEN:
+        return "length"
+    if not set(text) <= PRINTABLE_ASCII:
+        return "characters"
+    return None
+
+
+def build_text_inputs(text: str) -> list[dict]:
+    """The key events of ``text`` as ONE ``SendInput`` batch: for every character a Unicode key
+    press and release (2 * len events, at most 32)."""
+    if (problem := text_problem(text)) is not None:
+        raise InputRefused("text " + problem)
+    events: list[dict] = []
+    for char in text:
+        events.append({"kind": "key", "vk": 0, "scan": ord(char), "flags": KEYEVENTF_UNICODE})
+        events.append({"kind": "key", "vk": 0, "scan": ord(char), "flags": KEYEVENTF_UNICODE | KEYEVENTF_KEYUP})
+    return events
+
+
+# ---- the shapes the server is written against (fakes implement them; nothing here runs in tests) ----
+
+class OsReader:
+    """Reads the operating system. Every method is read only."""
+
+    def stop_present(self) -> bool | None:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def target_window(self, pid: int) -> Window | None:  # pragma: no cover - interface
+        """The main window of process ``pid`` (not a helper window), or None."""
+        raise NotImplementedError
+
+    def evidence(self, pid: int, point: tuple[int, int] | None, want_focus: bool) -> Evidence:  # pragma: no cover
+        raise NotImplementedError
+
+    def virtual_screen(self) -> tuple[int, int, int, int]:  # pragma: no cover - interface
+        raise NotImplementedError
+
+    def ensure_dpi_aware(self) -> bool:  # pragma: no cover - interface
+        raise NotImplementedError
+
+
+class Sender:
+    """Sends one batch of events with ONE operating-system call."""
+
+    def send(self, inputs: list[dict]) -> bool:  # pragma: no cover - interface
+        raise NotImplementedError
+
+
+class Gdi:
+    """The ``PrintWindow`` capture: the window renders itself into an app-owned bitmap."""
+
+    def print_window(self, hwnd: int, width: int, height: int) -> bytes | None:  # pragma: no cover - interface
+        """Top-down 32-bit BGRA rows of the client area, ``width * height * 4`` bytes, or None."""
+        raise NotImplementedError
+
+
+# ---- the real implementations: written, reviewed, never executed by this change ----------------------
+
+def _ct():
+    """``ctypes`` and ``ctypes.wintypes``, imported on first use: importing this module loads neither."""
+    import ctypes
+    from ctypes import wintypes
+    return ctypes, wintypes
+
+
+def _structures():
+    """The ctypes structures, built on first use (no Win32 call; importing the module builds none)."""
+    ctypes, wintypes = _ct()
+    class MOUSEINPUT(ctypes.Structure):
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
+                    ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.c_size_t)]
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+    class _Union(ctypes.Union):
+        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT)]
+
+    class INPUT(ctypes.Structure):
+        _fields_ = [("type", wintypes.DWORD), ("u", _Union)]
+
+    class GUITHREADINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("flags", wintypes.DWORD), ("hwndActive", wintypes.HWND),
+                    ("hwndFocus", wintypes.HWND), ("hwndCapture", wintypes.HWND),
+                    ("hwndMenuOwner", wintypes.HWND), ("hwndMoveSize", wintypes.HWND),
+                    ("hwndCaret", wintypes.HWND), ("rcCaret", wintypes.RECT)]
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG), ("biHeight", wintypes.LONG),
+                    ("biPlanes", wintypes.WORD), ("biBitCount", wintypes.WORD),
+                    ("biCompression", wintypes.DWORD), ("biSizeImage", wintypes.DWORD),
+                    ("biXPelsPerMeter", wintypes.LONG), ("biYPelsPerMeter", wintypes.LONG),
+                    ("biClrUsed", wintypes.DWORD), ("biClrImportant", wintypes.DWORD)]
+
+    class TOKEN_ELEVATION(ctypes.Structure):
+        _fields_ = [("TokenIsElevated", wintypes.DWORD)]
+
+    return MOUSEINPUT, KEYBDINPUT, INPUT, GUITHREADINFO, BITMAPINFOHEADER, TOKEN_ELEVATION
+
+
+def _dlls():
+    ctypes, wintypes = _ct()
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    for fn, restype in ((user32.GetForegroundWindow, wintypes.HWND), (user32.WindowFromPoint, wintypes.HWND),
+                        (user32.GetAncestor, wintypes.HWND), (kernel32.OpenProcess, wintypes.HANDLE),
+                        (gdi32.CreateCompatibleDC, wintypes.HDC), (gdi32.SelectObject, wintypes.HGDIOBJ)):
+        fn.restype = restype
+    user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.WindowFromPoint.argtypes = [wintypes.POINT]
+    user32.PrintWindow.argtypes = [wintypes.HWND, wintypes.HDC, wintypes.UINT]
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+    user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user32.MonitorFromWindow.restype = wintypes.HANDLE
+    user32.IsIconic.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+    user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.c_void_p]
+    user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+    # Handles are pointer-sized: without argtypes ctypes would pass them as 32-bit ints.
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                    ctypes.POINTER(wintypes.DWORD)]
+    advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                             ctypes.POINTER(wintypes.DWORD)]
+    gdi32.CreateCompatibleDC.argtypes = [wintypes.HDC]
+    gdi32.CreateDIBSection.argtypes = [wintypes.HDC, ctypes.c_void_p, wintypes.UINT, ctypes.POINTER(ctypes.c_void_p),
+                                       wintypes.HANDLE, wintypes.DWORD]
+    gdi32.CreateDIBSection.restype = wintypes.HANDLE
+    gdi32.SelectObject.argtypes = [wintypes.HDC, wintypes.HGDIOBJ]
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    gdi32.DeleteDC.argtypes = [wintypes.HDC]
+    return user32, kernel32, advapi32, gdi32
+
+
+class RealOs(OsReader):  # pragma: no cover - never executed by the tests
+    def __init__(self, stop_path):
+        self.stop_path = stop_path
+
+    def stop_present(self):
+        try:
+            return os.path.exists(self.stop_path)
+        except OSError:
+            return None
+
+    def ensure_dpi_aware(self):
+        ctypes, wintypes = _ct()
+        user32, *_ = _dlls()
+        user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is (HANDLE)-4. A process-level switch of this
+        # script only; no user setting is touched. 0 with ERROR_ACCESS_DENIED means "already set".
+        ok = bool(user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)))
+        return ok or ctypes.get_last_error() == 5
+
+    def virtual_screen(self):
+        ctypes, wintypes = _ct()
+        user32, *_ = _dlls()
+        return tuple(int(user32.GetSystemMetrics(i)) for i in (76, 77, 78, 79))  # SM_{X,Y}VIRTUALSCREEN, CX, CY
+
+    def _exe(self, kernel32, pid):
+        ctypes, wintypes = _ct()
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            buf = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(buf))
+            return os.path.basename(buf.value).lower() if kernel32.QueryFullProcessImageNameW(
+                handle, 0, buf, ctypes.byref(size)) else None
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def _elevated(self, kernel32, advapi32, pid):
+        ctypes, wintypes = _ct()
+        *_, TOKEN_ELEVATION = _structures()
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None  # an elevated process refuses this: unknown is refused by the guard
+        token = wintypes.HANDLE()
+        try:
+            if not advapi32.OpenProcessToken(handle, 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
+                return None
+            info, size = TOKEN_ELEVATION(), wintypes.DWORD()
+            ok = advapi32.GetTokenInformation(token, 20, ctypes.byref(info), ctypes.sizeof(info),
+                                              ctypes.byref(size))  # TokenElevation
+            kernel32.CloseHandle(token)
+            return bool(info.TokenIsElevated) if ok else None
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def _facts(self, hwnd) -> Window | None:
+        ctypes, wintypes = _ct()
+        user32, kernel32, advapi32, _ = _dlls()
+        if not hwnd:
+            return None
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        cls = ctypes.create_unicode_buffer(257)
+        user32.GetClassNameW(hwnd, cls, 257)
+        rect, origin = wintypes.RECT(), wintypes.POINT(0, 0)
+        if not user32.GetClientRect(hwnd, ctypes.byref(rect)) or not user32.ClientToScreen(hwnd, ctypes.byref(origin)):
+            return None
+        monitor = user32.MonitorFromWindow(hwnd, 0)
+        info = (ctypes.c_byte * 40)()  # MONITORINFO: cbSize, rcMonitor, rcWork, dwFlags
+        ctypes.cast(info, ctypes.POINTER(wintypes.DWORD))[0] = 40
+        primary = bool(monitor) and bool(user32.GetMonitorInfoW(monitor, info)) and bool(
+            ctypes.cast(info, ctypes.POINTER(wintypes.DWORD))[9] & 1)
+        return Window(hwnd=int(hwnd), pid=int(pid.value), exe=self._exe(kernel32, pid.value), cls=cls.value,
+                      client=(origin.x, origin.y, origin.x + rect.right, origin.y + rect.bottom),
+                      primary_monitor=primary, iconic=bool(user32.IsIconic(hwnd)),
+                      elevated=self._elevated(kernel32, advapi32, pid.value))
+
+    def target_window(self, pid):
+        ctypes, wintypes = _ct()
+        user32, *_ = _dlls()
+        found = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def visit(hwnd, _):
+            owner = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value == pid and user32.IsWindowVisible(hwnd):
+                found.append(hwnd)
+            return True
+
+        user32.EnumWindows(visit, 0)
+        windows = [w for w in (self._facts(h) for h in found) if w is not None]
+        main = [w for w in windows if not is_helper_class(w.cls)]
+        return max(main, key=lambda w: (w.client[2] - w.client[0]) * (w.client[3] - w.client[1])) if main else None
+
+    def evidence(self, pid, point, want_focus):
+        ctypes, wintypes = _ct()
+        user32, *_ = _dlls()
+        GUITHREADINFO = _structures()[3]
+        window = self._facts(user32.GetForegroundWindow())
+        root = None
+        if point is not None:
+            hit = user32.WindowFromPoint(wintypes.POINT(int(point[0]), int(point[1])))
+            root = int(user32.GetAncestor(hit, GA_ROOT) or hit) if hit else None
+        focus = None
+        if want_focus and window is not None:
+            info = GUITHREADINFO()
+            info.cbSize = ctypes.sizeof(info)
+            tid = user32.GetWindowThreadProcessId(window.hwnd, None)
+            if user32.GetGUIThreadInfo(tid, ctypes.byref(info)) and info.hwndFocus:
+                owner = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(info.hwndFocus, ctypes.byref(owner))
+                focus = Focus(hwnd=int(info.hwndFocus), top_hwnd=int(user32.GetAncestor(info.hwndFocus, GA_ROOT)
+                                                                     or info.hwndFocus), pid=int(owner.value))
+        held = any(user32.GetAsyncKeyState(vk) & 0x8000 for vk in MODIFIER_VKS)
+        return Evidence(stop_present=self.stop_present(), foreground=window, root_at_point=root,
+                        modifiers_held=held, focus=focus)
+
+
+class RealSender(Sender):  # pragma: no cover - never executed by the tests
+    def send(self, inputs):
+        ctypes, wintypes = _ct()
+        MOUSEINPUT, KEYBDINPUT, INPUT, *_ = _structures()
+        user32, *_ = _dlls()
+        user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+        array = (INPUT * len(inputs))()
+        for slot, event in zip(array, inputs):
+            if event["kind"] == "mouse":
+                slot.type = INPUT_MOUSE
+                slot.u.mi = MOUSEINPUT(event["dx"], event["dy"], 0, event["flags"], 0, 0)
+            else:
+                slot.type = INPUT_KEYBOARD
+                slot.u.ki = KEYBDINPUT(event["vk"], event["scan"], event["flags"], 0, 0)
+        return user32.SendInput(len(inputs), array, ctypes.sizeof(INPUT)) == len(inputs)
+
+
+class RealGdi(Gdi):  # pragma: no cover - never executed by the tests
+    def print_window(self, hwnd, width, height):
+        ctypes, wintypes = _ct()
+        *_, BITMAPINFOHEADER, _elev = _structures()
+        user32, _k, _a, gdi32 = _dlls()
+        header = BITMAPINFOHEADER(ctypes.sizeof(BITMAPINFOHEADER), width, -height, 1, 32, 0, 0, 0, 0, 0, 0)
+        bits = ctypes.c_void_p()
+        memory = gdi32.CreateCompatibleDC(None)  # a memory DC: no screen pixel is read through it
+        if not memory:
+            return None
+        bitmap = gdi32.CreateDIBSection(memory, ctypes.byref(header), 0, ctypes.byref(bits), None, 0)
+        if not bitmap or not bits:
+            gdi32.DeleteDC(memory)
+            return None
+        old = gdi32.SelectObject(memory, bitmap)
+        try:
+            if not user32.PrintWindow(hwnd, memory, PW_CLIENTONLY | PW_RENDERFULLCONTENT):
+                return None
+            return ctypes.string_at(bits, width * height * 4)
+        finally:
+            gdi32.SelectObject(memory, old)
+            gdi32.DeleteObject(bitmap)
+            gdi32.DeleteDC(memory)
+
+
