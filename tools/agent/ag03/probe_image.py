@@ -121,7 +121,7 @@ def run_session(args, width: int, height: int, config_dir: Path) -> dict:
         argv = pa.build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
                                     system_instruction=pa.SYSTEM_INSTRUCTION, max_budget_usd=0.5)
         env = rg.scrubbed_env({"CLAUDE_CONFIG_DIR": str(config_dir), "ANTHROPIC_BASE_URL": api.url,
-                               "ANTHROPIC_API_KEY": DUMMY_KEY})
+                               "ANTHROPIC_API_KEY": DUMMY_KEY, **pa.PIXEL_ENV})
         scratch = tmp / "scratch"
         scratch.mkdir()
         metrics = pa.PixelStream([], None, None)

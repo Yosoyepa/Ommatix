@@ -147,18 +147,19 @@ def route_env(route: str, base_url: str, token: str, model: str, config_dir) -> 
     return env
 
 
-def route_env_problems(env: dict, route: str, allowed_base_urls) -> list[str]:
+def route_env_problems(env: dict, route: str, allowed_base_urls, extra_allowed=()) -> list[str]:
     """Closed tokens for a route child environment that is not exactly the harness-controlled route:
     the routing variables present must be ``ANTHROPIC_BASE_URL`` alone, naming one of the allowed
     endpoints (or the preflight's loopback stand-in), and no ``ANTHROPIC_*`` / ``CLAUDE_*`` name may
-    exist beyond ``ROUTE_VARS`` and ``QUIET_ENV``."""
+    exist beyond ``ROUTE_VARS`` and ``QUIET_ENV`` (and the ``extra_allowed`` names of an agent that adds its own switches:
+    AG-03's ``PIXEL_ENV``)."""
     problems = []
     if rg.routing_problems(env) != ["ANTHROPIC_BASE_URL"]:
         problems.append("routing_variables_differ")
     url = env.get("ANTHROPIC_BASE_URL", "")
     if url not in allowed_base_urls and not url.startswith("http://127.0.0.1:"):
         problems.append("route_base_url_not_allowed")
-    allowed = set(ROUTE_VARS) | set(rg.QUIET_ENV)
+    allowed = set(ROUTE_VARS) | set(rg.QUIET_ENV) | set(extra_allowed)
     if any(k.upper().startswith(("ANTHROPIC_", "CLAUDE_")) and k not in allowed
            and k.upper() not in {b.upper() for b in rg.BASIC_ENV} for k in env):
         problems.append("route_extra_variable")
@@ -172,6 +173,8 @@ class AgentCLI:
     uses_claude_config_dir = False
     # Whether the goal runner's Anthropic routing-variable refusal applies to this agent.
     checks_anthropic_routing = False
+    # Environment switches of this agent beyond ``rg.QUIET_ENV`` (AG-03's feedback-survey switch); empty for AG-02.
+    agent_vars: dict = {}
 
     def __init__(self, args=None):
         self.args = args
@@ -253,8 +256,8 @@ class ClaudeCLI(AgentCLI):
         if not self.route:
             return rg.agent_env(extra)
         env = route_env(self.route, self.route_url(), self.read_key(), self.args.model,
-                        (extra or {}).get("CLAUDE_CONFIG_DIR") or self.args.claude_config_dir)
-        if (problems := route_env_problems(env, self.route, self.spec()["base_urls"])):
+                        (extra or {}).get("CLAUDE_CONFIG_DIR") or self.args.claude_config_dir) | self.agent_vars
+        if (problems := route_env_problems(env, self.route, self.spec()["base_urls"], self.agent_vars)):
             raise SystemExit("the route environment is not the harness-controlled one: " + ",".join(problems))
         return env
 

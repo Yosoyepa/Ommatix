@@ -160,6 +160,26 @@ applications to Anthropic, DeepSeek and Xiaomi (only after a model passes its ga
 decision O1; **nothing here deletes a screenshot remotely**. Outputs belong outside the checkout
 (`%LOCALAPPDATA%\Ommatix\runs\ag03`).
 
+### What a session leaves on disk (measured 2026-10-20, Claude Code 2.1.304)
+
+* **With `--no-session-persistence`** (the production command; a test, the preflight and a check before every launch hold it)
+  the isolated configuration directory gets only `.claude.json` and a backup: no `projects/`, no `tool-results/`, no
+  transcript, no image data. **Without it** the CLI writes every MCP image result in clear under
+  `<config>/projects/<cwd>/<session>/tool-results/*.png` and every transcript with the image in base64.
+* The CLI also keeps a **debug log of each MCP server outside the configuration directory**:
+  `%LOCALAPPDATA%\claude-cli-nodejs\Cache\<cwd>\mcp-logs-pixel\<date>.jsonl` (macOS and Linux locations follow the CLI's
+  convention and are not measured). On synthetic sessions it is ~4.6 KB and holds no image data. **The harness does not delete
+  it**, the preflight scans what a session adds to it for image data and refuses the proof otherwise, and **what it would hold
+  on a real screen is not measured**.
+* The preflight (`ag03-isolation-proof-1`, verifier revision 2) therefore snapshots the configuration directory and the CLI's
+  cache around each synthetic session and refuses when a session wrote anything under `projects/`, a `tool-results` file, a
+  `.jsonl` transcript or PNG / base64-PNG data, and records the facts in the proof (`disk`, `agent_env`). The pixel agent's
+  environment sets `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` (AG-03 only).
+* **Claude Code auto-updated to 2.1.305 on 2026-10-20.** Every proof must be regenerated with the version used before a live
+  series (O11). With 2.1.305 the preflight currently fails (`pixel_tools_not_the_three`): the CLI adds a
+  `DeferredToolPlaceholder` entry to every request's tool list. This is not changed here (the "exactly three tools" verdict is the
+  owner's rule): it needs a decision, or the CLI pinned to the version the proofs were made with.
+
 ## Implementation readings, as decided by the architect
 
 1. Safety events, operator stops and ordinary refusals: the table above (terminal, classified by guard and stage).

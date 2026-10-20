@@ -14,9 +14,18 @@ is not JSON. The modes that break exactly one image rule: ``image_elsewhere`` (a
 ``image_in_click`` (the image is the result of ``click``), ``image_oversized``, ``image_wide``,
 ``image_jpeg``, ``image_text`` (the PNG base64 as text), ``no_image`` (no screenshot result at all).
 With ``ANTHROPIC_AUTH_TOKEN`` in its environment (a route) it also sends both credential headers and the
-effort; the ``route_*`` modes of ``ag02/fake_claude.py`` that apply (``route_other_model``,
+effort. The on-disk modes write what the real CLI writes WITHOUT ``--no-session-persistence`` (or in its cache):
+``persist_tool_results`` (an image under ``projects/<cwd>/<session>/tool-results/``), ``persist_transcript`` (a project
+transcript carrying the image in base64), ``persist_clean_transcript`` (a transcript without one), ``cache_log_image`` and
+``cache_log_clean`` (a debug log of the MCP server under ``FAKE_CLAUDE_CACHE_ROOT``, with and without image data). The
+``route_*`` modes of ``ag02/fake_claude.py`` that apply (``route_other_model``,
 ``route_key_in_body``, ``route_bad_effort``, ``route_x_api_key``, ``route_proxy_authorization``,
-``route_cookie``) break one of those. Records argv and environment names like the AG-02 stand-in.
+``route_cookie``) break one of those. The on-disk modes write what the real CLI writes WITHOUT
+``--no-session-persistence`` or in its cache: ``persist_tool_results`` (an image under
+``projects/<cwd>/<session>/tool-results/``), ``persist_transcript`` (a project transcript carrying the image in base64),
+``persist_clean_transcript`` (a transcript without one), ``cache_log_image`` and ``cache_log_clean`` (a debug log of the MCP
+server under ``FAKE_CLAUDE_CACHE_ROOT``, with and without image data). Records argv and environment names like the AG-02
+stand-in.
 """
 
 import base64
@@ -44,6 +53,26 @@ def b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
+def write_disk_state(mode: str, home: Path) -> None:
+    """What the real CLI leaves on disk when it persists the session (see the module docstring)."""
+    png = cap.synthetic_png(0, 64, 48)[0]
+    project = home / "projects" / "scratch-cwd"
+    if mode == "persist_tool_results":
+        (project / "0ecf8087" / "tool-results").mkdir(parents=True, exist_ok=True)
+        (project / "0ecf8087" / "tool-results" / "mcp-pixel-blob-1.png").write_bytes(png)
+    elif mode in ("persist_transcript", "persist_clean_transcript"):
+        project.mkdir(parents=True, exist_ok=True)
+        content = b64(png) if mode == "persist_transcript" else "hello"
+        (project / "0ecf8087.jsonl").write_text(json.dumps({"message": content}) + "\n", encoding="utf-8")
+    elif mode in ("cache_log_image", "cache_log_clean") and os.environ.get("FAKE_CLAUDE_CACHE_ROOT"):
+        log = Path(os.environ["FAKE_CLAUDE_CACHE_ROOT"]) / "C--scratch-cwd" / "mcp-logs-pixel"
+        log.mkdir(parents=True, exist_ok=True)
+        debug = "connected" if mode == "cache_log_clean" else b64(png)
+        (log / "2026-10-20T00-00-00-000Z.jsonl").write_text(
+            json.dumps({"debug": debug, "cwd": str(Path.cwd()), "sessionId": "s", "timestamp": "t"}) + "\n",
+            encoding="utf-8")
+
+
 def main() -> int:
     argv = sys.argv[1:]
     mode = os.environ.get("FAKE_CLAUDE_MODE", "normal")
@@ -53,13 +82,15 @@ def main() -> int:
     if (env_file := os.environ.get("FAKE_CLAUDE_ENV_FILE")):
         with open(env_file, "w", encoding="utf-8") as handle:
             json.dump({"names": sorted(os.environ), "base_url": os.environ.get("ANTHROPIC_BASE_URL"),
-                       "api_key": os.environ.get("ANTHROPIC_API_KEY")}, handle)
+                       "api_key": os.environ.get("ANTHROPIC_API_KEY"),
+                       "feedback_survey": os.environ.get("CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY")}, handle)
     prompt = sys.stdin.read()
     sources = flag(argv, "--setting-sources")
     home = Path(os.environ.get("CLAUDE_CONFIG_DIR", ""))
     leak_dir = os.environ.get("FAKE_CLAUDE_LEAK_DIR")
     loads = mode != "blind" and (mode == "leak" or sources not in ("", None)
                                  or (mode == "leak_dir" and leak_dir and str(home) == leak_dir))
+    write_disk_state(mode, home)
     context = ""
     if loads:
         files = [home / "CLAUDE.md", *sorted((home / "rules").glob("*.md")),

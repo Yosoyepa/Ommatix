@@ -162,6 +162,23 @@ controlled environment only (no system setting changes); **O12** no prompt tunin
      owner by hand before a session (as in ADR-0036). This reduces what could appear; it is not the
      guarantee, which is the capture backend above;
    - **local storage** (the owner's O5): the pixel server holds the image **in memory only** to answer the call; it writes nothing to disk, logs nothing and hashes nothing into any result. Results hold the number of screenshots, their pixel dimensions and byte sizes, the latency and booleans, and the session is started with `--no-session-persistence`, the CLI's documented control for session transcripts. Whether the CLI also keeps image copies on this machine under these flags is an open measurement (see the Anthropic reading and Required validation); until it is measured, this bullet's claim covers the pixel server only;
+   - *Amendment, 2026-10-20 (the on-disk measurement, `docs/reviews/2026-10-20-ag03-disk-evidence.md`).* "In memory
+     only" holds for the pixel server and, in the agent, **only while the production command keeps
+     `--no-session-persistence`**: measured with Claude Code 2.1.304 (real CLI, loopback stand-in, synthetic server, no
+     provider), the command without that option writes every MCP image result in clear under
+     `<config>/projects/<cwd>/<session>/tool-results/*.png` and every transcript with the image in base64 (the
+     documentation lists a 30-day clean-up and says nothing on the option); with it, the isolated configuration directory
+     holds no `projects/` tree, no transcript and no image data. The option is now a checked invariant (a test, the
+     preflight and a check before every launch), the isolation preflight refuses a proof when its synthetic sessions leave
+     any of that on disk, and the agent's environment sets `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` (AG-03 only; AG-02's
+     environment and proofs are unchanged). **The CLI also keeps a debug log of each MCP server outside the configuration
+     directory**, `<cache>/claude-cli-nodejs/Cache/<cwd>/mcp-logs-pixel/<date>.jsonl` (on Windows under
+     `%LOCALAPPDATA%`; ~4.6 KB and no image data on synthetic sessions): it is **not deleted by the harness**, the
+     preflight scans what a session adds to it for image data, and **what it would hold on a real screen is not measured**.
+     Claude Code auto-updated to 2.1.305 on 2026-10-20, so every proof must be regenerated with the version used before a
+     live series (O11); 2.1.305 adds a `DeferredToolPlaceholder` entry to every request's tool list, which the
+     "exactly three tools" verdict refuses (`pixel_tools_not_the_three`), so no proof can be issued with it until the owner or
+     architect decides how the verdict treats that entry or the version is pinned.
    - **provider retention and training** are a separate matter. This machine does not control them, they
      are part of the data-use scope the owner accepted under O1, and **nothing here deletes a screenshot
      remotely**: once sent, it is held under each recipient's own policy. What the published policies say
@@ -788,3 +805,5 @@ antes de crearla y todas las firmas nativas se declaran. Hace falta una nueva re
 corregido; la carrera residual entre la última consulta y el envío y las condiciones nativas se validan en el paso 6.
 
 Segunda revisión del paso 5 (PR 104, sobre `23c43cc`): las teclas sólo cuentan con evidencia positiva de acceso (escritorio de entrada abierto con los derechos de lectura, ganchos y diario, e integridad media o superior), y una excepción de `Popen` sólo prueba la ausencia del hijo si el programa o el directorio no existen; cualquier otro error conserva la cerradura.
+
+**Medición en disco (20 de octubre de 2026).** «Sólo en memoria» vale para el servidor de píxeles y, en el agente, sólo mientras la orden de producción conserve `--no-session-persistence`: medido con Claude Code 2.1.304 (CLI real, sustituto local, servidor sintético, sin proveedor), sin esa opción la CLI escribe en claro cada imagen de resultado MCP en `<config>/projects/<cwd>/<sesión>/tool-results/*.png` y cada transcripción con la imagen en base64; con ella, el directorio de configuración aislado no contiene `projects/`, transcripciones ni datos de imagen. La opción pasa a ser un invariante comprobado (una prueba, el preflight y una comprobación antes de cada lanzamiento), el preflight rechaza la prueba si sus sesiones sintéticas dejan algo de eso, y el entorno del agente fija `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` (sólo AG-03). La CLI guarda además un registro de depuración de cada servidor MCP **fuera** del directorio de configuración (`<caché>/claude-cli-nodejs/Cache/<cwd>/mcp-logs-pixel/`): el arnés no lo borra, el preflight busca imágenes en lo que una sesión le añade, y lo que contendría con una pantalla real **no está medido**. Claude Code se actualizó solo a la 2.1.305 el 20 de octubre de 2026, así que toda prueba debe regenerarse con la versión que se use antes de una serie en vivo (O11); la 2.1.305 añade `DeferredToolPlaceholder` a la lista de herramientas de cada petición y el veredicto de «exactamente tres herramientas» la rechaza.

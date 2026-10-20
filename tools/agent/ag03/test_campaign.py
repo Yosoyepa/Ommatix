@@ -77,7 +77,8 @@ class Series:
             "pixel": {"server_sha256": pf.file_sha256(pf.SERVER_PATH), "instruction_sha256": pa.instruction_sha256(),
                       "control_detected": ["extra_tool"], "control_blind": [],
                       "images_only_in_screenshot_result": True, "screenshot_result_images": 1},
-            "real_capture_in_this_proof": False}
+            "real_capture_in_this_proof": False,
+            "disk": {"no_session_persistence_flag": True, "image_data_found": False}, "agent_env": dict(pa.PIXEL_ENV)}
         if route:
             proof |= {"route": {"provider": route, "base_url": route_url, "model": model_id, "effort": "max",
                                 "auth": "bearer"}, "route_verifier_revision": pf.ROUTE_VERIFIER_REVISION}
