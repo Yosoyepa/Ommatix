@@ -30,7 +30,10 @@
 //! a row of eight bare text-less synthetic glyphs painted by code from `tools/s4/icon_spec.rs`, near
 //! the bottom of the window, so that the detector has icon candidates for the icon cache.
 //! They are drawn on a layer of the window and nothing else: they take no input and expose
-//! nothing to UI Automation, and without the flag the window is exactly the same.
+//! nothing to UI Automation, and without the flag the window is exactly the same. With the flag
+//! the ink of the glyphs advances by a grey level every 100 ms through a cycle of 37 levels, so
+//! that between two observations the strip's region has always changed and the planner must
+//! re-analyse it (the engine's incrementality is untouched; only the strip changes).
 
 #![windows_subsystem = "windows"]
 
@@ -259,6 +262,19 @@ fn icon_strip_requested(args: impl IntoIterator<Item = String>) -> bool {
 /// Points above the window's bottom edge where the strip ends.
 const STRIP_BOTTOM_MARGIN: f32 = 64.0;
 
+/// How often the strip's ink advances, in milliseconds, and how many levels it cycles through:
+/// one grey level per tick over a prime number of ticks, so that the observations of a soak
+/// (every 5 s give or take a second) never see the same level twice in a row and the strip's
+/// region is always among the changed ones.
+const STRIP_TICK_MS: u128 = 100;
+const STRIP_CYCLE: u128 = 37;
+
+/// The ink of every glyph at `tick`: the nominal ink plus the tick's place in the cycle, so
+/// between 40 and 76, inside the style range the calibration draws (20 to 90).
+fn strip_ink(tick: u128) -> u8 {
+    icon_spec::INK_GREY + u8::try_from(tick % STRIP_CYCLE).unwrap_or(0)
+}
+
 /// A design coordinate (the spec is in `f64`) as a point; the values are a few hundred, so the
 /// narrowing is exact.
 #[allow(clippy::cast_possible_truncation)]
@@ -280,9 +296,13 @@ fn strip_rect(screen: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_size(egui::pos2(x, y), size)
 }
 
-fn paint_shape(painter: &egui::Painter, origin: egui::Pos2, shape: &icon_spec::Shape) {
+fn paint_shape(
+    painter: &egui::Painter,
+    origin: egui::Pos2,
+    shape: &icon_spec::Shape,
+    ink: egui::Color32,
+) {
     let at = |p: (f64, f64)| egui::pos2(origin.x + pt(p.0), origin.y + pt(p.1));
-    let ink = grey(icon_spec::INK_GREY);
     match *shape {
         icon_spec::Shape::Segment { a, b, width } => {
             painter.line_segment([at(a), at(b)], egui::Stroke::new(pt(width), ink));
@@ -316,9 +336,10 @@ fn paint_shape(painter: &egui::Painter, origin: egui::Pos2, shape: &icon_spec::S
     }
 }
 
-/// Paints the eight glyphs on a foreground layer of the window, with no tile or border,
-/// exactly as the calibration tool rasterises them.
-fn paint_icon_strip(ctx: &egui::Context) {
+/// Paints the eight glyphs on a foreground layer of the window, with no tile or border, as the
+/// calibration tool rasterises them but with the ink of `tick`, and asks for the next tick.
+fn paint_icon_strip(ctx: &egui::Context, tick: u128) {
+    let ink = grey(strip_ink(tick));
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("icon-strip"),
@@ -334,9 +355,10 @@ fn paint_icon_strip(ctx: &egui::Context) {
             egui::vec2(pt(icon_spec::CELL), pt(icon_spec::CELL)),
         );
         for shape in icon_spec::glyph(usize::from(class)) {
-            paint_shape(&painter, cell.min, shape);
+            paint_shape(&painter, cell.min, shape, ink);
         }
     }
+    ctx.request_repaint_after(Duration::from_millis(100));
 }
 // icon strip: end
 
@@ -446,7 +468,8 @@ impl eframe::App for TestApp {
             self.animated_labels(ui.ctx(), animation);
         }
         if self.icon_strip {
-            paint_icon_strip(ui.ctx());
+            let tick = self.started.elapsed().as_millis() / STRIP_TICK_MS;
+            paint_icon_strip(ui.ctx(), tick);
         }
     }
 }
@@ -580,6 +603,38 @@ mod tests {
 
     /// The strip is painted on a layer and nothing else: no widget, no input, no accessibility
     /// node. The forbidden names are built from pieces so that this test does not contain them.
+    /// R105-2: the strip changes between two consecutive observations of a soak, so that the
+    /// planner always has to re-analyse its region and the resolver re-describes every glyph;
+    /// a static strip would be crossed once and then kept as it was. The ink advances by one
+    /// grey level every tick through a cycle of 37 ticks (a prime), and the soak observes every
+    /// 5 seconds give or take a second, so no spacing between 4.0 and 6.5 s lands on the same
+    /// level.
+    #[test]
+    fn the_icon_strip_changes_between_consecutive_observations() {
+        for tick in 0..STRIP_CYCLE {
+            assert!(strip_ink(tick) >= icon_spec::INK_GREY);
+            assert!(
+                strip_ink(tick) <= 90,
+                "inside the calibrated style range (20 to 90)"
+            );
+        }
+        for spacing_ms in (4000..=6500).step_by(100) {
+            for start in 0..STRIP_CYCLE {
+                assert_ne!(
+                    strip_ink(start),
+                    strip_ink(start + spacing_ms / STRIP_TICK_MS),
+                    "start tick {start}, spacing {spacing_ms} ms"
+                );
+            }
+        }
+        // The ink never reaches the 255 levels of contrast that the measurement configuration
+        // would need for a valid gradient against the window.
+        assert!(
+            u16::from(icon_spec::WINDOW_GREY) - u16::from(strip_ink(0)) < 255,
+            "a glyph stays far from pure black on pure white"
+        );
+    }
+
     #[test]
     fn the_icon_strip_takes_no_input_and_exposes_nothing() {
         let source = include_str!("main.rs");

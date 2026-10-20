@@ -596,27 +596,60 @@ def element(label="", source="unknown", role="unknown"):
 
 
 class IconEngine(FakeEngine):
-    """An engine whose probe pages (limit 200) hold a strip of icons and some text."""
+    """An engine whose probe pages (limit 200) hold a strip of icons and some text.
 
-    def __init__(self, curated=0, candidates=8, note=NOTE, **kwargs):
+    ``pages`` splits the snapshot's elements over that many pages joined by cursors of the same
+    snapshot; ``endless`` makes every page promise another one; ``fail_probes_after`` makes every
+    probe after that many successful ones an MCP error; ``work`` is the plan kind of the engine's
+    own ``_meta`` record of each observation."""
+
+    def __init__(self, curated=0, candidates=8, note=NOTE, pages=1, endless=False,
+                 fail_probes_after=None, work="full_refresh", curated_on_last_page=False,
+                 **kwargs):
         super().__init__(**kwargs)
         self.curated, self.candidates, self.note = curated, candidates, note
-        self.limits = []
+        self.pages, self.endless, self.work = pages, endless, work
+        self.fail_probes_after = fail_probes_after
+        self.curated_on_last_page = curated_on_last_page
+        self.limits, self.cursors, self.probe_calls = [], [], 0
 
     def stderr_lines(self):
         return ["ommatix: note: [models] detector: threads", self.note] if self.note else []
+
+    def snapshot_elements(self):
+        elements = [element(f"cache-icon-0{i + 1}", "curated_icon") for i in range(self.curated)]
+        elements += [element() for _ in range(self.candidates)]
+        elements += [element("Sumar", "ocr", "button"), element("Tic 0001", "ocr", "text_node"),
+                     element("", "unknown", "text_node")]
+        if self.curated_on_last_page:
+            elements.sort(key=lambda e: e["label_source"] == "curated_icon")
+        return elements
 
     def call(self, name, arguments, timeout=0):
         if name == "observe_screen" and arguments.get("limit") == soak.PROBE_LIMIT:
             self.calls.append(name)
             self.limits.append(arguments["limit"])
-            elements = [element(f"cache-icon-0{i + 1}", "curated_icon")
-                        for i in range(self.curated)]
-            elements += [element() for _ in range(self.candidates)]
-            elements += [element("Sumar", "ocr", "button"), element("Tic 0001", "ocr", "text_node"),
-                         element("", "unknown", "text_node")]
-            return ({"elements": elements, "geometry_epoch": 1}, False, {}, 40.0)
-        return super().call(name, arguments, timeout)
+            self.cursors.append(arguments.get("cursor"))
+            first = arguments.get("cursor") is None
+            if first:
+                self.probe_calls += 1
+                self.index = 0
+            if (self.fail_probes_after is not None and self.probe_calls > self.fail_probes_after):
+                return ({"error": {"code": "CAPTURE_FAILED"}}, True, {}, 1.0)
+            elements = self.snapshot_elements()
+            size = -(-len(elements) // self.pages)
+            page = elements[self.index * size:(self.index + 1) * size]
+            self.index += 1
+            more = self.endless or self.index < self.pages
+            doc = {"elements": page, "total_elements": len(elements), "geometry_epoch": 1,
+                   "truncated": more}
+            if more:
+                doc["next_cursor"] = f"c{self.index}"
+            return (doc, False, {common.PLAN_KEY: {"work": self.work}}, 40.0)
+        page, is_error, meta, rtt = super().call(name, arguments, timeout)
+        if name == "observe_screen" and not is_error:
+            meta = {**meta, common.PLAN_KEY: {"work": self.work, "region_count": 2}}
+        return page, is_error, meta, rtt
 
 
 class IconStrip(Case):
@@ -688,6 +721,122 @@ class IconStrip(Case):
         self.assertEqual(report["icon_probe"]["probes"], 1)
 
 
+class CriterionEvidence(Case):
+    """R105-1: C5 must not approve incomplete, partial or ineligible evidence."""
+
+    def setUp(self):
+        super().setUp()
+        self.config.write_text(CACHE_TOML, encoding="utf-8")
+
+    def run_c5(self, engine, **extra):
+        report, code = self.run_soak(FakeHost(engine=engine), icon_probe_every=12,
+                                     expect_cache=True, **extra)
+        return report, report["criteria"]["icon_cache_exercised"]
+
+    def test_roles_the_resolver_excludes_are_not_candidates(self):
+        # Production icons::is_candidate leaves out text nodes and every role that takes an
+        # external label or holds a value: fields are not evidence that icon resolution ran.
+        page = {"elements": [element(role=r) for r in ("input", "dropdown", "checkbox",
+                                                       "text_node")]}
+        self.assertEqual(soak.probe_counts(page)["candidates"], 0)
+        page = {"elements": [element(role="unknown"), element(role="button"),
+                             element("", "accessibility", "icon_button"),
+                             element("Sumar", "ocr", "button")]}
+        self.assertEqual(soak.probe_counts(page)["candidates"], 3)
+
+    def test_one_probe_that_worked_and_119_that_failed_do_not_pass(self):
+        report, criterion = self.run_c5(IconEngine(fail_probes_after=1), minutes=120.0)
+        self.assertEqual(report["counts"]["probes_scheduled"], 120)
+        self.assertEqual(report["icon_probe"]["complete"], 1)
+        self.assertFalse(criterion["met"])
+        self.assertAlmostEqual(criterion["share_complete"], 1 / 120, places=4)
+        self.assertEqual(report["counts"]["probes_skipped"], 119)
+
+    def test_a_probe_that_stays_truncated_is_incomplete_evidence(self):
+        engine = IconEngine(endless=True)
+        report, criterion = self.run_c5(engine, minutes=120.0)
+        self.assertEqual(report["icon_probe"]["incomplete"], 120)
+        self.assertEqual(report["icon_probe"]["complete"], 0)
+        self.assertFalse(criterion["met"])
+        # It followed the cursor, but only up to its bound.
+        self.assertEqual(engine.cursors[:soak.PROBE_PAGES_MAX],
+                         [None] + [f"c{i}" for i in range(1, soak.PROBE_PAGES_MAX)])
+
+    def test_a_probe_follows_the_cursor_of_the_same_snapshot_and_counts_every_page(self):
+        engine = IconEngine(pages=3, curated=0)
+        report, criterion = self.run_c5(engine, minutes=120.0)
+        self.assertEqual(report["icon_probe"]["complete"], 120)
+        self.assertEqual(report["icon_probe"]["elements_max"], 8 + 3)
+        self.assertEqual(report["icon_probe"]["candidates_max"], 8)
+        self.assertTrue(criterion["met"])
+
+    def test_a_curated_label_on_a_later_page_fails_it(self):
+        engine = IconEngine(pages=3, curated=1, curated_on_last_page=True)
+        report, criterion = self.run_c5(engine, minutes=120.0)
+        self.assertEqual(report["icon_probe"]["curated_icon"]["max"], 1)
+        self.assertEqual(criterion["accepted_labels_max"], 1)
+        self.assertFalse(criterion["met"])
+
+    def test_a_label_on_an_incomplete_probe_still_fails_it(self):
+        engine = IconEngine(endless=True, curated=1)
+        _, criterion = self.run_c5(engine, minutes=120.0)
+        self.assertEqual(criterion["accepted_labels_max"], 1)
+        self.assertFalse(criterion["met"])
+
+    def test_a_clean_complete_run_is_the_control_that_passes(self):
+        report, criterion = self.run_c5(IconEngine(), minutes=120.0)
+        self.assertTrue(criterion["met"])
+        self.assertEqual((criterion["scheduled"], criterion["complete"]), (120, 120))
+        self.assertEqual((criterion["share_complete"], criterion["share_with_candidate"]),
+                         (1.0, 1.0))
+        self.assertEqual(report["counts"]["probes_skipped"], 0)
+
+    def test_a_probe_while_the_application_is_not_in_front_counts_against_coverage(self):
+        host = FakeHost(front=lambda t: APP if t < 600 else 999, engine=IconEngine())
+        report, _ = self.run_soak(host, icon_probe_every=12, expect_cache=True, minutes=20.0,
+                                  max_foreground_losses=10_000)
+        probe = report["icon_probe"]
+        self.assertGreater(report["counts"]["probes_scheduled"], probe["complete"])
+        self.assertEqual(report["counts"]["probes_scheduled"],
+                         probe["complete"] + report["counts"]["probes_skipped"]
+                         + probe["incomplete"])
+        self.assertFalse(report["criteria"]["icon_cache_exercised"]["met"])
+
+
+class CriterionWorkload(Case):
+    """R105-2: the descriptors are re-made in every observation, shown by the plan record."""
+
+    def setUp(self):
+        super().setUp()
+        self.config.write_text(CACHE_TOML, encoding="utf-8")
+
+    def test_the_plan_kind_of_every_observation_is_counted(self):
+        report, _ = self.run_soak(FakeHost(engine=IconEngine(work="full_refresh")),
+                                  icon_probe_every=12, expect_cache=True)
+        self.assertEqual(report["plan_work"], {"full_refresh": 24})
+        self.assertNotIn("region_count", json.dumps(report["plan_work"]))
+
+    def test_regional_observations_do_not_meet_it(self):
+        report, _ = self.run_soak(FakeHost(engine=IconEngine(work="regions")),
+                                  icon_probe_every=12, expect_cache=True)
+        criterion = report["criteria"]["icon_cache_exercised"]
+        self.assertEqual(criterion["share_full_refresh"], 0.0)
+        self.assertFalse(criterion["met"])
+        self.assertEqual(report["plan_work"], {"regions": 24})
+
+    def test_an_engine_that_reports_no_plan_does_not_meet_it(self):
+        class NoPlan(IconEngine):
+            def call(self, name, arguments, timeout=0):
+                page, error, meta, rtt = super().call(name, arguments, timeout)
+                meta = {k: v for k, v in meta.items() if k != common.PLAN_KEY}
+                return page, error, meta, rtt
+
+        report, _ = self.run_soak(FakeHost(engine=NoPlan()), icon_probe_every=12,
+                                  expect_cache=True)
+        self.assertFalse(report["criteria"]["icon_cache_exercised"]["met"])
+        self.assertEqual(report["plan_work"], {"not_reported": 24})
+
+
 class CacheCriterion(Case):
     def setUp(self):
         super().setUp()
@@ -731,15 +880,17 @@ class CacheCriterion(Case):
             self.run_expecting(IconEngine(note=None))["criteria"]["icon_cache_exercised"]["met"])
 
     def test_the_share_of_probes_with_candidates_has_a_floor(self):
-        none = {"curated_icon": {"min": 0, "max": 0, "median": 0}, "vocabulary_labelled_max": 0}
-        self.assertTrue(soak.cache_criterion(
-            {"prototypes": 32, "for_context": 32},
-            {"probes": 20, "share_with_candidate": 0.95, **none})["met"])
-        self.assertFalse(soak.cache_criterion(
-            {"prototypes": 32, "for_context": 32},
-            {"probes": 20, "share_with_candidate": 0.9, **none})["met"])
-        self.assertFalse(soak.cache_criterion(
-            {"prototypes": 32, "for_context": 32}, {"probes": 0})["met"])
+        note = {"prototypes": 32, "for_context": 32}
+        summary = {"scheduled": 20, "probes": 20, "complete": 20, "incomplete": 0,
+                   "with_candidate": 19, "curated_icon": {"min": 0, "max": 0, "median": 0},
+                   "vocabulary_labelled_max": 0}
+        plan = {"full_refresh": 20}
+        self.assertTrue(soak.cache_criterion(note, summary, plan)["met"])
+        self.assertFalse(soak.cache_criterion(note, {**summary, "with_candidate": 18}, plan)["met"])
+        self.assertFalse(soak.cache_criterion(note, {**summary, "complete": 18}, plan)["met"])
+        self.assertFalse(soak.cache_criterion(note, {"scheduled": 0}, plan)["met"])
+        self.assertFalse(soak.cache_criterion(note, summary, {"full_refresh": 18, "regions": 2})["met"])
+        self.assertFalse(soak.cache_criterion(note, summary, {})["met"])
 
     def test_it_refuses_to_judge_the_cache_without_a_probe_or_without_a_cache_block(self):
         report, code = self.run_soak(FakeHost(), expect_cache=True, icon_probe_every=0)
@@ -769,7 +920,11 @@ class ProbeCounting(unittest.TestCase):
         self.assertIsNone(soak.probe_counts(None))
 
     def test_the_summary_of_no_probe_is_just_its_period(self):
-        self.assertEqual(soak.probe_summary([], 12), {"every_ticks": 12, "probes": 0})
+        self.assertEqual(
+            soak.probe_summary([], 12),
+            {"every_ticks": 12, "scheduled": 0, "probes": 0, "complete": 0, "incomplete": 0,
+             "skipped": 0, "with_candidate": 0})
+        self.assertEqual(soak.probe_summary([], 12, 5)["skipped"], 5)
 
     def test_the_options_default_to_off(self):
         args = soak.parse_args(["--config", "c.toml", "--out", "o.json"])

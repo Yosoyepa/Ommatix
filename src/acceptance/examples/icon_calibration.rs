@@ -893,20 +893,16 @@ fn calibrate(smoke: bool) -> Value {
     let grids = prototype_grids();
     let file = prototype_file();
 
+    // Selection reads the calibration set only; the holdouts wait for a chosen setting.
     let mut candidates: Vec<(Params, Tally)> = Vec::new();
-    let mut evaluated: Vec<(u8, [Evaluated; 3])> = Vec::new();
+    let mut calibration: Vec<(u8, Evaluated)> = Vec::new();
     for tau in TAUS {
-        let protos = descriptors(&grids, tau);
-        let ev = [
-            evaluate(&sets[0], tau, &protos),
-            evaluate(&sets[1], tau, &protos),
-            evaluate(&sets[2], tau, &protos),
-        ];
+        let ev = evaluate(&sets[0], tau, &descriptors(&grids, tau));
         for distance_step in 0..=STEPS {
             for margin_step in 0..=STEPS {
                 let t = tally(
-                    &ev[0].positives,
-                    &ev[0].ood,
+                    &ev.positives,
+                    &ev.ood,
                     step_value(distance_step),
                     step_value(margin_step),
                 );
@@ -920,31 +916,37 @@ fn calibrate(smoke: bool) -> Value {
                 ));
             }
         }
-        evaluated.push((tau, ev));
+        calibration.push((tau, ev));
     }
 
+    let (mut validation_evaluations, mut test_evaluations) = (0, 0);
     let chosen = select(&candidates);
     let selection = match chosen {
         None => json!({ "proposal": null,
             "reason": "no setting has both zero wrong labels and out-of-distribution acceptance within the limit on the calibration set with at least one correct label" }),
         Some((p, _)) => {
-            let ev = &evaluated
+            let cal = &calibration
                 .iter()
                 .find(|(tau, _)| *tau == p.tau)
                 .expect("the chosen tau was evaluated")
                 .1;
             let (d, m) = (step_value(p.distance_step), step_value(p.margin_step));
-            let validation = tally(&ev[1].positives, &ev[1].ood, d, m);
-            match gate(&validation) {
-                Err(reason) => json!({ "proposal": null,
+            let protos = descriptors(&grids, p.tau);
+            let validation = evaluate(&sets[1], p.tau, &protos);
+            validation_evaluations += 1;
+            if let Err(reason) = gate(&tally(&validation.positives, &validation.ood, d, m)) {
+                json!({ "proposal": null,
                     "reason": format!("the chosen setting fails the validation gate: {reason}"),
-                    "rejected_setting": { "gradient_tau": p.tau, "max_distance": d, "min_margin": m } }),
-                Ok(()) => json!({
+                    "rejected_setting": { "gradient_tau": p.tau, "max_distance": d, "min_margin": m } })
+            } else {
+                let test = evaluate(&sets[2], p.tau, &protos);
+                test_evaluations += 1;
+                json!({
                     "proposal": { "gradient_tau": p.tau, "max_distance": d, "min_margin": m },
-                    "calibration": metrics(&ev[0], d, m),
-                    "validation": metrics(&ev[1], d, m),
-                    "test": metrics(&ev[2], d, m),
-                }),
+                    "calibration": metrics(cal, d, m),
+                    "validation": metrics(&validation, d, m),
+                    "test": metrics(&test, d, m),
+                })
             }
         }
     };
@@ -952,6 +954,8 @@ fn calibrate(smoke: bool) -> Value {
     json!({
         "schema": 1,
         "protocol_version": 2,
+        "evaluations": { "calibration": TAUS.len(), "validation": validation_evaluations,
+                         "test": test_evaluations },
         "tool": "src/acceptance/examples/icon_calibration.rs",
         "smoke": smoke,
         "synthetic_offline": true,
@@ -1352,6 +1356,39 @@ mod tests {
         }
     }
 
+    /// R105-4: the guarantee of the measurement configuration does not rest on the query being
+    /// low in contrast. At `gradient_tau` 255 every one of the 32 pinned prototypes has an empty
+    /// mask, so its support in common with ANY query is zero: even a query with all 64 gradients
+    /// valid (alternating black and white) passes the early query-support check, is compared
+    /// with the eligible prototypes and is refused for want of common support. A different
+    /// prototype file would be a different configuration, with another SHA-256.
+    #[test]
+    fn the_pinned_prototypes_refuse_every_query_at_the_measurement_settings() {
+        let tau = 255;
+        for (_, grid) in prototype_grids() {
+            assert_eq!(gradient_descriptor(&grid, tau).unwrap().mask, 0);
+        }
+        let black_white: Vec<u8> = (0..GRID_LEN)
+            .map(|i| if i % 2 == 0 { 0 } else { 255 })
+            .collect();
+        let query = gradient_descriptor(&black_white, tau).unwrap();
+        assert_eq!(query.support(), 64, "every gradient of the query is valid");
+        let policy = CachePolicy::new(0.0, 1.0).unwrap();
+        assert_eq!(
+            cache_at(tau).lookup(&query, CONTEXT, policy).unwrap(),
+            IconMatch::Unknown(UnknownReason::InsufficientSupport)
+        );
+        // Whatever the thresholds, with nothing in common nothing is within any distance.
+        for (d, m) in [(0.0, 0.0), (0.5, 0.0), (1.0, 0.0)] {
+            assert_eq!(
+                cache_at(tau)
+                    .lookup(&query, CONTEXT, CachePolicy::new(d, m).unwrap())
+                    .unwrap(),
+                IconMatch::Unknown(UnknownReason::InsufficientSupport)
+            );
+        }
+    }
+
     /// The bytes of the curated file are pinned: the operator pins their SHA-256, and an edit of
     /// `tools/s4/icon_spec.rs` or of the rasteriser that changed them would silently invalidate
     /// every pin. The value is the one of attempt 2 (S0 §19.3); change it only with the spec,
@@ -1531,6 +1568,24 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>()
                 .len()
         );
+    }
+
+    /// R105-3: the holdouts are touched only after a setting was chosen on the calibration set
+    /// and only as far as the rule needs: the validation set for the chosen `tau`, the test set
+    /// only once the validation gate passed. A calibration that finds no setting never
+    /// evaluates either of them. (The two historical calibrations, `6e561f7` and `1fa369e`,
+    /// computed their distances eagerly for every `tau` and consulted none of them; S0 §19.3
+    /// says so.)
+    #[test]
+    fn a_calibration_without_a_setting_never_evaluates_the_holdouts() {
+        let report = calibrate(true);
+        assert!(report["selection"]["proposal"].is_null());
+        assert_eq!(
+            report["evaluations"],
+            json!({ "calibration": TAUS.len(), "validation": 0, "test": 0 })
+        );
+        assert!(report["selection"].get("validation").is_none());
+        assert!(report["selection"].get("test").is_none());
     }
 
     #[test]

@@ -23,6 +23,7 @@ TESTAPP = REPO / "tools" / "s4" / "testapp" / "target" / "release" / "ommatix-te
 DEFAULT_EXE = REPO / "target" / "release" / "ommatix.exe"
 S3_DRIVER = REPO / "tools" / "s3" / "mcp_driver.py"
 TIMINGS_KEY = "io.ommatix/timings"
+PLAN_KEY = "io.ommatix/plan"
 
 
 # ---- pure helpers -------------------------------------------------------------------------
@@ -44,6 +45,15 @@ def summary(values: list[float]) -> dict:
         "p99": round(percentile(values, 0.99), 3),
         "max": round(max(values), 3),
     }
+
+
+def plan_work(meta: dict) -> str | None:
+    """The kind of work the planner chose for the observation behind a response, from the
+    engine's own ``_meta`` record (``full_refresh``, ``regions`` or ``nothing``); None when the
+    response carries no plan. Only the closed name: no region, no size."""
+    plan = meta.get(PLAN_KEY) if isinstance(meta, dict) else None
+    work = plan.get("work") if isinstance(plan, dict) else None
+    return work if isinstance(work, str) else None
 
 
 def stage_ms(meta: dict) -> dict:

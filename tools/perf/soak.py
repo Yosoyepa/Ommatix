@@ -17,11 +17,15 @@ seconds for ``--minutes`` (default 120, the soak of RNF-06), samples:
 With ``--icon-strip`` the test application also paints its hidden strip of eight text-less
 synthetic icons (dossier S0 §19), so that the icon cache has candidates; ``--icon-probe-every N``
 adds, every N ticks, one more ``observe_screen`` (limit 200, outside the latency figures) that
-only *counts* the elements by label source and by the closed synthetic vocabulary of the strip,
-never keeping a label or a coordinate; ``--expect-cache`` judges that the engine started with
-curated prototypes, that the probes saw candidates and that no label was accepted (the
-measurement configuration of S0 §19.4 accepts nothing, so an accepted label fails it). Without
-these flags the soak is the one of S0 §18.
+follows the cursor of the same snapshot (at most ``PROBE_PAGES_MAX`` pages) and only *counts* the
+elements by label source, by the closed synthetic vocabulary of the strip and as resolver-eligible
+candidates, never keeping a label or a coordinate. A probe that failed, was skipped or stayed
+truncated is evidence that is missing, and it is counted as such. ``--expect-cache`` judges (S0
+§19.4, C5, as amended) that the engine started with curated prototypes, that at least 95 % of the
+*scheduled* probes were complete and saw a candidate, that no probe, complete or not, saw an
+accepted label (the measurement configuration accepts nothing), and that at least 95 % of the
+observations were full refreshes by the engine's own plan record, which is what makes it
+re-describe every candidate. Without these flags the soak is the one of S0 §18.
 
 The report is JSON with no screen data: no frame, no element label, no coordinates. It carries
 the raw samples, the latency percentiles per window of time, and for each resource the first
@@ -90,6 +94,9 @@ EXIT_OK, EXIT_ENDED_EARLY, EXIT_REFUSED = 0, 1, 2
 # probes that must see a candidate for the icon cache to count as exercised (S0 §19.4, C5).
 SYNTHETIC_LABEL_PREFIX = "cache-icon-"
 PROBE_LIMIT = 200
+#: Pages of one snapshot a probe follows before it gives up; beyond that it is incomplete.
+PROBE_PAGES_MAX = 6
+#: The least share (of the scheduled probes, and of the observations) that C5 asks for.
 PROBE_SHARE_MIN = 0.95
 
 _NOTE = re.compile(r"\[cache\] (\d+) curated icon prototypes, (\d+) for context")
@@ -233,10 +240,27 @@ def cache_note(lines: list[str]) -> dict | None:
     return None
 
 
+#: Roles that the resolver never takes as icon candidates: text, and every role that takes an
+#: external label or holds a value (``icons::is_candidate``, ``Role::takes_external_label`` and
+#: ``Role::holds_value``).
+NOT_CANDIDATE_ROLES = ("text_node", "input", "dropdown", "checkbox")
+
+
+def is_candidate(element: dict) -> bool:
+    """Whether the resolver may label this element: an ``icon_button``, or a role that takes no
+    external label and holds no value (``button``, ``unknown``) with no inner label."""
+    role = element.get("role")
+    if role in NOT_CANDIDATE_ROLES:
+        return False
+    if role == "icon_button":
+        return True
+    return element.get("label_source", "unknown") == "unknown" and not element.get("label")
+
+
 def probe_counts(page) -> dict | None:
     """What one probe page holds, as counts: elements, by label source, those labelled with the
-    synthetic vocabulary, and the candidates (no label, source ``unknown``, not a text node).
-    No label, no coordinate and no identifier is kept. None for a page that is not a snapshot."""
+    synthetic vocabulary, and the resolver-eligible candidates. No label, no coordinate and no
+    identifier is kept. None for a page that is not a snapshot page."""
     if not isinstance(page, dict) or not isinstance(page.get("elements"), list):
         return None
     sources: dict[str, int] = {}
@@ -249,48 +273,86 @@ def probe_counts(page) -> dict | None:
         label = element.get("label")
         if isinstance(label, str) and label.startswith(SYNTHETIC_LABEL_PREFIX):
             vocabulary += 1
-        if source == "unknown" and not label and element.get("role") != "text_node":
+        if is_candidate(element):
             candidates += 1
     return {"elements": len(page["elements"]), "by_label_source": sources,
             "curated_icon": sources.get("curated_icon", 0), "vocabulary_labelled": vocabulary,
             "candidates": candidates, "truncated": bool(page.get("next_cursor"))}
 
 
-def probe_summary(probes: list[dict], every: int) -> dict:
-    """The counts of every probe, summarised: how many saw a candidate (or a curated label) and
-    the range of curated labels."""
-    summary = {"every_ticks": every, "probes": len(probes)}
-    if not probes:
-        return summary
-    curated = [p["curated_icon"] for p in probes]
-    seen = sum(1 for p in probes if p["candidates"] + p["curated_icon"] >= 1)
-    summary.update(
-        with_candidate=seen, share_with_candidate=round(seen / len(probes), 4),
-        curated_icon={"min": min(curated), "max": max(curated),
-                      "median": statistics.median(curated)},
-        vocabulary_labelled_max=max(p["vocabulary_labelled"] for p in probes),
-        candidates_max=max(p["candidates"] for p in probes),
-        elements_max=max(p["elements"] for p in probes),
-        truncated=sum(1 for p in probes if p["truncated"]))
+def merge_counts(first: dict, second: dict) -> dict:
+    """The counts of two pages of the same snapshot, added."""
+    sources = dict(first["by_label_source"])
+    for key, value in second["by_label_source"].items():
+        sources[key] = sources.get(key, 0) + value
+    return {"elements": first["elements"] + second["elements"], "by_label_source": sources,
+            "curated_icon": first["curated_icon"] + second["curated_icon"],
+            "vocabulary_labelled": first["vocabulary_labelled"] + second["vocabulary_labelled"],
+            "candidates": first["candidates"] + second["candidates"],
+            "truncated": second["truncated"]}
+
+
+def probe_summary(probes: list[dict], every: int, scheduled: int | None = None) -> dict:
+    """The counts of every recorded probe, summarised, with the coverage account: how many probes
+    were scheduled, how many are complete, incomplete (a truncated snapshot or a failed page) or
+    missing altogether (failed, or taken while the application was not in front)."""
+    scheduled = len(probes) if scheduled is None else scheduled
+    complete = [p for p in probes if p.get("complete", True)]
+    summary = {"every_ticks": every, "scheduled": scheduled, "probes": len(probes),
+               "complete": len(complete), "incomplete": len(probes) - len(complete),
+               "skipped": scheduled - len(probes)}
+    if probes:
+        curated = [p["curated_icon"] for p in probes]
+        summary.update(
+            curated_icon={"min": min(curated), "max": max(curated),
+                          "median": statistics.median(curated)},
+            vocabulary_labelled_max=max(p["vocabulary_labelled"] for p in probes),
+            candidates_max=max(p["candidates"] for p in probes),
+            elements_max=max(p["elements"] for p in probes),
+            truncated=sum(1 for p in probes if p["truncated"]))
+    seen = sum(1 for p in complete if p["candidates"] + p["curated_icon"] >= 1)
+    summary["with_candidate"] = seen
+    if scheduled:
+        summary["share_complete"] = round(len(complete) / scheduled, 4)
+        summary["share_with_candidate"] = round(seen / scheduled, 4)
     return summary
 
 
-def cache_criterion(note: dict | None, summary: dict) -> dict:
-    """S0 §19.4, C5 (option C, a measurement configuration whose thresholds accept nothing): the
-    engine started with curated prototypes, the probes saw candidates in at least
-    ``PROBE_SHARE_MIN`` of the probes, and **no** probe saw an accepted label. A label would mean
-    that the construction of the configuration is wrong, so it fails the criterion."""
-    share = summary.get("share_with_candidate")
+def cache_criterion(note: dict | None, summary: dict, plan: dict | None = None) -> dict:
+    """S0 §19.4, C5 (option C, as amended): the engine started with curated prototypes; of the
+    probes *scheduled*, at least ``PROBE_SHARE_MIN`` are complete and saw a resolver-eligible
+    candidate; no probe, complete or not, saw an accepted label (a label would mean that the
+    construction of the configuration is wrong); and at least ``PROBE_SHARE_MIN`` of the
+    observations were full refreshes by the engine's own plan record. A probe that failed or was
+    cut short is missing evidence, never a pass."""
+    plan = plan or {}
+    scheduled = summary.get("scheduled", 0)
+    complete = summary.get("complete", 0)
+    share_complete = complete / scheduled if scheduled else None
+    share_candidate = summary.get("with_candidate", 0) / scheduled if scheduled else None
+    observations = sum(plan.values())
+    share_full = plan.get("full_refresh", 0) / observations if observations else None
     loaded = note is not None and note["prototypes"] >= 1
     curated = summary.get("curated_icon", {}).get("max")
-    vocabulary = summary.get("vocabulary_labelled_max")
-    accepted = None if curated is None else max(curated, vocabulary or 0)
-    return {"rule": f"curated prototypes loaded, candidates seen in >= {PROBE_SHARE_MIN:.0%} of "
-                    "the probes and zero accepted labels in every probe",
-            "cache_note": note, "share_with_candidate": share,
-            "probes": summary.get("probes", 0), "accepted_labels_max": accepted,
-            "met": bool(loaded and share is not None and share >= PROBE_SHARE_MIN
-                        and accepted == 0)}
+    accepted = None if curated is None else max(curated, summary.get("vocabulary_labelled_max", 0))
+
+    def floor(share) -> bool:
+        return share is not None and share >= PROBE_SHARE_MIN
+
+    return {
+        "rule": (f"curated prototypes loaded; of the scheduled probes >= {PROBE_SHARE_MIN:.0%} "
+                 "complete and >= "
+                 f"{PROBE_SHARE_MIN:.0%} with a resolver-eligible candidate; zero accepted labels "
+                 f"in every probe, complete or not; >= {PROBE_SHARE_MIN:.0%} of the observations "
+                 "full refreshes by the engine's plan record"),
+        "cache_note": note, "scheduled": scheduled, "complete": complete,
+        "incomplete": summary.get("incomplete", 0), "skipped": summary.get("skipped", 0),
+        "share_complete": None if share_complete is None else round(share_complete, 4),
+        "share_with_candidate": None if share_candidate is None else round(share_candidate, 4),
+        "share_full_refresh": None if share_full is None else round(share_full, 4),
+        "accepted_labels_max": accepted,
+        "met": bool(loaded and scheduled >= 1 and floor(share_complete)
+                    and floor(share_candidate) and accepted == 0 and floor(share_full))}
 
 
 def cache_settings(config_text: str) -> dict | None:
@@ -458,19 +520,40 @@ class Soak:
 
     def probe(self, app, engine, probes: list[dict], counts: dict) -> None:
         """One extra observation that only counts what the snapshot holds (outside the latency
-        figures). Taken only while the test application is in front before and after it."""
+        figures), following the cursor of the same snapshot up to ``PROBE_PAGES_MAX`` pages. It
+        is taken only while the test application is in front before and after it; a probe that
+        could not be taken is counted as skipped (the loop counts it as scheduled), and one that stayed truncated or lost a page is
+        recorded as incomplete (its counts still count: a label on any page fails C5)."""
         if self.host.foreground_pid() != app.pid:
+            counts["probes_skipped"] += 1
             return
-        page, is_error, _, _ = engine.call(
-            "observe_screen", {"limit": PROBE_LIMIT}, timeout=self.args.call_timeout)
-        if is_error or self.host.foreground_pid() != app.pid:
-            counts["probes_skipped"] = counts.get("probes_skipped", 0) + 1
+        merged = total = None
+        pages, cursor, complete = 0, None, False
+        while True:
+            arguments = {"limit": PROBE_LIMIT}
+            if cursor is not None:
+                arguments["cursor"] = cursor
+            page, is_error, _, _ = engine.call(
+                "observe_screen", arguments, timeout=self.args.call_timeout)
+            found = None if is_error else probe_counts(page)
+            if found is None:
+                break
+            pages += 1
+            merged = found if merged is None else merge_counts(merged, found)
+            if total is None:
+                total = page.get("total_elements")
+            cursor = page.get("next_cursor")
+            if not cursor:
+                complete = True
+                break
+            if pages >= PROBE_PAGES_MAX:
+                break
+        if merged is None or self.host.foreground_pid() != app.pid:
+            counts["probes_skipped"] += 1
             return
-        found = probe_counts(page)
-        if found is None:
-            counts["probes_skipped"] = counts.get("probes_skipped", 0) + 1
-            return
-        probes.append(found)
+        merged["complete"] = complete and (total is None or merged["elements"] == total)
+        merged["pages"] = pages
+        probes.append(merged)
 
     def loop(self, app, engine, gpu, samples: list[dict], counts: dict,
              probes: list[dict] | None = None) -> str:
@@ -488,6 +571,11 @@ class Soak:
                 continue
             tick += a.interval
             counts["ticks"] += 1
+            every = getattr(a, "icon_probe_every", 0)
+            due = bool(every and probes is not None and counts["ticks"] % every == 0)
+            if due:  # scheduled whether or not it can be taken: a missing probe is missing evidence
+                counts["probes_scheduled"] = counts.get("probes_scheduled", 0) + 1
+                counts.setdefault("probes_skipped", 0)
             sample = {"t_s": round(now - start, 2)}
             if not engine.alive():
                 return "engine_exited"
@@ -499,6 +587,8 @@ class Soak:
             in_front = self.host.foreground_pid() == app.pid
             if not in_front:
                 counts["foreground_lost"] += 1
+                if due:
+                    counts["probes_skipped"] += 1
                 consecutive_lost += 1
                 sample["observed"] = False
                 samples.append(sample)
@@ -511,11 +601,15 @@ class Soak:
             if self.host.foreground_pid() != app.pid:
                 # The screen changed under the observation: its latency is not comparable.
                 counts["discarded_latencies"] += 1
+                if due:
+                    counts["probes_skipped"] += 1
                 sample["observed"] = False
                 samples.append(sample)
                 continue
             if is_error:
                 counts["observe_errors"] += 1
+                if due:
+                    counts["probes_skipped"] += 1
                 consecutive_errors += 1
                 sample.update(observed=False, error_code=_error_code(page))
                 samples.append(sample)
@@ -528,14 +622,14 @@ class Soak:
             metrics, _, _, _ = engine.call("get_engine_metrics", {}, timeout=a.call_timeout)
             sample.update(
                 observed=True, rtt_ms=round(rtt, 3), total_ms=stages.get("total"),
+                plan_work=common.plan_work(meta) or "not_reported",
                 degraded=bool(page.get("degraded")), epoch=page.get("geometry_epoch"),
                 observations=metrics.get("observations"),
                 pending_regions=metrics.get("pending_regions"),
                 rejected_actions=metrics.get("rejected_actions"),
                 delivered_actions=metrics.get("delivered_actions"))
             samples.append(sample)
-            every = getattr(a, "icon_probe_every", 0)
-            if every and probes is not None and counts["ticks"] % every == 0:
+            if due:
                 self.probe(app, engine, probes, counts)
             if a.out and counts["observed"] % 60 == 0:
                 self.checkpoint(samples, counts)
@@ -588,10 +682,16 @@ class Soak:
         report["criteria"] = criteria(resources, pending, rule, a)
         every = getattr(a, "icon_probe_every", 0)
         if every:
-            report["icon_probe"] = probe_summary(probes or [], every)
+            plan_work: dict[str, int] = {}
+            for sample in observed:
+                kind = sample.get("plan_work", "not_reported")
+                plan_work[kind] = plan_work.get(kind, 0) + 1
+            report["plan_work"] = plan_work
+            report["icon_probe"] = probe_summary(
+                probes or [], every, report["counts"].get("probes_scheduled", 0))
             if getattr(a, "expect_cache", False):
                 report["criteria"]["icon_cache_exercised"] = cache_criterion(
-                    report.get("cache_note"), report["icon_probe"])
+                    report.get("cache_note"), report["icon_probe"], plan_work)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -632,9 +732,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "latencies) that only counts elements by label source and by the "
                          "strip's synthetic vocabulary; 0 (default) is off")
     ap.add_argument("--expect-cache", action="store_true",
-                    help="judge that the engine started with curated icon prototypes and that "
-                         "the probes saw candidates (needs --icon-probe-every and a [cache] "
-                         "block); the curated labels are reported without a criterion")
+                    help="judge C5 of S0 section 19.4 (as amended): curated prototypes loaded; "
+                         "of the scheduled probes >= 95%% complete and with a resolver-eligible "
+                         "candidate; zero accepted labels in every probe, complete or not; >= "
+                         "95%% of the observations full refreshes by the engine's plan record "
+                         "(needs --icon-probe-every and a [cache] block; the configuration "
+                         "accepts nothing)")
     ap.add_argument("--max-pending-regions", type=int, default=None,
                     help="the owner's structural bound for the queue (pending_regions): the tile "
                          "count of the frame, ceil(W/64) * ceil(H/64), 510 for 1920x1080 "
@@ -657,7 +760,7 @@ def main(argv: list[str] | None = None) -> int:
     report, code = Soak(args, Host()).run()
     common.write_json(args.out, report)
     summary = {k: report.get(k)
-               for k in ("ended", "reason", "counts", "criteria", "icon_probe", "cache_note")}
+               for k in ("ended", "reason", "counts", "criteria", "icon_probe", "plan_work", "cache_note")}
     print(json.dumps(summary, indent=2))
     return code
 
