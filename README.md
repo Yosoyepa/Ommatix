@@ -26,7 +26,7 @@ is fail-closed: actions default to a dry run; live input needs the operator’s 
 current observation. [Design and trust boundaries →](docs/architecture/overview.md)
 
 <p align="center">
-  <a href="docs/assets/readme/protocol-demo.mp4"><img src="docs/assets/readme/protocol-demo.gif" alt="Animated protocol illustration: only the changed tiles of a synthetic window are re-analysed; the controls get IDs and revisions (e7, revision 3); the agent calls observe_screen and execute_action; an action on the old snapshot s16 is refused with STALE_SNAPSHOT and no input; after observing again, the dry-run action on s17 returns simulated, input_delivered false, verified false." width="800"></a>
+  <a href="docs/assets/readme/protocol-demo.mp4"><img src="docs/assets/readme/protocol-demo.gif" alt="Animated protocol illustration: only the changed tiles of a synthetic window are re-analysed; the controls get IDs and revisions (e7, revision 3); the agent calls observe_screen and execute_action; a dry-run action on snapshot s16, older than the 10-second age bound, is refused with STALE_SNAPSHOT and no input; a new observation publishes s17 and the dry-run action on it returns simulated, input_delivered false, verified false." width="800"></a>
 </p>
 
 <p align="center"><sub>An illustration on a simulated desktop, generated from the <a href="docs/thesis/contratos/ejemplos">contract examples</a>; not a screen recording.

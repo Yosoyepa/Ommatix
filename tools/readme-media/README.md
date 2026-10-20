@@ -77,14 +77,14 @@ components. No browser, encoder, probe or dependency binary is committed or redi
 | 0–4.4 s | Title: agents act on element IDs and revisions, not pixels | Repository README |
 | 4.4–10.2 s | A synthetic window changes; only the changed tiles light up | Algorithm 1 (chapter 04) |
 | 10.2–16.2 s | Boxes and tags for `e8` and `e7` (revision 3, button, confirmed); what the agent receives and what stays in the engine | `observe_output.json`, chapter 07 |
-| 16.2–23 s | The agent calls `observe_screen` and reads the element list (snapshot `s16`) | `observe_output.json` (elements), `stale_output.json` (snapshot) |
-| 23–30 s | The window changes (snapshot `s16` → `s17`); `execute_action` on `s16` stops at the gate: `STALE_SNAPSHOT`, no input | `stale_output.json` |
-| 30–35.8 s | The agent observes again and acts on `s17` in dry run: `simulated`, `input_delivered: false`, `verified: false` | `click_input.json`, `simulated_output.json` |
-| 35.8–39.6 s | The live-input chain: operator policy, foreground app, fresh snapshot, last look, delivery, effect verification | AGENTS.md §5 rule 6, ADR-0007 |
+| 16.2–23 s | The agent calls `observe_screen` and reads the element list (snapshot `s16`); the snapshot's age starts counting (compressed clock) | `observe_output.json` (elements), `stale_output.json` (snapshot) |
+| 23–30 s | The window changes; `s16` passes the 10 s `max_snapshot_age_ms` bound, so the dry-run `execute_action` on it stops at the gate: `STALE_SNAPSHOT`, no input | `stale_output.json`, chapter 07 §7.4 and ADR-0025 |
+| 30–35.8 s | A new observation re-analyses the changed tiles and publishes `s17`; the dry run on `s17` returns `simulated`, `input_delivered: false`, `verified: false` | `click_input.json`, `simulated_output.json` |
+| 35.8–39.6 s | The live-input chain: operator policy, foreground app, fresh snapshot, last look, delivery, effect verification; a failed check before delivery delivers nothing, an uncertain effect after delivery is `indeterminate` | AGENTS.md §5 rule 6, ADR-0007 |
 | 39.6–44 s | Name, tagline, repository | Repository README |
 
 The animation illustrates the protocol on a stylised simulated desktop. It is not a
-recording, a successful live action, or a latency measurement. A revision mismatch is
+recording, a successful live action, or a latency measurement. A dry run ends before any capture, so it never detects pixel changes; its `STALE_SNAPSHOT` here comes from the snapshot's age. A revision mismatch is
 `STALE_TARGET`; the illustrated `STALE_SNAPSHOT` is specifically an old snapshot.
 The results figure transcribes [chapter 09 §9.11](../../docs/thesis/09_EVALUACION_EXPERIMENTAL.md),
 including its phase-1 decoy-verdict exception and provider-version attribution.

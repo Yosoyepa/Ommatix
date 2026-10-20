@@ -91,12 +91,12 @@
       "sha256": "5f30d36cbdf5c6c6399b2462853d1d06cbba3f6f8296816fe0a3fd18d9e5d9a6"
     },
     "protocol-demo.gif": {
-      "bytes": 4395912,
-      "sha256": "0798752e78e107aa7b30a6d562e6d67500a6d125100c2289274c39736d83755e"
+      "bytes": 4451340,
+      "sha256": "b33cd887e0d1fa011b604904318bdbe57a0f92d66fb51bfa42e984fcfdde591e"
     },
     "protocol-demo.mp4": {
-      "bytes": 2416066,
-      "sha256": "8b861c157b4cfa5d04bc0815a81c4fce5082181fc9f190fc45982f5fb037b8a1"
+      "bytes": 2486256,
+      "sha256": "a3b0b922eea42592a12c57b3cedc49005c89f7b6521216417be5feab1d79db2e"
     },
     "results-dark.svg": {
       "bytes": 3179,

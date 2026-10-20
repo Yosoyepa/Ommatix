@@ -49,8 +49,8 @@
     [4.4, 10.2, '01 · Incremental perception', 'Only the regions that changed are analysed again.'],
     [10.2, 16.2, '02 · Stable identity', 'Each control gets a session ID and a revision. Coordinates stay inside the engine.'],
     [16.2, 23.0, '03 · Observe', 'The agent reads a compact list of elements, not pixels.'],
-    [23.0, 30.0, '04 · Freshness', 'The screen changed after that observation: the action is refused and no input is sent.'],
-    [30.0, 35.8, '05 · Act on the current snapshot', 'Dry run by default. The result reports only what happened.'],
+    [23.0, 30.0, '04 · Freshness', 'The observation is too old to authorise an action: refused, no input is sent.'],
+    [30.0, 35.8, '05 · Observe again, then act', 'The new observation re-analyses only what changed. The dry run reports only what happened.'],
     [35.8, 39.6, '06 · Fail-closed actuation', 'Live input needs the operator’s policy and fresh evidence at every step.'],
   ];
 
@@ -323,17 +323,29 @@
     return s;
   }
 
-  // ---------- STALE stamp and snapshot chip ----------
+  // ---------- snapshot age, STALE stamp ----------
+  // ADR-0025: a snapshot older than max_snapshot_age_ms (10 000 ms by default) does not authorise
+  // an action, in a dry run too. The engine publishes a new snapshot only when the agent observes.
+  const OBSERVED = 17.6, REOBSERVED = 30.9, AGE_RATE = 1.6; // the illustration compresses the clock
   function stale(t) {
     let s = '';
-    // snapshot chip: s16 -> s17 when the screen changes
-    const co = fade(t, 23.3, 23.7, 29.4, 29.9);
-    if (co > 0) {
-      const flip = out(prog(t, 23.9, 24.4));
-      s += g(rect(WIN.x + WIN.w - 214, WIN.y + 52, 196, 34, { fill: C.surface2, stroke: C.line, r: 17 }) +
-        text(WIN.x + WIN.w - 198, WIN.y + 74, 'engine snapshot', { size: 13, fill: C.muted }) +
-        text(WIN.x + WIN.w - 82, WIN.y + 74, 's16', { size: 15, mono: true, fill: C.muted, op: 1 - flip }) +
-        text(WIN.x + WIN.w - 82, WIN.y + 74, 's17', { size: 15, mono: true, fill: C.accent, weight: 700, op: flip }), { op: co });
+    const chipX = WIN.x + WIN.w - 290, chipY = WIN.y + 52;
+    const chip = (label, value, col, note) =>
+      rect(chipX, chipY, 272, 34, { fill: C.surface2, stroke: col === C.muted ? C.line : col, r: 17 }) +
+      text(chipX + 16, chipY + 22, label, { size: 13, mono: true, fill: C.muted }) +
+      text(chipX + 256, chipY + 22, value, { size: 14, mono: true, fill: col, weight: 700, anchor: 'end' }) +
+      (note ? text(chipX + 136, chipY + 52, note, { size: 12, fill: col, anchor: 'middle' }) : '');
+    const ao = fade(t, OBSERVED, OBSERVED + 0.4, REOBSERVED - 0.5, REOBSERVED - 0.1);
+    if (ao > 0) {
+      const age = Math.max(0, t - OBSERVED) * AGE_RATE;
+      const over = age > 10;
+      s += g(chip('snapshot s16 · age', `${age.toFixed(1)} s`, over ? C.amber : C.muted,
+        over ? 'older than the 10 s limit · clock compressed' : 'clock compressed'), { op: ao });
+    }
+    const no = fade(t, REOBSERVED, REOBSERVED + 0.4, 35.4, 35.8);
+    if (no > 0) {
+      const age = Math.max(0, t - REOBSERVED) * AGE_RATE;
+      s += g(chip('snapshot s17 · age', `${age.toFixed(1)} s`, C.accent, 'published by the new observation'), { op: no });
     }
     // stamp
     const so = fade(t, 25.5, 25.7, 29.2, 29.8);
@@ -343,7 +355,7 @@
       const shake = t < 26.2 ? Math.sin(t * 90) * 3 * (1 - prog(t, 25.6, 26.2)) : 0;
       const stamp = rect(cx - 210, cy - 54, 420, 108, { fill: C.amberDim, stroke: C.amber, sw: 3, r: 14, op: 0.96 }) +
         text(cx, cy - 4, D.stale.error.code, { size: 40, weight: 800, fill: C.amber, anchor: 'middle', mono: true, ls: 1 }) +
-        text(cx, cy + 32, 'no input sent · observe again', { size: 18, fill: C.amber, anchor: 'middle' });
+        text(cx, cy + 32, 's16 is too old · no input sent · observe again', { size: 18, fill: C.amber, anchor: 'middle' });
       s += g(stamp, { op: so, tr: `translate(${f(cx + shake)} ${f(cy)}) rotate(-5) scale(${f(sc)}) translate(${f(-cx)} ${f(-cy)})` });
     }
     return s;
@@ -369,8 +381,8 @@
     });
     const no = out(prog(t, 38.4, 38.9));
     s += g(rect(640 - 330, 380, 660, 64, { fill: C.surface, stroke: C.line, r: 12 }) +
-      text(640, 408, 'Any check fails → refused, nothing delivered.', { size: 18, anchor: 'middle', weight: 600 }) +
-      text(640, 432, 'An uncertain effect is reported as indeterminate, never retried automatically.', { size: 15, anchor: 'middle', fill: C.muted }), { op: no });
+      text(640, 408, 'A check before delivery fails → refused, nothing delivered.', { size: 18, anchor: 'middle', weight: 600 }) +
+      text(640, 432, 'After delivery, an uncertain effect is reported as indeterminate, never retried.', { size: 15, anchor: 'middle', fill: C.muted }), { op: no });
     return g(s, { op });
   }
 
@@ -379,7 +391,7 @@
     s += intro(t);
     s += appWindow(t);
     s += tiles(t, 6.6, 10.4, (c, r) => c <= 10 && r >= 2 && r <= 3, 'changed · re-analysed');
-    s += tiles(t, 23.3, 25.2, (c, r) => c <= 10 && r >= 2 && r <= 4, null);
+    s += tiles(t, 30.3, 32.2, (c, r) => c <= 10 && r >= 2 && r <= 4, null);
     s += identity(t);
     s += panel(t);
     s += packet(t, 24.5, true);

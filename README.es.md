@@ -27,7 +27,7 @@ acciones son dry run por defecto; la entrada real requiere la política del oper
 observación vigente. [Diseño y límites de confianza →](docs/architecture/overview.es.md)
 
 <p align="center">
-  <a href="docs/assets/readme/protocol-demo.mp4"><img src="docs/assets/readme/protocol-demo.gif" alt="Ilustración animada del protocolo: sólo se vuelven a analizar las teselas que cambian en una ventana sintética; los controles reciben IDs y revisiones (e7, revisión 3); el agente llama a observe_screen y execute_action; una acción sobre el snapshot antiguo s16 se rechaza con STALE_SNAPSHOT y sin entrada; tras observar de nuevo, la acción en dry run sobre s17 devuelve simulated, input_delivered false, verified false." width="800"></a>
+  <a href="docs/assets/readme/protocol-demo.mp4"><img src="docs/assets/readme/protocol-demo.gif" alt="Ilustración animada del protocolo: sólo se vuelven a analizar las teselas que cambian en una ventana sintética; los controles reciben IDs y revisiones (e7, revisión 3); el agente llama a observe_screen y execute_action; una acción en dry run sobre el snapshot s16, con más de 10 segundos de antigüedad, se rechaza con STALE_SNAPSHOT y sin entrada; una nueva observación publica s17 y la acción en dry run sobre él devuelve simulated, input_delivered false, verified false." width="800"></a>
 </p>
 
 <p align="center"><sub>Ilustración sobre un escritorio simulado, generada a partir de los <a href="docs/thesis/contratos/ejemplos">ejemplos del contrato</a>; no es una grabación de pantalla.
