@@ -462,7 +462,8 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                            max_budget_usd=args.max_budget_usd),
             pa.build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
             env=cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None),
-            should_stop=session_stop_hook(log, stop_file), **rg.token_cap_kwargs(args))
+            should_stop=session_stop_hook(log, stop_file), ownership=getattr(args, "ownership", None),
+            **rg.token_cap_kwargs(args))
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)
@@ -819,7 +820,8 @@ def main(argv=None, deps=rg.RealDeps, driver=None, display=None) -> int:
         return 0
     args.campaign_dir.mkdir(parents=True, exist_ok=True)
     lock = acquire_lock(args.campaign_dir)  # one executor at a time, for the whole process lifetime (G1)
-    holder = {"keep_lock": False}
+    holder = {"keep_lock": False, "owned": {"unverified": 0}}
+    args.ownership = holder["owned"]  # run_claude raises it per owned session and lowers it only on positive proof
     restore = install_signal_handlers()
     try:
         return _run_series_locked(args, goals, deps, driver, display, holder)
@@ -828,7 +830,7 @@ def main(argv=None, deps=rg.RealDeps, driver=None, display=None) -> int:
         raise
     finally:
         restore()
-        if holder["keep_lock"]:
+        if holder["keep_lock"] or holder["owned"]["unverified"] != 0:
             print(f"the campaign lock {lock[0]} is KEPT: an owned session could not be shown to be gone. Check that "
                   "nothing of this campaign is still running, then remove the lock by hand; the runner never does",
                   file=sys.stderr, flush=True)

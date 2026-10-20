@@ -50,11 +50,13 @@ section 9.11):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -1444,6 +1446,32 @@ IMMEDIATE_TREE_KILL = frozenset({"terminal", "operator_stop", "stop_unreadable",
 WATCHER_JOIN_S = 5.0
 
 
+@contextlib.contextmanager
+def _interrupts_ignored():
+    """SIGINT, SIGTERM and (Windows) SIGBREAK are ignored while the body runs and the previous handlers are restored
+    afterwards - only in the main thread, where Python delivers them; elsewhere a no-op."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = {}
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        number = getattr(signal, name, None)
+        if number is None:
+            continue
+        try:
+            previous[number] = signal.signal(number, signal.SIG_IGN)
+        except (ValueError, OSError):
+            pass
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            try:
+                signal.signal(number, handler)
+            except (ValueError, OSError):
+                pass
+
+
 class OwnedSessionNotQuiescent(RuntimeError):
     """The owned session could not be shown to be gone (a tree that is not verified ended, a monitor that has not
     finished). The caller must keep its ownership - the campaign lock - until the operator has checked."""
@@ -1589,7 +1617,8 @@ class OwnedTree:
 
 def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
                timeout: float, stderr_path: Path | None = None, env: dict | None = None,
-               max_context_tokens: int | None = None, should_stop=None, poll_s: float = 0.25) -> dict:
+               max_context_tokens: int | None = None, should_stop=None, poll_s: float = 0.25,
+               ownership: dict | None = None) -> dict:
     """Runs the command; feeds every stdout line to `metrics`; ends the session on a timeout, when the first
     event shows a session other than the proven one, when the tool surface is wider than the three Ommatix tools,
     or (``max_context_tokens``, provider routes, where the CLI's dollar figure is invalid) when the
@@ -1620,6 +1649,8 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
     # From here the owned job exists and EVERY exit path - normal, timeout, exception, KeyboardInterrupt - ends in
     # the ``finally`` below: monitoring closed, the whole tree killed and verified gone. Only then does the
     # function return or let the exception go on (review of PR 101, H1/H2).
+    if ownership is not None:
+        ownership["unverified"] = ownership.get("unverified", 0) + 1  # until the cleanup below proves it gone
     killed = {"reason": None}
     stop_lock = threading.Lock()
     gate_lock = threading.Lock()   # the one gate through which the monitor may act
@@ -1709,41 +1740,56 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
     except BaseException as error:  # noqa: BLE001 - KeyboardInterrupt, SystemExit and every other exception
         failure = error  # the ``finally`` ends the whole owned tree at once (an exception always does) and verifies it
     finally:
-        quiescent = True
-        # Close the gate: from this point no monitor answer can have an effect. Closing never waits for a slow
-        # observation (those run outside the lock), only for an effect already under way, which is short.
-        if gate_lock.acquire(timeout=WATCHER_JOIN_S):
-            gate["closed"] = True
-            gate_lock.release()
-        else:
-            quiescent = False
-        finished.set()
-        if watcher is not None:
-            watcher.join(timeout=WATCHER_JOIN_S)
-            quiescent = quiescent and not watcher.is_alive()
-        immediate = killed["reason"] in IMMEDIATE_TREE_KILL or failure is not None
-        if immediate:
-            tree._terminate()  # noqa: SLF001 - end the whole job NOW; ``shutdown`` would first wait for the CLI
-        try:
-            left = tree.shutdown(kill_cli=False, grace=0.0 if immediate else None)
-        except BaseException as error:  # noqa: BLE001 - a shutdown that itself fails is an unverified tree
-            left = 1
-            failure = failure or error
-        if reader is not None:
-            reader.join(timeout=10)
-        for stream in (proc.stdout,):
+        # The cleanup is fail closed from its first statement to its last (review of PR 101, I1). Every step is
+        # attempted whatever an earlier step did - a failed fast termination must not skip the fallback shutdown and
+        # its verification - a further SIGINT/SIGTERM/SIGBREAK is ignored while it runs, and nothing below can
+        # raise out of it. The only thing that counts as proof is: the monitor shown finished AND the tree killed and
+        # verified gone. Without that proof ``ownership["unverified"]`` stays raised and the caller keeps its lock.
+        cleanup_errors: list[BaseException] = []
+        quiescent, left = True, 1
+
+        def step(fn, default=None):
             try:
-                stream.close()
-            except OSError:
-                pass
-        if stderr_path:
-            stderr.close()
-    if failure is not None or not quiescent:
-        if left or not quiescent:
-            raise OwnedSessionNotQuiescent(
-                "the owned session could not be shown to be gone "
-                f"(tree_left={left}, monitoring_finished={quiescent}): the campaign lock must stay until the "
-                "operator has checked") from failure
+                return fn()
+            except BaseException as error:  # noqa: BLE001 - a second Ctrl+C or an OSError inside the cleanup
+                cleanup_errors.append(error)
+                return default
+
+        def close_gate() -> bool:
+            # No monitor answer can have an effect from here on. Closing never waits for a slow observation (those
+            # run outside the lock), only for an effect already under way, which is short.
+            if gate_lock.acquire(timeout=WATCHER_JOIN_S):
+                gate["closed"] = True
+                gate_lock.release()
+                return True
+            return False
+
+        with _interrupts_ignored():
+            quiescent = bool(step(close_gate, False))
+            step(finished.set)
+            if watcher is not None:
+                joined = step(lambda: (watcher.join(timeout=WATCHER_JOIN_S), not watcher.is_alive())[1], False)
+                quiescent = quiescent and bool(joined)
+            immediate = killed["reason"] in IMMEDIATE_TREE_KILL or failure is not None
+            if immediate:
+                step(tree._terminate)  # noqa: SLF001 - end the whole job NOW; ``shutdown`` would first wait for the CLI
+            left = step(lambda: tree.shutdown(kill_cli=False, grace=0.0 if immediate else None), 1)
+            if reader is not None:
+                pumped = step(lambda: (reader.join(timeout=10), not reader.is_alive())[1], False)
+                quiescent = quiescent and bool(pumped)
+            if reader is None or not reader.is_alive():
+                step(proc.stdout.close)  # closing under a blocked read would block here as well
+            if stderr_path:
+                step(stderr.close)
+        verified = quiescent and left == 0
+        if verified and ownership is not None:
+            ownership["unverified"] = ownership.get("unverified", 0) - 1
+    if not verified and (failure is not None or cleanup_errors or not quiescent):
+        raise OwnedSessionNotQuiescent(
+            "the owned session could not be shown to be gone "
+            f"(tree_left={left}, monitoring_finished={quiescent}, cleanup_errors={len(cleanup_errors)}): the campaign "
+            "lock must stay until the operator has checked") from (failure or (cleanup_errors or [None])[0])
+    if failure is not None:
         raise failure
     if guard is not None and killed["reason"] is None:
         killed["reason"] = guard.reason  # e.g. a result event that reports more than the cap

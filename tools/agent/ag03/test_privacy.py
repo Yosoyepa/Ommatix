@@ -123,7 +123,7 @@ class ResultAndSourceTests(unittest.TestCase):
                                              "", text)))
         self.assertNotIn("stderr", text)
         kwargs = h.captured["kwargs"]
-        self.assertLessEqual(set(kwargs), {"env", "max_context_tokens", "should_stop"})  # no stderr_path: production stores none
+        self.assertLessEqual(set(kwargs), {"env", "max_context_tokens", "should_stop", "ownership"})  # no stderr_path: production stores none
         self.assertEqual(len(h.captured["args"]), 0)
 
     def test_the_directory_of_a_run_holds_no_image_file(self):
