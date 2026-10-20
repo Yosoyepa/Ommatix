@@ -1439,7 +1439,14 @@ PROCESS_TREE_GRACE_S = 40.0  # the proxy waits up to 30 s for its engine to leav
 # The reasons a ``should_stop`` hook may give (AG-03): a terminal safety or uncertain-delivery state, the operator's
 # stop, an unreadable stop file, a monitor that failed. They end the WHOLE owned job/tree at once - no receipts
 # to wait for, no grace - and the shutdown then only verifies, within a bound, that nothing is left.
-IMMEDIATE_TREE_KILL = frozenset({"terminal", "operator_stop", "stop_unreadable", "should_stop_failed"})
+IMMEDIATE_TREE_KILL = frozenset({"terminal", "operator_stop", "stop_unreadable", "should_stop_failed", "interrupted"})
+# How long closing the monitor may take (the gate lock, the watcher thread) before the cleanup counts as FAILED.
+WATCHER_JOIN_S = 5.0
+
+
+class OwnedSessionNotQuiescent(RuntimeError):
+    """The owned session could not be shown to be gone (a tree that is not verified ended, a monitor that has not
+    finished). The caller must keep its ownership - the campaign lock - until the operator has checked."""
 
 
 class OwnedTree:
@@ -1610,23 +1617,71 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
         if stderr_path:
             stderr.close()
         return {"exit_code": proc.returncode, "killed": "no_tree_ownership"}
-    proc.stdin.write(prompt.encode("utf-8"))
-    proc.stdin.close()
+    # From here the owned job exists and EVERY exit path - normal, timeout, exception, KeyboardInterrupt - ends in
+    # the ``finally`` below: monitoring closed, the whole tree killed and verified gone. Only then does the
+    # function return or let the exception go on (review of PR 101, H1/H2).
     killed = {"reason": None}
-    guard = None if max_context_tokens is None else ContextGuard(max_context_tokens)
-
     stop_lock = threading.Lock()
+    gate_lock = threading.Lock()   # the one gate through which the monitor may act
+    gate = {"closed": False}
+    finished = threading.Event()
+    reader = watcher = None
+    failure: BaseException | None = None
+    on_stop = getattr(should_stop, "on_stop", None)
 
-    def stop(reason: str) -> None:
+    def stop(reason: str) -> bool:
         with stop_lock:  # the pump, the watcher and the timeout may all ask: the first reason wins
-            if killed["reason"] is None:
-                killed["reason"] = reason
-                if reason in IMMEDIATE_TREE_KILL:
-                    tree._terminate()  # noqa: SLF001 - the whole owned job/tree, now (G3)
-                proc.kill()  # the CLI alone: the proxy sees its input close and leaves with its engine
+            if killed["reason"] is not None:
+                return False
+            killed["reason"] = reason
+            if reason in IMMEDIATE_TREE_KILL:
+                tree._terminate()  # noqa: SLF001 - the whole owned job/tree, now (G3)
+            proc.kill()  # the CLI alone: the proxy sees its input close and leaves with its engine
+            return True
 
-    def pump():
-        for raw in proc.stdout:
+    def consult() -> None:
+        """One observation, then - only if the gate is still open and this is the first stop request - its side
+        effect (``should_stop.on_stop``: the stop file) and the kill, both under the gate lock. The observation
+        itself may be slow and runs outside the lock; its answer after the gate has closed is discarded."""
+        try:
+            reason = should_stop()
+        except Exception:  # noqa: BLE001 - a hook that cannot answer ends the session, fail closed
+            reason = "should_stop_failed"
+        if not reason:
+            return
+        with gate_lock:
+            if gate["closed"]:
+                return
+            with stop_lock:
+                first = killed["reason"] is None
+            if first and on_stop is not None:
+                try:
+                    on_stop(reason)
+                except Exception:  # noqa: BLE001 - an effect that fails does not stop the kill
+                    pass
+            stop(reason)
+
+    def watch():
+        while not finished.wait(poll_s):
+            consult()
+            if killed["reason"] is not None:
+                return
+
+    guard = None
+    try:
+        proc.stdin.write(prompt.encode("utf-8"))
+        proc.stdin.close()
+        guard = None if max_context_tokens is None else ContextGuard(max_context_tokens)
+
+        def pump():
+            try:
+                lines = iter(proc.stdout)
+                for raw in lines:
+                    consume(raw)
+            except (ValueError, OSError):  # the stream was closed under it at the end of the session
+                return
+
+        def consume(raw):
             text = raw.decode("utf-8", errors="replace")
             # The guard reads first and on its own: an event the reporting side cannot digest (an unhashable
             # id, a message that is not an object) must never stop the guard from seeing it.
@@ -1635,47 +1690,61 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
             try:
                 metrics.feed(text)
             except Exception:  # noqa: BLE001 - an event the metrics cannot read is a missing sample, not a crash
-                continue
+                return
             if metrics.init_problems or metrics.unexpected_tools:
                 stop("init" if metrics.init_problems else "tool_surface")
             if should_stop is not None:
-                try:
-                    reason = should_stop()
-                except Exception:  # noqa: BLE001 - a hook that cannot answer ends the session, fail closed
-                    reason = "should_stop_failed"
-                if reason:
-                    stop(reason)
+                consult()
 
-    reader = threading.Thread(target=pump, daemon=True)
-    reader.start()
-    finished = threading.Event()
-
-    def watch():
-        while not finished.wait(poll_s):
+        reader = threading.Thread(target=pump, daemon=True)
+        reader.start()
+        if should_stop is not None:
+            watcher = threading.Thread(target=watch, daemon=True)
+            watcher.start()
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            stop("timeout")
+            proc.wait()
+    except BaseException as error:  # noqa: BLE001 - KeyboardInterrupt, SystemExit and every other exception
+        failure = error  # the ``finally`` ends the whole owned tree at once (an exception always does) and verifies it
+    finally:
+        quiescent = True
+        # Close the gate: from this point no monitor answer can have an effect. Closing never waits for a slow
+        # observation (those run outside the lock), only for an effect already under way, which is short.
+        if gate_lock.acquire(timeout=WATCHER_JOIN_S):
+            gate["closed"] = True
+            gate_lock.release()
+        else:
+            quiescent = False
+        finished.set()
+        if watcher is not None:
+            watcher.join(timeout=WATCHER_JOIN_S)
+            quiescent = quiescent and not watcher.is_alive()
+        immediate = killed["reason"] in IMMEDIATE_TREE_KILL or failure is not None
+        if immediate:
+            tree._terminate()  # noqa: SLF001 - end the whole job NOW; ``shutdown`` would first wait for the CLI
+        try:
+            left = tree.shutdown(kill_cli=False, grace=0.0 if immediate else None)
+        except BaseException as error:  # noqa: BLE001 - a shutdown that itself fails is an unverified tree
+            left = 1
+            failure = failure or error
+        if reader is not None:
+            reader.join(timeout=10)
+        for stream in (proc.stdout,):
             try:
-                reason = should_stop()
-            except Exception:  # noqa: BLE001
-                reason = "should_stop_failed"
-            if reason:
-                stop(reason)
-                return
-    watcher = None
-    if should_stop is not None:
-        watcher = threading.Thread(target=watch, daemon=True)
-        watcher.start()
-    try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        stop("timeout")
-        proc.wait()
-    finished.set()
-    if watcher is not None:
-        watcher.join(timeout=5)  # no hook activity after this function returns
-    left = tree.shutdown(kill_cli=False, grace=0.0 if killed["reason"] in IMMEDIATE_TREE_KILL else None)
-    reader.join(timeout=10)
-    proc.stdout.close()
-    if stderr_path:
-        stderr.close()
+                stream.close()
+            except OSError:
+                pass
+        if stderr_path:
+            stderr.close()
+    if failure is not None or not quiescent:
+        if left or not quiescent:
+            raise OwnedSessionNotQuiescent(
+                "the owned session could not be shown to be gone "
+                f"(tree_left={left}, monitoring_finished={quiescent}): the campaign lock must stay until the "
+                "operator has checked") from failure
+        raise failure
     if guard is not None and killed["reason"] is None:
         killed["reason"] = guard.reason  # e.g. a result event that reports more than the cap
     out = {"exit_code": proc.returncode, "killed": killed["reason"]}

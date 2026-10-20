@@ -169,6 +169,7 @@ class G2UnverifiedLogTests(unittest.TestCase):
                 return real(path, *a, **k)
             with mock.patch.object(Path, "read_text", denied):
                 self.assertEqual(hook(), "terminal")
+            hook.on_stop("terminal")  # the effect run_claude applies through its gate
             self.assertTrue(stop.exists())
 
     def test_a_log_that_cannot_be_parsed_completely_ends_the_session_and_engages_the_stop(self):
@@ -176,6 +177,7 @@ class G2UnverifiedLogTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as tmp:
                 _log, stop, hook = self.hook_over(tmp, lambda p, b=body: p.write_text(b, encoding="utf-8"))
                 self.assertEqual(hook(), "terminal", body)
+                hook.on_stop("terminal")
                 self.assertTrue(stop.exists())
 
     def test_a_log_that_does_not_exist_yet_is_not_a_terminal_event(self):
@@ -397,7 +399,7 @@ class G4VerifiedContextTests(unittest.TestCase):
 
     def test_the_real_reader_asks_for_the_verified_context_first(self):
         source = (HERE / "pixel_win32.py").read_text(encoding="utf-8")
-        self.assertIn("SetThreadDpiAwarenessContext", source)
+        self.assertIn("GetDpiAwarenessContextForProcess", source)  # H3: the process level is what is verified
         measure = source[source.index("def measure_primary_display"):source.index("# ---- the shapes")]
         self.assertIn("ensure_dpi_aware", measure)
 

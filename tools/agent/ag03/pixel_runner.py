@@ -36,7 +36,9 @@ import hashlib
 import json
 import os
 import platform
+import signal
 import sys
+import threading
 import time
 import tomllib
 import uuid
@@ -215,27 +217,39 @@ def engage_stop(path: Path | None) -> str:
         return "failed"
 
 
-def session_stop_hook(log: Path, stop_file: Path | None, stat=None):
-    """The hook ``run_claude`` runs after every stream line and, independently of stdout, every few hundred
-    milliseconds (review of PR 101, F2): on the first terminal safety or uncertain-delivery state it engages the
-    stop file at once (create-if-absent) and asks for ``terminal``; an operator stop (the server's, or the file
-    appearing during silence) asks for ``operator_stop`` and the file is left alone; an unreadable stop file is
-    ``stop_unreadable`` (fail closed)."""
-    def hook() -> str | None:
-        kind = terminal_kind(log)
+class StopMonitor:
+    """What ``run_claude`` consults after every stream line and, independently of stdout, every few hundred
+    milliseconds (review of PR 101, F2): calling it only OBSERVES and returns a closed reason - ``terminal`` for the
+    first terminal safety, uncertain-delivery or unverifiable-log state, ``operator_stop`` for the operator's stop (the
+    server's, or the file appearing during silence), ``stop_unreadable`` (fail closed) - and has no side effect.
+    The side effect, ``on_stop`` (engage the stop file by exclusive create for a ``terminal`` reason; nothing for the
+    operator's own), is applied by ``run_claude`` through its gate, so it cannot happen after the session is over
+    (H2)."""
+
+    def __init__(self, log: Path, stop_file: Path | None, stat=None):
+        self.log, self.stop_file, self.stat = log, stop_file, stat
+
+    def __call__(self) -> str | None:
+        kind = terminal_kind(self.log)
         if kind in ("safety", "uncertain_delivery", "unverified"):
-            engage_stop(stop_file)
             return "terminal"
         if kind == "operator_stop":
             return "operator_stop"
-        if stop_file is not None:
-            state = w32.read_stop(stop_file, stat)
+        if self.stop_file is not None:
+            state = w32.read_stop(self.stop_file, self.stat)
             if state is True:
                 return "operator_stop"
             if state is None:
                 return "stop_unreadable"
         return None
-    return hook
+
+    def on_stop(self, reason: str) -> None:
+        if reason == "terminal":
+            engage_stop(self.stop_file)
+
+
+def session_stop_hook(log: Path, stop_file: Path | None, stat=None) -> StopMonitor:
+    return StopMonitor(log, stop_file, stat)
 
 
 def compress(labels: list[str]) -> list[str]:
@@ -638,7 +652,8 @@ def pool_check(campaign_dir: Path, name: str, phase: int, series_id: str, finger
 
 
 def run_series(args, goals: dict, out: Path, ledger: Path | None, stop_file: Path | None, proof: dict | None,
-               deps, driver, fingerprint: dict | None = None, claims: Path | None = None) -> tuple[list[sl.Slot], int]:
+               deps, driver, fingerprint: dict | None = None, claims: Path | None = None,
+               holder: dict | None = None) -> tuple[list[sl.Slot], int]:
     """The 11 goals of one repetition in the pre-registered order, through the slot machinery, on persisted claims:
     every attempt is claimed atomically before it runs and settled after, so a restart or a different ``--out``
     neither re-runs a settled slot nor grants a new attempt (review of PR 101, F5). Every attempt has its own
@@ -663,6 +678,8 @@ def run_series(args, goals: dict, out: Path, ledger: Path | None, stop_file: Pat
         if result.get("safety_event") and stop_file is not None:
             result["stop_engagement"] = engage_stop(stop_file)  # create-if-absent: never overwrites the operator's
         attempt = attempt_of(result)
+        if holder is not None and (result.get("cli") or {}).get("tree_left"):
+            holder["keep_lock"] = True  # the owned tree was not verified gone: the operator must check (H1)
         entry = {"attempt": number, "aborted": result.get("aborted"), "model_called": result.get("model_called"),
                  "harness_fault": result.get("harness_fault"), "success": (result.get("score") or {}).get("success"),
                  "fault": result.get("fault"), "safety_event": result.get("safety_event"),
@@ -802,10 +819,48 @@ def main(argv=None, deps=rg.RealDeps, driver=None, display=None) -> int:
         return 0
     args.campaign_dir.mkdir(parents=True, exist_ok=True)
     lock = acquire_lock(args.campaign_dir)  # one executor at a time, for the whole process lifetime (G1)
+    holder = {"keep_lock": False}
+    restore = install_signal_handlers()
     try:
-        return _run_series_locked(args, goals, deps, driver, display)
+        return _run_series_locked(args, goals, deps, driver, display, holder)
+    except rg.OwnedSessionNotQuiescent:
+        holder["keep_lock"] = True
+        raise
     finally:
-        release_lock(*lock)
+        restore()
+        if holder["keep_lock"]:
+            print(f"the campaign lock {lock[0]} is KEPT: an owned session could not be shown to be gone. Check that "
+                  "nothing of this campaign is still running, then remove the lock by hand; the runner never does",
+                  file=sys.stderr, flush=True)
+        else:
+            release_lock(*lock)  # only after the owned session of every attempt has been ended and verified (H1)
+
+
+def install_signal_handlers():
+    """Turns SIGTERM (and Ctrl+Break on Windows) into KeyboardInterrupt in the main thread, so a termination takes the
+    same orderly path as Ctrl+C: the owned tree is ended and verified, then the lock is released. Returns the undo."""
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+    names = ("SIGTERM", "SIGBREAK")
+    previous = {}
+
+    def raise_interrupt(signum, frame):  # noqa: ARG001
+        raise KeyboardInterrupt()
+    for name in names:
+        number = getattr(signal, name, None)
+        if number is not None:
+            try:
+                previous[number] = signal.signal(number, raise_interrupt)
+            except (ValueError, OSError):
+                pass
+
+    def restore():
+        for number, handler in previous.items():
+            try:
+                signal.signal(number, handler)
+            except (ValueError, OSError):
+                pass
+    return restore
 
 
 def acquire_lock(campaign_dir: Path) -> tuple[Path, str]:
@@ -835,7 +890,7 @@ def release_lock(path: Path, token: str) -> None:
         pass
 
 
-def _run_series_locked(args, goals, deps, driver, display) -> int:
+def _run_series_locked(args, goals, deps, driver, display, holder: dict) -> int:
     name = model_name(args)
     agent = pixel_cli(args)
     if (why := agent.refusal()) is not None:
@@ -871,7 +926,7 @@ def _run_series_locked(args, goals, deps, driver, display) -> int:
         raise SystemExit(f"the output directory {proxy_module.path_problem(out)}")
     out.mkdir(parents=True)  # never an existing directory: a series is not overwritten
     _slots, code = run_series(args, goals, out, args.ledger, rg.stop_path_of(config, config_dir), proof, deps,
-                              driver if driver is not None else rg.windows_driver(), fingerprint, claims)
+                              driver if driver is not None else rg.windows_driver(), fingerprint, claims, holder)
     return code
 
 

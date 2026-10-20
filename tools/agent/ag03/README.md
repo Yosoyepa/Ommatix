@@ -113,6 +113,10 @@ init, timeout, parse - earns a retry or discards a recorded terminal state), raw
 * **Lock**: a single exclusive `campaign.lock` in `--campaign-dir`, held for the whole process lifetime. A second executor
   (a series or a diagnostic) is refused outright - no waiting, no takeover, no guess about whether the owner is alive. A lock
   left by a hard crash is removed **by hand** by the operator, after checking that nothing of the campaign is still running.
+* **Interruption**: on every exit path (normal, exception, Ctrl+C, SIGTERM, Ctrl+Break) the owned job/tree is killed and
+  verified gone **before** the lock is released. If that cannot be verified, the lock is **kept** and the runner says so:
+  check that nothing of the campaign is running, then remove it by hand. The watcher's effects (stop file, kill) go through
+  one gate that is closed before `run_claude` returns, so nothing can act on an ended session.
 * **Logs**: a server log that cannot be read or parsed completely is a terminal **uncertain delivery** (deliveries unknown,
   not zero): the tree is killed, the stop is engaged and the attempt cannot score a success. Only a log that does not exist
   yet is not an event.
@@ -123,7 +127,8 @@ init, timeout, parse - earns a retry or discards a recorded terminal state), raw
   the primary pool: it writes only its own directory and never reads, creates or is constrained by the primary pool.
 * **Fingerprint**: built from the actual arguments (timeout, dollar or token cap, session budget, caps, effort,
   versions, instruction, backend) and the **measured** primary-monitor resolution and numeric scaling, read only in a per-monitor v2 DPI context
-  verified in the runner's own process and recorded beside them (an unmeasured or unverified display is refused); it must equal the campaign's (the refusal is recorded in `not_pooled.jsonl`).
+  verified at the **process** level (and the reading thread's) in the runner's own process - no thread-level fallback - and
+  recorded beside them (an unmeasured or unverified display is refused); it must equal the campaign's (the refusal is recorded in `not_pooled.jsonl`).
 * A terminated attempt (timeout, token cap, nonzero exit, provider error, capture refusal) cannot score a
   success; AG-02's raw answer is kept as `score_ag02` and the OS oracle as `oracle_only_ok`.
 * Native Claude keeps the registered 0.50 USD cap and effort `max`; a provider route has the context-token cap

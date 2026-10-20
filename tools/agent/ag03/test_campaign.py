@@ -153,6 +153,8 @@ class Series:
                 if hook is not None and ("safety" in behaviour or "uncertain" in behaviour or "operator" in behaviour):
                     reason = hook()
                     if reason:
+                        if getattr(hook, "on_stop", None) is not None:  # the gate applies the effect, as run_claude does
+                            hook.on_stop(reason)
                         return {"exit_code": None, "killed": reason}
                 if behaviour == "timeout":
                     return {"exit_code": -1, "killed": "timeout"}

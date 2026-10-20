@@ -316,26 +316,29 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
         return read_stop(self.stop_path, self._stat)
 
     def ensure_dpi_aware(self):
-        """Asks for per-monitor v2 and then READS the context the rectangle reads and the point mapping run
-        under; only that reading decides (``dpi_decision``), never the call's result or its error code."""
+        """Asks for per-monitor v2 for the PROCESS and then READS what holds, at both levels: the process (which is
+        what the numeric DPI API's contract is defined by) and the calling thread (which is what the rectangle reads
+        follow). Only per-monitor v2 at both levels passes (``dpi_decision``); the call's result and its error code
+        decide nothing, and there is **no thread-level fallback**: a thread override cannot certify a process
+        fixed as unaware (review of PR 101, H3)."""
         ctypes, wintypes = _ct()
-        user32, *_ = _dlls()
+        user32, kernel32, *_ = _dlls()
         user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
         user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
-        # The process default may already have been set by something else (access denied): ask for this thread too -
-        # a per-thread context needs no process-wide permission - and let the READ below decide.
-        user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
-        user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
-        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
         user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        user32.GetDpiAwarenessContextForProcess.argtypes = [ctypes.c_void_p]
+        user32.GetDpiAwarenessContextForProcess.restype = ctypes.c_void_p
         user32.AreDpiAwarenessContextsEqual.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         user32.GetAwarenessFromDpiAwarenessContext.argtypes = [ctypes.c_void_p]
-        context = user32.GetThreadDpiAwarenessContext()
-        if not context:
-            return False
-        equals = bool(user32.AreDpiAwarenessContextsEqual(context, ctypes.c_void_p(-4)))
-        awareness = int(user32.GetAwarenessFromDpiAwarenessContext(context))
-        return dpi_decision(decode_dpi_awareness(equals, awareness))
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        levels = []
+        for context in (user32.GetDpiAwarenessContextForProcess(kernel32.GetCurrentProcess()),
+                        user32.GetThreadDpiAwarenessContext()):
+            if not context:
+                return False
+            equals = bool(user32.AreDpiAwarenessContextsEqual(context, ctypes.c_void_p(-4)))
+            levels.append(decode_dpi_awareness(equals, int(user32.GetAwarenessFromDpiAwarenessContext(context))))
+        return all(dpi_decision(level) for level in levels)
 
     def primary_monitor_rect(self):
         """rcMonitor of the primary monitor (physical pixels under the verified per-monitor v2 context)."""
