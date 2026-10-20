@@ -604,13 +604,15 @@ class IconEngine(FakeEngine):
     own ``_meta`` record of each observation."""
 
     def __init__(self, curated=0, candidates=8, note=NOTE, pages=1, endless=False,
-                 fail_probes_after=None, work="full_refresh", curated_on_last_page=False,
+                 fail_probes_after=None, work="full", curated_on_last_page=False,
+                 main_curated=0, on_probe_page=None,
                  **kwargs):
         super().__init__(**kwargs)
         self.curated, self.candidates, self.note = curated, candidates, note
         self.pages, self.endless, self.work = pages, endless, work
         self.fail_probes_after = fail_probes_after
         self.curated_on_last_page = curated_on_last_page
+        self.main_curated, self.on_probe_page = main_curated, on_probe_page
         self.limits, self.cursors, self.probe_calls = [], [], 0
 
     def stderr_lines(self):
@@ -634,6 +636,8 @@ class IconEngine(FakeEngine):
             if first:
                 self.probe_calls += 1
                 self.index = 0
+                if self.on_probe_page is not None:
+                    self.on_probe_page(self.probe_calls)
             if (self.fail_probes_after is not None and self.probe_calls > self.fail_probes_after):
                 return ({"error": {"code": "CAPTURE_FAILED"}}, True, {}, 1.0)
             elements = self.snapshot_elements()
@@ -649,6 +653,9 @@ class IconEngine(FakeEngine):
         page, is_error, meta, rtt = super().call(name, arguments, timeout)
         if name == "observe_screen" and not is_error:
             meta = {**meta, common.PLAN_KEY: {"work": self.work, "region_count": 2}}
+            if self.main_curated:
+                # The regular observation (limit 1) lands on an accepted label.
+                page = {**page, "elements": [element("cache-icon-01", "curated_icon")]}
         return page, is_error, meta, rtt
 
 
@@ -729,8 +736,10 @@ class CriterionEvidence(Case):
         self.config.write_text(CACHE_TOML, encoding="utf-8")
 
     def run_c5(self, engine, **extra):
-        report, code = self.run_soak(FakeHost(engine=engine), icon_probe_every=12,
-                                     expect_cache=True, **extra)
+        return self.run_c5_with(FakeHost(engine=engine), **extra)
+
+    def run_c5_with(self, host, **extra):
+        report, code = self.run_soak(host, icon_probe_every=12, expect_cache=True, **extra)
         return report, report["criteria"]["icon_cache_exercised"]
 
     def test_roles_the_resolver_excludes_are_not_candidates(self):
@@ -791,6 +800,63 @@ class CriterionEvidence(Case):
                          (1.0, 1.0))
         self.assertEqual(report["counts"]["probes_skipped"], 0)
 
+    def test_the_engines_three_wire_names_are_the_ones_the_tool_reads(self):
+        # contract.rs WorkKind::as_str, copied unchanged by the MCP adapter's dto::plan_meta; the
+        # repository test `plan_work_names_in_the_perf_tools_are_the_wire_names` binds this
+        # constant to the real serializer.
+        self.assertEqual(common.PLAN_WORK_KINDS, ("full", "regions", "idle"))
+        self.assertEqual(common.PLAN_WORK_FULL, "full")
+
+    def test_an_accepted_label_already_read_stays_when_the_foreground_is_lost_after_it(self):
+        # RR105-2: one probe's page holds an accepted label, the foreground changes for the
+        # closing read and comes back; the other 119 probes are clean and complete.
+        class Flipping(FakeHost):
+            flip = False
+
+            def foreground_pid(self):
+                if self.flip:
+                    self.flip = False
+                    return 999
+                return super().foreground_pid()
+
+        engine = IconEngine()
+        host = Flipping(engine=engine)
+
+        def at_probe(n):
+            if n == 7:
+                engine.curated = 1
+            else:
+                engine.curated = 0
+
+        # The foreground read that follows the probe's page is the closing check: flip it.
+        original = engine.call
+
+        def call(name, arguments, timeout=0):
+            result = original(name, arguments, timeout)
+            if name == "observe_screen" and arguments.get("limit") == soak.PROBE_LIMIT \
+                    and engine.probe_calls == 7 and arguments.get("cursor") is None:
+                host.flip = True
+            return result
+
+        engine.on_probe_page = at_probe
+        engine.call = call
+        report, criterion = self.run_c5_with(host, minutes=120.0)
+        probe = report["icon_probe"]
+        self.assertEqual(probe["curated_icon"]["max"], 1, "the label that was read is recorded")
+        self.assertEqual(criterion["accepted_labels_max"], 1)
+        self.assertFalse(criterion["met"])
+        # The lost-foreground probe is not a success for coverage.
+        self.assertEqual((probe["scheduled"], probe["complete"], probe["incomplete"]),
+                         (120, 119, 1))
+
+    def test_an_accepted_label_on_a_regular_observation_fails_it_too(self):
+        # The regular observation asks for one element; if that one is an accepted label it was
+        # read, and it fails C5 whatever the probes see.
+        report, criterion = self.run_c5(IconEngine(main_curated=1), minutes=120.0)
+        self.assertEqual(report["icon_probe"]["curated_icon"]["max"], 0)
+        self.assertEqual(criterion["accepted_labels_max"], 1)
+        self.assertFalse(criterion["met"])
+
     def test_a_probe_while_the_application_is_not_in_front_counts_against_coverage(self):
         host = FakeHost(front=lambda t: APP if t < 600 else 999, engine=IconEngine())
         report, _ = self.run_soak(host, icon_probe_every=12, expect_cache=True, minutes=20.0,
@@ -811,9 +877,9 @@ class CriterionWorkload(Case):
         self.config.write_text(CACHE_TOML, encoding="utf-8")
 
     def test_the_plan_kind_of_every_observation_is_counted(self):
-        report, _ = self.run_soak(FakeHost(engine=IconEngine(work="full_refresh")),
+        report, _ = self.run_soak(FakeHost(engine=IconEngine(work="full")),
                                   icon_probe_every=12, expect_cache=True)
-        self.assertEqual(report["plan_work"], {"full_refresh": 24})
+        self.assertEqual(report["plan_work"], {"full": 24})
         self.assertNotIn("region_count", json.dumps(report["plan_work"]))
 
     def test_regional_observations_do_not_meet_it(self):
@@ -884,12 +950,12 @@ class CacheCriterion(Case):
         summary = {"scheduled": 20, "probes": 20, "complete": 20, "incomplete": 0,
                    "with_candidate": 19, "curated_icon": {"min": 0, "max": 0, "median": 0},
                    "vocabulary_labelled_max": 0}
-        plan = {"full_refresh": 20}
+        plan = {"full": 20}
         self.assertTrue(soak.cache_criterion(note, summary, plan)["met"])
         self.assertFalse(soak.cache_criterion(note, {**summary, "with_candidate": 18}, plan)["met"])
         self.assertFalse(soak.cache_criterion(note, {**summary, "complete": 18}, plan)["met"])
         self.assertFalse(soak.cache_criterion(note, {"scheduled": 0}, plan)["met"])
-        self.assertFalse(soak.cache_criterion(note, summary, {"full_refresh": 18, "regions": 2})["met"])
+        self.assertFalse(soak.cache_criterion(note, summary, {"full": 18, "regions": 2})["met"])
         self.assertFalse(soak.cache_criterion(note, summary, {})["met"])
 
     def test_it_refuses_to_judge_the_cache_without_a_probe_or_without_a_cache_block(self):

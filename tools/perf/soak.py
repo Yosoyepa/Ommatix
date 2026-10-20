@@ -292,6 +292,13 @@ def merge_counts(first: dict, second: dict) -> dict:
             "truncated": second["truncated"]}
 
 
+def accepted_count(page) -> int:
+    """How many elements of a decoded page carry an accepted label (``curated_icon``, or a label
+    of the synthetic vocabulary). Zero for anything that is not a snapshot page."""
+    found = probe_counts(page)
+    return 0 if found is None else max(found["curated_icon"], found["vocabulary_labelled"])
+
+
 def probe_summary(probes: list[dict], every: int, scheduled: int | None = None) -> dict:
     """The counts of every recorded probe, summarised, with the coverage account: how many probes
     were scheduled, how many are complete, incomplete (a truncated snapshot or a failed page) or
@@ -318,12 +325,13 @@ def probe_summary(probes: list[dict], every: int, scheduled: int | None = None) 
     return summary
 
 
-def cache_criterion(note: dict | None, summary: dict, plan: dict | None = None) -> dict:
+def cache_criterion(note: dict | None, summary: dict, plan: dict | None = None,
+                    observed_accepted: int = 0) -> dict:
     """S0 §19.4, C5 (option C, as amended): the engine started with curated prototypes; of the
     probes *scheduled*, at least ``PROBE_SHARE_MIN`` are complete and saw a resolver-eligible
     candidate; no probe, complete or not, saw an accepted label (a label would mean that the
     construction of the configuration is wrong); and at least ``PROBE_SHARE_MIN`` of the
-    observations were full refreshes by the engine's own plan record. A probe that failed or was
+    observations were full refreshes (`work = full`) by the engine's own plan record. A probe that failed or was
     cut short is missing evidence, never a pass."""
     plan = plan or {}
     scheduled = summary.get("scheduled", 0)
@@ -331,10 +339,11 @@ def cache_criterion(note: dict | None, summary: dict, plan: dict | None = None) 
     share_complete = complete / scheduled if scheduled else None
     share_candidate = summary.get("with_candidate", 0) / scheduled if scheduled else None
     observations = sum(plan.values())
-    share_full = plan.get("full_refresh", 0) / observations if observations else None
+    share_full = plan.get(common.PLAN_WORK_FULL, 0) / observations if observations else None
     loaded = note is not None and note["prototypes"] >= 1
     curated = summary.get("curated_icon", {}).get("max")
-    accepted = None if curated is None else max(curated, summary.get("vocabulary_labelled_max", 0))
+    accepted = (None if curated is None else
+                max(curated, summary.get("vocabulary_labelled_max", 0), observed_accepted))
 
     def floor(share) -> bool:
         return share is not None and share >= PROBE_SHARE_MIN
@@ -344,7 +353,7 @@ def cache_criterion(note: dict | None, summary: dict, plan: dict | None = None) 
                  "complete and >= "
                  f"{PROBE_SHARE_MIN:.0%} with a resolver-eligible candidate; zero accepted labels "
                  f"in every probe, complete or not; >= {PROBE_SHARE_MIN:.0%} of the observations "
-                 "full refreshes by the engine's plan record"),
+                 "full refreshes (work = full) by the engine's plan record"),
         "cache_note": note, "scheduled": scheduled, "complete": complete,
         "incomplete": summary.get("incomplete", 0), "skipped": summary.get("skipped", 0),
         "share_complete": None if share_complete is None else round(share_complete, 4),
@@ -548,10 +557,14 @@ class Soak:
                 break
             if pages >= PROBE_PAGES_MAX:
                 break
-        if merged is None or self.host.foreground_pid() != app.pid:
+        if merged is None:
             counts["probes_skipped"] += 1
             return
-        merged["complete"] = complete and (total is None or merged["elements"] == total)
+        # What was read is kept even if the foreground changed after it: a label already seen
+        # must keep failing C5. Such a probe is not complete, so it is no success for coverage.
+        in_front = self.host.foreground_pid() == app.pid
+        merged["complete"] = (complete and in_front
+                              and (total is None or merged["elements"] == total))
         merged["pages"] = pages
         probes.append(merged)
 
@@ -598,6 +611,9 @@ class Soak:
             consecutive_lost = 0
             page, is_error, meta, rtt = engine.call(
                 "observe_screen", {"limit": 1}, timeout=a.call_timeout)
+            if every and not is_error:  # an accepted label read anywhere stays recorded
+                counts["accepted_labels_seen"] = max(
+                    counts.get("accepted_labels_seen", 0), accepted_count(page))
             if self.host.foreground_pid() != app.pid:
                 # The screen changed under the observation: its latency is not comparable.
                 counts["discarded_latencies"] += 1
@@ -691,7 +707,8 @@ class Soak:
                 probes or [], every, report["counts"].get("probes_scheduled", 0))
             if getattr(a, "expect_cache", False):
                 report["criteria"]["icon_cache_exercised"] = cache_criterion(
-                    report.get("cache_note"), report["icon_probe"], plan_work)
+                    report.get("cache_note"), report["icon_probe"], plan_work,
+                    report["counts"].get("accepted_labels_seen", 0))
 
 
 def build_parser() -> argparse.ArgumentParser:

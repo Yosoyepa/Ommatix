@@ -24,6 +24,13 @@ DEFAULT_EXE = REPO / "target" / "release" / "ommatix.exe"
 S3_DRIVER = REPO / "tools" / "s3" / "mcp_driver.py"
 TIMINGS_KEY = "io.ommatix/timings"
 PLAN_KEY = "io.ommatix/plan"
+#: The three kinds of work in the engine's plan record, as the wire carries them
+#: (``WorkKind::as_str`` in ``src/application/src/contract.rs``, copied unchanged by the MCP
+#: adapter's ``dto::plan_meta``). The repository test ``plan_work_names_in_the_perf_tools_are_the_
+#: wire_names`` binds this tuple to the real serializer, so that no fake producer and consumer can
+#: agree on a name the engine never emits.
+PLAN_WORK_KINDS = ("full", "regions", "idle")
+PLAN_WORK_FULL = "full"
 
 
 # ---- pure helpers -------------------------------------------------------------------------
@@ -49,8 +56,8 @@ def summary(values: list[float]) -> dict:
 
 def plan_work(meta: dict) -> str | None:
     """The kind of work the planner chose for the observation behind a response, from the
-    engine's own ``_meta`` record (``full_refresh``, ``regions`` or ``nothing``); None when the
-    response carries no plan. Only the closed name: no region, no size."""
+    engine's own ``_meta`` record (one of ``PLAN_WORK_KINDS``: ``full``, ``regions`` or ``idle``);
+    None when the response carries no plan. Only the closed name: no region, no size."""
     plan = meta.get(PLAN_KEY) if isinstance(meta, dict) else None
     work = plan.get("work") if isinstance(plan, dict) else None
     return work if isinstance(work, str) else None
