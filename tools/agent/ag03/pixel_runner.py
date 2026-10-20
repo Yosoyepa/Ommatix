@@ -39,6 +39,7 @@ import platform
 import sys
 import time
 import tomllib
+import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -57,6 +58,7 @@ import proxy as proxy_module  # noqa: E402
 import run_goal as rg  # noqa: E402
 
 MODEL_NAMES = {None: "Haiku", "deepseek": "DeepSeek", "mimo": "MiMo"}
+LOCK_NAME = "campaign.lock"
 NATIVE_DOLLAR_CAP = 0.5   # decision 11: the native Claude route keeps its 0.50 USD CLI cap
 EFFORT = "max"            # decision 11 / ADR-0037: effort max, on every route and on the native path
 # Closed words for why an attempt ended without a trustworthy outcome (review of PR 101, R8).
@@ -120,23 +122,20 @@ def pixel_log_summary(log: Path) -> dict:
     out = {"live_forwarded": 0, "delivered": 0, "uncertain_delivery": 0, "terminal": None, "proxy_refusals": {},
            "complete": False, "click_labels": [], "screenshots": 0, "screenshot_dims": [], "png_bytes": [],
            "calls": 0, "refused_calls": 0, "capture_refused": False, "capture_reasons": {}}
-    try:
-        lines = log.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return out | {"log": "unreadable"}
+    records, status = read_log(log, final=True)
+    out["log_status"], out["delivery_unknown"] = status, False
+    if status in ("unreadable", "corrupt"):
+        # Unverifiable evidence is a terminal uncertain outcome: the deliveries are UNKNOWN, not zero (G2)
+        out |= {"terminal": "uncertain_delivery", "delivery_unknown": True, "delivered": "unknown"}
     last = None
-    for line in lines:
-        try:
-            r = json.loads(line)
-        except ValueError:
-            continue
+    for r in records:
         last = r
         if r.get("end"):
             continue
         out["calls"] += 1
         if r.get("reserved"):
             out["live_forwarded"] += 1
-        if r.get("delivered"):
+        if r.get("delivered") and not out["delivery_unknown"]:
             out["delivered"] += 1
         if r.get("delivered") == "uncertain":
             out["uncertain_delivery"] += 1
@@ -155,25 +154,48 @@ def pixel_log_summary(log: Path) -> dict:
             if code == "CAPTURE_REFUSED":
                 out["capture_refused"] = True
                 out["capture_reasons"][r.get("reason")] = out["capture_reasons"].get(r.get("reason"), 0) + 1
-    out["complete"] = bool(last and last.get("end") is True)
+    out["complete"] = bool(last and last.get("end") is True) and status == "ok"
     return out
 
 
-def terminal_kind(log: Path) -> str | None:
-    """The first terminal state the server latched (``safety``, ``uncertain_delivery`` or ``operator_stop``), read
-    from its metadata log; None while there is none (or no log yet)."""
+def read_log(log: Path, *, final: bool = False) -> tuple[list[dict], str]:
+    """The server's metadata log as (records, status). ``absent``: the file does not exist (the server has not
+    started, or never did); ``unreadable``: it exists and cannot be read; ``corrupt``: a complete line is not a JSON
+    object (while the server runs, a last line without its newline is a write in progress and is waited for; once
+    the session is over, ``final``, it is corrupt too); ``ok`` otherwise. Anything but ``absent`` and ``ok`` is
+    evidence that cannot be verified, and the callers treat it as a terminal uncertain outcome (review of
+    PR 101, G2) - never as "nothing happened"."""
     try:
-        lines = log.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return None
-    for line in lines:
+        text = log.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return [], "absent"
+    except Exception:  # noqa: BLE001 - denied, I/O error, bad encoding: all unverifiable
+        return [], "unreadable"
+    *complete, tail = text.split("\n")
+    records: list[dict] = []
+    for line in complete:
+        if not line.strip():
+            continue
         try:
             record = json.loads(line)
         except ValueError:
-            continue
-        if isinstance(record, dict) and record.get("terminal"):
+            return records, "corrupt"
+        if not isinstance(record, dict):
+            return records, "corrupt"
+        records.append(record)
+    if tail.strip() and final:
+        return records, "corrupt"
+    return records, "ok"
+
+
+def terminal_kind(log: Path) -> str | None:
+    """The first terminal state the server latched (``safety``, ``uncertain_delivery`` or ``operator_stop``), or
+    ``unverified`` when the log cannot be read or parsed; None while there is none (or no log yet)."""
+    records, status = read_log(log)
+    for record in records:
+        if record.get("terminal"):
             return record["terminal"]
-    return None
+    return "unverified" if status in ("unreadable", "corrupt") else None
 
 
 def engage_stop(path: Path | None) -> str:
@@ -201,7 +223,7 @@ def session_stop_hook(log: Path, stop_file: Path | None, stat=None):
     ``stop_unreadable`` (fail closed)."""
     def hook() -> str | None:
         kind = terminal_kind(log)
-        if kind in ("safety", "uncertain_delivery"):
+        if kind in ("safety", "uncertain_delivery", "unverified"):
             engage_stop(stop_file)
             return "terminal"
         if kind == "operator_stop":
@@ -251,6 +273,8 @@ def terminal_fault(ran: dict, summary: dict, server: dict) -> str | None:
     operator's stop. The imported AG-02 scorer is left as it is and its answer is kept beside this."""
     if server.get("terminal") == "operator_stop" or ran.get("killed") in ("operator_stop", "stop_unreadable"):
         return ran.get("killed") if ran.get("killed") == "stop_unreadable" else "operator_stop"
+    if server.get("log_status") in ("unreadable", "corrupt"):
+        return "log_unverified"
     if server.get("capture_refused"):
         return "capture_refused"
     killed = ran.get("killed")
@@ -326,7 +350,7 @@ def series_fingerprint(args, proof: dict, display: dict) -> dict:
         "resolved_model": proof["model"], "route_host": cli.provenance().get("route_host", "api.anthropic.com"),
         "effort": EFFORT, "proof_schema": proof["schema"], "proof_verifier_revision": proof["verifier_revision"],
         "machine": platform.platform(), "monitor_resolution": display.get("resolution"),
-        "monitor_scaling": display.get("scaling"),
+        "monitor_scaling": display.get("scaling"), "dpi_context": display.get("dpi_context"),
         "caps": json.dumps(effective_caps(args), sort_keys=True),
         "capture_backend": display.get("capture_backend"), "instruction_sha256": pa.instruction_sha256(),
         "session_budget": args.max_live_session,
@@ -526,12 +550,17 @@ def real_display_facts(api=None, admission: Path | None = None) -> dict:
     measured = w32.measure_primary_display(api) or {}
     record = cap.load_admission(admission) if admission is not None else None
     return {"resolution": measured.get("resolution"), "scaling": measured.get("scaling"),
-            "capture_backend": record.backend if record else None}
+            "dpi_context": measured.get("dpi_context"), "capture_backend": record.backend if record else None}
 
 
 def display_problems(facts: dict) -> list[str]:
-    return [f"display {key} is not measured" for key in ("resolution", "scaling", "capture_backend")
-            if not facts.get(key)]
+    """What is not measured, or not measured in a verified context (G4): the monitor's numbers count only with
+    the per-monitor v2 context verified in this process, recorded beside them."""
+    problems = [f"display {key} is not measured" for key in ("resolution", "scaling", "capture_backend")
+                if not facts.get(key)]
+    if facts.get("dpi_context") != w32.DPI_V2:
+        problems.append("display dpi_context is not verified (per-monitor v2 in this process)")
+    return problems
 
 
 # ---- persistent claims: a primary slot is settled once, whatever --out says ------------------------
@@ -771,6 +800,42 @@ def main(argv=None, deps=rg.RealDeps, driver=None, display=None) -> int:
                                                                               args.repetition, line["goal"]]},
                              ensure_ascii=False))
         return 0
+    args.campaign_dir.mkdir(parents=True, exist_ok=True)
+    lock = acquire_lock(args.campaign_dir)  # one executor at a time, for the whole process lifetime (G1)
+    try:
+        return _run_series_locked(args, goals, deps, driver, display)
+    finally:
+        release_lock(*lock)
+
+
+def acquire_lock(campaign_dir: Path) -> tuple[Path, str]:
+    """The campaign's single exclusive lock, held until the process ends (review of PR 101, G1). A second executor
+    is refused outright - there is no waiting, no takeover and no recovery by guessing whether the owner is alive: a
+    lock left behind by a crash is for the operator to remove **by hand**, after checking that no executor or
+    session of this campaign is still running. Creation is exclusive, so two initial pool writers cannot both win."""
+    path = Path(campaign_dir) / LOCK_NAME
+    token = uuid.uuid4().hex
+    try:
+        with open(path, "x", encoding="utf-8") as handle:
+            handle.write(json.dumps({"pid": os.getpid(), "token": token,
+                                     "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}))
+    except FileExistsError:
+        raise SystemExit(f"another executor holds the campaign lock {path} (or one crashed holding it): nothing was "
+                         "started. If you are sure no executor or session of this campaign is running, remove the "
+                         "file by hand; the runner never does") from None
+    return path, token
+
+
+def release_lock(path: Path, token: str) -> None:
+    """Removes the lock only if it is still the one this process created."""
+    try:
+        if json.loads(path.read_text(encoding="utf-8")).get("token") == token:
+            path.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def _run_series_locked(args, goals, deps, driver, display) -> int:
     name = model_name(args)
     agent = pixel_cli(args)
     if (why := agent.refusal()) is not None:
@@ -791,8 +856,8 @@ def main(argv=None, deps=rg.RealDeps, driver=None, display=None) -> int:
         raise SystemExit("refused, " + "; ".join(problems) + " (no pooling without a measured display)")
     fingerprint = series_fingerprint(args, proof, facts)
     series_id = f"{name}/AG-03/phase{args.phase}/rep{args.repetition}"
-    args.campaign_dir.mkdir(parents=True, exist_ok=True)
-    pool_check(args.campaign_dir, name, args.phase, series_id, fingerprint)
+    if not args.diagnostic:  # a diagnostic neither reads nor creates nor is constrained by the primary pool (G5)
+        pool_check(args.campaign_dir, name, args.phase, series_id, fingerprint)
     claims = claim_dir(args.campaign_dir, name, args.phase, args.repetition, diagnostic=args.diagnostic)
     if not args.diagnostic and claims.exists():
         if (claims / "stopped.json").exists():

@@ -317,6 +317,9 @@ class FakeDisplayApi:
     def __init__(self, primary=(0, 0, 2560, 1440), dpi=96, virtual=(0, 0, 2560, 1440)):
         self._primary, self._dpi, self._virtual = primary, dpi, virtual
 
+    def ensure_dpi_aware(self):
+        return True
+
     def primary_monitor_rect(self):
         return self._primary
 
@@ -340,7 +343,8 @@ class F6DisplayTests(unittest.TestCase):
 
     def test_the_primary_monitor_is_measured_not_the_virtual_desktop(self):
         api = FakeDisplayApi(primary=(0, 0, 1920, 1080), dpi=120, virtual=(-1920, 0, 3840, 1080))
-        self.assertEqual(w32.measure_primary_display(api), {"resolution": "1920x1080", "scaling": 125})
+        self.assertEqual(w32.measure_primary_display(api), {"resolution": "1920x1080", "scaling": 125,
+                                                                           "dpi_context": "per_monitor_v2"})
 
     def test_a_secondary_monitor_layout_does_not_stand_in_for_the_primary(self):
         one = w32.measure_primary_display(FakeDisplayApi(virtual=(0, 0, 2560, 1440)))
@@ -354,23 +358,25 @@ class F6DisplayTests(unittest.TestCase):
         self.assertEqual((facts["resolution"], facts["scaling"]), ("2560x1440", 150))
 
     def test_the_same_resolution_with_a_different_scaling_changes_the_pool_key(self):
-        a = Series(self, display={"resolution": "2560x1440", "scaling": 100, "capture_backend": "printwindow"})
+        a = Series(self, display={"resolution": "2560x1440", "scaling": 100, "capture_backend": "printwindow",
+                                  "dpi_context": "per_monitor_v2"})
         a.run()
         pool = a.root / "campaign" / "campaign-Haiku-AG-03-phase1.json"
         stored = json.loads(pool.read_text(encoding="utf-8"))
         self.assertEqual(stored["monitor_scaling"], 100)
         # same campaign directory, same everything else, only the scaling differs
         b2 = Series(self, root=a.root, rep=2, display={"resolution": "2560x1440", "scaling": 125,
-                                                       "capture_backend": "printwindow"})
+                                                       "capture_backend": "printwindow", "dpi_context": "per_monitor_v2"})
         with self.assertRaises(SystemExit) as raised:
             b2.run()
         self.assertIn("monitor_scaling", str(raised.exception))
         self.assertEqual(b2.calls, [])
 
     def test_unknown_scaling_or_resolution_is_refused_before_any_session(self):
-        for display in ({"resolution": "2560x1440", "scaling": None, "capture_backend": "printwindow"},
-                        {"resolution": None, "scaling": 100, "capture_backend": "printwindow"},
-                        {"resolution": "2560x1440", "scaling": 100, "capture_backend": None}):
+        v2 = {"dpi_context": "per_monitor_v2"}
+        for display in ({"resolution": "2560x1440", "scaling": None, "capture_backend": "printwindow", **v2},
+                        {"resolution": None, "scaling": 100, "capture_backend": "printwindow", **v2},
+                        {"resolution": "2560x1440", "scaling": 100, "capture_backend": None, **v2}):
             s = Series(self, display=display)
             with self.subTest(display), self.assertRaises(SystemExit) as raised:
                 s.run()

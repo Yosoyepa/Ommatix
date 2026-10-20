@@ -137,7 +137,7 @@ class ResultAndSourceTests(unittest.TestCase):
     def test_no_module_writes_a_file_except_the_reviewed_sites(self):
         # The only writers of the ag03 package: the server's metadata log, the runner's per-goal result,
         # MCP config and stop file, the probe's and the preflight's result files. Nothing writes pixels.
-        allowed = {"pixel_server.py": 1, "pixel_runner.py": 8, "pixel_preflight.py": 2, "probe_image.py": 2}
+        allowed = {"pixel_server.py": 1, "pixel_runner.py": 9, "pixel_preflight.py": 2, "probe_image.py": 2}
         pattern = re.compile(r"\.write_text\(|\.write_bytes\(|open\([^)]*[\"'](?:w|a|wb|ab|w\+|a\+|x)[\"']")
         for path in sorted(HERE.glob("*.py")):
             if path.name.startswith(("test_", "fake_")):

@@ -92,7 +92,7 @@ A refusal after the reservation **keeps it**. A failed Win32 read is unknown evi
 
 | Guard | Examples | Meaning |
 |---|---|---|
-| 5, 6, 7 and the window/foreground/focus/modifier parts of the delivery check; a click outside the window or the image; unreadable system evidence | `FOREGROUND_NOT_TARGET_PROCESS`, `POINT_WINDOW_MISMATCH`, `MODIFIER_HELD`, `POINT_OUTSIDE_CLIENT`, `OS_READ_FAILED` | **Terminal safety event**: the server latches (`SESSION_TERMINATED` to every later call, screenshots included), an independent watcher (not the CLI's next output line) stops the owned session tree within a few hundred milliseconds, the stop file is created by exclusive create (never overwritten or deleted) and the series ends |
+| 5, 6, 7 and the window/foreground/focus/modifier parts of the delivery check; a click outside the window or the image; unreadable system evidence | `FOREGROUND_NOT_TARGET_PROCESS`, `POINT_WINDOW_MISMATCH`, `MODIFIER_HELD`, `POINT_OUTSIDE_CLIENT`, `OS_READ_FAILED` | **Terminal safety event**: the server latches (`SESSION_TERMINATED` to every later call, screenshots included), an independent watcher (not the CLI's next output line) kills the **whole owned job/tree at once, with no grace**, within a few hundred milliseconds, the stop file is created by exclusive create (never overwritten or deleted) and the series ends |
 | A failed, partial or uncertain `SendInput` | `INPUT_FAILED` | **Terminal, uncertain delivery**: logged `delivered: "uncertain"` with the inserted count, never reported as nothing sent, never retried |
 | Items 1 and the stop part of the delivery check (present or unreadable) | `STOP_ENGAGED`, `STOP_UNREADABLE` | **Operator stop**: the campaign ends; not a safety event; the runner neither creates nor deletes the operator's file |
 | Item 3 and the age part of the delivery check; item 4 (budget); arguments, caps, a capture refusal | `SCREENSHOT_STALE`, `LIVE_BUDGET_EXHAUSTED`, `CAPTURE_REFUSED` | Ordinary scored refusals: the session goes on |
@@ -110,14 +110,20 @@ init, timeout, parse - earns a retry or discards a recorded terminal state), raw
 * **Gate**: `--gate-record` must be this model's passing record, bound to the requested model, its attested
   (resolved) identity and, on a route, the endpoint; only the owner's accepted set runs (Haiku 5.5,
   `deepseek-flash`, `mimo-v2.6-flash`). A mismatch is refused before any application or session.
+* **Lock**: a single exclusive `campaign.lock` in `--campaign-dir`, held for the whole process lifetime. A second executor
+  (a series or a diagnostic) is refused outright - no waiting, no takeover, no guess about whether the owner is alive. A lock
+  left by a hard crash is removed **by hand** by the operator, after checking that nothing of the campaign is still running.
+* **Logs**: a server log that cannot be read or parsed completely is a terminal **uncertain delivery** (deliveries unknown,
+  not zero): the tree is killed, the stop is engaged and the attempt cannot score a success. Only a log that does not exist
+  yet is not an event.
 * **Claims**: every attempt is claimed atomically in `--campaign-dir` before it runs and settled after, so a
   different `--out`, a restart or a second invocation never re-runs a settled primary slot nor grants a new
   attempt; an interrupted series resumes from its claims (an attempt that never recorded an outcome counts as
   consumed, of unknown progress); a settled or stopped series is refused. `--diagnostic` runs a series outside
-  the primary pool, recorded as such.
+  the primary pool: it writes only its own directory and never reads, creates or is constrained by the primary pool.
 * **Fingerprint**: built from the actual arguments (timeout, dollar or token cap, session budget, caps, effort,
-  versions, instruction, backend) and the **measured** primary-monitor resolution and numeric scaling (an
-  unmeasured display is refused); it must equal the campaign's (the refusal is recorded in `not_pooled.jsonl`).
+  versions, instruction, backend) and the **measured** primary-monitor resolution and numeric scaling, read only in a per-monitor v2 DPI context
+  verified in the runner's own process and recorded beside them (an unmeasured or unverified display is refused); it must equal the campaign's (the refusal is recorded in `not_pooled.jsonl`).
 * A terminated attempt (timeout, token cap, nonzero exit, provider error, capture refusal) cannot score a
   success; AG-02's raw answer is kept as `score_ag02` and the OS oracle as `oracle_only_ok`.
 * Native Claude keeps the registered 0.50 USD cap and effort `max`; a provider route has the context-token cap

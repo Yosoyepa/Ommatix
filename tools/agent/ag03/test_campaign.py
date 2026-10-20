@@ -10,6 +10,7 @@ import io
 import json
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -54,7 +55,7 @@ class Series:
         proof_model = resolved_id or model_id  # the attested (resolved) identity
         self.model_id = model_id
         self.display = display if display is not None else {"resolution": "2560x1440", "scaling": 100,
-                                                          "capture_backend": "printwindow"}
+                                                          "capture_backend": "printwindow", "dpi_context": "per_monitor_v2"}
         route_url = agentcli.CLAUDE_ROUTES[route]["base_urls"][0] if route else None
         gate_file = root / f"gate-{self.name}.json"
         provider = route or "anthropic"
@@ -136,8 +137,16 @@ class Series:
                     metrics.feed(json.dumps(line))
                     if metrics.init_problems:  # the real runner ends the session at once
                         break
-                (attempt_dir / f"{goal_id}.pixel.jsonl").write_text(
-                    "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+                log_path = attempt_dir / f"{goal_id}.pixel.jsonl"
+                if behaviour != "nolog":
+                    log_path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+                if behaviour == "log_corrupt":
+                    log_path.write_text(log_path.read_text(encoding="utf-8") + "this is not json\n", encoding="utf-8")
+                if behaviour == "log_denied":
+                    harness.deny_path = log_path  # the final summary cannot read it (see Series.run)
+                if behaviour == "block":
+                    harness.started.set()
+                    harness.release.wait(60)
                 if behaviour == "safety_race":
                     harness.stop.write_bytes(b"operator-marker")
                 hook = k.get("should_stop")
@@ -149,6 +158,8 @@ class Series:
                     return {"exit_code": -1, "killed": "timeout"}
                 return {"exit_code": 0, "killed": None}
         self.deps = Deps
+        self.deny_path = None
+        self.started, self.release = threading.Event(), threading.Event()
 
     def events_for(self, goal, behaviour):
         labels, text = goal["choice"]["labels"], goal["choice"]["type_text"]
@@ -156,6 +167,8 @@ class Series:
         if goal.get("phase1_verdict") == "impossible":
             events = events[:-1] + [final("VERDICT: IMPOSSIBLE")]
         records = [shot(), *[click(label) for label in labels]]
+        if behaviour in ("log_denied", "log_corrupt"):
+            records.append(refused("click", "FOREGROUND_NOT_TARGET_PROCESS", reserved=True, terminal="safety"))
         if behaviour in ("safety", "safety_race", "noinit_safety"):
             records.append(refused("click", "FOREGROUND_NOT_TARGET_PROCESS", reserved=True, terminal="safety"))
         elif behaviour in ("operator_stop", "noinit_operator_stop"):
@@ -167,9 +180,21 @@ class Series:
             records.append(refused("screenshot", "CAPTURE_REFUSED", reason="BACKEND_FAILED"))
         return events, [*records, END]
 
+    def denying_read_text(self):
+        """``Path.read_text`` that refuses the one log path the scenario denies (permission denied)."""
+        real = Path.read_text
+        harness = self
+
+        def read_text(path, *a, **k):
+            if harness.deny_path is not None and path == harness.deny_path:
+                raise PermissionError("denied")
+            return real(path, *a, **k)
+        return mock.patch.object(Path, "read_text", read_text)
+
     def run(self, extra=()):
         stdout = io.StringIO()
-        with mock.patch.object(rg, "ancestor_context", return_value=[]), contextlib.redirect_stdout(stdout):
+        with mock.patch.object(rg, "ancestor_context", return_value=[]), contextlib.redirect_stdout(stdout), \
+                self.denying_read_text():
             (self.root / "folders").mkdir(exist_ok=True)
             code = pr.main([*self.argv, *extra], deps=self.deps, driver=object(), display=self.display)
         return code

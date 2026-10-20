@@ -1436,6 +1436,10 @@ class ContextGuard:
 
 
 PROCESS_TREE_GRACE_S = 40.0  # the proxy waits up to 30 s for its engine to leave, then kills it
+# The reasons a ``should_stop`` hook may give (AG-03): a terminal safety or uncertain-delivery state, the operator's
+# stop, an unreadable stop file, a monitor that failed. They end the WHOLE owned job/tree at once - no receipts
+# to wait for, no grace - and the shutdown then only verifies, within a bound, that nothing is left.
+IMMEDIATE_TREE_KILL = frozenset({"terminal", "operator_stop", "stop_unreadable", "should_stop_failed"})
 
 
 class OwnedTree:
@@ -1617,6 +1621,8 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
         with stop_lock:  # the pump, the watcher and the timeout may all ask: the first reason wins
             if killed["reason"] is None:
                 killed["reason"] = reason
+                if reason in IMMEDIATE_TREE_KILL:
+                    tree._terminate()  # noqa: SLF001 - the whole owned job/tree, now (G3)
                 proc.kill()  # the CLI alone: the proxy sees its input close and leaves with its engine
 
     def pump():
@@ -1663,7 +1669,9 @@ def run_claude(argv: list[str], prompt: str, cwd: Path, metrics: StreamMetrics,
         stop("timeout")
         proc.wait()
     finished.set()
-    left = tree.shutdown(kill_cli=False)
+    if watcher is not None:
+        watcher.join(timeout=5)  # no hook activity after this function returns
+    left = tree.shutdown(kill_cli=False, grace=0.0 if killed["reason"] in IMMEDIATE_TREE_KILL else None)
     reader.join(timeout=10)
     proc.stdout.close()
     if stderr_path:

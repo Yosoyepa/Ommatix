@@ -162,10 +162,15 @@ def decode_display(rect, dpi) -> dict | None:
 
 def measure_primary_display(api) -> dict | None:
     """What the series' display really is: the PRIMARY monitor's size and scaling, read through ``api``
-    (``primary_monitor_rect``, ``primary_effective_dpi``) - not the virtual desktop, whose size changes with a
-    secondary monitor, and not the process' DPI awareness, which says nothing about the scaling."""
+    (``ensure_dpi_aware``, ``primary_monitor_rect``, ``primary_effective_dpi``) - not the virtual desktop, whose
+    size changes with a secondary monitor. The DPI is read only after ``ensure_dpi_aware`` has VERIFIED, in this
+    very process, the per-monitor v2 context the read needs (an unaware caller is handed 96 by the API whatever the
+    real scaling); without it the display is unknown. The verified context is recorded beside the numbers."""
     try:
-        return decode_display(api.primary_monitor_rect(), api.primary_effective_dpi())
+        if not api.ensure_dpi_aware():
+            return None
+        measured = decode_display(api.primary_monitor_rect(), api.primary_effective_dpi())
+        return None if measured is None else measured | {"dpi_context": DPI_V2}
     except Exception:  # noqa: BLE001 - an unreadable display is an unknown display
         return None
 
@@ -317,6 +322,11 @@ class RealOs(OsReader):  # pragma: no cover - the Win32 parts are never executed
         user32, *_ = _dlls()
         user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
         user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        # The process default may already have been set by something else (access denied): ask for this thread too -
+        # a per-thread context needs no process-wide permission - and let the READ below decide.
+        user32.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        user32.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        user32.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))
         user32.GetThreadDpiAwarenessContext.restype = ctypes.c_void_p
         user32.AreDpiAwarenessContextsEqual.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
         user32.GetAwarenessFromDpiAwarenessContext.argtypes = [ctypes.c_void_p]
