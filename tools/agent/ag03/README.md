@@ -17,12 +17,12 @@ provider**, and the first three lines below are the reason the rest is not yet a
 | 1 `pixel_server.py`, guards, synthetic mode | implemented, unit-tested with fakes | The `SendInput`/`PrintWindow` paths are written and **never executed** |
 | 2 fidelity and isolation of `PrintWindow` on synthetic windows | **not done, not allowed yet** | Needs the owner: it puts synthetic windows on the screen. Without its admission record the server returns **no image** |
 | 3 preflight and proof (native and routes) | implemented, tested against the stand-in | Run `pixel_preflight.py` with the owner; no provider is reached |
-| 3b gate smoke per model | **not done, not allowed yet** | A real provider call with synthetic images: needs the owner's go-ahead and the OI-2 reading recorded for the provider. OI-1 (the Claude account's plan and model-improvement setting) was answered by the owner on 2026-10-20 (consumer subscription, "Help improve our AI models" off), so the Claude gate smoke precondition is met |
+| 3b gate smoke per model | runner implemented (`gate_smoke.py`), tested with fakes; **not run: no provider has been called** | A real provider call with synthetic images: needs the owner's go-ahead file (`--print-preconditions-command`) and the OI-2 reading recorded for the provider. OI-1 (the Claude account's plan and model-improvement setting) was answered by the owner on 2026-10-20 (consumer subscription, "Help improve our AI models" off), so the Claude gate smoke precondition is met. The runner needs its own independent review before the first call; see "The gate smoke" below |
 | 4 runner | implemented and connected to the slot, plan, fingerprint and gate machinery; tested through `main()` with a fake application, sampler and Claude | One run is one series (a model, a phase, a repetition); phase 2 needs `--live`, the owner present, a consent per series |
-| 5 independent review of the `SendInput` helper and the guards | **not done: blocks every live run** | A Codex review in a visible Orca terminal; file in `docs/reviews/` |
+| 5 independent review of the `SendInput` helper and the guards | **independent code review released (2026-10-20)**: the round-2 re-review of PR 104 at `71842ad` found R104-1 and R104-2 closed and no new finding | This releases the **code review of step 5 only**. It is not a native run, not the capture admission (step 2), not any provider gate (3b), and says nothing about the owner's desktop: the native validations it lists (input-desktop access `0x19` in the normal session, DPI and monitor placement, job enforcement, the query-to-dispatch race) stay with the step-6 owner session |
 | 6 owner-run phase 1, then phase 2 | **not done** | The plan rows `AG-03` and `AG-02R` stay `NO_EJECUTADO` |
 
-Do not run `pixel_runner.py` without `--plan` until steps 2, 3b and 5 are recorded.
+Do not run `pixel_runner.py` without `--plan` until steps 2 and 3b are recorded (step 5, the code review, is released; see its row).
 
 ## Files
 
@@ -35,10 +35,11 @@ Do not run `pixel_runner.py` without `--plan` until steps 2, 3b and 5 are record
 | `pixel_agent.py` | The command, the pinned instruction (SHA-256), the request verdict (images only in the `screenshot` result), the stream reader |
 | `pixel_preflight.py` | The isolation proof `ag03-isolation-proof-1`, native and `--route mimo|deepseek`, with positive controls |
 | `pixel_gate.py` | The records of the per-model gate smoke (pass, fail, exclusion); never calls a provider |
+| `gate_smoke.py` | The gate smoke runner (step 3b): the one place that sends the synthetic images to a provider, once per model, after the owner's preconditions file and a valid proof |
 | `pixel_runner.py` | The `run_goal.py`-style runner and the production entry point of one series (slots, retry, gate, pool); AG-02's oracle and scoring unchanged |
 | `pixel_plan.py`, `pixel_stats.py`, `pixel_slots.py` | The pre-registered orders and fingerprint rule; the interval and exact-test helpers; the slot, retry and campaign-stop rules |
 | `probe_image.py` | Step 0: does Claude Code forward an MCP image block? |
-| `fake_*.py`, `test_*.py` | Fakes (clock, operating system, sender, capture backends, Messages API, `claude`) and the tests |
+| `fake_*.py`, `test_*.py` | Fakes (clock, operating system, sender, capture backends, Messages API, `claude`, the gate smoke's `claude`) and the tests |
 
 Run the tests with `python -m unittest discover -s tools/agent -p "test_*.py"` (what CI runs) or
 `python -m unittest discover -s tools/agent/ag03`. They need no screen, no network beyond `127.0.0.1`
@@ -192,6 +193,51 @@ decision O1; **nothing here deletes a screenshot remotely**. Outputs belong outs
   `ENABLE_TOOL_SEARCH=false` (AG-02 and AG-03), the proof records `cli_sha256` and `agent_env` and is valid for at most 24 hours
   (verifier revision 3; routes 2). Install: extract `claude.exe` from the npm package (`npm pack` into a temporary directory), check the
   hash, make the folder read-only; never touch the owner's own Claude Code, PATH or `~/.local`.
+
+## The gate smoke (step 3b)
+
+`gate_smoke.py` runs **one** real session per model on **four synthetic drawn images** (a different word and shape each, 1280x720,
+never a capture, no engine, no window, no focus, no input) with the pinned question of `pixel_gate.SMOKE_PROMPT`, through the
+production command of the pixel agent (`PixelCLI`, the pinned Claude Code 2.1.304 launched from its verified private copy, the
+three tools, every settings source off, `--no-session-persistence`). The answer is scored in memory, one boolean per image; the
+record (`<out-dir>/<Haiku|DeepSeek|MiMo>.gate.json`, schema `ag03-gate-1`, which `pixel_runner --gate-record` reads) holds those
+booleans, the model identities, the endpoint, counts and closed tokens: never the answer, a word, an image or a hash of one.
+
+```text
+# the owner records the preconditions (this prints the command; the tool never writes the file and has no default for any field)
+python tools/agent/ag03/gate_smoke.py --route deepseek --route-base-url https://api.deepseek.com/anthropic ^
+    --preconditions %LOCALAPPDATA%\Ommatix\ag03\preconditions\deepseek.json --print-preconditions-command
+# the smoke (after the isolation proof of the SAME model, route and pinned CLI, at most 24 h old)
+python tools/agent/ag03/gate_smoke.py --claude %LOCALAPPDATA%\Ommatix\agent-cli\2.1.304\claude.exe ^
+    --claude-config-dir DIR --isolation-proof PROOF.json --preconditions PRE.json ^
+    --out-dir %LOCALAPPDATA%\Ommatix\ag03\gate [--route deepseek --route-base-url URL --key-file KEYFILE]
+```
+
+* **Before anything is read or sent** the preconditions file must be the owner's, for this provider, model and endpoint, with the
+  OI-2 reading recorded (for Anthropic also OI-1) and the go-ahead, at most 24 hours old; otherwise the outcome is `not_run`
+  (exit 3): no key is read, no provider is called, no claim or record is made. The proof must be a passing `ag03-isolation-proof-1` for
+  the same requested model, route, configuration directory, pixel server, instruction and agent environment, with the pinned CLI's
+  SHA-256, and `clipin` checks the binary, the pin and the proof's age before the launch. A proof that did **not** pass excludes the model
+  (`preflight_failed`, no provider called) only if it meets everything a valid proof must meet except `passed`: the ag03 schema, the current verifier revision, the pinned CLI's SHA-256, a date under 24 hours old and this very model, route and endpoint. An old failed proof, one of another verifier revision, CLI or route excludes nobody: exit 2, nothing recorded.
+* **One attempt, whatever `--out-dir` says.** The attempt is claimed by an exclusive create (`<name>.claim.json`) as the last step before the CLI runs, and it is
+  never removed; the record is created exclusively too. Both are written in the given directory **and** in the canonical root
+  `%LOCALAPPDATA%\Ommatix\ag03\gate`, and a claim or record found in either refuses the attempt, so another `--out-dir` does not give another one. A model that fails (`smoke_failed`, a provider that rejects the image, a
+  transport error, a timeout, a CLI error) is **excluded and recorded** and nothing here runs it again with other settings; a claim
+  without a record (the process died) is a consumed attempt. A launch refused before the CLI runs (the pin, the proof's age, a lost
+  invariant) consumes nothing. Exits: 0 passed, 1 excluded, 3 not run, 2 refused, 4 a session that could not be shown gone (the lock is kept).
+* **Caps.** `--timeout` and `--max-context-tokens` may be lowered, never raised above 240 s and 120 000 (exit 2). Native: `--max-budget-usd 0.25` (applied by the CLI; the final `cost_usd` is compared with it afterwards and a spend over it is noted as `cost_over_cap` in the record's `problems` and on stderr, not decisive), effort `max`; a route: the context-token cap (default 120 000) with effort `max` in its
+  child environment and no dollar figure; both: 240 s, the server's 6 screenshots and 8 calls, one session.
+* **Key.** On a route only through `--key-file` into the child's environment (`agentcli.route_env`); in no argument, record, log or
+  message. The native route uses the configuration directory's own login.
+* **Evidence limitation, recorded in every record.** A real endpoint cannot be read request by request from a loopback stand-in. The
+  tools and the images that reached the model are therefore **stream-attested** (the CLI's `init` event lists exactly the three
+  tools, the stream shows four screenshot calls and results of the server's size) and are only as good as the proof for the same
+  pinned CLI hash, route and environment, whose stand-in session did read the requests. A record cannot pass with unclean stream
+  evidence even if the words are right.
+* **A refusal of the image needs an explicit signal.** `provider_rejected_image` is recorded only for a 400, 413, 415 or 422 together with a word of the image, or a sentence saying the image is not supported; a stray word in a transport error is `transport_error`, and anything else is `cli_error`.
+* **Known risk: the format of the answer.** The question is fixed and scored by `pixel_gate.ANSWER_LINE`; a model that sees the images but does not follow the format (for instance `WORD=**LUNA**`) is recorded as `smoke_failed` and excluded. The record cannot tell "did not see" from "did not follow the format"; say so wherever a run's result is reported.
+* **Not decisive, reported.** What the session wrote under the configuration directory, its own temp directory and the CLI's cache,
+  and a private copy of the CLI that could not be removed, are recorded (images are synthetic) and printed, not used to decide the gate.
 
 ## Implementation readings, as decided by the architect
 
