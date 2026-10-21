@@ -78,6 +78,16 @@ def write_disk_state(mode: str, home: Path) -> None:
             encoding="utf-8")
 
 
+def init_event(argv, home: Path, tools) -> dict:
+    """The ``init`` event of the stand-in (shared with ``fake_claude_smoke``, so that both carry the same keys)."""
+    return {"type": "system", "subtype": "init", "claude_code_version": "2.1.304",
+            "model": flag(argv, "--model"), "tools": tools,
+            "mcp_servers": [{"name": "pixel", "status": "connected"}], "skills": [],
+            "slash_commands": [], "plugins": [{"name": "p1"}], "agents": ["a1"],
+            "memory_paths": {"auto": str(home / "projects" / "scratch" / "memory")},
+            "additional_directories": []}
+
+
 def main() -> int:
     argv = sys.argv[1:]
     mode = os.environ.get("FAKE_CLAUDE_MODE", "normal")
@@ -113,12 +123,7 @@ def main() -> int:
                 for hook in entry["hooks"]:
                     subprocess.run(hook["command"], shell=True, capture_output=True, check=False)
     tools = TOOLS + (["Bash"] if mode == "extra_tool" else [])
-    print(json.dumps({"type": "system", "subtype": "init", "claude_code_version": "2.1.304",
-                      "model": flag(argv, "--model"), "tools": tools,
-                      "mcp_servers": [{"name": "pixel", "status": "connected"}], "skills": [],
-                      "slash_commands": [], "plugins": [{"name": "p1"}], "agents": ["a1"],
-                      "memory_paths": {"auto": str(home / "projects" / "scratch" / "memory")},
-                      "additional_directories": []}), flush=True)
+    print(json.dumps(init_event(argv, home, tools)), flush=True)
     png = cap.synthetic_png(0, 64, 48)[0]
     image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(png)}}
     text = {"type": "text", "text": "Screenshot of the application window, 64 by 48 pixels."}
