@@ -84,18 +84,22 @@ def script(request: dict, n: int) -> dict:
 def one_session(args, config_dir: Path, cwd: Path, **kwargs) -> dict:
     """One session, launched from its OWN verified copy of the pinned CLI (the bytes that were verified are the bytes that
     run; nothing is launched when the CLI is not the pin). See ``_one_session``."""
-    with clipin.verified(args.claude) as verified:
+    session_tmp = kwargs["log"].with_name(kwargs["scratch_name"] + "-cli-tmp")  # the child's own TEMP/TMP/TMPDIR/CLAUDE_CODE_TMPDIR
+    session_tmp.mkdir(parents=True, exist_ok=True)
+    # The private copy is made INSIDE the session's monitored temp directory: whatever the CLI writes beside its executable is
+    # seen by the same before/after scan (re-review of PR 107, R107-4), and the executable's own file is unchanged in it.
+    with clipin.verified(args.claude, parent=session_tmp) as verified:
         if verified.problems:
             raise PixelRefused(verified.problems)
-        session = _one_session(args, config_dir, cwd, claude=verified.path, **kwargs)
+        session = _one_session(args, config_dir, cwd, claude=verified.path, session_tmp=session_tmp, **kwargs)
+    # A private copy that could not be removed is a refusal of the proof (R107-5), never ignored.
+    session["disk_problems"] = sorted(set(session["disk_problems"]) | set(verified.cleanup))
     return session | {"cli_sha256": verified.sha}
 
 
 def _one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path, scratch_name: str,
-                 memory_dir: Path | None, claude) -> dict:
+                 memory_dir: Path | None, claude, session_tmp: Path) -> dict:
     """One session. Production flags, or (control) the settings sources on and the CLAUDE.md switch off."""
-    session_tmp = log.with_name(scratch_name + "-cli-tmp")  # the child's own TEMP/TMP/TMPDIR/CLAUDE_CODE_TMPDIR
-    session_tmp.mkdir(parents=True, exist_ok=True)
     mcp = pa.build_mcp_config(sys.executable, ["--synthetic", "--synthetic-size", "640x360", "--log", str(log)])
     mcp_path = log.with_name(scratch_name + ".mcp.json")
     mcp_path.write_text(json.dumps(mcp), encoding="utf-8")

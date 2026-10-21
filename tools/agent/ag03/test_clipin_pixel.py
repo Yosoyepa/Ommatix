@@ -99,6 +99,71 @@ class PixelPreflightTests(PreflightHarness):
                       pf.proof_problems(proof | {"agent_env": dict(pa.PIXEL_ENV)}, args, self.production, None))
 
 
+class CopyDirectoryEvidenceTests(PreflightHarness):
+    """Re-review of PR 107 (R107-4, R107-5) on the AG-03 preflight with the REAL guard: the private copy lives inside the child's own
+    monitored temp directory, so whatever the CLI writes beside its executable is scanned before the copy is removed; a copy that
+    could not be removed fails the proof."""
+
+    BYTES = b"MZ synthetic claude " * 64
+
+    def run_real_guard(self, *, png=False, read_only=False, fail_cleanup=False):
+        import hashlib
+        import os
+        import shutil
+        import pixel_capture as cap
+        scratch = tempfile.TemporaryDirectory(prefix="ag03-realguard-")
+        self.addCleanup(scratch.cleanup)
+        exe = Path(scratch.name) / "agent-cli" / "claude.exe"
+        exe.parent.mkdir()
+        exe.write_bytes(self.BYTES)
+        pin = {"version": "9.9.9", "sha256": hashlib.sha256(self.BYTES).hexdigest()}
+        real = rg.run_claude
+        fake_cli = [sys.executable, str(HERE / "fake_claude_pixel.py")]
+
+        def launch(argv, *a, **k):  # the "CLI" writes beside its executable, then the scripted stand-in runs
+            if png:
+                target = Path(argv[0]).parent / "synthetic.png"
+                target.write_bytes(cap.synthetic_png(0, 64, 48)[0])
+                if read_only:
+                    os.chmod(target, 0o400)
+            return real(fake_cli + argv[1:], *a, **k)
+        leftovers = []
+        patches = [mock.patch.object(clipin, "CLAUDE_CODE_PIN", pin),
+                   mock.patch.object(clipin, "run_version", lambda path: "9.9.9 (Claude Code)"),
+                   mock.patch.object(rg, "run_claude", launch)]
+        if fail_cleanup:
+            patches.append(mock.patch.object(clipin.shutil, "rmtree", lambda path, *a, **k: leftovers.append(path)))
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            proof = self.preflight(pin=False, claude=str(exe))
+        for path in leftovers:  # the test's own housekeeping of what the simulated failure left
+            for root, _dirs, files in os.walk(path):
+                for name in files:
+                    os.chmod(Path(root) / name, 0o700)
+            shutil.rmtree(path, ignore_errors=True)
+        return proof, leftovers
+
+    def test_a_clean_session_passes_and_leaves_no_copy(self):
+        proof, _ = self.run_real_guard()
+        self.assertTrue(proof["passed"], proof["problems"])
+        self.assertEqual(list(Path(tempfile.gettempdir()).glob("ommatix-cli-*")), [])
+
+    def test_an_image_written_beside_the_launched_copy_refuses_the_proof_in_every_session(self):
+        for read_only in (False, True):
+            with self.subTest(read_only=read_only):
+                proof, _ = self.run_real_guard(png=True, read_only=read_only)
+                self.assertFalse(proof["passed"], "a PNG beside the launched executable went unnoticed")
+                for name in ("canary", "control", "production_dir"):
+                    self.assertIn(f"{name}_disk_temp_image_data", proof["problems"])
+
+    def test_a_copy_that_could_not_be_removed_fails_the_proof(self):
+        proof, leftovers = self.run_real_guard(fail_cleanup=True)
+        self.assertTrue(leftovers, "the simulated cleanup failure did not happen")
+        self.assertFalse(proof["passed"])
+        self.assertIn("claude_copy_not_removed", proof["problems"])
+
+
 class PixelLaunchTests(unittest.TestCase):
     def test_nothing_is_launched_with_a_cli_that_is_not_the_pin(self):
         from test_campaign import Series

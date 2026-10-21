@@ -2120,6 +2120,8 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                                max_budget_usd=args.max_budget_usd, **verified.kwargs()),
                 build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
                 env=env, **token_cap_kwargs(args))
+        if verified.cleanup:
+            result["cli_copy_cleanup"] = list(verified.cleanup)  # the private copy stayed behind (R107-5): recorded, never ignored
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)

@@ -67,3 +67,17 @@ Cost: one copy (0.1 s) and two hashes of ~290 MB per launch; 293 MB of temporary
 of the same user that replaces the copy BEFORE the Windows hold is taken (the directory name is random and the window is the copy
 itself); on other platforms the copy is read-only in a 0700 directory. Real check (pinned CLI, loopback stand-in): the AG-03 and AG-02
 preflights still pass native and `--route deepseek` and leave no copy in TEMP.
+
+## Re-review of PR 107 at `94450e9` (independent, 2026-10-20): two P2, resolved
+
+R107-1..3 were closed. Regressions first (`step5fix_red\pin3\`: 33 tests run against `94450e9`, 4 failures and 2 errors), in
+`ag02/test_clipin_guard.py` (`CopyCleanupTests`) and `ag03/test_clipin_pixel.py` (`CopyDirectoryEvidenceTests`, with the real guard).
+
+| # | Finding | Resolution | Regression tests |
+|---|---|---|---|
+| R107-4 (P2) | The private copy's directory was not covered by the disk-evidence scan: a PNG written beside the launched executable went unnoticed | `verified(..., parent=)` creates the private directory inside a caller-chosen directory. The AG-03 preflight (`one_session`) and runner (`launch_guard(proof, parent=attempt_tmp)`) pass the session's own monitored temp directory, which is already the child's `TEMP`/`TMP`/`TMPDIR`/`CLAUDE_CODE_TMPDIR`: the copy is in the snapshot taken before the session (unchanged, so never "touched"), anything new beside it is touched, scanned and refused (`*_disk_temp_image_data`), and a change to the executable's own file is `unreadable` (it exceeds the scan limit) | `CopyDirectoryEvidenceTests.test_an_image_written_beside_the_launched_copy_refuses_the_proof_in_every_session` (writable and read-only PNG; canary, control and production-directory sessions), `test_a_clean_session_passes_and_leaves_no_copy` |
+| R107-5 (P2) | On Windows the read-only copy could be silently retained when the cleanup failed (`rmtree(ignore_errors=True)`) | The cleanup clears the read-only attribute of every file and directory of the private tree before removing it and then looks: if the directory still exists, the yielded `Verified.cleanup` says `claude_copy_not_removed` (a closed token, no path). The AG-03 and AG-02 preflights add it to the proof's problems, the probe to its problems, the goal/attempt result records `cli_copy_cleanup` (the outcome is not rewritten) | `CopyCleanupTests` (read-only companion file, a failing removal reported, a goal result recording it), `CopyDirectoryEvidenceTests.test_a_copy_that_could_not_be_removed_fails_the_proof` |
+
+Real check (pinned CLI 2.1.304, loopback stand-in, synthetic/simulated servers, no provider): the AG-03 and AG-02 native preflights pass
+with the copy inside the session's temp directory and leave no `ommatix-cli-*` directory in TEMP. Not run: the Windows job tests of the
+process harness (the Linux suite covers them); a goal run.

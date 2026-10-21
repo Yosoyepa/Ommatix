@@ -239,6 +239,42 @@ class EachLaunchIsVerifiedOnItsOwnTests(Base):
         self.assertNotIn("aborted", result)
 
 
+class CopyCleanupTests(Base):
+    """Re-review of PR 107 (R107-5): the guard's private tree is removed even with read-only companions, and a cleanup that fails is
+    reported to the caller (closed token), never ignored."""
+
+    def test_a_read_only_companion_file_does_not_keep_the_copy_directory(self):
+        with clipin.verified(str(self.exe), version_runner=self.version) as v:
+            companion = Path(v.path).parent / "readonly-state.bin"
+            companion.write_bytes(b"state")
+            os.chmod(companion, 0o400)  # the read-only attribute on Windows
+            copy_dir = Path(v.path).parent
+        self.assertFalse(copy_dir.exists(), "a read-only companion kept the private directory")
+        self.assertEqual(v.cleanup, [])
+
+    def test_a_cleanup_that_fails_is_reported_and_names_no_path(self):
+        import shutil
+        with mock.patch.object(clipin.shutil, "rmtree", lambda *a, **k: None):
+            with clipin.verified(str(self.exe), version_runner=self.version) as v:
+                copy_dir = Path(v.path).parent
+        try:
+            self.assertEqual(v.cleanup, ["claude_copy_not_removed"])
+            self.assertTrue(copy_dir.exists())
+        finally:
+            os.chmod(copy_dir / Path(v.path).name, 0o700)
+            shutil.rmtree(copy_dir, ignore_errors=True)
+
+    def test_a_goal_result_records_the_cleanup_failure_and_keeps_its_outcome(self):
+        from pin_support import pinned
+        from test_run_goal import Harness
+        harness = Harness(self, "G01", 1, final_state={})
+        harness.patch_pin = False
+        with pinned(cleanup=["claude_copy_not_removed"]):
+            result = harness.run()
+        self.assertEqual(result.get("cli_copy_cleanup"), ["claude_copy_not_removed"])
+        self.assertNotIn("claude_copy_not_removed", result.get("aborted", ""), "a cleanup failure must not rewrite the outcome")
+
+
 class SmokeNeedsThePinTests(Base):
     """R107-3: the native smoke has no isolation proof and still needs the pinned executable."""
 

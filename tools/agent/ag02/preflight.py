@@ -242,7 +242,7 @@ def one_session(args, config_dir: Path, cwd: Path, **kwargs) -> dict:
         if verified.problems:
             raise PreflightRefused(verified.problems)
         session = _one_session(args, config_dir, cwd, claude=verified.path, **kwargs)
-    return session | {"cli_sha256": verified.sha}
+    return session | {"cli_sha256": verified.sha, "copy_cleanup": verified.cleanup}  # known once the block has ended
 
 
 def _one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path,
@@ -443,6 +443,8 @@ def run(args) -> dict:
     cli_sha256 = a["cli_sha256"]  # every session was verified on its own; they must agree
     if len({a["cli_sha256"], control["cli_sha256"], b["cli_sha256"]}) != 1:
         problems.append("cli_differs_between_sessions")
+    for session in (a, control, b):
+        problems += [t for t in session["copy_cleanup"] if t not in problems]  # a copy that stayed behind (R107-5)
     att_a, att_b = a["attestation"] or {}, b["attestation"] or {}
     for name, run_ in (("canary_session", a), ("production_dir_session", b)):
         if run_["cli"]["exit_code"] != 0 or run_["cli"]["killed"]:

@@ -1,3 +1,4 @@
+PASS schema:contratos/esquemas/action_freshness_diff.meta.schema.json 
 PASS schema:contratos/esquemas/execute_action.input.schema.json 
 PASS schema:contratos/esquemas/execute_action.output.schema.json 
 PASS schema:contratos/esquemas/get_engine_metrics.input.schema.json 
@@ -22,6 +23,8 @@ PASS payload:contratos/ejemplos_invalidos/accion_shell.json 'shell' is not one o
 PASS payload:contratos/ejemplos_invalidos/revision_cero.json 0 is less than the minimum of 1
 PASS payload:contratos/ejemplos_invalidos/snapshot_sin_cursor.json 'next_cursor' is a required property
 PASS payload:contratos/ejemplos_invalidos/simulacion_con_efecto_real.json False was expected
+PASS payload:contratos/ejemplos/freshness_diff_meta.json válido
+PASS payload:contratos/ejemplos_invalidos/freshness_diff_con_geometria.json Additional properties are not allowed ('rectangle' was unexpected)
 PASS jsonl:mcp_legacy_solicitudes.jsonl:1 
 PASS jsonl:mcp_legacy_solicitudes.jsonl:2 
 PASS jsonl:mcp_legacy_solicitudes.jsonl:3 
@@ -39,6 +42,9 @@ PASS result_type:4
 PASS contenido_consistente:4 
 PASS jsonl:mcp_moderno_respuestas.jsonl:5 
 PASS result_type:5 
+PASS frescura_d0_meta:5 
+PASS frescura_d0_rechazo:5 
+PASS frescura_d0_solo_meta:5 
 PASS contenido_consistente:5 
 PASS jsonl:mcp_moderno_solicitudes.jsonl:1 
 PASS meta:1 
@@ -63,7 +69,7 @@ PASS csv_columnas_completas
 PASS requisitos_unicos 
 PASS pruebas_planificadas_unicas 
 PASS capitulos_encontrados 13
-PASS adrs_encontradas 32
+PASS adrs_encontradas 38
 PASS referencias:00_AUDITORIA_TECNICA.md []
 PASS referencias:01_TESIS_Y_MARCO_TEORICO.md []
 PASS referencias:02_SDD_ARQUITECTURA_MVP.md []
@@ -109,6 +115,12 @@ PASS referencias:0029-accepted-by-scope-requirement-status.md []
 PASS referencias:0030-adaptive-full-or-regional-plan.md []
 PASS referencias:0031-refuse-scaling-outside-the-dpi-profile.md []
 PASS referencias:0032-freshness-scoped-to-the-target-window.md []
+PASS referencias:0033-external-decision-model-for-offline-agent-experiments.md []
+PASS referencias:0034-propose-fail-closed-retained-state-budgets.md []
+PASS referencias:0035-freshness-group-limited-to-occluders.md []
+PASS referencias:0036-llm-only-agent-experiment-on-the-test-applications.md []
+PASS referencias:0037-ag02-other-providers-through-a-confinable-agent.md []
+PASS referencias:0038-ag03-vision-baseline-and-ag02-repetitions.md []
 PASS gherkin_cabecera:01_incrementalidad.feature 
 PASS gherkin_id_unico:BDD-01 
 PASS gherkin_estructura:BDD-01 
@@ -195,6 +207,22 @@ PASS gherkin_id_unico:BDD-37
 PASS gherkin_estructura:BDD-37 
 PASS gherkin_id_unico:BDD-38 
 PASS gherkin_estructura:BDD-38 
+PASS gherkin_id_unico:BDD-55 
+PASS gherkin_estructura:BDD-55 
+PASS gherkin_id_unico:BDD-56 
+PASS gherkin_estructura:BDD-56 
+PASS gherkin_id_unico:BDD-57 
+PASS gherkin_estructura:BDD-57 
+PASS gherkin_id_unico:BDD-58 
+PASS gherkin_estructura:BDD-58 
+PASS gherkin_id_unico:BDD-59 
+PASS gherkin_estructura:BDD-59 
+PASS gherkin_id_unico:BDD-60 
+PASS gherkin_estructura:BDD-60 
+PASS gherkin_id_unico:BDD-61 
+PASS gherkin_estructura:BDD-61 
+PASS gherkin_id_unico:BDD-62 
+PASS gherkin_estructura:BDD-62 
 PASS gherkin_cabecera:07_retencion.feature 
 PASS gherkin_id_unico:BDD-39 
 PASS gherkin_estructura:BDD-39 
@@ -280,6 +308,14 @@ PASS trazabilidad:BDD-51
 PASS trazabilidad:BDD-52 
 PASS trazabilidad:BDD-53 
 PASS trazabilidad:BDD-54 
+PASS trazabilidad:BDD-55 
+PASS trazabilidad:BDD-56 
+PASS trazabilidad:BDD-57 
+PASS trazabilidad:BDD-58 
+PASS trazabilidad:BDD-59 
+PASS trazabilidad:BDD-60 
+PASS trazabilidad:BDD-61 
+PASS trazabilidad:BDD-62 
 PASS doc01_pruebas_existen:RF-01 []
 PASS doc01_adr_existen:RF-01 ADR-0008; ADR-0016
 PASS doc01_propietario:RF-01 
@@ -321,7 +357,7 @@ PASS doc01_adr_existen:RF-10 ADR-0002; ADR-0006; ADR-0027
 PASS doc01_propietario:RF-10 
 PASS doc01_evidencia_existe:RF-10 []
 PASS doc01_pruebas_existen:RF-11 []
-PASS doc01_adr_existen:RF-11 ADR-0006; ADR-0007; ADR-0020; ADR-0025
+PASS doc01_adr_existen:RF-11 ADR-0006; ADR-0007; ADR-0020; ADR-0025; ADR-0032; ADR-0035
 PASS doc01_propietario:RF-11 
 PASS doc01_evidencia_existe:RF-11 []
 PASS doc01_pruebas_existen:RF-12 []
@@ -438,6 +474,12 @@ PASS doc01_adr_pruebas:0029-accepted-by-scope-requirement-status.md []
 PASS doc01_adr_pruebas:0030-adaptive-full-or-regional-plan.md []
 PASS doc01_adr_pruebas:0031-refuse-scaling-outside-the-dpi-profile.md []
 PASS doc01_adr_pruebas:0032-freshness-scoped-to-the-target-window.md []
+PASS doc01_adr_pruebas:0033-external-decision-model-for-offline-agent-experiments.md []
+PASS doc01_adr_pruebas:0034-propose-fail-closed-retained-state-budgets.md []
+PASS doc01_adr_pruebas:0035-freshness-group-limited-to-occluders.md []
+PASS doc01_adr_pruebas:0036-llm-only-agent-experiment-on-the-test-applications.md []
+PASS doc01_adr_pruebas:0037-ag02-other-providers-through-a-confinable-agent.md []
+PASS doc01_adr_pruebas:0038-ag03-vision-baseline-and-ag02-repetitions.md []
 PASS doc01_prueba_enlazada:UT-01 
 PASS doc01_prueba_enlazada:UT-02 
 PASS doc01_prueba_enlazada:UT-03 
@@ -526,6 +568,10 @@ PASS doc01_prueba_enlazada:PERF-02
 PASS doc01_prueba_enlazada:PERF-03 
 PASS doc01_prueba_enlazada:EV-01 
 PASS doc01_prueba_enlazada:EV-02 
+PASS doc01_prueba_enlazada:AG-02 
+PASS doc01_prueba_enlazada:AG-02M 
+PASS doc01_prueba_enlazada:AG-03 
+PASS doc01_prueba_enlazada:AG-02R 
 PASS doc01_prueba_enlazada:REL-01 
 PASS doc01_prueba_enlazada:DOC-01 
 PASS doc01_prueba_enlazada:IDX-01 
@@ -542,12 +588,42 @@ PASS doc01_prueba_enlazada:IDX-11
 PASS doc01_prueba_enlazada:IDX-12 
 PASS doc01_prueba_enlazada:IDX-13 
 PASS doc01_prueba_enlazada:IDX-14 
+PASS doc01_prueba_enlazada:UT-55 
+PASS doc01_prueba_enlazada:UT-56 
+PASS doc01_prueba_enlazada:UT-57 
+PASS doc01_prueba_enlazada:UT-58 
+PASS doc01_prueba_enlazada:UT-59 
+PASS doc01_prueba_enlazada:UT-60 
+PASS doc01_prueba_enlazada:UT-61 
+PASS doc01_prueba_enlazada:UT-62 
+PASS doc01_prueba_enlazada:UT-63 
+PASS doc01_prueba_enlazada:UT-64 
+PASS doc01_prueba_enlazada:UT-65 
+PASS doc01_prueba_enlazada:UT-66 
+PASS doc01_prueba_enlazada:UT-67 
+PASS doc01_prueba_enlazada:UT-68 
+PASS doc01_prueba_enlazada:UT-69 
+PASS doc01_prueba_enlazada:UT-70 
+PASS doc01_prueba_enlazada:UT-71 
+PASS doc01_prueba_enlazada:UT-72 
+PASS doc01_prueba_enlazada:UT-73 
+PASS doc01_prueba_enlazada:UT-74 
+PASS doc01_prueba_enlazada:UT-75 
+PASS doc01_prueba_enlazada:BDD-55 
+PASS doc01_prueba_enlazada:BDD-56 
+PASS doc01_prueba_enlazada:BDD-57 
+PASS doc01_prueba_enlazada:BDD-58 
+PASS doc01_prueba_enlazada:BDD-59 
+PASS doc01_prueba_enlazada:BDD-60 
+PASS doc01_prueba_enlazada:BDD-61 
+PASS doc01_prueba_enlazada:BDD-62 
+PASS doc01_prueba_enlazada:IT-08 
 PASS doc01_estados_de_pruebas []
 PASS doc01_estados_de_escenarios []
 PASS doc01_estado_de_requisitos []
 PASS doc01_nota_de_alcance:RNF-02 EV-01 sin ejecutar: el corpus de 300 capturas no existe (docs/thesis/09_EVALUACION_EXPERIMENTAL.md); fuera del MVP por el alcance reducido (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado c). Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c)
 PASS doc01_nota_de_alcance:RNF-03 Protocolo reducido de S4 (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado b): E2E-01, E2E-02, E2E-03, S4R-02 y S4R-03, diez de diez corridas puntuadas cada uno y sin falsos éxitos (docs/thesis/S4_ACEPTACION_REDUCIDA.md). EV-02 (450 corridas) sin ejecutar: pasa al próximo corte. Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c)
 PASS doc01_nota_de_alcance:RNF-05 PERF-02 ejecutada en parte: docs/thesis/S0_RESULTADOS.md §10 (medianas y p95, sin y con uia) y §§13.3 y 13.11 (B0 frente a B1); tools/perf/measure_latency.py. Medición de INC-07 con uia (docs/thesis/S0_RESULTADOS.md §16, ADR-0030, activada por defecto con dos regiones): p95 de 136,3 ms en incr1, 137,6 ms en incr2 y 131,8 ms en full (refresco completo, B0), con p99 publicado en cada caso. Lectura del responsable: «incremental» nombra el escenario, y con esa lectura las metas de latencia se cumplen; la aceptación de §6.7 (a) queda superada para la latencia. Lo que resta de PERF-02 (variante de caché B2 e igualdad de modelos) se acepta por alcance para el próximo corte: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (e) y CHANGELOG 1.0.69. Con dos regiones y sin la regla de ADR-0030, la ruta incremental da 186,8 ms en incr2 (§16); la regla está activada por defecto.
-PASS doc01_nota_de_alcance:RNF-06 PERF-03 ejecutado en dos corridas supervisadas de 120 minutos, completas y sin entrada: sobre fe35d80 sin accesibilidad (docs/thesis/S0_RESULTADOS.md §12) y sobre 745caff con uia (§15); tools/perf/soak.py. El conjunto de trabajo cumple el umbral del responsable (no más de 10 MiB/h; +1,25 MiB/h en §15). En la corrida con uia el recuento de manejadores pasa de 1008 a 1009 en el minuto 69 y se queda plano, con pendiente de +0,81 por hora, que no cumple el criterio de no crecimiento. Aceptado por cambio de alcance para el MVP, con esta evidencia documentada: ese paso de manejador (§15), la cota de la cola de regiones pendientes (decisión 9, sin cifra ni prueba con observaciones fallidas) y la memoria de la caché de iconos (no activa en la corrida): docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (f) y CHANGELOG 1.0.69. No se afirma ausencia de fugas.
+PASS doc01_nota_de_alcance:RNF-06 PERF-03 ejecutado en tres corridas supervisadas de 120 minutos, completas y sin entrada: sobre fe35d80 sin accesibilidad (docs/thesis/S0_RESULTADOS.md §12), sobre 745caff con uia (§15) y sobre 1c46b87 con uia (docs/thesis/S0_RESULTADOS.md §18: conjunto de trabajo +1,39 MiB/h, que cumple; cola con máximo 0 frente a 510, que cumple; manejadores con un paso de 998 a 999 en el minuto 13 y después plano, pendiente de +0,0892 por hora, criterio estricto no cumplido); tools/perf/soak.py. El conjunto de trabajo cumple el umbral del responsable (no más de 10 MiB/h; +1,25 MiB/h en §15). En la corrida con uia el recuento de manejadores pasa de 1008 a 1009 en el minuto 69 y se queda plano, con pendiente de +0,81 por hora, que no cumple el criterio de no crecimiento. Aceptado por cambio de alcance para el MVP, con esta evidencia documentada: ese paso de manejador (§15), la cota de la cola de regiones pendientes (decisión 9, resuelta como estructural el 17 de octubre de 2026: 510 teselas pendientes en 1920x1080, con evidencia sin conexión en docs/thesis/S0_RESULTADOS.md §17 y sin estrés en vivo) y la memoria de la caché de iconos (no activa en la corrida): docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (f) y CHANGELOG 1.0.69. Relectura del 17 de octubre de 2026 (1.0.93) con la regla de manejadores de ese día (decisión 10 de docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7): los manejadores cumplen en la corrida de docs/thesis/S0_RESULTADOS.md §18 (un paso de +1 en el segundo 785 y recuento constante durante los últimos 6410 s); el estado de esta fila no cambia. No se afirma ausencia de fugas.
 PASS doc01_nota_de_alcance:RNF-07 IT-07 fuera del MVP (docs/adr/0023-licence-and-reduced-mvp-scope.md, apartado c), adelantada y ejecutada el 2026-10-15 (1.0.73): met_all a 100 % (96 dpi), 125 % (120 dpi) y 150 % (144 dpi) con fotograma 1920x1080, DisplayMapping identidad, 5 de 5 observaciones y los 6 botones; cambio en vivo 100 a 125 % con epoch de 1 a 2 y epoch_follows_scaling cumplido; 175 % rechazada 5 de 5 con UNSUPPORTED_GEOMETRY (flagged); un monitor, sin acciones en vivo con DPI distinto de 100 %; resultado en docs/thesis/S4_SESIONES_PENDIENTES.md §C.1 (herramienta tools/perf/dpi_probe.py). Perfil medido: docs/thesis/plantillas/hardware_profile.s0.json. Aceptado por cambio de alcance: docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (c). Rechazo fuera de perfil implementado en el motor (1.0.70, docs/adr/0031-refuse-scaling-outside-the-dpi-profile.md; BDD-54 en docs/thesis/features/05_mcp.feature; prueba a_scaling_outside_the_dpi_profile_is_refused_and_publishes_nothing en src/application/src/engine/tests.rs); la comprobación en vivo a 175 % se hizo (flagged). Este estado no lo cambia la sesión: lo decide el responsable.
 PASS reporte_oraculo_aprobado Se lee el informe previo; para volver a ejecutar use referencia_ejecutable/run_tests.py

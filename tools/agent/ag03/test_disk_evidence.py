@@ -35,7 +35,7 @@ SURVEY = "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"
 
 
 class PreflightHarness(unittest.TestCase):
-    def preflight(self, mode="normal", *, route=None, argv_filter=None, pin=True):
+    def preflight(self, mode="normal", *, route=None, argv_filter=None, pin=True, claude=None):
         scratch = tempfile.TemporaryDirectory(prefix="ag03-disk-")
         self.addCleanup(scratch.cleanup)
         tmp = Path(scratch.name)
@@ -46,7 +46,7 @@ class PreflightHarness(unittest.TestCase):
                  "FAKE_CLAUDE_CACHE_ROOT": str(self.cache), "FAKE_CLAUDE_LEAK_DIR": str(self.production)}
         model, url = (agentcli.CLAUDE_ROUTES[route]["model"], agentcli.CLAUDE_ROUTES[route]["base_urls"][0]) \
             if route else ("claude-haiku-5-5", None)
-        args = argparse.Namespace(exe=Path(sys.executable), model=model, claude=FAKE_CLI, timeout=60,
+        args = argparse.Namespace(exe=Path(sys.executable), model=model, claude=claude or FAKE_CLI, timeout=60,
                                   claude_config_dir=self.production, extra_env=extra, route=route, route_base_url=url)
         patches = [mock.patch.object(pf.ag02, "refusals", return_value=[])] + ([pinned()] if pin else [])
         try:

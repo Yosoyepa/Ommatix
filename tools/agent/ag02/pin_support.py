@@ -15,20 +15,22 @@ PIN_SHA = "019e5174d5d954585edb1a946fe280e44a973050b4897034adf0e16306f85fdd"
 
 
 @contextlib.contextmanager
-def _verified(claude, proof=None, *, problems=(), sha=PIN_SHA, log=None, **_unused):
+def _verified(claude, proof=None, *, problems=(), sha=PIN_SHA, log=None, cleanup=(), **_unused):
     """What ``clipin.verified`` yields for a fake CLI: the configured command itself as the path (there is no binary to copy)."""
     if log is not None:
         log.append("enter")
-    yield clipin.Verified(list(problems), sha, None if problems else claude)
+    state = clipin.Verified(list(problems), sha, None if problems else claude)
+    yield state
+    state.cleanup = list(cleanup)  # what the real guard reports once its private copy was (not) removed
     if log is not None:
         log.append("exit")
 
 
-def pinned(sha=PIN_SHA, problems=(), log=None):
+def pinned(sha=PIN_SHA, problems=(), log=None, cleanup=()):
     """``clipin.verified`` answers ``(problems, sha)`` for a fake CLI."""
     if clipin is None:
         return contextlib.nullcontext()
-    return mock.patch.object(clipin, "verified", functools.partial(_verified, problems=problems, sha=sha, log=log))
+    return mock.patch.object(clipin, "verified", functools.partial(_verified, problems=problems, sha=sha, log=log, cleanup=cleanup))
 
 
 def launch_ok():

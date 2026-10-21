@@ -456,11 +456,11 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                 f"{t}" for t in rg.ancestor_context(scratch, config_dir)]
             if changed:
                 return aborted(result, "isolation proof does not cover this run: " + ",".join(changed))
-        with cli.launch_guard(proof) as verified:  # the bytes that were verified are the bytes that run (R107-2)
+        attempt_tmp = out / "cli-tmp"  # the child's own TEMP/TMP/TMPDIR/CLAUDE_CODE_TMPDIR, inside the attempt
+        attempt_tmp.mkdir(exist_ok=True)
+        with cli.launch_guard(proof, parent=attempt_tmp) as verified:  # verified bytes = launched bytes (R107-2, R107-4)
             argv = cli.build_argv(model=args.model, mcp_config=mcp_path, system_instruction=pa.SYSTEM_INSTRUCTION,
                                   max_budget_usd=args.max_budget_usd, **verified.kwargs())
-            attempt_tmp = out / "cli-tmp"  # the child's own TEMP/TMP/TMPDIR/CLAUDE_CODE_TMPDIR, inside the attempt
-            attempt_tmp.mkdir(exist_ok=True)
             env = cli.env({**({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else {}), **disk.child_temp_env(attempt_tmp)})
             lost = pa.command_problems(argv) + pa.env_problems(env) + pa.temp_env_problems(env)  # invariants of the proof
             lost += verified.problems  # the CLI is the pin and the binary of the proof, and the proof is at most 24 h old
@@ -478,6 +478,8 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                 argv, pa.build_prompt(goal, phase), scratch, metrics, args.goal_timeout, env=env,
                 should_stop=session_stop_hook(log, stop_file), ownership=getattr(args, "ownership", None),
                 **rg.token_cap_kwargs(args))
+        if verified.cleanup:
+            result["cli_copy_cleanup"] = list(verified.cleanup)  # the private copy stayed behind (R107-5): recorded, never ignored
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)

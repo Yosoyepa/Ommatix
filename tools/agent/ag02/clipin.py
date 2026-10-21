@@ -15,7 +15,7 @@ Nothing is executed before the scope and hash checks pass, and what is verified 
 makes a PRIVATE COPY of the pinned binary in a directory it creates, holds it against writes where the platform allows
 (Windows sharing mode), hashes THE COPY, asks the version of THE COPY and yields the copy's path, which the caller launches;
 replacing the configured file at any moment changes nothing that runs. Every launch is verified on its own, and the copy is
-removed afterwards. It installs, updates and deletes nothing of the operator's; ``--version`` runs with a minimal
+removed afterwards (a copy that cannot be removed is reported, never ignored). It installs, updates and deletes nothing of the operator's; ``--version`` runs with a minimal
 environment (the CLI's automatic update off).
 """
 
@@ -74,10 +74,12 @@ def executable_of(claude) -> str | None:
 @dataclass
 class Verified:
     """What ``verified`` yields: ``problems`` (closed tokens; empty means the launch may go on), the SHA-256 of the binary and
-    ``path``, the executable to launch (the verified private copy; None when there are problems)."""
+    ``path``, the executable to launch (the verified private copy; None when there are problems). ``cleanup`` is read AFTER the
+    ``with``: empty when the private tree is gone, ``["claude_copy_not_removed"]`` when it could not be removed."""
     problems: list = field(default_factory=list)
     sha: str | None = None
     path: object = None
+    cleanup: list = field(default_factory=list)  # filled when the block ends: ``claude_copy_not_removed`` if the copy stayed
 
     def kwargs(self) -> dict:
         """The ``claude=`` argument for the command builders: the verified copy, or nothing for an agent that is not Claude Code."""
@@ -95,26 +97,50 @@ def _hold_against_writes(path):
     return lambda: _winapi.CloseHandle(handle)
 
 
+def _remove_tree(directory: Path) -> bool:
+    """Removes ``directory`` after clearing the read-only attribute of everything in it (on Windows a read-only file cannot be
+    deleted); True when the directory is gone. Never raises."""
+    for root, dirs, files in os.walk(directory):
+        for name in files + dirs:
+            with contextlib.suppress(OSError):
+                os.chmod(Path(root) / name, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+    with contextlib.suppress(OSError):
+        os.chmod(directory, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
+    shutil.rmtree(directory, ignore_errors=True)
+    return not directory.exists()
+
+
 @contextlib.contextmanager
 def verified(claude, proof: dict | None = None, *, repo_root=None, now: float | None = None, hasher=None,
-             version_runner=None, copier=None):
+             version_runner=None, copier=None, parent=None):
     """Verifies ``claude`` and yields a ``Verified`` whose ``path`` is the private copy to launch; the copy lives while the
     ``with`` block does. Order (nothing is executed until the copy has been hashed): a single executable named by an absolute
     path that exists and is outside the repository; its SHA-256 is the pin's; the proof (if any) names that hash and is at most 24 h
-    old; a private copy is made, held against writes and hashed again; ``--version`` of the COPY is the pinned version."""
+    old; a private copy is made, held against writes and hashed again; ``--version`` of the COPY is the pinned version.
+
+    ``parent`` is the directory the private one is created in (default: the system temporary directory). A caller that scans a
+    directory for what the CLI writes passes the child's own monitored temporary directory, so whatever the CLI writes beside
+    its executable is seen by that scan (re-review of PR 107). The private tree is removed when the block ends, clearing read-only
+    attributes first; if it is still there, ``cleanup`` of the yielded value says ``claude_copy_not_removed``."""
     hasher = hasher or sha256_file
     version_runner = version_runner or run_version
     copier = copier or shutil.copyfile
+    state = Verified()
+
+    def refuse(problems, sha=None):
+        state.problems, state.sha, state.path = list(problems), sha, None
+        return state
+
     exe = executable_of(claude)
     if exe is None:
-        yield Verified(["claude_not_a_single_executable"])
+        yield refuse(["claude_not_a_single_executable"])
         return
     path = Path(exe)
     if not path.is_absolute():
-        yield Verified(["claude_not_an_absolute_path"])
+        yield refuse(["claude_not_an_absolute_path"])
         return
     if not path.is_file():
-        yield Verified(["claude_missing"])
+        yield refuse(["claude_missing"])
         return
     root = Path(REPO_ROOT if repo_root is None else repo_root).resolve()
     try:
@@ -123,23 +149,27 @@ def verified(claude, proof: dict | None = None, *, repo_root=None, now: float | 
     except ValueError:
         inside = False
     if inside:
-        yield Verified(["claude_inside_repository"])
+        yield refuse(["claude_inside_repository"])
         return
     try:
         sha = hasher(path)
     except OSError:
-        yield Verified(["claude_unreadable"])
+        yield refuse(["claude_unreadable"])
         return
     if sha != CLAUDE_CODE_PIN["sha256"]:
-        yield Verified(["claude_hash_differs"], sha)
+        yield refuse(["claude_hash_differs"], sha)
         return
     if proof is not None:
         problems = (["cli_differs_from_proof"] if sha != proof.get("cli_sha256") else []) + age_problems(
             proof.get("date_utc"), now)
         if problems:
-            yield Verified(problems, sha)
+            yield refuse(problems, sha)
             return
-    private = Path(tempfile.mkdtemp(prefix="ommatix-cli-"))
+    try:
+        private = Path(tempfile.mkdtemp(prefix="ommatix-cli-", dir=None if parent is None else str(parent)))
+    except OSError:
+        yield refuse(["claude_copy_failed"], sha)
+        return
     release = None
     copy = private / path.name
     try:
@@ -149,10 +179,10 @@ def verified(claude, proof: dict | None = None, *, repo_root=None, now: float | 
             release = _hold_against_writes(copy)
             copy_sha = hasher(copy)
         except OSError:
-            yield Verified(["claude_copy_failed"], sha)
+            yield refuse(["claude_copy_failed"], sha)
             return
         if copy_sha != CLAUDE_CODE_PIN["sha256"]:
-            yield Verified(["claude_copy_differs"], sha)
+            yield refuse(["claude_copy_differs"], sha)
             return
         try:
             output = version_runner(str(copy))
@@ -161,18 +191,18 @@ def verified(claude, proof: dict | None = None, *, repo_root=None, now: float | 
         except (OSError, subprocess.SubprocessError):
             version = None
         if version is None:
-            yield Verified(["claude_version_unreadable"], sha)
+            yield refuse(["claude_version_unreadable"], sha)
         elif version != CLAUDE_CODE_PIN["version"]:
-            yield Verified(["claude_version_differs"], sha)
+            yield refuse(["claude_version_differs"], sha)
         else:
-            yield Verified([], sha, str(copy))
+            state.problems, state.sha, state.path = [], sha, str(copy)
+            yield state
     finally:
         if release is not None:
             with contextlib.suppress(OSError):
                 release()
-        with contextlib.suppress(OSError):
-            os.chmod(copy, stat.S_IWRITE | stat.S_IREAD)
-        shutil.rmtree(private, ignore_errors=True)
+        if not _remove_tree(private):
+            state.cleanup = ["claude_copy_not_removed"]
 
 
 def check(claude, **kwargs) -> tuple[list[str], str | None]:

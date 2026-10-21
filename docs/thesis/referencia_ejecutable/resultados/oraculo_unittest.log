@@ -48,6 +48,6 @@ test_or47_retired_missing (test_core.CoreTests.test_or47_retired_missing) ... ok
 test_or48_all_small_pixels_detected (test_core.CoreTests.test_or48_all_small_pixels_detected) ... ok
 
 ----------------------------------------------------------------------
-Ran 48 tests in 0.010s
+Ran 48 tests in 0.007s
 
 OK

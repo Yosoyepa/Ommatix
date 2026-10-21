@@ -180,9 +180,10 @@ class AgentCLI:
     # Whether this agent is the pinned Claude Code (``clipin``): its launches check the binary, the proof and the environment.
     checks_pinned_cli = False
 
-    def launch_guard(self, proof: dict | None = None):
+    def launch_guard(self, proof: dict | None = None, *, parent=None):
         """A context manager around ONE launch: yields a ``clipin.Verified`` (``problems`` stop the launch; ``kwargs()`` is
-        what the command builder takes). Nothing to verify for agents that are not Claude Code."""
+        what the command builder takes; ``cleanup`` is read after the block). ``parent`` is where the private copy is made.
+        Nothing to verify for agents that are not Claude Code."""
         return contextlib.nullcontext(clipin.Verified())
 
     def __init__(self, args=None):
@@ -263,10 +264,10 @@ class ClaudeCLI(AgentCLI):
 
     checks_pinned_cli = True
 
-    def launch_guard(self, proof=None):
+    def launch_guard(self, proof=None, *, parent=None):
         """ONE launch of the pinned Claude Code (``clipin.verified``): the CLI is the pin, the proof (if any) names its bytes and is at
         most 24 hours old, and the executable to launch is a verified private copy that lives while the block does."""
-        return clipin.verified(getattr(self.args, "claude", "claude"), proof)
+        return clipin.verified(getattr(self.args, "claude", "claude"), proof, parent=parent)
 
     def env(self, extra=None):
         if not self.route:

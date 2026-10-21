@@ -115,7 +115,8 @@ def run_session(args, width: int, height: int, config_dir: Path) -> dict:
     with clipin.verified(args.claude) as verified:
         if verified.problems:
             raise ag02_preflight.PreflightRefused(verified.problems)
-        return _run_session(args, width, height, config_dir, verified.path)
+        session = _run_session(args, width, height, config_dir, verified.path)
+    return session | {"copy_cleanup": verified.cleanup}
 
 
 def _run_session(args, width: int, height: int, config_dir: Path, claude) -> dict:
@@ -152,6 +153,7 @@ def run(args) -> dict:
         raise ag02_preflight.PreflightRefused(reasons)
     sessions = [run_session(args, w, h, args.claude_config_dir) for w, h in SIZES]
     verdict, problems = verdict_of(sessions)
+    problems += sorted({t for s in sessions for t in s.get("copy_cleanup", ())})  # a copy that stayed behind (R107-5)
     versions = sorted({s["claude_code_version"] for s in sessions if s["claude_code_version"]})
     return {"schema": SCHEMA, "date_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "claude_code_versions": versions, "requested_model": args.model, "verdict": verdict,
