@@ -1,30 +1,25 @@
 {
-  "timestamp_utc": "2026-10-21T00:10:58.131867+00:00",
+  "timestamp_utc": "2026-10-15T23:04:50.125520+00:00",
   "python": "3.12.2",
   "jsonschema_version": "4.26.0",
   "scope": "Schemas de dominio, ejemplos y consistencia estructural de documentación. NO conformidad MCP ni ejecución Cucumber.",
   "counts": {
-    "schemas": 8,
-    "payload_cases": 19,
-    "valid_examples": 10,
-    "invalid_examples": 9,
+    "schemas": 7,
+    "payload_cases": 17,
+    "valid_examples": 9,
+    "invalid_examples": 8,
     "jsonl_messages": 13,
     "feature_files": 8,
-    "gherkin_scenarios": 62,
+    "gherkin_scenarios": 54,
     "requirements": 28,
-    "planned_tests": 138,
+    "planned_tests": 104,
     "references": 24,
-    "adrs": 38
+    "adrs": 32
   },
-  "checks_run": 629,
+  "checks_run": 553,
   "checks_failed": 0,
   "success": true,
   "checks": [
-    {
-      "check": "schema:contratos/esquemas/action_freshness_diff.meta.schema.json",
-      "passed": true,
-      "detail": ""
-    },
     {
       "check": "schema:contratos/esquemas/execute_action.input.schema.json",
       "passed": true,
@@ -146,16 +141,6 @@
       "detail": "False was expected"
     },
     {
-      "check": "payload:contratos/ejemplos/freshness_diff_meta.json",
-      "passed": true,
-      "detail": "válido"
-    },
-    {
-      "check": "payload:contratos/ejemplos_invalidos/freshness_diff_con_geometria.json",
-      "passed": true,
-      "detail": "Additional properties are not allowed ('rectangle' was unexpected)"
-    },
-    {
       "check": "jsonl:mcp_legacy_solicitudes.jsonl:1",
       "passed": true,
       "detail": ""
@@ -237,21 +222,6 @@
     },
     {
       "check": "result_type:5",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "frescura_d0_meta:5",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "frescura_d0_rechazo:5",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "frescura_d0_solo_meta:5",
       "passed": true,
       "detail": ""
     },
@@ -378,7 +348,7 @@
     {
       "check": "adrs_encontradas",
       "passed": true,
-      "detail": "38"
+      "detail": "32"
     },
     {
       "check": "referencias:00_AUDITORIA_TECNICA.md",
@@ -602,36 +572,6 @@
     },
     {
       "check": "referencias:0032-freshness-scoped-to-the-target-window.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "referencias:0033-external-decision-model-for-offline-agent-experiments.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "referencias:0034-propose-fail-closed-retained-state-budgets.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "referencias:0035-freshness-group-limited-to-occluders.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "referencias:0036-llm-only-agent-experiment-on-the-test-applications.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "referencias:0037-ag02-other-providers-through-a-confinable-agent.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "referencias:0038-ag03-vision-baseline-and-ag02-repetitions.md",
       "passed": true,
       "detail": "[]"
     },
@@ -1066,86 +1006,6 @@
       "detail": ""
     },
     {
-      "check": "gherkin_id_unico:BDD-55",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_estructura:BDD-55",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_id_unico:BDD-56",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_estructura:BDD-56",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_id_unico:BDD-57",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_estructura:BDD-57",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_id_unico:BDD-58",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_estructura:BDD-58",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_id_unico:BDD-59",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_estructura:BDD-59",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_id_unico:BDD-60",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_estructura:BDD-60",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_id_unico:BDD-61",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_estructura:BDD-61",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_id_unico:BDD-62",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "gherkin_estructura:BDD-62",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "check": "gherkin_cabecera:07_retencion.feature",
       "passed": true,
       "detail": ""
@@ -1571,46 +1431,6 @@
       "detail": ""
     },
     {
-      "check": "trazabilidad:BDD-55",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "trazabilidad:BDD-56",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "trazabilidad:BDD-57",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "trazabilidad:BDD-58",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "trazabilidad:BDD-59",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "trazabilidad:BDD-60",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "trazabilidad:BDD-61",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "trazabilidad:BDD-62",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "check": "doc01_pruebas_existen:RF-01",
       "passed": true,
       "detail": "[]"
@@ -1818,7 +1638,7 @@
     {
       "check": "doc01_adr_existen:RF-11",
       "passed": true,
-      "detail": "ADR-0006; ADR-0007; ADR-0020; ADR-0025; ADR-0032; ADR-0035"
+      "detail": "ADR-0006; ADR-0007; ADR-0020; ADR-0025"
     },
     {
       "check": "doc01_propietario:RF-11",
@@ -2401,36 +2221,6 @@
       "detail": "[]"
     },
     {
-      "check": "doc01_adr_pruebas:0033-external-decision-model-for-offline-agent-experiments.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "doc01_adr_pruebas:0034-propose-fail-closed-retained-state-budgets.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "doc01_adr_pruebas:0035-freshness-group-limited-to-occluders.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "doc01_adr_pruebas:0036-llm-only-agent-experiment-on-the-test-applications.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "doc01_adr_pruebas:0037-ag02-other-providers-through-a-confinable-agent.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
-      "check": "doc01_adr_pruebas:0038-ag03-vision-baseline-and-ag02-repetitions.md",
-      "passed": true,
-      "detail": "[]"
-    },
-    {
       "check": "doc01_prueba_enlazada:UT-01",
       "passed": true,
       "detail": ""
@@ -2871,26 +2661,6 @@
       "detail": ""
     },
     {
-      "check": "doc01_prueba_enlazada:AG-02",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:AG-02M",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:AG-03",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:AG-02R",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "check": "doc01_prueba_enlazada:REL-01",
       "passed": true,
       "detail": ""
@@ -2971,156 +2741,6 @@
       "detail": ""
     },
     {
-      "check": "doc01_prueba_enlazada:UT-55",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-56",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-57",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-58",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-59",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-60",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-61",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-62",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-63",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-64",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-65",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-66",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-67",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-68",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-69",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-70",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-71",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-72",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-73",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-74",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:UT-75",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:BDD-55",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:BDD-56",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:BDD-57",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:BDD-58",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:BDD-59",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:BDD-60",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:BDD-61",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:BDD-62",
-      "passed": true,
-      "detail": ""
-    },
-    {
-      "check": "doc01_prueba_enlazada:IT-08",
-      "passed": true,
-      "detail": ""
-    },
-    {
       "check": "doc01_estados_de_pruebas",
       "passed": true,
       "detail": "[]"
@@ -3153,7 +2773,7 @@
     {
       "check": "doc01_nota_de_alcance:RNF-06",
       "passed": true,
-      "detail": "PERF-03 ejecutado en tres corridas supervisadas de 120 minutos, completas y sin entrada: sobre fe35d80 sin accesibilidad (docs/thesis/S0_RESULTADOS.md §12), sobre 745caff con uia (§15) y sobre 1c46b87 con uia (docs/thesis/S0_RESULTADOS.md §18: conjunto de trabajo +1,39 MiB/h, que cumple; cola con máximo 0 frente a 510, que cumple; manejadores con un paso de 998 a 999 en el minuto 13 y después plano, pendiente de +0,0892 por hora, criterio estricto no cumplido); tools/perf/soak.py. El conjunto de trabajo cumple el umbral del responsable (no más de 10 MiB/h; +1,25 MiB/h en §15). En la corrida con uia el recuento de manejadores pasa de 1008 a 1009 en el minuto 69 y se queda plano, con pendiente de +0,81 por hora, que no cumple el criterio de no crecimiento. Aceptado por cambio de alcance para el MVP, con esta evidencia documentada: ese paso de manejador (§15), la cota de la cola de regiones pendientes (decisión 9, resuelta como estructural el 17 de octubre de 2026: 510 teselas pendientes en 1920x1080, con evidencia sin conexión en docs/thesis/S0_RESULTADOS.md §17 y sin estrés en vivo) y la memoria de la caché de iconos (no activa en la corrida): docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (f) y CHANGELOG 1.0.69. Relectura del 17 de octubre de 2026 (1.0.93) con la regla de manejadores de ese día (decisión 10 de docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7): los manejadores cumplen en la corrida de docs/thesis/S0_RESULTADOS.md §18 (un paso de +1 en el segundo 785 y recuento constante durante los últimos 6410 s); el estado de esta fila no cambia. No se afirma ausencia de fugas."
+      "detail": "PERF-03 ejecutado en dos corridas supervisadas de 120 minutos, completas y sin entrada: sobre fe35d80 sin accesibilidad (docs/thesis/S0_RESULTADOS.md §12) y sobre 745caff con uia (§15); tools/perf/soak.py. El conjunto de trabajo cumple el umbral del responsable (no más de 10 MiB/h; +1,25 MiB/h en §15). En la corrida con uia el recuento de manejadores pasa de 1008 a 1009 en el minuto 69 y se queda plano, con pendiente de +0,81 por hora, que no cumple el criterio de no crecimiento. Aceptado por cambio de alcance para el MVP, con esta evidencia documentada: ese paso de manejador (§15), la cota de la cola de regiones pendientes (decisión 9, sin cifra ni prueba con observaciones fallidas) y la memoria de la caché de iconos (no activa en la corrida): docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md §6.7 (f) y CHANGELOG 1.0.69. No se afirma ausencia de fugas."
     },
     {
       "check": "doc01_nota_de_alcance:RNF-07",
