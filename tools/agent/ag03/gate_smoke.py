@@ -48,6 +48,7 @@ HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent / "ag02")]
 
 import agentcli  # noqa: E402
+import clipin  # noqa: E402
 import pixel_agent as pa  # noqa: E402
 import pixel_disk as disk  # noqa: E402
 import pixel_gate as gate  # noqa: E402
@@ -69,8 +70,14 @@ LIMITATION = ("stream-attested: a real endpoint cannot be read request by reques
               "reached the model are known from the CLI's own init event and stream, and are as good as the isolation "
               "proof for the same pinned CLI hash, route and environment, whose stand-in session read the requests")
 # Closed classes for how a provider's refusal reads in the result event. Judged in memory; the text is never stored.
-IMAGE_REJECTED = re.compile(r"image|media[_ -]?type|multimodal|vision|content[_ -]?type|base64|unsupported (?:input|content)",
-                            re.I)
+# A refusal of the image needs an explicit signal: a client-error status that is about the request's content (400, 413, 415,
+# 422) together with a word of the image, or a sentence that says the image is not supported. A stray word is not enough.
+IMAGE_WORD = re.compile(r"image|media[_ -]?type|multimodal|vision|content[_ -]?type|base64", re.I)
+REJECTION_STATUS = re.compile(r"\b(?:400|413|415|422)\b")
+REJECTION_SENTENCE = re.compile(
+    r"(?:does not|doesn't|do not|cannot|can't) (?:support|accept|process) (?:\w+ ){0,2}image"
+    r"|image\w*[^.\n]{0,60}(?:not supported|unsupported|not allowed|not accepted)"
+    r"|(?:unsupported|unknown|invalid)[^.\n]{0,40}image", re.I)
 TRANSPORT = re.compile(r"ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|socket|network|connect|fetch failed|overloaded|rate.?limit|"
                        r"certificate|\b(?:429|5\d\d)\b", re.I)
 
@@ -168,7 +175,7 @@ def provider_error_of(ran: dict, metrics) -> str | None:
     if not failed:
         return None
     text = result.get("result") if isinstance(result.get("result"), str) else ""
-    if IMAGE_REJECTED.search(text):
+    if REJECTION_SENTENCE.search(text) or (REJECTION_STATUS.search(text) and IMAGE_WORD.search(text)):
         return "provider_rejected_image"
     if TRANSPORT.search(text):
         return "transport_error"
@@ -193,6 +200,15 @@ def stream_problems(summary: dict, ran: dict) -> list[str]:
     if ran.get("tree_left"):
         problems.append("tree_left")
     return problems
+
+
+def cost_notes(args, summary: dict) -> list[str]:
+    """Non-decisive notes on the spend: the native route's dollar cap is applied by the CLI, and the final figure is compared
+    with it afterwards. A route has no dollar figure (ADR-0037)."""
+    cost = summary.get("cost_usd")
+    if args.route or isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return []
+    return ["cost_over_cap"] if cost > NATIVE_USD_CAP else []
 
 
 def evidence_block(args, proof: dict, summary: dict, ran: dict, problems: list[str], disk_facts: dict,
@@ -271,12 +287,25 @@ def run_session(args, cli: pr.PixelCLI, proof: dict, work: Path, run_claude, cla
 
 # ---- records and claims ------------------------------------------------------------------------------
 
-def claim_path(out_dir: Path, name: str) -> Path:
-    return out_dir / f"{name}.claim.json"
+def canonical_root() -> Path:
+    """The one place the one-attempt rule is kept whatever ``--out-dir`` says: the claim and the record of each model are
+    also written here, and either, found here or in the given directory, refuses the attempt."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".local" / "share")
+    return Path(base) / "Ommatix" / "ag03" / "gate"
 
 
-def record_path(out_dir: Path, name: str) -> Path:
-    return out_dir / f"{name}.gate.json"
+def roots(out_dir: Path) -> list[Path]:
+    canonical = canonical_root()
+    return [canonical] if os.path.normcase(os.path.abspath(out_dir)) == os.path.normcase(os.path.abspath(canonical)) \
+        else [canonical, out_dir]
+
+
+def claim_path(root: Path, name: str) -> Path:
+    return root / f"{name}.claim.json"
+
+
+def record_path(root: Path, name: str) -> Path:
+    return root / f"{name}.gate.json"
 
 
 def write_exclusive(path: Path, text: str) -> None:
@@ -285,36 +314,61 @@ def write_exclusive(path: Path, text: str) -> None:
 
 
 def claim_attempt(out_dir: Path, name: str, args) -> None:
-    """The one attempt, claimed before the provider can be reached, by an exclusive create that is never undone."""
-    try:
-        write_exclusive(claim_path(out_dir, name), json.dumps({
-            "model": name, "requested_model": args.model, "provider": provider_of(args),
-            "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "state": "started"}))
-    except FileExistsError:
-        raise SystemExit(f"{name} has already been attempted ({claim_path(out_dir, name)} exists): the gate is one "
-                         "attempt per model, an exclusion is recorded and not retried, and a claim without a record is "
-                         "a consumed attempt; nothing was sent") from None
+    """The one attempt, claimed before the provider can be reached, by an exclusive create (in the canonical root and in the
+    given directory) that is never undone."""
+    text = json.dumps({"model": name, "requested_model": args.model, "provider": provider_of(args),
+                       "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "state": "started"})
+    for root in roots(out_dir):
+        root.mkdir(parents=True, exist_ok=True)
+        try:
+            write_exclusive(claim_path(root, name), text)
+        except FileExistsError:
+            raise SystemExit(f"{name} has already been attempted ({claim_path(root, name)} exists): the gate is one "
+                             "attempt per model, an exclusion is recorded and not retried, and a claim without a record "
+                             "is a consumed attempt; nothing was sent") from None
+
+
+def write_record(out_dir: Path, name: str, record: dict) -> Path:
+    """The gate record, created exclusively in the given directory and in the canonical root; returns the given one's path."""
+    text = json.dumps(record, indent=2)
+    for root in roots(out_dir):
+        root.mkdir(parents=True, exist_ok=True)
+        write_exclusive(record_path(root, name), text)
+    return record_path(out_dir, name)
+
+
+def settle_claim(out_dir: Path, name: str, record: dict) -> None:
+    for root in roots(out_dir):
+        claim_path(root, name).write_text(json.dumps({"model": name, "state": "done", "status": record["status"]}),
+                                          encoding="utf-8")
 
 
 def refused_early(args, name: str, out_dir: Path) -> None:
-    for path in (record_path(out_dir, name), claim_path(out_dir, name)):
-        if path.exists():
-            raise SystemExit(f"{name} already has {path.name}: one attempt per model, nothing was sent")
+    for root in roots(out_dir):
+        for path in (record_path(root, name), claim_path(root, name)):
+            if path.exists():
+                raise SystemExit(f"{name} already has {path}: one attempt per model, nothing was sent")
 
 
-def preflight_failed_proof(path: Path, model: str, base_url: str | None) -> dict | None:
-    """The proof when it is a well-formed ag03 proof for THIS model and endpoint that did NOT pass (the model failed its
-    preflight: excluded and recorded), else None (a failed proof of another model excludes nobody)."""
+def preflight_failed_proof(path: Path, model: str, route_facts: dict | None) -> dict | None:
+    """The proof when it meets everything a valid proof must meet except ``passed`` - the ag03 schema, the current verifier
+    revision (and the route's), the pinned CLI's SHA-256, a date under 24 hours old, this model and exactly this route and
+    endpoint - and did NOT pass (the model failed its preflight: excluded and recorded); else None. A stale, foreign or
+    older-verifier failed proof excludes nobody."""
     try:
         proof = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    route = proof.get("route") if isinstance(proof, dict) else None
-    if isinstance(proof, dict) and proof.get("schema") == pa.PROOF_SCHEMA and proof.get("passed") is False \
-            and isinstance(proof.get("problems"), list) and proof.get("requested_model") == model \
-            and (route.get("base_url") if isinstance(route, dict) else None) == base_url:
-        return proof
-    return None
+    if not isinstance(proof, dict):
+        return None
+    revision = proof.get("verifier_revision")
+    current = (proof.get("schema") == pa.PROOF_SCHEMA and proof.get("passed") is False
+               and isinstance(proof.get("problems"), list) and type(revision) is int and revision == pa.VERIFIER_REVISION
+               and proof.get("cli_sha256") == clipin.CLAUDE_CODE_PIN["sha256"]
+               and not clipin.age_problems(proof.get("date_utc")) and proof.get("requested_model") == model
+               and proof.get("route") == route_facts
+               and (route_facts is None or proof.get("route_verifier_revision") == pf.ROUTE_VERIFIER_REVISION))
+    return proof if current else None
 
 
 def summary_line(record: dict, path: Path | None) -> str:
@@ -337,8 +391,9 @@ def parse_args(argv=None):
     p.add_argument("--print-preconditions-command", action="store_true",
                    help="print the PowerShell command that records the owner's preconditions at --preconditions; send nothing")
     p.add_argument("--out-dir", type=Path, help="where the claim, the record and the work files go (outside the checkout)")
-    p.add_argument("--timeout", type=float, default=TIMEOUT_S)
-    p.add_argument("--max-context-tokens", type=int, default=ROUTE_CONTEXT_TOKENS, help="a route only")
+    p.add_argument("--timeout", type=float, default=TIMEOUT_S, help="seconds; may be lowered, never raised")
+    p.add_argument("--max-context-tokens", type=int, default=ROUTE_CONTEXT_TOKENS,
+                   help="a route only; may be lowered, never raised")
     args = p.parse_args(argv)
     if args.route:
         spec = agentcli.CLAUDE_ROUTES[args.route]
@@ -361,8 +416,10 @@ def parse_args(argv=None):
         value = getattr(args, name)
         if value is not None and (problem := proxy_module.path_problem(value)):
             p.error(f"--{name.replace('_', '-')}: {problem}")
-    if args.max_context_tokens < 1 or args.timeout <= 0:
-        p.error("--max-context-tokens and --timeout must be positive")
+    if not 0 < args.timeout <= TIMEOUT_S:
+        p.error(f"--timeout may be lowered, never raised: it must be above 0 and at most {TIMEOUT_S:g} seconds")
+    if not 0 < args.max_context_tokens <= ROUTE_CONTEXT_TOKENS:
+        p.error(f"--max-context-tokens may be lowered, never raised: it must be above 0 and at most {ROUTE_CONTEXT_TOKENS}")
     # the attributes ``PixelCLI`` and ``rg.token_cap_kwargs`` read
     args.max_usd_explicit = False
     args.max_context_tokens_per_goal = args.max_context_tokens if args.route else None
@@ -415,12 +472,12 @@ def _locked(args, base_url: str | None, run_claude) -> int:
         return 3  # not a gate outcome: no key was read, no provider was called, nothing is written
     if (why := cli.key_problem()) is not None:
         raise SystemExit(why)
-    failed_proof = preflight_failed_proof(args.isolation_proof, args.model, base_url)
+    failed_proof = preflight_failed_proof(args.isolation_proof, args.model,
+                                         cli.route_facts(args.model) if args.route else None)
     if failed_proof is not None:
         record = gate.gate_record(name, provider, preflight_passed=False, preconditions=preconditions, **identity)
         record["evidence"] = {"basis": "preflight", "problems": sorted(set(map(str, failed_proof["problems"])))}
-        path = record_path(out_dir, name)
-        write_exclusive(path, json.dumps(record, indent=2))
+        path = write_record(out_dir, name, record)
         print(summary_line(record, path))
         return 1
     proof = cli.load_proof(args.isolation_proof)
@@ -436,21 +493,20 @@ def _locked(args, base_url: str | None, run_claude) -> int:
     summary = metrics.summary()
     error = provider_error_of(ran, metrics)
     evidence_problems = stream_problems(summary, ran)
+    notes = cost_notes(args, summary)
     if error is None and evidence_problems:
         error = "cli_error"  # right words, but the evidence that the confined tools reached the model is not clean
     attested = (metrics.attestation or {}).get("model")
     record = gate.gate_record(name, provider, preflight_passed=True, preconditions=preconditions,
                               answer=None if error else answer_of(metrics), provider_error=error,
                               requested_model=args.model, resolved_model=attested, route_base_url=base_url)
-    record["evidence"] = evidence_block(args, proof, summary, ran, evidence_problems, disk_facts, cleanup)
-    path = record_path(out_dir, name)
-    write_exclusive(path, json.dumps(record, indent=2))
-    claim_path(out_dir, name).write_text(json.dumps({"model": name, "state": "done", "status": record["status"]}),
-                                         encoding="utf-8")
+    record["evidence"] = evidence_block(args, proof, summary, ran, evidence_problems + notes, disk_facts, cleanup)
+    path = write_record(out_dir, name, record)
+    settle_claim(out_dir, name, record)
     print(summary_line(record, path))
-    if cleanup or disk_facts["problems"]:
+    if cleanup or disk_facts["problems"] or notes:
         print("reported, not decisive (synthetic images): copy_cleanup=" + ",".join(cleanup)
-              + " disk=" + ",".join(disk_facts["problems"]), file=sys.stderr)
+              + " disk=" + ",".join(disk_facts["problems"]) + " notes=" + ",".join(notes), file=sys.stderr)
     return 0 if record["status"] == "passed" else 1
 
 

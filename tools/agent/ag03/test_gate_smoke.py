@@ -41,9 +41,9 @@ class Runner:
     """``run_claude`` for ``gate_smoke.main``: the real one (it owns and ends the process tree) with the fake CLI's switches
     added to the child's environment, remembering every call."""
 
-    def __init__(self, mode="good", shots=4, record=None, size="1280x720"):
+    def __init__(self, mode="good", shots=4, record=None, size="1280x720", cost="0.01"):
         self.extra = {"FAKE_SMOKE_MODE": mode, "FAKE_SMOKE_SHOTS": str(shots), "FAKE_SMOKE_SECRET": KEY,
-                      "FAKE_SMOKE_SIZE": size}
+                      "FAKE_SMOKE_SIZE": size, "FAKE_SMOKE_COST": cost}
         if record:
             self.extra["FAKE_SMOKE_RECORD"] = str(record)
         self.calls = []
@@ -77,6 +77,9 @@ class GateSmokeCase(PreflightHarness):
         self.addCleanup(environ.stop)
         for name in rg.routing_problems(os.environ):
             os.environ.pop(name, None)
+        # the canonical root of the one-attempt rule lives under LOCALAPPDATA: the test's own, never the owner's
+        os.environ["LOCALAPPDATA"] = str(self.tmp / "local")
+        self.canonical = self.tmp / "local" / "Ommatix" / "ag03" / "gate"
 
     def prepare(self, route=None, *, proof_edit=None, preconditions="ok", proof_age_s=0.0):
         proof = self.preflight(route=route)
@@ -357,6 +360,101 @@ class CommandLineTests(GateSmokeCase):
         self.assertFalse((self.out_dir / "Haiku.claim.json").exists())
 
 
+class CapTests(GateSmokeCase):
+    def parse_refused(self, *extra):
+        self.prepare()
+        with contextlib.redirect_stderr(self.stderr), self.assertRaises(SystemExit) as raised:
+            gs.parse_args(self.argv(*extra))
+        return raised.exception.code
+
+    def test_the_timeout_can_be_lowered_but_not_raised(self):
+        self.prepare()
+        self.assertEqual(gs.parse_args(self.argv("--timeout", "30")).timeout, 30.0)
+        self.assertEqual(gs.parse_args(self.argv("--timeout", str(gs.TIMEOUT_S))).timeout, gs.TIMEOUT_S)
+        self.assertEqual(self.parse_refused("--timeout", str(gs.TIMEOUT_S + 1)), 2)
+        self.assertEqual(self.parse_refused("--timeout", "99999"), 2)
+
+    def test_the_context_cap_can_be_lowered_but_not_raised(self):
+        self.prepare("deepseek")
+        self.assertEqual(gs.parse_args(self.argv("--max-context-tokens", "1000")).max_context_tokens_per_goal, 1000)
+        with contextlib.redirect_stderr(self.stderr), self.assertRaises(SystemExit) as raised:
+            gs.parse_args(self.argv("--max-context-tokens", str(gs.ROUTE_CONTEXT_TOKENS + 1)))
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_a_raised_cap_runs_nothing_through_the_command_line(self):
+        self.prepare()
+        with contextlib.redirect_stderr(self.stderr), contextlib.redirect_stdout(self.stdout), \
+                self.assertRaises(SystemExit) as raised:
+            gs.entry(self.argv("--timeout", "99999"))
+        self.assertEqual(raised.exception.code, 2)
+        self.assertFalse((self.out_dir / "Haiku.claim.json").exists())
+
+
+class CanonicalAttemptTests(GateSmokeCase):
+    def test_the_attempt_is_also_claimed_in_the_canonical_root(self):
+        self.prepare()
+        self.run_main(Runner())
+        self.assertTrue((self.canonical / "Haiku.claim.json").exists())
+
+    def test_another_out_dir_does_not_give_another_attempt(self):
+        self.prepare()
+        self.run_main(Runner("wrong"))
+        self.out_dir = self.tmp / "gate2"
+        with self.assertRaises(SystemExit) as raised:
+            self.run_main(NeverRuns())
+        self.assertIn("already", str(raised.exception))
+        self.assertFalse((self.out_dir / "Haiku.claim.json").exists())
+
+    def test_a_claim_without_a_record_in_the_canonical_root_is_a_consumed_attempt_for_any_out_dir(self):
+        self.prepare()
+        self.canonical.mkdir(parents=True)
+        (self.canonical / "Haiku.claim.json").write_text("{}", encoding="utf-8")
+        with self.assertRaises(SystemExit) as raised:
+            self.run_main(NeverRuns())
+        self.assertIn("already", str(raised.exception))
+
+    def test_a_record_in_the_canonical_root_is_also_refused(self):
+        self.prepare()
+        self.canonical.mkdir(parents=True)
+        (self.canonical / "Haiku.gate.json").write_text("{}", encoding="utf-8")
+        with self.assertRaises(SystemExit):
+            self.run_main(NeverRuns())
+
+    def test_the_canonical_root_as_out_dir_works(self):
+        self.prepare()
+        self.out_dir = self.canonical
+        self.assertEqual(self.run_main(Runner()), 0)
+        self.assertTrue((self.canonical / "Haiku.gate.json").exists())
+
+    def test_a_refused_launch_consumes_nothing_in_either_place(self):
+        self.prepare()
+        with launch_refused("claude_hash_differs"), self.assertRaises(SystemExit):
+            self.run_main(NeverRuns())
+        self.assertFalse((self.canonical / "Haiku.claim.json").exists())
+        self.assertEqual(self.run_main(Runner()), 0)
+
+
+class CostTests(GateSmokeCase):
+    def test_a_native_session_over_the_dollar_cap_is_noted_not_decisive(self):
+        self.prepare()
+        self.assertEqual(self.run_main(Runner(cost="0.50")), 0)
+        record = self.record("Haiku")
+        self.assertEqual(record["status"], "passed")
+        self.assertIn("cost_over_cap", record["evidence"]["problems"])
+        self.assertIn("cost_over_cap", self.stderr.getvalue())
+
+    def test_a_native_session_within_the_cap_has_no_note(self):
+        self.prepare()
+        self.run_main(Runner(cost="0.25"))
+        self.assertNotIn("cost_over_cap", self.record("Haiku")["evidence"]["problems"])
+        self.assertNotIn("cost_over_cap", self.stderr.getvalue())
+
+    def test_a_route_has_no_dollar_figure_to_compare(self):
+        self.prepare("deepseek")
+        self.run_main(Runner(cost="9.0"))
+        self.assertNotIn("cost_over_cap", self.record("DeepSeek")["evidence"]["problems"])
+
+
 class ProofTests(GateSmokeCase):
     def test_a_proof_that_did_not_pass_excludes_the_model_and_calls_no_provider(self):
         self.prepare(proof_edit=lambda p: p.update(passed=False, problems=["pixel_control_blind"]))
@@ -365,6 +463,32 @@ class ProofTests(GateSmokeCase):
         self.assertEqual((record["status"], record["reason"], record["provider_called"]),
                          ("excluded", "preflight_failed", False))
         self.assertEqual(record["evidence"]["problems"], ["pixel_control_blind"])
+
+    def assert_failed_proof_records_nothing(self, **edit):
+        self.prepare(proof_edit=lambda p: p.update(passed=False, problems=["pixel_control_blind"], **edit))
+        with self.assertRaises(SystemExit):
+            self.run_main(NeverRuns())
+        self.assertFalse((self.out_dir / "Haiku.gate.json").exists())
+        self.assertFalse((self.out_dir / "Haiku.claim.json").exists())
+
+    def test_an_old_failed_proof_excludes_nobody(self):
+        self.assert_failed_proof_records_nothing(date_utc="2026-01-01T00:00:00Z")
+
+    def test_a_failed_proof_of_another_verifier_revision_excludes_nobody(self):
+        self.assert_failed_proof_records_nothing(verifier_revision=1)
+
+    def test_a_failed_proof_of_another_cli_excludes_nobody(self):
+        self.assert_failed_proof_records_nothing(cli_sha256="0" * 64)
+
+    def test_a_failed_proof_without_a_cli_hash_excludes_nobody(self):
+        self.assert_failed_proof_records_nothing(cli_sha256=None)
+
+    def test_a_failed_route_proof_of_another_route_excludes_nobody(self):
+        self.prepare("deepseek", proof_edit=lambda p: p.update(
+            passed=False, problems=["x"], route=dict(p["route"], base_url="https://elsewhere.invalid")))
+        with self.assertRaises(SystemExit):
+            self.run_main(NeverRuns())
+        self.assertFalse((self.out_dir / "DeepSeek.gate.json").exists())
 
     def test_a_failed_proof_of_another_model_excludes_nobody(self):
         self.prepare(proof_edit=lambda p: p.update(passed=False, problems=["x"], requested_model="claude-sonnet-5-5"))
@@ -519,6 +643,29 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(gs.provider_error_of({"exit_code": 0, "killed": "token_cap"}, self.metrics()), "cli_error")
         self.assertIsNone(gs.provider_error_of({"exit_code": 0, "killed": None},
                                                self.metrics(is_error=False, subtype="success", result="ok")))
+
+    def error(self, text):
+        m = self.metrics(is_error=True, subtype="error_during_execution", result=text)
+        return gs.provider_error_of({"exit_code": 1, "killed": None}, m)
+
+    def test_a_stray_image_word_in_a_transport_error_is_a_transport_error(self):
+        self.assertEqual(self.error("fetch failed while loading the image cache: ECONNRESET"), "transport_error")
+        self.assertEqual(self.error("503 service unavailable (image service)"), "transport_error")
+        self.assertEqual(self.error("API Error: connect ETIMEDOUT, base64 payload not sent"), "transport_error")
+
+    def test_a_stray_image_word_without_a_rejection_is_a_cli_error(self):
+        self.assertEqual(self.error("something failed near the image"), "cli_error")
+        self.assertEqual(self.error("vision module crashed"), "cli_error")
+
+    def test_a_rate_limit_that_names_an_image_is_not_a_rejection(self):
+        self.assertEqual(self.error("429 too many requests for image input"), "transport_error")
+
+    def test_an_explicit_rejection_of_the_image_is_one(self):
+        self.assertEqual(self.error("400 invalid request: image content blocks are not supported"),
+                         "provider_rejected_image")
+        self.assertEqual(self.error("422 unprocessable: messages.0.content: unknown block type image"),
+                         "provider_rejected_image")
+        self.assertEqual(self.error("The model does not support image input"), "provider_rejected_image")
 
     def test_no_result_event_is_a_cli_error(self):
         m = argparse.Namespace(killed=None, init_problems=[], attestation={"model": "m"}, result=None)

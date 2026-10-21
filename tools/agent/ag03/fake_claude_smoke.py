@@ -6,7 +6,7 @@ It prints an ``init`` event with the same keys as the preflight stand-in (``fake
 answer depends on ``FAKE_SMOKE_MODE``:
 
 ``good``: the four lines the smoke asks for, with the word and shape of each scene; ``wrong``: another word per image;
-``garbled``: no ``IMAGE n:`` lines (``FAKE_SMOKE_SIZE`` WxH sets the size of the drawn images); ``error_image`` / ``error_transport`` / ``error_other``: an error result with a refusal
+``garbled``: no ``IMAGE n:`` lines (``FAKE_SMOKE_SIZE`` WxH sets the size of the drawn images, ``FAKE_SMOKE_COST`` the reported cost); ``error_image`` / ``error_transport`` / ``error_other``: an error result with a refusal
 text of that class; ``extra_tool``: a fourth tool at init; ``hang``: sleeps past the timeout.
 
 Records its argv, and the NAMES (never the values) of its environment, to ``FAKE_SMOKE_RECORD``; ``FAKE_SMOKE_SECRET``
@@ -75,7 +75,7 @@ def main() -> int:
     print(json.dumps({"type": "assistant", "message": {"id": "mf", "usage": {"input_tokens": 100, "output_tokens": 40},
                                                       "content": [{"type": "text", "text": answer}]}}), flush=True)
     print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": answer,
-                      "num_turns": shots + 1, "total_cost_usd": 0.01, "prompt_chars": len(prompt)}), flush=True)
+                      "num_turns": shots + 1, "total_cost_usd": float(os.environ.get("FAKE_SMOKE_COST", "0.01")), "prompt_chars": len(prompt)}), flush=True)
     return 0
 
 
