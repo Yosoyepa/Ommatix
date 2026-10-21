@@ -91,6 +91,8 @@ def main() -> int:
         token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
         if token:  # a route: what a real Claude Code adds
             tools = [{"name": n} for n in TOOLS] + ([{"name": "Bash"}] if mode == "route_extra_tool" else [])
+            if mode == "deferred_placeholder" and os.environ.get("ENABLE_TOOL_SEARCH") != "false":
+                tools.append({"name": "DeferredToolPlaceholder"})  # what Claude Code adds unless tool search is off
             payload |= {"tools": tools, "thinking": {"type": "adaptive"},
                         "output_config": {"effort": "low" if mode == "route_bad_effort"
                                           else os.environ.get("CLAUDE_CODE_EFFORT_LEVEL")}}

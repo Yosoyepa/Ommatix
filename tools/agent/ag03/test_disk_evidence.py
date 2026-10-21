@@ -28,13 +28,14 @@ import pixel_agent as pa  # noqa: E402
 import pixel_capture as cap  # noqa: E402
 import pixel_preflight as pf  # noqa: E402
 import run_goal as rg  # noqa: E402
+from pin_support import pinned  # noqa: E402
 
 FAKE_CLI = [sys.executable, str(HERE / "fake_claude_pixel.py")]
 SURVEY = "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"
 
 
 class PreflightHarness(unittest.TestCase):
-    def preflight(self, mode="normal", *, route=None, argv_filter=None):
+    def preflight(self, mode="normal", *, route=None, argv_filter=None, pin=True, claude=None):
         scratch = tempfile.TemporaryDirectory(prefix="ag03-disk-")
         self.addCleanup(scratch.cleanup)
         tmp = Path(scratch.name)
@@ -45,9 +46,9 @@ class PreflightHarness(unittest.TestCase):
                  "FAKE_CLAUDE_CACHE_ROOT": str(self.cache), "FAKE_CLAUDE_LEAK_DIR": str(self.production)}
         model, url = (agentcli.CLAUDE_ROUTES[route]["model"], agentcli.CLAUDE_ROUTES[route]["base_urls"][0]) \
             if route else ("claude-haiku-5-5", None)
-        args = argparse.Namespace(exe=Path(sys.executable), model=model, claude=FAKE_CLI, timeout=60,
+        args = argparse.Namespace(exe=Path(sys.executable), model=model, claude=claude or FAKE_CLI, timeout=60,
                                   claude_config_dir=self.production, extra_env=extra, route=route, route_base_url=url)
-        patches = [mock.patch.object(pf.ag02, "refusals", return_value=[])]
+        patches = [mock.patch.object(pf.ag02, "refusals", return_value=[])] + ([pinned()] if pin else [])
         try:
             import pixel_disk  # noqa: PLC0415
         except ImportError:  # before the fix there is no module (and no cache check): the test then fails on its merits
@@ -77,7 +78,7 @@ class OnDiskEvidenceTests(PreflightHarness):
         self.assertTrue(disk["no_session_persistence_flag"])
         self.assertFalse(disk["image_data_found"])
         self.assertEqual(disk["config_files_touched"], {"canary": 0, "control": 0, "production_dir": 0})
-        self.assertEqual(proof["agent_env"], pa.PIXEL_ENV)
+        self.assertEqual(proof["agent_env"], pa.AGENT_ENV)
 
     def test_tool_results_images_in_the_configuration_directory_refuse_the_proof(self):
         proof = self.preflight("persist_tool_results")

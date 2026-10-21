@@ -22,6 +22,7 @@ import pixel_gate as gate  # noqa: E402
 import pixel_plan as plan  # noqa: E402
 import pixel_preflight as pf  # noqa: E402
 import run_goal as rg  # noqa: E402
+from pin_support import pinned  # noqa: E402
 
 DEEPSEEK_URL = agentcli.CLAUDE_ROUTES["deepseek"]["base_urls"][0]
 MIMO_URL = agentcli.CLAUDE_ROUTES["mimo"]["base_urls"][0]
@@ -51,7 +52,7 @@ class Base(unittest.TestCase):
         def spy(python, server_args):
             self.server_args.append(list(server_args))
             return real_build(python, server_args)
-        with mock.patch.object(pf.ag02, "refusals", return_value=list(refusals)), \
+        with pinned(), mock.patch.object(pf.ag02, "refusals", return_value=list(refusals)), \
                 mock.patch.object(pa, "build_mcp_config", side_effect=spy):
             return pf.run(args)
 

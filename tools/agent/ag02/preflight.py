@@ -64,6 +64,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import agentcli  # noqa: E402
+import clipin  # noqa: E402
 import proxy as proxy_module  # noqa: E402
 import run_goal as rg  # noqa: E402
 from fake_api import FakeApi  # noqa: E402
@@ -234,8 +235,18 @@ def context_snippets(config_dir: Path) -> tuple[list[str], list[str]]:
     return snippets, untestable
 
 
-def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path,
-                scratch_name: str, memory_dir: Path | None) -> dict:
+def one_session(args, config_dir: Path, cwd: Path, **kwargs) -> dict:
+    """One session, launched from its OWN verified copy of the pinned CLI (the bytes that were verified are the bytes that
+    run; nothing is launched when the CLI is not the pin). See ``_one_session``."""
+    with clipin.verified(args.claude) as verified:
+        if verified.problems:
+            raise PreflightRefused(verified.problems)
+        session = _one_session(args, config_dir, cwd, claude=verified.path, **kwargs)
+    return session | {"cli_sha256": verified.sha, "copy_cleanup": verified.cleanup}  # known once the block has ended
+
+
+def _one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path,
+                 scratch_name: str, memory_dir: Path | None, claude) -> dict:
     """One session. Production flags, or (control) the settings sources on and the CLAUDE.md
     switch off. `memory_dir` is the directory init's memory paths must lie under, if checked."""
     goals = rg.load_goals()
@@ -243,7 +254,7 @@ def one_session(args, config_dir: Path, cwd: Path, *, control: bool, log: Path,
                               [str(args.exe), "serve", "--source", "sim", "--legacy"])
     mcp_path = log.with_name(scratch_name + ".mcp.json")
     mcp_path.write_text(json.dumps(mcp), encoding="utf-8")
-    argv = rg.build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
+    argv = rg.build_claude_argv(claude=claude, model=args.model, mcp_config=mcp_path,
                                 system_instruction=goals["system_instruction"],
                                 max_budget_usd=None if getattr(args, "route", None) else 0.5)
     route = getattr(args, "route", None)
@@ -429,6 +440,11 @@ def run(args) -> dict:
                 (route_detected if seen else route_blind).append(name)
         if route_blind:
             problems.append("route_control_blind")
+    cli_sha256 = a["cli_sha256"]  # every session was verified on its own; they must agree
+    if len({a["cli_sha256"], control["cli_sha256"], b["cli_sha256"]}) != 1:
+        problems.append("cli_differs_between_sessions")
+    for session in (a, control, b):
+        problems += [t for t in session["copy_cleanup"] if t not in problems]  # a copy that stayed behind (R107-5)
     att_a, att_b = a["attestation"] or {}, b["attestation"] or {}
     for name, run_ in (("canary_session", a), ("production_dir_session", b)):
         if run_["cli"]["exit_code"] != 0 or run_["cli"]["killed"]:
@@ -465,6 +481,7 @@ def run(args) -> dict:
         "date_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "claude_code_version": att_b.get("claude_code_version"), "model": att_b.get("model"),
         "requested_model": args.model, "tools": att_b.get("tools") or [],
+        "cli_sha256": cli_sha256, "agent_env": dict(rg.QUIET_ENV),
         "plugins": att_b.get("plugins") or [], "agents": att_b.get("agents") or [],
         "plugin_hashes": att_b.get("plugin_hashes") or [], "agent_hashes": att_b.get("agent_hashes") or [],
         "init_keys_sha256": att_b.get("init_keys_sha256") or "",

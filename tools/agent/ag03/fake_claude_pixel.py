@@ -151,7 +151,9 @@ def main() -> int:
     answer = "VERDICT: DONE"
     if mode != "silent":
         payload = {"model": flag(argv, "--model"), "stream": False, "system": flag(argv, "--system-prompt"),
-                   "tools": [{"name": n} for n in tools],
+                   "tools": [{"name": n} for n in tools]
+                            + ([{"name": "DeferredToolPlaceholder"}] if mode == "deferred_placeholder"
+                               and os.environ.get("ENABLE_TOOL_SEARCH") != "false" else []),
                    "messages": [{"role": "user", "content": prompt + "\n" + context},
                                 {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": tool_name,
                                                                    "input": {}}]},

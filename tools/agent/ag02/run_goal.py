@@ -67,6 +67,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import clipin  # noqa: E402
 import proxy as proxy_module  # noqa: E402
 
 GOALS_PATH = HERE / "goals.json"
@@ -109,7 +110,9 @@ PROOF_SCHEMA = "ag02-isolation-proof-3"
 #   2: first review round (isolation canary, stage B, scrubbed environment)
 #   3: decoded-request matching, untestable-file failure, manifest cap as a refusal, managed-policy
 #      drop-ins and unreadable roots/keys (third review)
-VERIFIER_REVISION = 3
+#   4: the proof records the SHA-256 of the pinned CLI it was made with and the agent's environment (with
+#      ``ENABLE_TOOL_SEARCH=false``), and is valid for at most 24 hours (``clipin``; decisions of 2026-10-20)
+VERIFIER_REVISION = 4
 # The per-goal cap on context tokens of a provider route (the CLI's dollar figure is invalid there). The largest
 # per-goal context of the four route series of 2026-10-19 is 274 232 (MiMo, phase 1, G02); the default is twice
 # that, rounded up. It is a runaway guard, not a prediction, and every run records it in its provenance.
@@ -389,7 +392,15 @@ def agent_env(extra: dict | None = None) -> dict:
 # (`execute_action` is missing), in every run: the CLI's tool surface depends on its own network
 # state, so those controls would change what the preflight measures. A production session whose
 # environment sets them fails the runner's init comparison (`tools_differ`), closed.
-QUIET_ENV = {"DISABLE_ERROR_REPORTING": "1", "DISABLE_AUTOUPDATER": "1"}
+# ``ENABLE_TOOL_SEARCH=false`` (2026-10-20): without it Claude Code puts a ``DeferredToolPlaceholder`` entry in the tool
+# list of every request, measured on 2.1.304 and 2.1.305 with the CLI's own configuration; with it the list is exactly
+# the three tools of the harness. It is part of the environment of BOTH harnesses (AG-02, AG-03) and of their proofs.
+QUIET_ENV = {"DISABLE_ERROR_REPORTING": "1", "DISABLE_AUTOUPDATER": "1", "ENABLE_TOOL_SEARCH": "false"}
+
+
+def env_problems(env: dict) -> list[str]:
+    """Closed tokens for an agent environment that lacks the switches of ``QUIET_ENV``."""
+    return [] if all(env.get(k) == v for k, v in QUIET_ENV.items()) else ["agent_environment_lacks_switches"]
 
 
 def scrubbed_env(extra: dict) -> dict:
@@ -648,7 +659,9 @@ def load_isolation_proof(path: Path) -> dict:
           and isinstance(proof.get("init_keys_sha256"), str)
           and isinstance(proof.get("config_identity"), str)
           and isinstance(proof.get("context_manifest"), dict)
-          and isinstance(proof.get("date_utc"), str))
+          and isinstance(proof.get("date_utc"), str)
+          and proof.get("cli_sha256") == clipin.CLAUDE_CODE_PIN["sha256"]
+          and proof.get("agent_env") == QUIET_ENV)
     if not ok:
         raise SystemExit(f"the isolation proof is not a passing {PROOF_SCHEMA} file with verifier "
                          f"revision {VERIFIER_REVISION}: it was issued by an older or different verifier "
@@ -2090,16 +2103,25 @@ def run_goal(args, goals: dict, goal: dict, out: Path, ledger: Path | None, stop
                 return result
         metrics = StreamMetrics(goals["vocabulary"][goal["app"]], goal["choice"]["type_text"], proof,
                                 config_dir=config_dir)
-        sampler = deps.make_sampler(app.state)
-        sampler.start()
-        spent_before = proxy_module.read_ledger(ledger)["total"] if ledger else 0
-        ran = deps.run_claude(
-            cli.build_argv(model=args.model, mcp_config=mcp_path,
-                           system_instruction=goals["system_instruction"],
-                           max_budget_usd=args.max_budget_usd),
-            build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
-            env=cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None),
-            **token_cap_kwargs(args))
+        with cli.launch_guard(proof) as verified:  # the bytes that were verified are the bytes that run (R107-2)
+            if verified.problems:
+                result["aborted"] = "isolation proof does not cover this run: " + ",".join(verified.problems)
+                return result
+            sampler = deps.make_sampler(app.state)
+            sampler.start()
+            spent_before = proxy_module.read_ledger(ledger)["total"] if ledger else 0
+            env = cli.env({"CLAUDE_CONFIG_DIR": str(config_dir)} if config_dir else None)
+            if cli.checks_pinned_cli and (lost := env_problems(env)):  # the environment the proof was made with
+                result["aborted"] = "the agent environment lost an invariant of the isolation proof: " + ",".join(lost)
+                return result
+            ran = deps.run_claude(
+                cli.build_argv(model=args.model, mcp_config=mcp_path,
+                               system_instruction=goals["system_instruction"],
+                               max_budget_usd=args.max_budget_usd, **verified.kwargs()),
+                build_prompt(goal, phase), scratch, metrics, args.goal_timeout,
+                env=env, **token_cap_kwargs(args))
+        if verified.cleanup:
+            result["cli_copy_cleanup"] = list(verified.cleanup)  # the private copy stayed behind (R107-5): recorded, never ignored
         history = sampler.stop()
         sampler = None
         deps.sleep(0.5)
@@ -2146,15 +2168,21 @@ def run_smoke(args, out: Path, goals: dict, deps=RealDeps, proof: dict | None = 
         engine_argv(args, 1, args.config))), encoding="utf-8")
     agent = agent_cli(args)
     metrics = StreamMetrics([], None, proof, config_dir=getattr(args, "claude_config_dir", None) if proof else None)
-    cli = deps.run_claude(
-        agent.build_argv(model=args.model, mcp_config=mcp_path,
-                         system_instruction=goals["system_instruction"],
-                         max_budget_usd=args.max_budget_usd),
-        # The child's stderr is discarded here as it is for every goal: a provider error or a CLI diagnostic
-        # may echo the credential, a response or a label, and nothing filters it (the re-review of PR 93, N1).
-        SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env(), **token_cap_kwargs(args))
-    return {"smoke": True, "cli": cli, "provenance": metrics.provenance(args.model) | agent.provenance(),
-            "metrics": metrics.summary(), "proxy": proxy_summary(log)}
+    with agent.launch_guard(proof) as verified:  # the pin is needed whether or not the smoke has a proof (R107-3)
+        if verified.problems:
+            raise SystemExit("the smoke session is not launched: " + ",".join(verified.problems))
+        cli = deps.run_claude(
+            agent.build_argv(model=args.model, mcp_config=mcp_path,
+                             system_instruction=goals["system_instruction"],
+                             max_budget_usd=args.max_budget_usd, **verified.kwargs()),
+            # The child's stderr is discarded here as it is for every goal: a provider error or a CLI diagnostic
+            # may echo the credential, a response or a label, and nothing filters it (the re-review of PR 93, N1).
+            SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env(), **token_cap_kwargs(args))
+    result = {"smoke": True, "cli": cli, "provenance": metrics.provenance(args.model) | agent.provenance(),
+              "metrics": metrics.summary(), "proxy": proxy_summary(log)}
+    if verified.cleanup:
+        result["cli_copy_cleanup"] = list(verified.cleanup)  # the private copy stayed behind (R107-5): recorded, never ignored
+    return result
 
 
 def main(argv=None, deps=RealDeps) -> int:
@@ -2197,8 +2225,11 @@ def main(argv=None, deps=RealDeps) -> int:
         (out / "smoke.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(json.dumps({"smoke": out.as_posix(), "verdict": result["metrics"]["verdict"],
                           "mcp_status": result["metrics"]["mcp_status"],
-                          "init_problems": result["metrics"]["init_problems"]}))
-        return 2 if result["cli"].get("tree_left") or result["cli"].get("killed") == "no_tree_ownership" else 0
+                          "init_problems": result["metrics"]["init_problems"],
+                          "cli_copy_cleanup": result.get("cli_copy_cleanup", [])}))
+        # A session tree that could not be owned, or a private copy that could not be removed, is not a clean smoke.
+        return 2 if (result["cli"].get("tree_left") or result["cli"].get("killed") == "no_tree_ownership"
+                     or result.get("cli_copy_cleanup")) else 0
     stop_file = stop_path_of(config, config_dir)
     return run_series(args, goals, chosen, out, args.ledger, stop_file, proof, deps, windows_driver())
 

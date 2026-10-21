@@ -41,10 +41,13 @@ PROOF_SCHEMA = "ag03-isolation-proof-1"
 # Raised whenever this verifier is made stricter; a proof of an older revision is refused. AG-02's
 # proofs (``ag02-isolation-proof-3``) are a different schema and stay valid. Revision 2: the proof records and checks what the
 # synthetic sessions leave on disk (``pixel_disk``), the ``--no-session-persistence`` invariant and the agent's environment.
-VERIFIER_REVISION = 2
+VERIFIER_REVISION = 3
 # The pixel agent's own environment switch (AG-02's ``QUIET_ENV`` and so its proofs are unchanged): the CLI's feedback survey
 # off, so that no survey prompt, and nothing it would write for one, can touch a session. Part of the proof.
 PIXEL_ENV = {"CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY": "1"}
+# The whole agent environment of the pixel agent (and of its proof): AG-02's switches - the CLI's automatic update and
+# error reporting off, tool search off (``ENABLE_TOOL_SEARCH=false``) - plus the survey switch.
+AGENT_ENV = {**rg.QUIET_ENV, **PIXEL_ENV}
 NO_PERSISTENCE_FLAG = "--no-session-persistence"
 
 SYSTEM_INSTRUCTION = (
@@ -114,8 +117,8 @@ def temp_env_problems(env: dict) -> list[str]:
 
 
 def env_problems(env: dict) -> list[str]:
-    """Closed tokens for an environment that lacks the pixel agent's switches (``PIXEL_ENV``)."""
-    return [] if all(env.get(k) == v for k, v in PIXEL_ENV.items()) else ["agent_environment_lacks_pixel_switches"]
+    """Closed tokens for an environment that lacks the pixel agent's switches (``AGENT_ENV``)."""
+    return [] if all(env.get(k) == v for k, v in AGENT_ENV.items()) else ["agent_environment_lacks_pixel_switches"]
 
 
 # ---- images in a request -----------------------------------------------------------------------

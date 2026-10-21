@@ -182,10 +182,16 @@ decision O1; **nothing here deletes a screenshot remotely**. Outputs belong outs
   proof bound. The facts go in the proof (`disk`, `agent_env`). A clean snapshot after a session is **not** proof that nothing
   was ever written transiently while it ran. The pixel agent's
   environment sets `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` (AG-03 only).
-* **Claude Code auto-updated to 2.1.305 on 2026-10-20.** Every proof must be regenerated with the version used before a live
-  series (O11). With 2.1.305 the preflight currently fails (`pixel_tools_not_the_three`): the CLI adds a
-  `DeferredToolPlaceholder` entry to every request's tool list. This is not changed here (the "exactly three tools" verdict is the
-  owner's rule): it needs a decision, or the CLI pinned to the version the proofs were made with.
+* **The pinned CLI (2026-10-20).** Claude Code auto-updated to 2.1.305 on 2026-10-20, and the CLI (2.1.304 and 2.1.305 alike, so it
+  is not the version) adds a `DeferredToolPlaceholder` entry to every request's tool list, which the "exactly three tools" verdict
+  refuses (`pixel_tools_not_the_three`; there is no exception by name). The experiments therefore run on **one pinned binary**
+  (Claude Code 2.1.304 win32-x64, SHA-256 `019e5174d5d954585edb1a946fe280e44a973050b4897034adf0e16306f85fdd`, identical to the
+  `claude.exe` of `@anthropic-ai/claude-code-win32-x64@2.1.304`) in a private directory outside the repository
+  (`%LOCALAPPDATA%\Ommatix\agent-cli\2.1.304\claude.exe`, read-only): `--claude` must be that absolute path (`claude` from PATH is
+  refused), each preflight session and every launch (goals, smoke, probe) verifies a private read-only copy of the binary - path and hash first, nothing executed before they pass, then the hash and `--version` of the copy - and launches that copy (made inside the session's own monitored temporary directory, so the disk-evidence scan covers what the CLI writes beside it; removed afterwards, and a copy that cannot be removed fails the proof), so replacing the configured file cannot change what runs (`ag02/clipin.py`), the agent environment sets
+  `ENABLE_TOOL_SEARCH=false` (AG-02 and AG-03), the proof records `cli_sha256` and `agent_env` and is valid for at most 24 hours
+  (verifier revision 3; routes 2). Install: extract `claude.exe` from the npm package (`npm pack` into a temporary directory), check the
+  hash, make the folder read-only; never touch the owner's own Claude Code, PATH or `~/.local`.
 
 ## Implementation readings, as decided by the architect
 

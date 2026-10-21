@@ -32,6 +32,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent / "ag02")]
 
+import clipin  # noqa: E402
 import fake_messages  # noqa: E402
 import pixel_agent as pa  # noqa: E402
 import pixel_capture as cap  # noqa: E402
@@ -110,6 +111,15 @@ def verdict_of(sessions: list[dict]) -> tuple[str, list[str]]:
 
 
 def run_session(args, width: int, height: int, config_dir: Path) -> dict:
+    """One session, launched from its own verified copy of the pinned CLI (nothing is launched otherwise)."""
+    with clipin.verified(args.claude) as verified:
+        if verified.problems:
+            raise ag02_preflight.PreflightRefused(verified.problems)
+        session = _run_session(args, width, height, config_dir, verified.path)
+    return session | {"copy_cleanup": verified.cleanup}
+
+
+def _run_session(args, width: int, height: int, config_dir: Path, claude) -> dict:
     with tempfile.TemporaryDirectory(prefix="ag03-probe-") as tmp, \
             fake_messages.ScriptedMessages(script) as api:
         tmp = Path(tmp)
@@ -118,7 +128,7 @@ def run_session(args, width: int, height: int, config_dir: Path) -> dict:
                                                    "--log", str(log)])
         mcp_path = tmp / "mcp.json"
         mcp_path.write_text(json.dumps(mcp), encoding="utf-8")
-        argv = pa.build_claude_argv(claude=args.claude, model=args.model, mcp_config=mcp_path,
+        argv = pa.build_claude_argv(claude=claude, model=args.model, mcp_config=mcp_path,
                                     system_instruction=pa.SYSTEM_INSTRUCTION, max_budget_usd=0.5)
         env = rg.scrubbed_env({"CLAUDE_CONFIG_DIR": str(config_dir), "ANTHROPIC_BASE_URL": api.url,
                                "ANTHROPIC_API_KEY": DUMMY_KEY, **pa.PIXEL_ENV})
@@ -143,6 +153,7 @@ def run(args) -> dict:
         raise ag02_preflight.PreflightRefused(reasons)
     sessions = [run_session(args, w, h, args.claude_config_dir) for w, h in SIZES]
     verdict, problems = verdict_of(sessions)
+    problems += sorted({t for s in sessions for t in s.get("copy_cleanup", ())})  # a copy that stayed behind (R107-5)
     versions = sorted({s["claude_code_version"] for s in sessions if s["claude_code_version"]})
     return {"schema": SCHEMA, "date_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "claude_code_versions": versions, "requested_model": args.model, "verdict": verdict,
