@@ -81,3 +81,12 @@ R107-1..3 were closed. Regressions first (`step5fix_red\pin3\`: 33 tests run aga
 Real check (pinned CLI 2.1.304, loopback stand-in, synthetic/simulated servers, no provider): the AG-03 and AG-02 native preflights pass
 with the copy inside the session's temp directory and leave no `ommatix-cli-*` directory in TEMP. Not run: the Windows job tests of the
 process harness (the Linux suite covers them); a goal run.
+
+## Closing review of PR 107 at `eecaeb3` (independent, 2026-10-20): R107-5 open in one path, resolved
+
+R107-4 was closed. R107-5 stayed open in the native smoke, which dropped the cleanup diagnostic of the guard. Regression first
+(`step5fix_red\pin4\`: 1 failure against `eecaeb3`), `ag02/test_clipin_guard.py::SmokeNeedsThePinTests`.
+
+| # | Finding | Resolution | Regression test |
+|---|---|---|---|
+| R107-5 (P2, remaining path) | `run_smoke` read nothing from the guard after the `with`: a `claude_copy_not_removed` was neither recorded nor reported and the smoke exited 0 | The smoke result records `cli_copy_cleanup`, the printed line carries it and the smoke exits 2 (the code of a session tree that could not be owned) when the copy stayed behind | `test_a_copy_that_could_not_be_removed_is_recorded_and_the_smoke_exits_non_zero` |

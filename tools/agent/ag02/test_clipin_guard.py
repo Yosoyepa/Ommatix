@@ -12,6 +12,7 @@ Synthetic bytes and a temporary pin only; the version query is a spy: nothing is
 import argparse
 import contextlib
 import hashlib
+import json
 import os
 import sys
 import tempfile
@@ -314,6 +315,25 @@ class SmokeNeedsThePinTests(Base):
         self.assertIsNone(error, error)
         self.assertEqual(len(launches), 1)
         self.assertNotEqual(os.path.normcase(launches[0]), os.path.normcase(str(self.exe)))
+
+    def test_a_copy_that_could_not_be_removed_is_recorded_and_the_smoke_exits_non_zero(self):
+        """Closing review of PR 107 (R107-5): the smoke does not drop the cleanup diagnostic."""
+        import shutil
+        before = set(Path(tempfile.gettempdir()).glob("ommatix-cli-*"))
+        real_rmtree = shutil.rmtree
+        with mock.patch.object(clipin, "run_version", self.version), \
+                mock.patch.object(clipin.shutil, "rmtree", lambda *a, **k: None):
+            launches, code, error = self.run_main(str(self.exe))
+        for left in set(Path(tempfile.gettempdir()).glob("ommatix-cli-*")) - before:  # housekeeping of the simulated failure
+            for root, _dirs, files in os.walk(left):
+                for name in files:
+                    os.chmod(Path(root) / name, 0o700)
+            real_rmtree(left, ignore_errors=True)
+        self.assertIsNone(error, error)
+        self.assertEqual(len(launches), 1)
+        self.assertNotEqual(code, 0, "the smoke exited 0 with its private copy left behind")
+        result = json.loads((self.root / "out" / next((self.root / "out").iterdir()).name / "smoke.json").read_text(encoding="utf-8"))
+        self.assertEqual(result.get("cli_copy_cleanup"), ["claude_copy_not_removed"])
 
 
 if __name__ == "__main__":

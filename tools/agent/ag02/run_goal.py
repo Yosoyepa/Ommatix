@@ -2178,8 +2178,11 @@ def run_smoke(args, out: Path, goals: dict, deps=RealDeps, proof: dict | None = 
             # The child's stderr is discarded here as it is for every goal: a provider error or a CLI diagnostic
             # may echo the credential, a response or a label, and nothing filters it (the re-review of PR 93, N1).
             SMOKE_PROMPT, scratch, metrics, args.goal_timeout, None, env=agent.env(), **token_cap_kwargs(args))
-    return {"smoke": True, "cli": cli, "provenance": metrics.provenance(args.model) | agent.provenance(),
-            "metrics": metrics.summary(), "proxy": proxy_summary(log)}
+    result = {"smoke": True, "cli": cli, "provenance": metrics.provenance(args.model) | agent.provenance(),
+              "metrics": metrics.summary(), "proxy": proxy_summary(log)}
+    if verified.cleanup:
+        result["cli_copy_cleanup"] = list(verified.cleanup)  # the private copy stayed behind (R107-5): recorded, never ignored
+    return result
 
 
 def main(argv=None, deps=RealDeps) -> int:
@@ -2222,8 +2225,11 @@ def main(argv=None, deps=RealDeps) -> int:
         (out / "smoke.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         print(json.dumps({"smoke": out.as_posix(), "verdict": result["metrics"]["verdict"],
                           "mcp_status": result["metrics"]["mcp_status"],
-                          "init_problems": result["metrics"]["init_problems"]}))
-        return 2 if result["cli"].get("tree_left") or result["cli"].get("killed") == "no_tree_ownership" else 0
+                          "init_problems": result["metrics"]["init_problems"],
+                          "cli_copy_cleanup": result.get("cli_copy_cleanup", [])}))
+        # A session tree that could not be owned, or a private copy that could not be removed, is not a clean smoke.
+        return 2 if (result["cli"].get("tree_left") or result["cli"].get("killed") == "no_tree_ownership"
+                     or result.get("cli_copy_cleanup")) else 0
     stop_file = stop_path_of(config, config_dir)
     return run_series(args, goals, chosen, out, args.ledger, stop_file, proof, deps, windows_driver())
 
