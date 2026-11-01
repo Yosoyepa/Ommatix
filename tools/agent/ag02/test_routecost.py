@@ -24,6 +24,7 @@ import agentcli  # noqa: E402
 import run_goal as rg  # noqa: E402
 from pin_support import PIN_SHA, launch_ok  # noqa: E402
 from test_prreview93 import DEEPSEEK_URL, MIMO_URL, THREE  # noqa: E402
+import routing_isolation  # noqa: E402
 
 TOKEN = "tp-dummy-secret-route-token-0002"
 
@@ -44,6 +45,15 @@ capped = "--max-budget-usd" in sys.argv
 print(json.dumps({"type": "result", "subtype": "error_max_budget_usd" if capped else "success",
                   "is_error": capped, "result": "" if capped else "VERDICT: DONE", "num_turns": 1}), flush=True)
 """
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 def init_event():

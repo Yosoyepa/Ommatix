@@ -36,8 +36,18 @@ import pixel_runner as pr  # noqa: E402
 import pixel_server as ps  # noqa: E402
 import pixel_win32 as w32  # noqa: E402
 import run_goal as rg  # noqa: E402
+import routing_isolation  # noqa: E402
 
 TARGET_PID = 4242
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 def make_server(os_, sender, clock):
