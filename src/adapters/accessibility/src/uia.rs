@@ -32,8 +32,7 @@
 //! keyboard focus, when it belongs to the attested foreground application and lies on the
 //! captured monitor. It only asks the framework which element has focus: it never moves it.
 
-use std::fmt;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Instant;
 
@@ -47,30 +46,11 @@ use uiautomation::types::{TreeScope, UIProperty};
 use uiautomation::variants::Variant;
 use uiautomation::{UIAutomation, UIElement, UITreeWalker};
 
+use crate::link::{Answer, Reply, Request, ThreadedProvider};
 use crate::{
     ADAPTER, Budget, HOSTED_WINDOW_CLASS, Spent, is_frame_host_window, native_identity, role_of,
     walk,
 };
-
-/// The live mapping from frame pixels to desktop coordinates (the capturer's).
-type MappingSource = Box<dyn Fn() -> Result<DisplayMapping, PortError> + Send + Sync>;
-
-enum Request {
-    Snapshot {
-        mapping: DisplayMapping,
-        regions: Vec<BBox>,
-    },
-    Focus {
-        mapping: DisplayMapping,
-    },
-}
-
-enum Answer {
-    Elements(AccessibleRead),
-    Focus(Option<AccessibleElement>),
-}
-
-type Reply = Result<Answer, String>;
 
 /// What one read of the tree has gathered so far.
 struct Read {
@@ -90,17 +70,12 @@ impl Read {
 
 /// Reads the foreground application's UI Automation tree for the
 /// [`AccessibilityProvider`] port. Never sends input and never reads a value.
-pub struct UiaProvider {
-    requests: Sender<Request>,
-    replies: Receiver<Reply>,
-    mapping: MappingSource,
-}
-
-impl fmt::Debug for UiaProvider {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("UiaProvider").finish_non_exhaustive()
-    }
-}
+///
+/// The reads run on a worker thread, and the wait for each is bounded (see [`crate::link`]):
+/// a provider that does not answer costs the observation its deadline once, then the
+/// regions it could not read are reported as not read.
+#[derive(Debug)]
+pub struct UiaProvider(ThreadedProvider);
 
 impl UiaProvider {
     /// Starts the UI Automation client on its own thread. `mapping` maps frame pixels of
@@ -141,11 +116,12 @@ impl UiaProvider {
                 PortError::new(ADAPTER, "cannot start the UI Automation thread").with_source(e)
             })?;
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(Self {
+            Ok(Ok(())) => Ok(Self(ThreadedProvider::over(
                 requests,
                 replies,
-                mapping: Box::new(mapping),
-            }),
+                Box::new(mapping),
+                &budget,
+            ))),
             Ok(Err(e)) => Err(PortError::new(
                 ADAPTER,
                 format!("UI Automation is unavailable: {e}"),
@@ -157,49 +133,21 @@ impl UiaProvider {
 
 impl AccessibilityProvider for UiaProvider {
     fn name(&self) -> &'static str {
-        ADAPTER
+        self.0.name()
     }
 
     fn snapshot(&mut self, regions: &[BBox]) -> Result<AccessibleRead, PortError> {
-        if regions.is_empty() {
-            return Ok(AccessibleRead::complete(Vec::new()));
-        }
-        let mapping = (self.mapping)()?;
-        match self.ask(Request::Snapshot {
-            mapping,
-            regions: regions.to_vec(),
-        })? {
-            Answer::Elements(read) => Ok(read),
-            Answer::Focus(_) => Err(PortError::new(ADAPTER, "unexpected reply")),
-        }
+        self.0.snapshot(regions)
     }
 
     fn reads_keyboard_focus(&self) -> bool {
-        true
+        self.0.reads_keyboard_focus()
     }
 
     fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError> {
-        let mapping = (self.mapping)()?;
-        match self.ask(Request::Focus { mapping })? {
-            Answer::Focus(element) => Ok(element),
-            Answer::Elements(_) => Err(PortError::new(ADAPTER, "unexpected reply")),
-        }
+        self.0.keyboard_focus()
     }
 }
-
-impl UiaProvider {
-    /// Sends one request to the worker thread and waits for its answer.
-    fn ask(&mut self, request: Request) -> Result<Answer, PortError> {
-        self.requests
-            .send(request)
-            .map_err(|_| PortError::new(ADAPTER, "the UI Automation thread ended"))?;
-        self.replies
-            .recv()
-            .map_err(|_| PortError::new(ADAPTER, "the UI Automation thread ended"))?
-            .map_err(|e| PortError::new(ADAPTER, e))
-    }
-}
-
 /// The COM side, owned by the worker thread.
 struct Reader {
     automation: UIAutomation,

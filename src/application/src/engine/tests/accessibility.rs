@@ -270,6 +270,31 @@ fn an_accessibility_failure_publishes_nothing() {
     assert_eq!(r.engine.engine_metrics().observations, 0);
 }
 
+/// A provider that did not answer in time reports an empty, truncated read (the UI
+/// Automation adapter's bounded wait): unlike a failure, that keeps the observation on the
+/// visual path, and the regions it did not cover stay unconfirmed and are read again.
+#[test]
+fn an_empty_truncated_accessibility_read_keeps_the_visual_elements() {
+    let mut r = rig(accessible_form());
+    r.world().access_limit = Some(0);
+    let page = r
+        .observe_with(&ObserveRequest::default())
+        .expect("a read that did not cover its regions is not a failure");
+    assert_eq!(
+        page.elements.len(),
+        4,
+        "the detector's four boxes are served"
+    );
+    assert!(
+        page.elements
+            .iter()
+            .all(|e| e.actionability != Actionability::Confirmed),
+        "nothing is confirmed where the tree could not be read"
+    );
+    assert!(r.engine.last_plan().unwrap().accessibility_truncated);
+    assert_eq!(r.engine.engine_metrics().observations, 1);
+}
+
 /// S4 finding 2: a detector box centred on another control (the Calculator's "Función"
 /// box over x²) is no longer confirmed once the accessibility tree shows the control under
 /// its centre; the accessible control is.
