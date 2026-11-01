@@ -1282,3 +1282,49 @@ python tools/perf/soak.py --config <copia de §18 con el [cache] de 19.4> --icon
 ```
 
 Sin `--expect-cache` ni `[cache]` es el control R3 (el mismo dibujo, sin caché).
+
+### 19.6 Resultados de R0 y R1 (corridas del 20 de octubre de 2026)
+
+**Carácter.** Adición fechada el 1 de noviembre de 2026. Registra las dos primeras corridas del protocolo de §19.4, con sus enmiendas 1 y 2, tal como salieron. **R2 (obligatoria) y R3 (recomendada) no se han corrido.** Ninguna casilla de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) ni ningún estado de requisito cambia: la casilla 7 la decide el responsable con el registro completo, y una aceptación por cambio de alcance no la marca (§19.4).
+
+**Condiciones de las dos corridas.**
+- **Código y configuración:**
+  - commit `6273145`, con el árbol limpio;
+  - `ommatix.exe` con SHA-256 `e0e32161…2808`;
+  - configuración con SHA-256 `b609168a…ea59`: la de §18 con el `[cache]` de §19.4. Son 32 prototipos (SHA-256 `d43a784c…14a8`), `gradient_tau` 255, `max_distance` 0, `min_margin` 1, `max_entries` 64 y contexto `ommatix-testapp.exe`.
+- **Entorno:** Windows 11 (10.0.26300) y `accessibility = "uia"`.
+- **Orden:** `tools/perf/soak.py --icon-strip --icon-probe-every 12 --expect-cache --max-pending-regions 510 --foreground-wait 300`, una observación cada 5 s.
+- **Sin entrada de ningún tipo:** `delivered_actions` máximo 0.
+- **Datos:** los resultados en bruto están fuera del repositorio (`%LOCALAPPDATA%\Ommatix\runs\soak-icons-R0.json` y `soak-icons-R1.json`, ADR-0012).
+
+**R0 (humo).** El responsable la interrumpió a los 4,6 minutos (`ended = interrupted`). No tiene veredicto, por diseño.
+- 56 observaciones y 0 errores.
+- La nota de arranque informa de 32 prototipos curados para el contexto.
+- Las 4 sondas programadas salieron completas y todas tenían un candidato elegible (máximo 72 candidatos y 103 elementos).
+- **0 etiquetas aceptadas**, y el 100 % de las observaciones con `work = full`.
+- La pendiente del conjunto de trabajo que calcula la herramienta en 4,6 minutos sin calentamiento no es un dato de C1.
+
+**R1 (120 minutos, completa).**
+
+| Criterio (§19.4) | Medido | ¿Cumple? |
+|---|---|---|
+| C1 conjunto de trabajo | +1,81 MiB/h tras 10 min de calentamiento: la mediana va de 298,4 a 302,2 MiB. Los bytes privados suben +1,33 MiB/h | sí (≤ 10) |
+| C2 manejadores | Un paso de +1 (de 1 015 a 1 016) a los 4 590 s (76,5 min), a la vez que un hilo más (de 35 a 36). El recuento queda constante los últimos 2 605 s (43,4 min) | **no**: el recuento cambió dentro de los últimos 60 minutos |
+| C3 cola | `pending_regions` máximo 0, en las 1 439 muestras | sí |
+| C4 corrida completa | `ended = completed`; 1 439 de 1 440 observaciones; 0 errores de observación; `delivered_actions` 0 | sí |
+| C5 caché ejercida (enmiendas 1 y 2) | La nota de arranque informa de 32 prototipos, 32 del contexto. De 120 sondas programadas: 120 completas y 120 con candidato elegible (máximo 74 candidatos y 121 elementos), 0 incompletas y 0 ausentes. 0 etiquetas aceptadas en todas las sondas y en la observación regular (`accepted_labels_seen` 0). 1 439 de 1 439 observaciones con `work = full` | sí |
+| C6 memoria de la caché | Cota estructural: 32 prototipos ≤ 64. La comparación de nivel y pendiente con R3 está pendiente (sin criterio) | — |
+
+**Latencia (informativa, sin criterio).**
+- **Ida y vuelta:** mediana 96,1 ms, p95 138,0 ms y p99 153,8 ms. El total del motor tiene mediana 95,7 ms y p95 137,5 ms.
+- **Dos observaciones muy lentas, seguidas, a los 4 000 y 4 010 s (66,7 min):** 10,07 s y 7,45 s de ida y vuelta, casi enteras dentro del motor (`total_ms` 10 072,7 y 7 445,7), con plan `full` y sin degradación. La observación programada entre ambas no llegó a hacerse; de ahí las 1 439 de 1 440 y la única latencia descartada.
+- **Otras dos lentas:** 0,64 s y 0,61 s, a los 2 985 y 2 990 s.
+- **La primera de la corrida:** 0,86 s de ida y vuelta y 98 ms de motor, propio del arranque.
+- **Causa no determinada.** `soak.py` guarda por muestra sólo el total del motor, no los tramos de `_meta["io.ommatix/timings"]`, así que no se sabe qué etapa se detuvo.
+- **Una candidata, sin demostrar:** una lectura de UI Automation que tardó en responder. En el commit de la corrida, el adaptador esperaba esa respuesta sin límite; la PR 109 acota esa espera.
+- Entre las dos observaciones lentas los hilos bajaron de 36 a 35, y 590 s después llegó el paso de manejadores con un hilo más. No se les atribuye causa.
+
+**Qué queda.**
+- Correr R2, que da la variación entre corridas y es obligatoria, y R3, el control sin `[cache]`, con el guion del responsable.
+- Una mejora de la herramienta, propuesta y no hecha: que `soak.py` conserve los tramos de `_meta` de las observaciones lentas, para que una parada como la de R1 se pueda atribuir.
+- R1 no cumple C2 tal como está escrito, preregistrado antes de correr. Por sí sola, esta corrida no reúne los criterios de §19.4.
