@@ -333,10 +333,52 @@ fn cargo_metadata() -> Value {
         .expect("cargo runs");
     assert!(
         output.status.success(),
-        "cargo metadata --locked: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "{}",
+        metadata_failure(&String::from_utf8_lossy(&output.stderr))
     );
     serde_json::from_slice(&output.stdout).expect("cargo metadata prints JSON")
+}
+
+/// The message for a failed `cargo metadata --locked --offline`. `cargo metadata` resolves the
+/// crates of every target in Cargo.lock, while a build downloads only the host's: on a machine
+/// that has only built, the missing crates make the offline run fail. That case names the fix
+/// (`cargo fetch --locked`); the test never fetches by itself and never passes without
+/// resolving.
+fn metadata_failure(stderr: &str) -> String {
+    let offline_download_refused =
+        stderr.contains("failed to download") && stderr.contains("--offline was specified");
+    if offline_download_refused {
+        format!(
+            "cargo metadata --locked --offline needs the crates of every target in Cargo.lock, \
+             and this machine has only the ones its builds downloaded. Run `cargo fetch --locked` \
+             once (it needs the network) and run the tests again. Cargo said: {}",
+            stderr.trim()
+        )
+    } else {
+        format!("cargo metadata --locked: {stderr}")
+    }
+}
+
+/// Regression for the clean-machine failure (REL-01, session A): the offline refusal turns into
+/// an actionable message, and any other failure keeps cargo's own text.
+#[test]
+fn rel_01_an_offline_metadata_failure_names_cargo_fetch() {
+    let refused = "error: failed to download `android_system_properties v0.1.6`
+
+Caused by:
+  attempting to make an HTTP request, but --offline was specified
+";
+    let message = metadata_failure(refused);
+    assert!(message.contains("cargo fetch --locked"), "{message}");
+    assert!(message.contains("android_system_properties"), "{message}");
+    assert!(
+        !message.contains("  and"),
+        "stray spaces in the message: {message}"
+    );
+    let other = "error: the lock file needs to be updated but --locked was passed";
+    let message = metadata_failure(other);
+    assert!(!message.contains("cargo fetch"), "{message}");
+    assert!(message.contains(other), "{message}");
 }
 
 /// REL-01: Cargo.lock is committed (not ignored) and current: the workspace resolves from

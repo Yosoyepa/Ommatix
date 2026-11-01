@@ -18,16 +18,27 @@ in input pixels, then activated class scores. The wrapper applies the model card
 (sigmoid on the logits; ``x0 = (gx + 0.5 - left) * stride`` and so on) and emits
 ``[1, 5, 33600]``, so the adapter needs no change. NMS stays in the adapter.
 
-Environment used in S0 (Windows 11, Python 3.12.2, CPU only)::
+Environment used in S0 (Windows 11, Python 3.12.2, CPU only), every package pinned in
+``tools/s0/export_requirements.txt`` (the five top-level ones, torch 2.14.1+cpu, onnx 1.23.2,
+onnxruntime 1.31.0, numpy 2.5.4 and onnxscript 0.7.2, and the transitive ones of the owner's
+environment)::
 
     python -m venv s0venv
-    s0venv\\Scripts\\python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-    s0venv\\Scripts\\python -m pip install onnx onnxruntime numpy onnxscript
+    s0venv\\Scripts\\python -m pip install -r tools/s0/export_requirements.txt
     s0venv\\Scripts\\python tools/s0/export_omniparser_v3.py ^
         --weights %LOCALAPPDATA%\\Ommatix\\models\\omniparser-icon-detect-v3\\model.pt ^
         --out-dir %LOCALAPPDATA%\\Ommatix\\models\\omniparser-icon-detect-v3
 
-(torch 2.14.1+cpu, onnx 1.23.2, onnxruntime 1.31.0, numpy 2.5.4, onnxscript 0.7.2.)
+What the export promises: the script's own checks (ONNX Runtime against the TorchScript
+module and the wrapper against the model card's decoding, printed at the end) pass, and the
+same environment on the same machine writes the same bytes. It does not promise the pinned
+SHA-256 on another machine: a clean Windows 11 virtual machine with every package at the
+versions above (Python 3.12.2 too) wrote a file with another digest (92ae77a1... against the
+pinned bcbec780...) whose numbers agree with TorchScript (largest difference 1.6e-2 px in the
+boxes and 7.2e-7 in the scores, on the synthetic image). Pinning every package, the
+requirements file included, did not change the digest. The cause is not determined. The
+digest pin verifies the file the operator loads, not that this script reproduces it
+(docs/thesis/S4_SESIONES_PENDIENTES.md, session A).
 
 ``--dynamic`` (RNF-05, docs/thesis/S0_RESULTADOS.md §10) exports the same network with the
 height and width of the input free (``image`` ``[1, 3, height, width]``, both multiples of
