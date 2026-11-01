@@ -28,7 +28,7 @@ PYTHON_TOOLS = {
 }
 # Options of the programs the guides use that this repository does not define.
 CARGO = {"--locked", "--release", "--features", "--workspace", "--all-targets", "--check",
-         "--all", "--ignored", "--nocapture"}
+         "--all", "--ignored", "--nocapture", "--offline"}
 OTHER = {"--all", "--tags", "--porcelain", "--animate"}  # git; the test application's hidden flag
 FLAG = re.compile(r"(?<![\w-])(--[a-z][a-z0-9-]*)")
 PATH = re.compile(r"(?<![\w%$.])((?:tools|docs|src)[\\/][\w.*\-\\/]*[\w*])")

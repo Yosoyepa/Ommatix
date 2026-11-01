@@ -24,6 +24,10 @@ jobs:
           toolchain: 1.99.0
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # REL-01 tests run `cargo metadata --locked --offline`, which needs the crates of every
+      # target in Cargo.lock; a build downloads only the host's. With a cold registry cache
+      # they fail without this (S4_REPRODUCIBILIDAD.md §7).
+      - run: cargo fetch --locked
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

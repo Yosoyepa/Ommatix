@@ -59,10 +59,13 @@ Deja `tools\s4\testapp\target\release\ommatix-testapp.exe`. El editor propio (`t
 Comprobación de lo compilado, sin pantalla:
 
 ```powershell
+cargo fetch --locked
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
+
+`cargo fetch --locked` va **antes** de `cargo test` en una máquina que sólo ha compilado: dos pruebas de REL-01 (`rel_01_the_lockfiles_are_committed_and_current` y `rel_01_every_dependency_has_a_licence_and_none_is_copyleft`) ejecutan `cargo metadata --locked --offline`, que necesita los crates de **todos** los destinos de `Cargo.lock`, mientras que `cargo build` sólo descarga los del destino Windows (en la sesión A, `android_system_properties`). Sin el `fetch` esas dos pruebas fallan con un mensaje que lo nombra (la prueba nunca descarga por sí misma) y `cargo test` se detiene en esa suite: las siguientes no corren. Necesita red; el resto de los pasos de esta guía ya la necesitaba.
 
 ## 4. Los archivos del operador
 
@@ -89,13 +92,15 @@ Qué colocar y con qué digest (los mismos de [`S0_RESULTADOS.md`](S0_RESULTADOS
 |---|---|---|
 | `models\manifest.json` | copia de `docs/thesis/plantillas/model_manifest.s0.json` | `63d9df24109308d1e2b354648139fee0c1d4e2563f8cb2a83497d4e26b7d728e` |
 | `models\manifest.rnf05.json` | copia de `docs/thesis/plantillas/model_manifest.rnf05.json` | `f8b04be90e3259ac2ca877d3e6928af155adf250a6d6d6c5292b1c4b0ae7fe47` |
-| `icon_detect_v3.onnx` | exportado con `tools/s0/export_omniparser_v3.py` | `bcbec780f2b3e5fcbc13c26a73a73541c84ea3482a7696540eb258a076c9d968` |
+| `icon_detect_v3.onnx` | exportado con `tools/s0/export_omniparser_v3.py` (**una máquina limpia no obtiene este digest**: véase el párrafo «Digest de la exportación» más abajo) | `bcbec780f2b3e5fcbc13c26a73a73541c84ea3482a7696540eb258a076c9d968` |
 | `icon_detect_v3_fp16.onnx` | el mismo script con `--fp16` | `d7a8901db0ae650616ee43f53e6ee8f57a829de54ab8daae431be77556cc0805` |
 | `onnxruntime.dll` 1.28.0 (CPU) | `onnxruntime-win-x64-1.28.0.zip` de la release v1.28.0 de `microsoft/onnxruntime` | `18370c375f07357fa5874344a9d9ac17e6b6fe1eb18b1dd209d79483b4470257` |
 | `onnxruntime.dll` 1.24.4 (DirectML) | paquete NuGet `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4, `runtimes/win-x64/native/` | `e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40` |
 | `DirectML.dll` 1.15.4 | paquete NuGet `Microsoft.AI.DirectML` 1.15.4, `bin/x64-win/` | `9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1` |
 
-Los pesos de partida (`icon_detect_v3/model.pt`, MIT) se descargan de `microsoft/OmniParser-v2.0`, revisión `f55d0750e5b94db2125ef0b45b0fa4a85ddc59b4`, en `https://huggingface.co/microsoft/OmniParser-v2.0/resolve/f55d0750e5b94db2125ef0b45b0fa4a85ddc59b4/icon_detect_v3/model.pt` (281 182 680 bytes), y su digest (`11c6cbb77f22569fab22d86c76407a83ec81ab89dbfe28279854822d6e3fb00c`) lo comprueba el script de exportación antes de exportar; **no se usan los pesos `icon_detect` AGPL-3.0.** Cópielos a `%LOCALAPPDATA%\Ommatix\models\omniparser-icon-detect-v3\model.pt`, la ruta que usa la orden de exportación del encabezado del script. El entorno de exportación (torch, onnx, onnxruntime) es un `venv` temporal fuera del repositorio; el encabezado del script da las versiones y las órdenes exactas.
+Los pesos de partida (`icon_detect_v3/model.pt`, MIT) se descargan de `microsoft/OmniParser-v2.0`, revisión `f55d0750e5b94db2125ef0b45b0fa4a85ddc59b4`, en `https://huggingface.co/microsoft/OmniParser-v2.0/resolve/f55d0750e5b94db2125ef0b45b0fa4a85ddc59b4/icon_detect_v3/model.pt` (281 182 680 bytes), y su digest (`11c6cbb77f22569fab22d86c76407a83ec81ab89dbfe28279854822d6e3fb00c`) lo comprueba el script de exportación antes de exportar; **no se usan los pesos `icon_detect` AGPL-3.0.** Cópielos a `%LOCALAPPDATA%\Ommatix\models\omniparser-icon-detect-v3\model.pt`, la ruta que usa la orden de exportación del encabezado del script. El entorno de exportación (torch, onnx, onnxruntime) es un `venv` temporal fuera del repositorio; el encabezado del script da las órdenes exactas y todas sus versiones están fijadas en `tools/s0/export_requirements.txt` (`pip install -r`).
+
+**Digest de la exportación (sesión A, 20 de octubre de 2026).** Lo que esta guía puede prometer de la exportación es que **el script la verifica numéricamente** (ONNX Runtime frente al TorchScript y el envoltorio frente a la decodificación de la ficha, que imprime al terminar) y que el mismo entorno en la misma máquina escribe los mismos bytes. **No** promete el digest de la tabla en otra máquina: en una máquina Windows 11 limpia, con el entorno de exportación completo fijado (incluidas las versiones transitivas del entorno del responsable), la exportación salió con otro SHA-256 (`92ae77a1…` frente a `bcbec780…`) y con diferencias máximas, frente al TorchScript, de 1,6·10⁻² px en las cajas y 7,2·10⁻⁷ en las puntuaciones (en la imagen sintética; con ruido, 4,9·10⁻⁴ px y 1,2·10⁻⁷). Con todos los paquetes de Python en las versiones del entorno del responsable el digest fue el mismo, así que fijar el entorno (`tools/s0/export_requirements.txt`) **no lo arregló**. Una máquina limpia reproduce los **números**, no los **bytes**; la causa no está determinada. El digest fijado verifica el archivo que el operador carga: con el exportado localmente, el motor se niega a cargarlo (`SHA-256 mismatch … refusing to load`, como debe) y `environment.py` da `mismatch` en los pesos. Cómo obtener el archivo fijado en una máquina limpia es una decisión abierta del responsable ([`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md) §A.1); esta guía no la toma ni cambia ningún digest.
 
 `DirectML.dll` se distribuye con los términos de Microsoft para DirectML (no MIT) y el repositorio no la incluye; usarla es una decisión de licencia del responsable ([`S4_REPRODUCIBILIDAD.md`](S4_REPRODUCIBILIDAD.md) §3).
 
@@ -149,7 +154,7 @@ Desde la raíz del repositorio, sólo lectura y sin red:
 python tools/repro/environment.py --operator-dir "$env:LOCALAPPDATA\Ommatix" --out ..\environment.json
 ```
 
-Termina con código 1 si algún archivo existe con un digest distinto del fijado (`status: mismatch`); un archivo de otra variante que no se instaló aparece como `absent`, que no es un fallo. Escribe el commit, si el árbol estaba limpio, `rustc`, los digests de los tres `Cargo.lock`, la máquina y el estado de cada archivo fijado. No imprime el contenido de ningún archivo. Guárdelo junto a la entrega: es el registro de lo que se instaló. Se escribe fuera del repositorio (`..\environment.json`) para que el árbol quede limpio en §8.4.
+Termina con código 1 si algún archivo existe con un digest distinto del fijado (`status: mismatch`); un archivo de otra variante que no se instaló aparece como `absent`, que no es un fallo. Si el `icon_detect_v3.onnx` es el exportado en esa máquina y no el fijado, `mismatch` en los pesos es lo que hoy se obtiene en una máquina limpia y es correcto: el digest no es el fijado (§4, «Digest de la exportación»). Escribe el commit, si el árbol estaba limpio, `rustc`, los digests de los tres `Cargo.lock`, la máquina y el estado de cada archivo fijado. No imprime el contenido de ningún archivo. Guárdelo junto a la entrega: es el registro de lo que se instaló. Se escribe fuera del repositorio (`..\environment.json`) para que el árbol quede limpio en §8.4.
 
 Después, el motor de punta a punta sobre el escritorio simulado y sobre la pantalla real (esto último captura fotogramas en memoria, nunca se guardan, y no envía entrada):
 
@@ -233,7 +238,7 @@ Get-ChildItem -Recurse "$env:LOCALAPPDATA\Ommatix" | Measure-Object -Property Le
 ```
 
 - **Retirada parcial** (dejar la máquina sin configuración, conservar los modelos): borre los `*.toml`, `STOP`, el archivo de ventana registrada y `releases\`.
-- **Retirada completa:** `Remove-Item -Recurse "$env:LOCALAPPDATA\Ommatix"`. Es la única orden destructiva de esta guía y no tiene vuelta atrás: los pesos exportados se regeneran con `tools/s0/export_omniparser_v3.py`, y los runtimes se vuelven a bajar de su origen y se comprueban contra los digests del §4.
+- **Retirada completa:** `Remove-Item -Recurse "$env:LOCALAPPDATA\Ommatix"`. Es la única orden destructiva de esta guía y no tiene vuelta atrás: los pesos exportados se regeneran con `tools/s0/export_omniparser_v3.py` (con los mismos números pero, en otra máquina, no necesariamente los mismos bytes: §4), y los runtimes se vuelven a bajar de su origen y se comprueban contra los digests del §4.
 - La salida de compilación se retira con `cargo clean` en la raíz y en `tools\s4\testapp` y `tools\s4\testeditor`; el árbol de trabajo extra, con `git worktree remove ..\Ommatix-anterior`.
 
 ### 8.4 Comprobar que no queda nada
