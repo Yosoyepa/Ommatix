@@ -25,9 +25,5 @@ ommatix-domain = { workspace = true }
 # focus and pattern call, and CI runs clippy with `-D warnings`.
 uiautomation = { workspace = true, optional = true }
 
-[dev-dependencies]
-# The engine over the simulated desktop, with a provider that never answers.
-ommatix-adapter-sim = { workspace = true }
-
 [lints]
 workspace = true

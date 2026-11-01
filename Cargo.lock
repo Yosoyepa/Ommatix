@@ -2305,7 +2305,6 @@ dependencies = [
 name = "ommatix-adapter-accessibility"
 version = "0.1.0"
 dependencies = [
- "ommatix-adapter-sim",
  "ommatix-application",
  "ommatix-domain",
  "uiautomation",

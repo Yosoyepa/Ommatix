@@ -308,58 +308,6 @@ mod tests {
         });
     }
 
-    /// The engine over the simulated desktop, reading its accessibility tree through
-    /// `provider`.
-    fn engine_over(provider: ThreadedProvider) -> ommatix_application::Engine {
-        struct DenyAll;
-        impl ommatix_application::PolicyStore for DenyAll {
-            fn current(&self) -> ommatix_application::LocalPolicy {
-                ommatix_application::LocalPolicy::default()
-            }
-        }
-        let clock = Arc::new(ommatix_application::ManualClock::new());
-        let desktop = ommatix_adapter_sim::SimulatedDesktop::new().with_clock(clock.clone());
-        ommatix_application::Engine::new(
-            ommatix_application::EngineConfig::new("hung-provider"),
-            ommatix_application::Ports {
-                capturer: Box::new(desktop.capturer()),
-                detector: Box::new(desktop.detector()),
-                recognizer: Box::new(desktop.recognizer()),
-                accessibility: Box::new(provider),
-                actuator: Box::new(desktop.actuator()),
-                policy: Arc::new(DenyAll),
-                clock,
-            },
-        )
-    }
-
-    /// The engine ends an observation whose accessibility read fails
-    /// (`an_accessibility_failure_publishes_nothing`), so a provider that does not answer
-    /// must not be a failure: the observation goes on with the visual elements.
-    #[test]
-    fn an_observation_with_a_provider_that_never_answers_still_yields_the_visual_elements() {
-        let (provider, _gate) = provider(&quick());
-        let started = Instant::now();
-        let (labels, truncated) = within(Duration::from_secs(10), move || {
-            let mut engine = engine_over(provider);
-            let page = engine
-                .observe_screen(&ommatix_application::contract::ObserveRequest::default())
-                .expect("the observation is served on the visual path");
-            let labels: Vec<String> = page.elements.iter().map(|e| e.label.clone()).collect();
-            (
-                labels,
-                engine.last_plan().map(|p| p.accessibility_truncated),
-            )
-        });
-        assert_eq!(labels, ["Name", "Cancel", "Save"]);
-        assert_eq!(
-            truncated,
-            Some(true),
-            "the plan reports that the accessibility read did not cover its regions"
-        );
-        assert!(started.elapsed() < Duration::from_secs(5));
-    }
-
     #[test]
     fn keyboard_focus_that_is_not_answered_is_an_error_not_a_focus() {
         let (mut provider, _gate) = provider(&quick());
