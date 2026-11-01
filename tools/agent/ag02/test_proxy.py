@@ -425,5 +425,35 @@ class PassthroughAndPrivacyTests(unittest.TestCase):
                              .replace("os.unlink(tmp)", ""))
 
 
+class ClockTests(unittest.TestCase):
+    """The latencies are timed with a sub-millisecond clock. ``time.monotonic`` is
+    ``GetTickCount64`` on Windows (15.625 ms ticks): every short latency logged with it was a
+    multiple of one tick (AG-02 records of 18 and 19 October 2026, chapter 09 section 9.11.4)."""
+
+    def test_the_latency_clock_is_monotonic_with_sub_millisecond_resolution(self):
+        info = time.get_clock_info(proxy.CLOCK)
+        self.assertTrue(info.monotonic)
+        self.assertLessEqual(info.resolution, 1e-3)
+        self.assertIs(proxy._clock, getattr(time, proxy.CLOCK))
+
+    def test_a_latency_is_measured_with_that_clock(self):
+        import io
+        ticks = iter([10.0, 10.0, 10.0, 10.0012, 10.0012])  # t0, log, sent, received, log
+        scratch = tempfile.TemporaryDirectory(prefix="ag02-clock-")
+        self.addCleanup(scratch.cleanup)
+        p = proxy.Proxy(["unused"], None, Path(scratch.name) / "p.jsonl",
+                        stdin=io.BytesIO(), stdout=io.BytesIO())
+        with mock.patch.object(proxy, "_clock", lambda: next(ticks)):
+            p.t0 = proxy._clock()
+            p.log_file = io.StringIO()
+            p.handle_agent_line(json.dumps(call(1, "observe_screen", {})).encode() + b"\n",
+                                io.BytesIO())
+            reply = {"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": {"elements": []}}}
+            p.pump_engine([json.dumps(reply).encode() + b"\n"])
+        records = [json.loads(l) for l in p.log_file.getvalue().splitlines()]
+        answered = next(r for r in records if r["dir"] == "engine->agent")
+        self.assertEqual(answered["latency_ms"], 1.2)
+
+
 if __name__ == "__main__":
     unittest.main()
