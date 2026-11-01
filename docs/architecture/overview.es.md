@@ -241,8 +241,11 @@ sin OCR, entrada en dry run y política que lo niega todo.
   centrada sobre otro control accesible deja de estar confirmada. Un recorrido que termina por
   su presupuesto lo declara (`truncated`): esas regiones se leen otra vez en la observación
   siguiente aunque ningún píxel haya cambiado, la evidencia que la lectura parcial no repite se
-  conserva mientras sus píxeles no cambien y una caja visual dentro de un hueco no se confirma.
-  Nunca lee el valor de un campo y un campo de contraseña no es una entrada. Sólo con `dxgi` o `screen`; apagado por
+  conserva mientras sus píxeles no cambien y una caja visual dentro de un hueco no se confirma. La espera de cada lectura está
+  acotada (el presupuesto de tiempo más 500 ms): un proveedor que no responde da una lectura vacía
+  y truncada, así que la observación sigue por la vía visual, esas regiones se leen otra vez
+  después y la lectura siguiente se rechaza al instante mientras el trabajador siga atascado (un
+  solo hilo de trabajo, nada en cola detrás de él). Nunca lee el valor de un campo y un campo de contraseña no es una entrada. Sólo con `dxgi` o `screen`; apagado por
   defecto.
 - *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` para exactamente
   `ocr_language`, nunca otro idioma, sin inventar confianzas; el texto reconocido nunca se

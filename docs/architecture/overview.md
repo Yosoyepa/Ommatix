@@ -228,8 +228,11 @@ default, and the defaults stay fail-closed: no model, no OCR, dry-run input, den
   merge into it, and a box centred on another accessible control stops being confirmed. A walk
   that ends on its budget says so (`truncated`): those regions are read again on the next
   observation even if no pixel changed, evidence the partial read does not repeat is kept while
-  its pixels are unchanged, and a visual box inside such a gap is not confirmed. It
-  never reads a field's value, and a password field is no input. Allowed only with `dxgi` or
+  its pixels are unchanged, and a visual box inside such a gap is not confirmed. The wait
+  for each read is bounded (the time budget plus 500 ms): a provider that does not answer
+  yields an empty, truncated read, so the observation goes on with the visual path, the regions
+  are read again later, and the next read is refused at once while the worker is still stuck
+  (one worker thread, nothing queued behind it). It never reads a field's value, and a password field is no input. Allowed only with `dxgi` or
   `screen`; off by default.
 - *OCR* (`winrt-ocr`, `[models] ocr = "winrt"`): `Windows.Media.Ocr` for exactly
   `ocr_language`, never another language, without invented confidences; recognised text is

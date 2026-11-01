@@ -27,6 +27,9 @@ use std::time::Duration;
 use ommatix_application::NativeIdentity;
 use ommatix_domain::fusion::Role;
 
+#[cfg(any(test, all(windows, feature = "uia")))]
+mod link;
+
 #[cfg(all(windows, feature = "uia"))]
 mod uia;
 
@@ -167,6 +170,20 @@ impl Budget {
     pub const DEFAULT_MAX_DEPTH: usize = 32;
     pub const DEFAULT_MAX_ELEMENTS: usize = 2_000;
     pub const DEFAULT_MAX_DURATION: Duration = Duration::from_millis(250);
+
+    /// Slack on top of the time budget before a read that has not answered is abandoned.
+    /// The budget is checked between calls to the provider, so a read can overrun it by the
+    /// one call in flight; that call (a window listing, 50 ms with 13 windows, or the climb
+    /// to the top-level window) is far below this margin on a provider that answers. UI
+    /// Automation's own transaction timeout, which a hung provider would otherwise run
+    /// into, is 20 s.
+    pub const REPLY_MARGIN: Duration = Duration::from_millis(500);
+
+    /// How long the engine waits for one read before treating the provider as not
+    /// answering: the time budget plus [`Self::REPLY_MARGIN`].
+    pub fn reply_deadline(&self) -> Duration {
+        self.max_duration.saturating_add(Self::REPLY_MARGIN)
+    }
 }
 
 impl Default for Budget {
