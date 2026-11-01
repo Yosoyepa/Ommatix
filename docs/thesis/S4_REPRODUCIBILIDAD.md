@@ -22,6 +22,8 @@ Cada afirmación de las tablas la comprueba una prueba de Rust (`src/acceptance/
 
 Con `python tools/repro/environment.py` (sólo lectura, sin red), el 14 de octubre de 2026, sobre `%LOCALAPPDATA%\Ommatix`, **los 11 archivos que fijan las tres configuraciones de `tools/s0/` tienen el digest fijado**: los tres manifiestos, los dos pesos (`icon_detect_v3.onnx`, `icon_detect_v3_fp16.onnx`; cada manifiesto declara los suyos y coinciden), ONNX Runtime 1.28.0 (CPU), ONNX Runtime 1.24.4 con DirectML y `DirectML.dll` 1.15.4. Ningún mensaje de error ni el informe imprimen contenido de un archivo. El registro de esa comprobación, con el commit, el toolchain, los digests de los tres `Cargo.lock` y la máquina, es `plantillas/environment.rel01.json`.
 
+**Lo que el digest de un `.onnx` exportado verifica (20 de octubre de 2026, §7).** El digest fijado de `icon_detect_v3.onnx` verifica **el archivo que el operador carga**. No es una promesa de que `tools/s0/export_omniparser_v3.py` lo reproduzca byte a byte en otra máquina: en una máquina limpia, con el entorno de exportación completo fijado, la exportación salió con otro SHA-256 y los mismos números dentro de las tolerancias del propio script. La exportación se verifica numéricamente (las comprobaciones del script); los bytes se verifican con el digest. La decisión de cómo obtener el archivo fijado en una máquina limpia está abierta ([`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md) §A.1).
+
 Las pruebas `sec_06_*` hacen lo contrario con archivos temporales falsos, nunca con los pesos reales: un bit cambiado, un archivo truncado, ampliado, vacío o sustituido por otro, un manifiesto editado después de fijarlo, un runtime parcheado y un archivo de prototipos de íconos con una línea añadida se rechazan antes de cargar nada.
 
 ## 3. Licencias del grafo de dependencias
@@ -69,12 +71,15 @@ Si cambia el grafo, la prueba falla hasta que esta tabla lo recoja.
 Desde la raíz del repositorio, con el toolchain de `rust-toolchain.toml` (`rustup` lo instala solo):
 
 ```bash
+cargo fetch --locked
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 python -m unittest discover -s tools/repro -p "test_*.py"
 python tools/repro/environment.py --out environment.json
 ```
+
+`cargo fetch --locked` va antes de `cargo test` en una máquina que sólo ha compilado: dos pruebas REL-01 ejecutan `cargo metadata --locked --offline`, que necesita los crates de todos los destinos de `Cargo.lock` y `cargo build` sólo descarga los del destino de la máquina. Sin él esas dos pruebas fallan (con un mensaje que nombra esta orden; la prueba nunca descarga) y `cargo test` no corre las suites siguientes. La CI ejecuta `cargo fetch --locked` antes de compilar (trabajo `check` de `ci.yml`, desde 1.0.114), así que no reproduce el orden de una máquina que sólo ha compilado: ese orden lo sostienen esta guía y el mensaje de las dos pruebas (§7).
 
 Desde `docs/thesis/` (necesita `pip install -r requirements-validacion.txt`):
 
@@ -106,8 +111,16 @@ El **corpus de aceptación** del capítulo 03 §3.5 (al menos 300 capturas etiqu
 
 1. **Corpus de aceptación congelado** (§5): construirlo, etiquetarlo y fijarlo por hash. Es trabajo del responsable y de corridas supervisadas. Desde el 15 de octubre de 2026 pasa al próximo corte, junto con EV-01, EV-02 y IT-07 (capítulo 06 §6.7); IT-07 se ejecutó después, el 15 de octubre de 2026 ([S4_SESIONES_PENDIENTES.md](S4_SESIONES_PENDIENTES.md) §C.1).
 2. **Commit de entrega**: RNF-08 pide «commit … congelados». Un commit se congela en S4 al etiquetar la entrega; este PR sólo hace que cada medición lo registre.
-3. **Instalación, rollback y límites de compatibilidad** (documentados; la ejecución en una máquina limpia no está hecha): desde 1.0.47 hay una guía escrita, [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md), con la compilación de cada conjunto de rasgos, los archivos del operador con su digest, la verificación, la conexión de un cliente MCP, la reversión y los límites de compatibilidad, y pruebas que comprueban que lo que nombra existe (`rel_01_the_install_guide_points_at_files_that_exist` y `tools/repro/test_install_guide.py`). **Nadie la ha seguido en una máquina limpia**: esa ejecución y su `environment.json` son la sesión A de [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md). Lo que dice sobre la escala (100, 125 y 150 %) tampoco está medido: IT-07 sigue sin ejecutar (sesión C).
+3. **Instalación, rollback y límites de compatibilidad** (documentados; la ejecución en una máquina limpia se intentó una vez, el 20 de octubre de 2026, y no pasó limpia: §7; la sesión A completa sigue sin cerrarse): desde 1.0.47 hay una guía escrita, [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md), con la compilación de cada conjunto de rasgos, los archivos del operador con su digest, la verificación, la conexión de un cliente MCP, la reversión y los límites de compatibilidad, y pruebas que comprueban que lo que nombra existe (`rel_01_the_install_guide_points_at_files_that_exist` y `tools/repro/test_install_guide.py`). **Se siguió una vez en una máquina limpia (una VM) y no pasó limpia** (§7); la sesión A de [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md) con su `environment.json` sigue sin cerrarse. Lo que dice sobre la escala (100, 125 y 150 %) tampoco está medido: IT-07 sigue sin ejecutar (sesión C).
 4. **Proveniencia más allá del hash**: S0 comprobó a mano la firma Authenticode de `onnxruntime.dll` (DirectML) y de `DirectML.dll`, y que los digests de los zips coinciden con los publicados; no hay una comprobación automática de firma.
 5. **Aprobación de licencias por el responsable**: la licencia del código y la de los documentos están decididas desde el 15 de octubre de 2026 (§3). Quedan para el responsable el detector del producto (ADR-0009: pesos y su licencia) y la distribución de `DirectML.dll`, que el repositorio no redistribuye.
 
 Por eso `matrices/plan_pruebas.csv` mantiene REL-01 en `PENDIENTE_PRODUCTO`.
+
+## 7. Sesión A en una máquina limpia (20 de octubre de 2026)
+
+Primera ejecución de la guía [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) en una máquina sin el repositorio ni `%LOCALAPPDATA%\Ommatix`, sobre `46fba4f`. El registro completo (máquina, pasos, hallazgos, segmento suplementario, lo no ejecutado) está en [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md) §A.1. Lo que cambia aquí:
+
+- **Resultado: 30 PASS, 7 FAIL, 2 SKIP, 0 LIMIT.** La sesión A **no pasó limpia** y REL-01 no se cierra con ella. Ningún estado de requisito ni casilla de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) cambia.
+- **P3.8, `cargo test --workspace`** falló en dos pruebas REL-01 por falta de los crates de otros destinos (`cargo fetch --locked`); corregido aquí: la guía lo ordena (§4) y las dos pruebas nombran la orden en su mensaje (`rel_01_an_offline_metadata_failure_names_cargo_fetch`). La CI no lo veía con la caché del registro caliente: con la caché fría (`No cache found.`) las mismas dos pruebas fallaron con `failed to download android_system_properties v0.1.6` en las ejecuciones 39490166977 (rama `feat/box7-icon-cache`) y 39509993108 (`main`, fusión de la PR 106). Las ejecuciones con la caché restaurada pasan (el registro guardado ya trae el crate; no se determinó cuándo llegó a ella por primera vez), y `CACHE_ON_FAILURE` es `false`, así que una ejecución fría que falla no deja caché. El 1 de noviembre de 2026 la ejecución de esta corrección (41350961908) arrancó con la caché fría en todos los trabajos (`No cache found.`; no se determinó por qué: una causa posible es el desalojo de la caché tras días sin ejecuciones) y el trabajo `fmt · clippy · test` falló en esas mismas dos pruebas, ya con el mensaje que nombra `cargo fetch --locked`. Por eso el trabajo `check` de `.github/workflows/ci.yml` ejecuta ahora `cargo fetch --locked` antes de compilar. La CI, por tanto, sigue sin verificar el orden de una máquina limpia (el `fetch` lo oculta): lo hace la guía y el mensaje de la prueba.
+- **P4.4, la exportación del ONNX** no dio el digest fijado (§2): se corrige el texto, no los digests.

@@ -66,6 +66,7 @@ manifiesto y la conversación original [F0] se conservan fuera del repositorio
 
 ```bash
 git config core.hooksPath .githooks     # once: fmt + clippy + tests before commit/push
+cargo fetch --locked                    # once on a clean machine, before cargo test (REL-01 resolves every target offline)
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                  # unit, integration and Gherkin acceptance tests
