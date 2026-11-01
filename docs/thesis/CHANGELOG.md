@@ -1,6 +1,6 @@
 # Historial documental
 
-## 1.0.114 — 2026-10-20: REL-01, sesión A en una máquina limpia (no pasó limpia): registro, `cargo fetch --locked` y el digest de la exportación del ONNX
+## 1.0.114 — 2026-11-01: REL-01, sesión A en una máquina limpia (no pasó limpia): registro, `cargo fetch --locked` y el digest de la exportación del ONNX
 
 El 20 de octubre de 2026 se siguió por primera vez la guía [`S4_INSTALACION_Y_REVERSION.md`](S4_INSTALACION_Y_REVERSION.md) en una máquina virtual Windows 11 Enterprise Evaluation 25H2 (compilación 26200.6584, 4 vCPU efectivas, sin GPU, conjunto de rasgos CPU `dxgi,onnx,winrt-ocr`, commit `46fba4f`). **Resultado limpio: 30 PASS, 7 FAIL, 2 SKIP, 0 LIMIT; la sesión A no pasó limpia y REL-01 sigue en `PENDIENTE_PRODUCTO`.** Registro completo en [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md) §A.1 y [`S4_REPRODUCIBILIDAD.md`](S4_REPRODUCIBILIDAD.md) §7. Ningún estado de requisito, fila de la matriz ni casilla de [06 §6.7](06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md) cambia.
 

@@ -79,7 +79,7 @@ python -m unittest discover -s tools/repro -p "test_*.py"
 python tools/repro/environment.py --out environment.json
 ```
 
-`cargo fetch --locked` va antes de `cargo test` en una máquina que sólo ha compilado: dos pruebas REL-01 ejecutan `cargo metadata --locked --offline`, que necesita los crates de todos los destinos de `Cargo.lock` y `cargo build` sólo descarga los del destino de la máquina. Sin él esas dos pruebas fallan (con un mensaje que nombra esta orden; la prueba nunca descarga) y `cargo test` no corre las suites siguientes. En la CI pasa porque la caché del registro (`Swatinem/rust-cache`) ya trae esos crates; con la caché fría falla igual (§7).
+`cargo fetch --locked` va antes de `cargo test` en una máquina que sólo ha compilado: dos pruebas REL-01 ejecutan `cargo metadata --locked --offline`, que necesita los crates de todos los destinos de `Cargo.lock` y `cargo build` sólo descarga los del destino de la máquina. Sin él esas dos pruebas fallan (con un mensaje que nombra esta orden; la prueba nunca descarga) y `cargo test` no corre las suites siguientes. La CI ejecuta `cargo fetch --locked` antes de compilar (trabajo `check` de `ci.yml`, desde 1.0.114), así que no reproduce el orden de una máquina que sólo ha compilado: ese orden lo sostienen esta guía y el mensaje de las dos pruebas (§7).
 
 Desde `docs/thesis/` (necesita `pip install -r requirements-validacion.txt`):
 
