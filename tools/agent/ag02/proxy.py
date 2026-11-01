@@ -62,6 +62,10 @@ PRINTABLE_ASCII = frozenset(chr(c) for c in range(0x20, 0x7F))
 GOAL_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 LOCK_WAIT_S = 10.0
 KNOWN_IDS_LIMIT = 5000
+# The clock of every logged time and latency: monotonic and sub-millisecond. `time.monotonic` is
+# GetTickCount64 on Windows (15.625 ms), which rounded every short latency to whole ticks.
+CLOCK = "perf_counter"
+_clock = time.perf_counter
 
 # Closed vocabularies: the only strings of the agent's or the engine's that the log may carry.
 METHODS = frozenset({"initialize", "notifications/initialized", "notifications/cancelled", "ping",
@@ -455,17 +459,17 @@ class Proxy:
         self.out_lock = threading.Lock()
         self.log_lock = threading.Lock()
         self.state_lock = threading.Lock()  # pending ids and the engine-issued ids
-        # id_key -> (tool or None, monotonic time sent, request_index, observe_index or None)
+        # id_key -> (tool or None, clock time sent, request_index, observe_index or None)
         self.pending: dict = {}
         self.requests_seen = 0  # requests with an id that were forwarded: the session's request index
         self.observes_seen = 0
         self.known_ids: set = set()
         self.live_spent_here = 0
-        self.t0 = time.monotonic()
+        self.t0 = _clock()
         self.log_file = None
 
     def log(self, direction: str, size: int, **fields) -> None:
-        record = {"t_ms": round((time.monotonic() - self.t0) * 1000, 1), "dir": direction,
+        record = {"t_ms": round((_clock() - self.t0) * 1000, 1), "dir": direction,
                   "bytes": size, **fields}
         with self.log_lock:
             self.log_file.write(json.dumps(record, ensure_ascii=True) + "\n")
@@ -530,7 +534,7 @@ class Proxy:
             self.live_spent_here += 1
         if is_request:
             with self.state_lock:
-                self.pending[key] = (meta.get("tool"), time.monotonic(), indices["request_index"],
+                self.pending[key] = (meta.get("tool"), _clock(), indices["request_index"],
                                      indices.get("observe_index"))
         engine_in.write(raw if raw.endswith(b"\n") else raw + b"\n")
         engine_in.flush()
@@ -562,7 +566,7 @@ class Proxy:
             if observe_index is not None:
                 meta["observe_index"] = observe_index
             if started is not None:
-                meta["latency_ms"] = round((time.monotonic() - started) * 1000, 1)
+                meta["latency_ms"] = round((_clock() - started) * 1000, 1)
             self.log("engine->agent", size, **meta)
             self.to_agent(raw if raw.endswith(b"\n") else raw + b"\n")
 
