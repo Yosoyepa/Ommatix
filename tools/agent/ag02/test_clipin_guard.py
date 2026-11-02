@@ -26,10 +26,20 @@ sys.path.insert(0, str(HERE))
 
 import clipin  # noqa: E402
 import run_goal as rg  # noqa: E402
+import routing_isolation  # noqa: E402
 
 BYTES = b"MZ synthetic claude " * 64
 SHA = hashlib.sha256(BYTES).hexdigest()
 VERSION = "9.9.9"
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 def temp_pin():

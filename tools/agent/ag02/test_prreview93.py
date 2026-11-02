@@ -28,6 +28,7 @@ import preflight_cli as pc  # noqa: E402
 import run_goal as rg  # noqa: E402
 from pin_support import PIN_SHA, launch_ok, pinned  # noqa: E402
 from test_multimodel import FAKE_ENGINE, INSTRUCTION, PROMPT, AgentRun, EndToEndTests  # noqa: E402
+import routing_isolation  # noqa: E402
 
 GOALS = rg.load_goals()
 THREE = sorted(rg.ALLOWED_TOOL_NAMES)
@@ -35,6 +36,15 @@ SENTINEL = "CANARY-K-1"
 OBSERVE = {"tool": "observe_screen", "args": {}}
 ACTION = {"request_id": "r1", "session_id": "fake", "snapshot_id": "s1", "geometry_epoch": 1,
           "target_id": "e1", "expected_revision": 1, "action": "click", "dry_run": True}
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 def call(name, arguments, call_id="call_1", **extra):

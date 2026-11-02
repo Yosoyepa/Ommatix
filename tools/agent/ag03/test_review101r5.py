@@ -31,6 +31,7 @@ import pixel_runner as pr  # noqa: E402
 import run_goal as rg  # noqa: E402
 from test_campaign import Series  # noqa: E402
 from test_review101r4 import beating, interrupting_wait  # noqa: E402
+import routing_isolation  # noqa: E402
 
 LIVELY = textwrap.dedent('''
     import pathlib, sys, time
@@ -49,6 +50,15 @@ MARKER = textwrap.dedent('''
     pathlib.Path(sys.argv[1]).write_text("still running after the interruption")
     time.sleep(60)
 ''')
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 def child(tmp: Path):

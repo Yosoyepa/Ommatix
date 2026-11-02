@@ -29,9 +29,19 @@ import pixel_capture as cap  # noqa: E402
 import pixel_preflight as pf  # noqa: E402
 import run_goal as rg  # noqa: E402
 from pin_support import pinned  # noqa: E402
+import routing_isolation  # noqa: E402
 
 FAKE_CLI = [sys.executable, str(HERE / "fake_claude_pixel.py")]
 SURVEY = "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 class PreflightHarness(unittest.TestCase):

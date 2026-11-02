@@ -27,8 +27,18 @@ import run_goal as rg  # noqa: E402
 import clipin  # noqa: E402
 from pin_support import PIN_SHA, launch_refused, pinned  # noqa: E402
 from test_disk_evidence import PreflightHarness  # noqa: E402
+import routing_isolation  # noqa: E402
 
 SWITCH = "ENABLE_TOOL_SEARCH"
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 class PixelEnvironmentTests(unittest.TestCase):
