@@ -26,14 +26,20 @@ class RoutingIsolationTests(unittest.TestCase):
         ambient = {"ANTHROPIC_BASE_URL": "http://127.0.0.1:9", "CLAUDE_CODE_USE_BEDROCK": "1",
                    "ANTHROPIC_VERTEX_PROJECT_ID": "p"}
         with mock.patch.dict(os.environ, ambient):
-            path = os.environ.get("PATH")
+            # The developer's own environment may carry routing variables of its own (a Foundry
+            # or Vertex session, say): the expectation is read from it, never assumed (R113-1).
+            before = dict(os.environ)
+            routing = rg.routing_problems(os.environ)
+            self.assertLessEqual(set(ambient), set(routing))
             routing_isolation.start()
             try:
                 self.assertEqual(rg.routing_problems(os.environ), [])
-                self.assertEqual(os.environ.get("PATH"), path, "only routing variables are removed")
+                # Only the routing variables are removed; every other one keeps its value (R113-2).
+                self.assertEqual(dict(os.environ),
+                                 {k: v for k, v in before.items() if k not in routing})
             finally:
                 routing_isolation.stop()
-            self.assertEqual(rg.routing_problems(os.environ), sorted(ambient))
+            self.assertEqual(dict(os.environ), before, "stop restores the exact environment")
 
     def test_a_module_that_drives_a_main_passes_with_a_routing_variable_in_the_environment(self):
         env = dict(os.environ, ANTHROPIC_BASE_URL="http://127.0.0.1:9")
