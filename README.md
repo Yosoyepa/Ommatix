@@ -223,17 +223,17 @@ For an MCP client, build with `cargo build --locked`, put the binary on `PATH` (
 
 ## Project status
 
-As of **19 October 2026**, evidence checked against commit **`875495f`**.
+As of **15 November 2026**, evidence checked against commit **`1951633`**.
 The [dossier](docs/thesis/README.md) is the specification; this table states the current scope.
 
 | Area | Current state |
 |---|---|
-| S0 · feasibility | Candidate detector and OCR measured; product detector validation and clean-machine installation remain pending. |
+| S0 · feasibility | Candidate detector and OCR measured; product detector validation remains pending. A clean-machine installation (VM, 20 October 2026) did not pass clean: the exported detector's digest does not reproduce there, and the owner's decision is open. |
 | S1 · geometric core | Implemented: tile diff, region plan, spatial fusion and transactional snapshots. |
 | S2 · identity and contract | Implemented: temporal registry, curated icon cache and the three MCP tools. |
 | S3 · Windows integration | Opt-in DXGI, SendInput, ONNX, Windows OCR and UI Automation; supervised evidence within the agreed profile. Integration cases IT-01–04 remain partial. |
 | S4 · acceptance | Reduced protocol: five flows, each 10/10 with no false success. The broader corpus and evaluation remain deferred. |
-| Definition of Done | **6/10 boxes checked: 1, 4, 5, 6, 8, 9.** Boxes 2 and 3 have scope acceptances, not fulfilment; box 7 lacks active-icon-cache memory evidence and run variation; box 10 retains partial integration and clean-installation work. |
+| Definition of Done | **6/10 boxes checked: 1, 4, 5, 6, 8, 9.** Boxes 2 and 3 have scope acceptances, not fulfilment; box 7: in the preregistered soak with the active icon cache, R1 met every criterion except the handle criterion C2, and R2 and R3 have not run; box 10 retains partial integration and clean-installation work. |
 
 Source: [chapter 06 §6.7](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md#67-definition-of-done-del-producto).
 First live platform: Windows 11 x64, one monitor, 100% DPI and one theme for the reduced MVP.
