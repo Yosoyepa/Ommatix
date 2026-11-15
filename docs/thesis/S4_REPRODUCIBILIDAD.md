@@ -81,6 +81,8 @@ python tools/repro/environment.py --out environment.json
 
 `cargo fetch --locked` va antes de `cargo test` en una máquina que sólo ha compilado: dos pruebas REL-01 ejecutan `cargo metadata --locked --offline`, que necesita los crates de todos los destinos de `Cargo.lock` y `cargo build` sólo descarga los del destino de la máquina. Sin él esas dos pruebas fallan (con un mensaje que nombra esta orden; la prueba nunca descarga) y `cargo test` no corre las suites siguientes. La CI ejecuta `cargo fetch --locked` antes de compilar (trabajo `check` de `ci.yml`, desde 1.0.114), así que no reproduce el orden de una máquina que sólo ha compilado: ese orden lo sostienen esta guía y el mensaje de las dos pruebas (§7).
 
+`environment.py` registra también, desde 1.0.118, el triple de Rust de la máquina (`rustc_host`: `x86_64-pc-windows-msvc` por la ruta de esta guía, `x86_64-pc-windows-gnu` si se compiló con el toolchain GNU) y, en Windows, el estado del control inteligente de aplicaciones (`machine.smart_app_control`: `on`, `off`, `evaluation`, `not_reported` o `unknown`, nunca `off` por omisión). Con `on`, Windows puede negarse a ejecutar un binario compilado en la máquina ([S4_INSTALACION_Y_REVERSION.md](S4_INSTALACION_Y_REVERSION.md) §10 y [S4_SESIONES_PENDIENTES.md](S4_SESIONES_PENDIENTES.md) §A.2).
+
 Desde `docs/thesis/` (necesita `pip install -r requirements-validacion.txt`):
 
 ```bash

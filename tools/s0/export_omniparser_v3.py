@@ -36,9 +36,13 @@ SHA-256 on another machine: a clean Windows 11 virtual machine with every packag
 versions above (Python 3.12.2 too) wrote a file with another digest (92ae77a1... against the
 pinned bcbec780...) whose numbers agree with TorchScript (largest difference 1.6e-2 px in the
 boxes and 7.2e-7 in the scores, on the synthetic image). Pinning every package, the
-requirements file included, did not change the digest. The cause is not determined. The
-digest pin verifies the file the operator loads, not that this script reproduces it
-(docs/thesis/S4_SESIONES_PENDIENTES.md, session A).
+requirements file included, did not change the digest. On 2026-11-15 a second machine (Intel,
+AVX2) exported the VM's bytes again and located the factor: the float32 ``sqrt`` kernel MKL
+dispatches when the exporter folds each BatchNorm into its convolution (592 initializers, one-ULP
+differences; the graph is identical). Which kernel the reference PC used is not measured;
+``tools/repro/export_digest.py kernels`` and its ``fingerprint``/``compare`` tell it without
+moving the weights. The digest pin verifies the file the operator loads, not that this script
+reproduces it (docs/thesis/S4_SESIONES_PENDIENTES.md, session A, §A.1 and §A.2).
 
 ``--dynamic`` (RNF-05, docs/thesis/S0_RESULTADOS.md §10) exports the same network with the
 height and width of the input free (``image`` ``[1, 3, height, width]``, both multiples of
