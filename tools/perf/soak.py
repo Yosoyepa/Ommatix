@@ -52,6 +52,15 @@ Its ``criteria`` judge, each with the value measured against it:
 The handle slope is reported in ``resources`` without criterion unless its flag is given. The
 tool states no verdict on RNF-06 as a whole; the reading is the owner's.
 
+Every observed sample also keeps the engine's own stage timings from ``_meta`` (``stages_ms``: the
+closed names of ``perf_common.TIMING_STAGES``, in milliseconds, without the total, which is
+``total_ms``) and whether its accessibility evidence was complete. The report adds, without
+touching any criterion, ``latency_ms.stages`` (a summary per stage) and ``slow_observations``:
+every observation whose round trip is at least ``--slow-ms`` (default 500, ``slow_threshold_ms``)
+with its stages, the dominant one (the largest, leaving out the total and the response build), the
+plan kind and the thread and handle counts, so that a stop inside the engine can be attributed
+(S0 §19.6). Only closed names, numbers and booleans are written.
+
 What it will not do, by construction:
 
 * it never brings a window to the front. The test application opens maximised and in front; if
@@ -225,6 +234,52 @@ def latency_windows(points: list[tuple[float, float]], window_s: float) -> list[
         rows.append({"from_s": index * window_s, "n": s["n"], "p50": s["median"],
                      "p95": s["p95"], "p99": s["p99"], "max": s["max"]})
     return rows
+
+
+#: The default of ``--slow-ms``: an observation whose round trip is at least this is listed with
+#: its stages (S0 §19.6: R1's two stops of 10.07 s and 7.45 s could not be attributed).
+SLOW_MS_DEFAULT = 500.0
+#: Stages that are not a cause of their own: the total contains the others, and the response
+#: build starts after the publication that the total ends at.
+NOT_DOMINANT = ("total", "response_build")
+
+
+def dominant_stage(stages_ms: dict) -> str | None:
+    """The stage with the largest time among the closed names, leaving out the total and the
+    response build (``NOT_DOMINANT``); a tie goes to the earlier stage of ``TIMING_STAGES``;
+    None when no such stage was reported."""
+    best, best_ms = None, None
+    for stage in common.TIMING_STAGES:
+        if stage in NOT_DOMINANT or stage not in stages_ms:
+            continue
+        if best_ms is None or stages_ms[stage] > best_ms:
+            best, best_ms = stage, stages_ms[stage]
+    return best
+
+
+def stage_summaries(observed: list[dict]) -> dict:
+    """A ``common.summary`` per closed stage over the observed samples, in ``TIMING_STAGES``
+    order; ``{"n": 0}`` for a stage no sample reported. The total is each sample's ``total_ms``."""
+    summaries = {}
+    for stage in common.TIMING_STAGES:
+        values = [s.get("total_ms") if stage == "total" else s.get("stages_ms", {}).get(stage)
+                  for s in observed]
+        summaries[stage] = common.summary([v for v in values if v is not None])
+    return summaries
+
+
+def slow_observations(observed: list[dict], threshold_ms: float) -> list[dict]:
+    """Every observed sample whose round trip is at least ``threshold_ms``, with the engine's
+    stages of that observation, the dominant one, the completeness of its accessibility evidence
+    and the process's threads and handles at that sample. Closed names, numbers and booleans
+    only (ADR-0012): no label, no coordinate, no screen content."""
+    return [{"t_s": s["t_s"], "rtt_ms": s["rtt_ms"], "total_ms": s.get("total_ms"),
+             "plan_work": s.get("plan_work", "not_reported"),
+             "stages_ms": dict(s.get("stages_ms", {})),
+             "dominant_stage": dominant_stage(s.get("stages_ms", {})),
+             "accessibility_complete": s.get("accessibility_complete"),
+             "threads": s.get("threads"), "handles": s.get("handles")}
+            for s in observed if s["rtt_ms"] >= threshold_ms]
 
 
 def cache_note(lines: list[str]) -> dict | None:
@@ -638,6 +693,11 @@ class Soak:
             metrics, _, _, _ = engine.call("get_engine_metrics", {}, timeout=a.call_timeout)
             sample.update(
                 observed=True, rtt_ms=round(rtt, 3), total_ms=stages.get("total"),
+                # The engine's own stages (closed names, numbers), so that a slow observation
+                # can be attributed afterwards; the total is `total_ms`.
+                stages_ms={k: v for k, v in common.timing_stages_ms(meta).items()
+                           if k != "total"},
+                accessibility_complete=common.accessibility_complete(meta),
                 plan_work=common.plan_work(meta) or "not_reported",
                 degraded=bool(page.get("degraded")), epoch=page.get("geometry_epoch"),
                 observations=metrics.get("observations"),
@@ -694,6 +754,10 @@ class Soak:
                     [(s["t_s"], s["total_ms"]) for s in observed if s.get("total_ms")],
                     window_s)},
         }
+        threshold = getattr(a, "slow_ms", SLOW_MS_DEFAULT)
+        report["latency_ms"]["stages"] = stage_summaries(observed)
+        report["slow_threshold_ms"] = threshold
+        report["slow_observations"] = slow_observations(observed, threshold)
         rule = handle_rule(samples, handle_warmup, report["ended"] == "completed")
         report["criteria"] = criteria(resources, pending, rule, a)
         every = getattr(a, "icon_probe_every", 0)
@@ -755,6 +819,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "95%% of the observations full refreshes by the engine's plan record "
                          "(needs --icon-probe-every and a [cache] block; the configuration "
                          "accepts nothing)")
+    ap.add_argument("--slow-ms", type=float, default=SLOW_MS_DEFAULT, metavar="MS",
+                    help="every observation whose round trip is at least this many ms is listed "
+                         "in the report's slow_observations with the engine's stage timings, so "
+                         "that a stop can be attributed; it judges nothing (default 500, must be "
+                         "positive)")
     ap.add_argument("--max-pending-regions", type=int, default=None,
                     help="the owner's structural bound for the queue (pending_regions): the tile "
                          "count of the frame, ceil(W/64) * ceil(H/64), 510 for 1920x1080 "
@@ -767,6 +836,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = ap.parse_args(argv)
     if args.minutes <= 0 or args.interval <= 0:
         ap.error("--minutes and --interval must be positive")
+    if not args.slow_ms > 0:  # also refuses NaN
+        ap.error("--slow-ms must be positive")
     if args.icon_probe_every < 0:
         ap.error("--icon-probe-every must not be negative")
     return args

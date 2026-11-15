@@ -1009,5 +1009,202 @@ class ProbeCounting(unittest.TestCase):
         self.assertIsNone(soak.cache_note(["ommatix: something else"]))
 
 
+# ---- the stages of the slow observations (box 7, S0 section 19.6) --------------------------
+
+FAST_US = {"capture_us": 5_000, "plan_us": 200, "detect_us": 8_000, "recognize_us": 4_000,
+           "accessibility_us": 3_000, "fuse_us": 500, "track_us": 100, "commit_us": 50,
+           "total_us": 20_850, "response_build_us": 1_000}
+#: A stall inside the accessibility read: the stage dominates, and the response build (which the
+#: total does not include) is larger still, so that it must not be named the dominant one.
+STALL_US = {**FAST_US, "accessibility_us": 9_000_000, "total_us": 9_020_000,
+            "response_build_us": 9_500_000}
+
+
+class StagedEngine(FakeEngine):
+    """Observations whose `_meta` carries the engine's stage timings. ``slow`` maps the n-th
+    observation (from 1) to its round trip in ms and its timings in us."""
+
+    def __init__(self, slow=None, timings=True, complete=True, extra_timing=None, **kwargs):
+        super().__init__(**kwargs)
+        self.slow, self.timings, self.complete = slow or {}, timings, complete
+        self.extra_timing = extra_timing or {}
+
+    def call(self, name, arguments, timeout=0):
+        page, is_error, meta, rtt = super().call(name, arguments, timeout)
+        if name != "observe_screen" or is_error:
+            return page, is_error, meta, rtt
+        n = self.calls.count("observe_screen")
+        rtt, timings = self.slow.get(n, (rtt, FAST_US))
+        meta = {k: v for k, v in meta.items() if k != common.TIMINGS_KEY}
+        if self.timings:
+            meta[common.TIMINGS_KEY] = {**timings, **self.extra_timing}
+        if self.complete is not None:
+            meta[common.ACCESSIBILITY_KEY] = {"complete": self.complete}
+        return page, is_error, meta, rtt
+
+
+class SlowObservations(Case):
+    def test_an_observation_that_stalled_in_one_stage_is_listed_with_its_dominant_stage(self):
+        engine = StagedEngine(slow={10: (10_000.0, STALL_US)})
+        report, code = self.run_soak(FakeHost(engine=engine))
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        slow = report["slow_observations"]
+        self.assertEqual(len(slow), 1)
+        entry = slow[0]
+        self.assertEqual(entry["dominant_stage"], "accessibility")
+        self.assertEqual((entry["rtt_ms"], entry["total_ms"]), (10_000.0, 9020.0))
+        self.assertEqual(entry["stages_ms"]["accessibility"], 9000.0)
+        self.assertEqual(entry["stages_ms"]["response_build"], 9500.0)
+        self.assertNotIn("total", entry["stages_ms"])
+        self.assertEqual(entry["t_s"], report["samples"][9]["t_s"])
+        self.assertEqual((entry["threads"], entry["handles"]), (40, 500))
+        self.assertTrue(entry["accessibility_complete"])
+        self.assertEqual(entry["plan_work"], "not_reported")
+
+    def test_fast_observations_are_not_listed_and_the_threshold_is_in_the_report(self):
+        report, _ = self.run_soak(FakeHost(engine=StagedEngine()))
+        self.assertEqual(report["slow_observations"], [])
+        self.assertEqual(report["slow_threshold_ms"], soak.SLOW_MS_DEFAULT)
+        self.assertEqual(soak.SLOW_MS_DEFAULT, 500.0)
+
+    def test_the_threshold_is_inclusive_and_the_flag_moves_it(self):
+        engine = StagedEngine(slow={3: (500.0, FAST_US), 4: (499.999, FAST_US)})
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        self.assertEqual([e["rtt_ms"] for e in report["slow_observations"]], [500.0])
+        engine = StagedEngine(slow={3: (500.0, FAST_US)})
+        report, _ = self.run_soak(FakeHost(engine=engine), slow_ms=25.0)
+        self.assertEqual(report["slow_threshold_ms"], 25.0)
+        self.assertEqual(len(report["slow_observations"]), 24)  # every round trip is 30 ms or more
+
+    def test_every_observed_sample_keeps_its_stages_without_the_total(self):
+        report, _ = self.run_soak(FakeHost(engine=StagedEngine()))
+        for sample in report["samples"]:
+            self.assertEqual(set(sample["stages_ms"]),
+                             set(common.TIMING_STAGES) - {"total"})
+            self.assertEqual(sample["total_ms"], 20.85)
+            self.assertIs(sample["accessibility_complete"], True)
+        self.assertEqual(report["samples"][0]["stages_ms"]["recognize"], 4.0)
+
+    def test_a_response_without_stage_timings_has_none_and_is_never_invented(self):
+        engine = StagedEngine(timings=False, complete=None, slow={2: (900.0, FAST_US)})
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        sample = report["samples"][0]
+        self.assertEqual(sample["stages_ms"], {})
+        self.assertIsNone(sample["total_ms"])
+        self.assertIsNone(sample["accessibility_complete"])
+        entry = report["slow_observations"][0]
+        self.assertEqual((entry["stages_ms"], entry["dominant_stage"], entry["total_ms"]),
+                         ({}, None, None))
+        self.assertIsNone(entry["accessibility_complete"])
+
+    def test_incomplete_accessibility_evidence_is_kept_as_false(self):
+        report, _ = self.run_soak(FakeHost(engine=StagedEngine(complete=False)))
+        self.assertIs(report["samples"][0]["accessibility_complete"], False)
+
+    def test_a_null_response_build_is_omitted_and_an_unknown_key_is_dropped(self):
+        engine = StagedEngine(extra_timing={"response_build_us": None, "foo_us": 99_000_000})
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        stages = report["samples"][0]["stages_ms"]
+        self.assertNotIn("response_build", stages)
+        self.assertNotIn("foo", stages)
+        self.assertNotIn("foo_us", json.dumps(report))
+        self.assertEqual(report["latency_ms"]["stages"]["response_build"], {"n": 0})
+
+    def test_the_stage_summary_has_one_entry_per_closed_stage_over_the_observed_samples(self):
+        engine = StagedEngine(slow={1: (30.0, {**FAST_US, "detect_us": 28_000}),
+                                    2: (30.0, {**FAST_US, "detect_us": 18_000})})
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        stages = report["latency_ms"]["stages"]
+        self.assertEqual(list(stages), list(common.TIMING_STAGES))
+        detect = stages["detect"]
+        self.assertEqual((detect["n"], detect["median"], detect["max"]), (24, 8.0, 28.0))
+        self.assertEqual(detect["p95"], 18.0)  # nearest rank: 23rd of 24 sorted values
+        self.assertEqual(stages["accessibility"]["max"], 3.0)
+        self.assertEqual(stages["total"]["n"], 24)
+        # The existing figures are still there, unchanged.
+        self.assertEqual(report["latency_ms"]["engine_total"]["n"], 24)
+        self.assertEqual(report["latency_ms"]["rtt"]["n"], 24)
+
+    def test_an_unobserved_sample_has_no_stages_and_is_never_listed(self):
+        host = FakeHost(front=lambda t: 999 if 20 <= t < 30 else APP,
+                        engine=StagedEngine(slow={1: (10_000.0, STALL_US)}))
+        report, _ = self.run_soak(host)
+        unobserved = [s for s in report["samples"] if not s["observed"]]
+        self.assertEqual(len(unobserved), 2)
+        for sample in unobserved:
+            self.assertNotIn("stages_ms", sample)
+        self.assertEqual(len(report["slow_observations"]), 1)
+
+    def test_a_partial_report_still_goes_out_while_the_soak_runs(self):
+        engine = StagedEngine(slow={5: (10_000.0, STALL_US)})
+        self.run_soak(FakeHost(engine=engine), minutes=10.0)
+        self.assertEqual(self.written[0], "running")
+
+    def test_only_closed_names_numbers_and_booleans_are_written(self):
+        engine = StagedEngine(slow={4: (2_000.0, STALL_US)},
+                              extra_timing={"label_us": 5, "window_title_us": 7})
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        entry = report["slow_observations"][0]
+        self.assertEqual(set(entry), {
+            "t_s", "rtt_ms", "total_ms", "plan_work", "stages_ms", "dominant_stage",
+            "accessibility_complete", "threads", "handles"})
+        self.assertLessEqual(set(entry["stages_ms"]), set(common.TIMING_STAGES))
+        for value in entry["stages_ms"].values():
+            self.assertIsInstance(value, float)
+        self.assertIn(entry["dominant_stage"], common.TIMING_STAGES)
+        self.assertIsInstance(entry["accessibility_complete"], bool)
+        text = json.dumps(report)
+        for leaked in ("label_us", "window_title_us", "label_", "window_title"):
+            self.assertNotIn(leaked, text)
+
+    def test_the_criteria_are_the_same_whether_or_not_the_responses_carry_stage_timings(self):
+        slow = {7: (10_000.0, STALL_US)}
+        runs = []
+        for timings in (True, False):
+            host = FakeHost(engine=StagedEngine(slow=slow, timings=timings, complete=timings))
+            report, code = self.run_soak(host, minutes=75.0, interval=30.0,
+                                         max_handle_growth_per_hour=0.0, max_pending_regions=510)
+            runs.append((report, code))
+        (with_stages, code_a), (without, code_b) = runs
+        self.assertEqual(code_a, code_b)
+        self.assertEqual(with_stages["criteria"], without["criteria"])
+        for key in ("resources", "handle_steps", "pending_regions", "delivered_actions_max",
+                    "counts", "ended", "warmup_s"):
+            self.assertEqual(with_stages[key], without[key], key)
+        self.assertEqual(with_stages["latency_ms"]["rtt"], without["latency_ms"]["rtt"])
+        self.assertTrue(with_stages["criteria"]["handle_count"]["met"])  # not vacuous
+        self.assertEqual(len(with_stages["slow_observations"]), 1)
+        self.assertEqual(len(without["slow_observations"]), 1)  # listed by rtt alone
+
+
+class DominantStage(unittest.TestCase):
+    def test_the_largest_stage_wins_without_the_total_and_the_response_build(self):
+        stages = {"capture": 5.0, "detect": 9.0, "accessibility": 6.0, "response_build": 99.0}
+        self.assertEqual(soak.dominant_stage(stages), "detect")
+        self.assertEqual(soak.dominant_stage({**stages, "total": 500.0}), "detect")
+
+    def test_a_tie_goes_to_the_earlier_stage_in_the_closed_order(self):
+        self.assertEqual(soak.dominant_stage({"fuse": 4.0, "detect": 4.0, "commit": 4.0}),
+                         "detect")
+        self.assertEqual(soak.dominant_stage({"track": 0.0, "plan": 0.0}), "plan")
+
+    def test_no_stage_is_none(self):
+        self.assertIsNone(soak.dominant_stage({}))
+        self.assertIsNone(soak.dominant_stage({"total": 5.0, "response_build": 3.0}))
+
+
+class SlowThresholdFlag(unittest.TestCase):
+    def test_the_default_is_half_a_second(self):
+        args = soak.parse_args(["--config", "c.toml", "--out", "o.json"])
+        self.assertEqual(args.slow_ms, 500.0)
+        args = soak.parse_args(["--config", "c.toml", "--out", "o.json", "--slow-ms", "250.5"])
+        self.assertEqual(args.slow_ms, 250.5)
+
+    def test_zero_a_negative_and_not_a_number_are_refused_like_the_other_numeric_flags(self):
+        for bad in ("0", "-1", "-0.5", "nan"):
+            with self.assertRaises(SystemExit, msg=bad):
+                soak.parse_args(["--config", "c.toml", "--out", "o.json", "--slow-ms", bad])
+
+
 if __name__ == "__main__":
     unittest.main()

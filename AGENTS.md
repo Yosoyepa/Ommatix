@@ -195,7 +195,7 @@ cargo clippy --workspace --all-targets -- -D warnings  # lint (CI-blocking)
 cargo test --workspace                                 # unit + integration + Gherkin (CI-blocking)
 cargo run -- demo                                      # smoke test: the engine on the simulated desktop
 python tools/perf/measure_latency.py --variant NAME=EXE,CONFIG ... --out perf.json  # RNF-05 latency, Windows, no input (S0_RESULTADOS.md §10)
-python tools/perf/soak.py --config CONFIG --minutes 120 --out soak.json  # PERF-03 / RNF-06: resources and 2 h soak, Windows, no input; the test app must be in front (S4_SESIONES_PENDIENTES.md B)
+python tools/perf/soak.py --config CONFIG --minutes 120 --out soak.json  # PERF-03 / RNF-06: resources and 2 h soak, Windows, no input; the test app must be in front (S4_SESIONES_PENDIENTES.md B); `--slow-ms` (default 500) lists slower observations with their engine stages, judging nothing
 python tools/perf/dpi_probe.py --config CONFIG --out dpi-probe.json  # IT-07: DPI per session, read only; never changes the scaling (S4_SESIONES_PENDIENTES.md C)
 cargo run --release -p ommatix-acceptance --example core_latency -- --out perf01.json  # PERF-01: the core on 300 controls and 600 spans, no screen (S0_RESULTADOS.md §11)
 cargo run -p ommatix-acceptance --example agent_scenes -- --out scenes.json  # AG-01: the synthetic scenes of the offline agent-decision experiment, no screen (ADR-0033, chapter 09 §9.10); the tool below runs it itself

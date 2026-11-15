@@ -1327,5 +1327,5 @@ Sin `--expect-cache` ni `[cache]` es el control R3 (el mismo dibujo, sin caché)
 
 **Qué queda.**
 - Correr R2, que da la variación entre corridas y es obligatoria, y R3, el control sin `[cache]`, con el guion del responsable.
-- Una mejora de la herramienta, propuesta y no hecha: que `soak.py` conserve los tramos de `_meta` de las observaciones lentas, para que una parada como la de R1 se pueda atribuir.
+- Una mejora de la herramienta, hecha el 15 de noviembre de 2026 (CHANGELOG 1.0.117): `soak.py` conserva ahora los tramos de `_meta` de cada observación y lista las lentas (`--slow-ms`, 500 por defecto) con su etapa dominante, para que una parada como la de R1 se pueda atribuir. **No atribuye las de R1**, que no se vuelve a correr: esas dos observaciones siguen sin etapa. §19.4 manda correr R1 a R3 sobre el mismo commit (R1 fue sobre `6273145`); si R2 y R3 usan esta versión de la herramienta es decisión del responsable.
 - R1 no cumple C2 tal como está escrito, preregistrado antes de correr. Por sí sola, esta corrida no reúne los criterios de §19.4.

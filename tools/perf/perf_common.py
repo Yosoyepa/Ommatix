@@ -31,6 +31,16 @@ PLAN_KEY = "io.ommatix/plan"
 #: agree on a name the engine never emits.
 PLAN_WORK_KINDS = ("full", "regions", "idle")
 PLAN_WORK_FULL = "full"
+ACCESSIBILITY_KEY = "io.ommatix/accessibility"
+#: The stage timings of a response's ``_meta`` under ``TIMINGS_KEY``, as the wire names them
+#: without the ``_us`` suffix, in the order ``dto::timings_meta`` writes them
+#: (``src/adapters/mcp/src/dto.rs``). A closed list: a key outside it is dropped, so that nothing
+#: but these names ever reaches a report (ADR-0012). The repository test ``timing_stage_names_in_
+#: the_perf_tools_are_the_wire_names`` binds this tuple to the real serializer.
+TIMING_STAGES = (
+    "capture", "plan", "detect", "recognize", "accessibility", "fuse", "track", "commit",
+    "total", "response_build",
+)
 
 
 # ---- pure helpers -------------------------------------------------------------------------
@@ -67,6 +77,31 @@ def stage_ms(meta: dict) -> dict:
     """The per-stage timings of a response's ``_meta`` in milliseconds."""
     return {k.removesuffix("_us"): round(v / 1000, 3)
             for k, v in meta.get(TIMINGS_KEY, {}).items() if isinstance(v, (int, float))}
+
+
+def timing_stages_ms(meta) -> dict:
+    """The stage timings of a response's ``_meta`` in milliseconds (three decimals), for the
+    closed names of ``TIMING_STAGES`` only, in that order. A key outside the list is dropped; a
+    ``null`` (``response_build_us`` is null until the page is built), a boolean or any other
+    non-number is omitted, never invented; a response without ``_meta`` timings gives ``{}``."""
+    timings = meta.get(TIMINGS_KEY) if isinstance(meta, dict) else None
+    if not isinstance(timings, dict):
+        return {}
+    stages = {}
+    for stage in TIMING_STAGES:
+        value = timings.get(f"{stage}_us")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            stages[stage] = round(value / 1000, 3)
+    return stages
+
+
+def accessibility_complete(meta) -> bool | None:
+    """Whether the accessibility evidence behind a response was complete, from the engine's own
+    ``io.ommatix/accessibility`` record: True or False, and None when the response carries no
+    such record or its ``complete`` is not a boolean."""
+    record = meta.get(ACCESSIBILITY_KEY) if isinstance(meta, dict) else None
+    complete = record.get("complete") if isinstance(record, dict) else None
+    return complete if isinstance(complete, bool) else None
 
 
 def config_problem(config_text: str) -> str | None:

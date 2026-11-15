@@ -29,6 +29,60 @@ class Statistics(unittest.TestCase):
         self.assertEqual(c.stage_ms({}), {})
 
 
+class TimingStages(unittest.TestCase):
+    """The closed stage names of a response's `_meta`, kept for the slow observations of the
+    soak (box 7). The repository test `timing_stage_names_in_the_perf_tools_are_the_wire_names`
+    binds the tuple to the real serializer."""
+
+    FULL = {"capture_us": 12_000, "plan_us": 300, "detect_us": 80_000, "recognize_us": 41_250,
+            "accessibility_us": 9_000_000, "fuse_us": 700, "track_us": 90, "commit_us": 40,
+            "total_us": 9_500_000, "response_build_us": 1_500}
+
+    def test_the_closed_names_are_the_wire_names_without_the_suffix_in_wire_order(self):
+        self.assertEqual(c.TIMING_STAGES, (
+            "capture", "plan", "detect", "recognize", "accessibility", "fuse", "track", "commit",
+            "total", "response_build"))
+        self.assertEqual(c.ACCESSIBILITY_KEY, "io.ommatix/accessibility")
+
+    def test_the_stage_timings_of_a_response_are_milliseconds_with_three_decimals(self):
+        got = c.timing_stages_ms({c.TIMINGS_KEY: self.FULL})
+        self.assertEqual(list(got), list(c.TIMING_STAGES))
+        self.assertEqual(got["recognize"], 41.25)
+        self.assertEqual(got["plan"], 0.3)
+        self.assertEqual(got["accessibility"], 9000.0)
+        self.assertEqual(c.timing_stages_ms({c.TIMINGS_KEY: {"track_us": 1_234_567}}),
+                         {"track": 1234.567})
+        self.assertEqual(c.timing_stages_ms({c.TIMINGS_KEY: {"plan_us": 1}}), {"plan": 0.001})
+
+    def test_a_key_outside_the_closed_names_is_dropped(self):
+        meta = {c.TIMINGS_KEY: {"detect_us": 5_000, "foo_us": 7_000, "detect": 1, "total": 2,
+                                "": 3, "plan_ms": 4}}
+        self.assertEqual(c.timing_stages_ms(meta), {"detect": 5.0})
+
+    def test_a_null_or_a_value_that_is_not_a_number_is_omitted_and_never_invented(self):
+        meta = {c.TIMINGS_KEY: {"detect_us": 5_000, "response_build_us": None,
+                                "fuse_us": "12", "track_us": [1], "commit_us": True,
+                                "capture_us": {"x": 1}}}
+        self.assertEqual(c.timing_stages_ms(meta), {"detect": 5.0})
+
+    def test_a_response_without_timings_gives_nothing(self):
+        for meta in ({}, {c.TIMINGS_KEY: None}, {c.TIMINGS_KEY: []}, {c.TIMINGS_KEY: "x"},
+                     None, [], "x"):
+            self.assertEqual(c.timing_stages_ms(meta), {}, meta)
+
+    def test_the_completeness_of_the_accessibility_evidence_is_true_false_or_unknown(self):
+        key = c.ACCESSIBILITY_KEY
+        self.assertIs(c.accessibility_complete({key: {"complete": True}}), True)
+        self.assertIs(c.accessibility_complete({key: {"complete": False}}), False)
+        for meta in ({}, {key: None}, {key: {}}, {key: {"complete": None}},
+                     {key: {"complete": "yes"}}, {key: {"complete": 1}}, {key: []}, None, "x"):
+            self.assertIsNone(c.accessibility_complete(meta), meta)
+
+    def test_stage_ms_is_unchanged(self):
+        meta = {c.TIMINGS_KEY: {"foo_us": 1_000, "total_us": 2_000}}
+        self.assertEqual(c.stage_ms(meta), {"foo": 1.0, "total": 2.0})
+
+
 class InputFreeConfiguration(unittest.TestCase):
     def test_the_shipped_operator_configurations_are_input_free(self):
         paths = sorted((c.REPO / "tools" / "s0").glob("*.toml"))
