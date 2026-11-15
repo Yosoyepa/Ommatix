@@ -63,7 +63,8 @@ GOAL_ID = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 LOCK_WAIT_S = 10.0
 KNOWN_IDS_LIMIT = 5000
 # The clock of every logged time and latency: monotonic and sub-millisecond. `time.monotonic` is
-# GetTickCount64 on Windows (15.625 ms), which rounded every short latency to whole ticks.
+# GetTickCount64 on Windows up to CPython 3.12 (15.625 ms; 3.13 moved it to QueryPerformanceCounter),
+# which rounded every short latency of the AG-02 records to whole ticks.
 CLOCK = "perf_counter"
 _clock = time.perf_counter
 

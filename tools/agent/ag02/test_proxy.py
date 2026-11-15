@@ -427,10 +427,15 @@ class PassthroughAndPrivacyTests(unittest.TestCase):
 
 class ClockTests(unittest.TestCase):
     """The latencies are timed with a sub-millisecond clock. ``time.monotonic`` is
-    ``GetTickCount64`` on Windows (15.625 ms ticks): every short latency logged with it was a
-    multiple of one tick (AG-02 records of 18 and 19 October 2026, chapter 09 section 9.11.4)."""
+    ``GetTickCount64`` on Windows up to CPython 3.12 (15.625 ms ticks): every short latency logged
+    with it was a multiple of one tick (AG-02 records of 18 and 19 October 2026, chapter 09
+    section 9.11.4). CPython 3.13 moved it to ``QueryPerformanceCounter``, and on Linux it was
+    always sub-millisecond, so the clock's name is pinned too: a resolution check alone would let a
+    return to ``time.monotonic`` pass everywhere except Windows with CPython 3.12 or older
+    (review R112-2)."""
 
     def test_the_latency_clock_is_monotonic_with_sub_millisecond_resolution(self):
+        self.assertEqual(proxy.CLOCK, "perf_counter")
         info = time.get_clock_info(proxy.CLOCK)
         self.assertTrue(info.monotonic)
         self.assertLessEqual(info.resolution, 1e-3)
