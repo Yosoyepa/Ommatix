@@ -99,6 +99,17 @@ class FakeHost(soak.Host):
     def gpu(self, pid):
         return FakeGpu()
 
+    # The thread snapshot: forty threads that never change, all started in one fake module (the
+    # real calls must never run against a fake pid).
+    def thread_ids(self, pid):
+        return list(range(5000, 5040))
+
+    def modules(self, pid):
+        return [(0x7FFA10000000, 0x180000, "ntdll.dll")]
+
+    def thread_start(self, tid):
+        return 0x7FFA10001000
+
     def start_testapp(self, args):
         return self.app
 
@@ -1191,6 +1202,244 @@ class DominantStage(unittest.TestCase):
     def test_no_stage_is_none(self):
         self.assertIsNone(soak.dominant_stage({}))
         self.assertIsNone(soak.dominant_stage({"total": 5.0, "response_build": 3.0}))
+
+
+# ---- which thread appeared (box 7, C2, S0 section 19.6) -------------------------------------
+
+NTDLL_BASE, UIA_BASE = 0x7FFA10000000, 0x7FFA20000000
+MODULE_EXE = (0x7FF600000000, 0x200000, "ommatix.exe")
+MODULE_NTDLL = (NTDLL_BASE, 0x180000, "ntdll.dll")
+MODULE_UIA = (UIA_BASE, 0x300000, "UIAutomationCore.dll")
+MODULE_DML = (0x7FFA30000000, 0x100000, "DirectML.dll")
+BASE_IDS = list(range(5000, 5040))
+
+
+class ThreadedHost(FakeHost):
+    """A host with a thread snapshot. ``ids(t)`` is the engine's thread ids (or None: unreadable),
+    ``modules(t)`` its module list (or None), ``starts`` maps a thread id to its Win32 start
+    address (others start in ntdll). Every read is counted."""
+
+    def __init__(self, ids=lambda t: BASE_IDS, modules=lambda t: [MODULE_EXE, MODULE_NTDLL],
+                 starts=None, **kwargs):
+        super().__init__(**kwargs)
+        self.ids, self.module_list, self.starts = ids, modules, starts or {}
+        self.id_reads = self.module_reads = self.start_reads = 0
+
+    def thread_ids(self, pid):
+        assert pid == ENGINE
+        self.id_reads += 1
+        return self.ids(self.t)
+
+    def modules(self, pid):
+        assert pid == ENGINE
+        self.module_reads += 1
+        return self.module_list(self.t)
+
+    def thread_start(self, tid):
+        self.start_reads += 1
+        return self.starts.get(tid, NTDLL_BASE + 0x1000)
+
+
+def gains(extra, at=30):
+    """The base threads, and from second ``at`` the ids of ``extra`` too."""
+    return lambda t: BASE_IDS + (list(extra) if t >= at else [])
+
+
+class ThreadAttribution(Case):
+    def test_a_new_thread_is_named_by_the_module_its_start_address_falls_in(self):
+        host = ThreadedHost(
+            ids=gains([9001]), starts={9001: UIA_BASE + 0x40},
+            modules=lambda t: [MODULE_EXE, MODULE_NTDLL] + ([MODULE_UIA] if t >= 30 else []))
+        report, code = self.run_soak(host)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertEqual(report["thread_changes"], [{
+            "t_s": 30.0, "threads_before": 40, "threads_after": 41,
+            "added": [{"start_module": "UIAutomationCore.dll"}], "removed": 0}])
+
+    def test_the_first_list_is_counted_by_start_module_sorted_by_name(self):
+        starts = {5001: UIA_BASE + 4, 5002: UIA_BASE + 8, 5003: 0x7FF600000010}
+        host = ThreadedHost(starts=starts,
+                            modules=lambda t: [MODULE_EXE, MODULE_NTDLL, MODULE_UIA])
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["thread_start_modules_initial"],
+                         {"UIAutomationCore.dll": 2, "ntdll.dll": 37, "ommatix.exe": 1})
+        self.assertEqual(list(report["thread_start_modules_initial"]),
+                         ["UIAutomationCore.dll", "ntdll.dll", "ommatix.exe"])
+        self.assertEqual(report["thread_changes"], [])
+
+    def test_a_stable_thread_set_is_read_every_sample_and_the_modules_once(self):
+        host = ThreadedHost()
+        report, _ = self.run_soak(host)
+        self.assertEqual(host.id_reads, 24)
+        self.assertEqual(host.module_reads, 1)  # cached after the first list
+        self.assertEqual(host.start_reads, 40)  # the first list only
+        self.assertEqual(report["thread_changes"], [])
+        self.assertNotIn("thread_reads_failed", report["counts"])
+
+    def test_the_module_list_is_read_again_once_when_an_address_is_not_found(self):
+        host = ThreadedHost(
+            ids=gains([9001, 9002]), starts={9001: UIA_BASE + 1, 9002: UIA_BASE + 2},
+            modules=lambda t: [MODULE_EXE, MODULE_NTDLL] + ([MODULE_UIA] if t >= 30 else []))
+        report, _ = self.run_soak(host)
+        self.assertEqual(host.module_reads, 2)  # the first list, and one re-read for two threads
+        self.assertEqual(report["thread_changes"][0]["added"],
+                         [{"start_module": "UIAutomationCore.dll"}] * 2)
+
+    def test_an_address_in_no_module_is_unknown_after_one_re_read_per_change(self):
+        host = ThreadedHost(ids=gains([9001, 9002]), starts={9001: 0x1000, 9002: 0x2000})
+        report, _ = self.run_soak(host)
+        self.assertEqual(host.module_reads, 2)
+        self.assertEqual(report["thread_changes"][0]["added"],
+                         [{"start_module": "unknown"}] * 2)
+
+    def test_the_cached_modules_are_reused_by_later_changes_that_they_resolve(self):
+        host = ThreadedHost(ids=lambda t: BASE_IDS + [9001] * (t >= 30) + [9002] * (t >= 60))
+        report, _ = self.run_soak(host)
+        self.assertEqual([c["t_s"] for c in report["thread_changes"]], [30.0, 60.0])
+        self.assertEqual(host.module_reads, 1)
+
+    def test_the_added_threads_are_listed_by_module_name_and_a_removed_one_is_a_number(self):
+        starts = {9001: UIA_BASE + 1, 9002: NTDLL_BASE + 5, 9003: 0x7FFA30000020}
+        host = ThreadedHost(
+            ids=lambda t: BASE_IDS[1:] + ([9003, 9001, 9002] if t >= 30 else []),
+            starts=starts, modules=lambda t: [MODULE_EXE, MODULE_NTDLL, MODULE_UIA, MODULE_DML])
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["thread_changes"], [{
+            "t_s": 30.0, "threads_before": 39, "threads_after": 42,
+            "added": [{"start_module": "DirectML.dll"}, {"start_module": "UIAutomationCore.dll"},
+                      {"start_module": "ntdll.dll"}], "removed": 0}])
+        host = ThreadedHost(ids=lambda t: BASE_IDS if t < 30 else BASE_IDS[2:])
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["thread_changes"], [{
+            "t_s": 30.0, "threads_before": 40, "threads_after": 38, "added": [], "removed": 2}])
+
+    def test_the_report_names_no_thread_id_and_no_address_and_no_path(self):
+        starts = {9001: UIA_BASE + 0x40}
+        host = ThreadedHost(
+            ids=gains([9001]), starts=starts,
+            modules=lambda t: [MODULE_EXE, MODULE_NTDLL, (UIA_BASE, 0x300000,
+                                                           "C:\\Windows\\UIAutomationCore.dll")])
+        report, _ = self.run_soak(host)
+        text = json.dumps({k: report[k] for k in ("thread_changes", "thread_start_modules_initial",
+                                                  "counts")})
+        for leaked in ("9001", "5000", str(UIA_BASE), hex(UIA_BASE), "C:\\\\", "Windows\\\\"):
+            self.assertNotIn(leaked, text)
+        self.assertEqual(set(report["thread_changes"][0]),
+                         {"t_s", "threads_before", "threads_after", "added", "removed"})
+        self.assertEqual(report["thread_changes"][0]["added"],
+                         [{"start_module": "UIAutomationCore.dll"}])
+
+    def test_a_start_address_that_cannot_be_read_is_an_unknown_module(self):
+        host = ThreadedHost(ids=gains([9001]))
+        host.thread_start = lambda tid: None if tid == 9001 else NTDLL_BASE + 8
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["thread_changes"][0]["added"], [{"start_module": "unknown"}])
+
+    def test_an_unreadable_module_list_is_an_unreadable_entry_and_is_counted(self):
+        host = ThreadedHost(ids=gains([9001]), modules=lambda t: None)
+        report, code = self.run_soak(host)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertEqual(report["thread_changes"], [{
+            "t_s": 30.0, "threads_before": 40, "threads_after": 41,
+            "added": "unreadable", "removed": 0}])
+        self.assertEqual(report["counts"]["thread_reads_failed"], 2)  # the first list, the change
+
+    def test_a_module_list_that_cannot_be_read_again_keeps_the_old_one(self):
+        host = ThreadedHost(ids=gains([9001, 9002]), starts={9001: UIA_BASE + 1},
+                            modules=lambda t: [MODULE_EXE, MODULE_NTDLL] if t < 30 else None)
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["thread_changes"][0]["added"],
+                         [{"start_module": "ntdll.dll"}, {"start_module": "unknown"}])
+
+    def test_an_unreadable_first_module_list_leaves_the_initial_counts_empty_and_goes_on(self):
+        host = ThreadedHost(modules=lambda t: None)
+        report, code = self.run_soak(host)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertIsNone(report["thread_start_modules_initial"])
+        self.assertEqual(report["thread_changes"], [])
+
+    def test_unreadable_thread_lists_never_break_the_run_and_are_counted(self):
+        host = ThreadedHost(ids=lambda t: None)
+        report, code = self.run_soak(host)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertEqual(report["counts"]["thread_reads_failed"], 24)
+        self.assertEqual(report["thread_changes"], [])
+        self.assertIsNone(report["thread_start_modules_initial"])
+        self.assertEqual(report["counts"]["observed"], 24)
+
+    def test_a_host_that_raises_is_an_unreadable_read_not_an_exception(self):
+        class Raising(ThreadedHost):
+            def thread_ids(self, pid):
+                raise OSError(5, "access denied")
+
+            def modules(self, pid):
+                raise OSError(5, "access denied")
+
+        report, code = self.run_soak(Raising())
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertEqual(report["counts"]["thread_reads_failed"], 24)
+
+        class RaisingModules(ThreadedHost):
+            def modules(self, pid):
+                raise OSError(5, "access denied")
+
+            def thread_start(self, tid):
+                raise OSError(5, "access denied")
+
+        report, code = self.run_soak(RaisingModules(ids=gains([9001])))
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertEqual(report["thread_changes"][0]["added"], "unreadable")
+
+    def test_a_missed_read_is_compared_with_the_last_list_that_was_read(self):
+        host = ThreadedHost(
+            ids=lambda t: None if 30 <= t < 50 else BASE_IDS + ([9001] if t >= 40 else []),
+            starts={9001: UIA_BASE + 1}, modules=lambda t: [MODULE_EXE, MODULE_NTDLL, MODULE_UIA])
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["counts"]["thread_reads_failed"], 4)  # 30, 35, 40 and 45 s
+        self.assertEqual(report["thread_changes"], [{
+            "t_s": 50.0, "threads_before": 40, "threads_after": 41,
+            "added": [{"start_module": "UIAutomationCore.dll"}], "removed": 0}])
+
+    def test_a_thread_that_comes_and_goes_between_samples_is_not_seen(self):
+        host = ThreadedHost(ids=lambda t: BASE_IDS + ([9001] if t == 30 else []))
+        report, _ = self.run_soak(host)
+        self.assertEqual([c["added"] != [] for c in report["thread_changes"]], [True, False])
+
+    def test_unobserved_samples_are_read_too(self):
+        host = ThreadedHost(front=lambda t: 999 if 20 <= t < 30 else APP, ids=gains([9001], 25))
+        report, _ = self.run_soak(host)
+        self.assertEqual([c["t_s"] for c in report["thread_changes"]], [25.0])
+
+    def test_the_criteria_and_every_other_figure_are_the_same_with_or_without_thread_data(self):
+        class Stepped:
+            """Counters as ThreadsAndHandles: a handle and a thread appear at minute 30."""
+
+            def counters(self, pid):
+                return ThreadsAndHandles.counters(self, pid)
+
+        class WithThreads(Stepped, ThreadedHost):
+            pass
+
+        runs = []
+        for ids in (gains([9001], at=30 * 60), lambda t: None):
+            host = WithThreads(ids=ids, starts={9001: UIA_BASE + 1},
+                               modules=lambda t: [MODULE_EXE, MODULE_NTDLL, MODULE_UIA])
+            runs.append(self.run_soak(host, minutes=75.0, interval=30.0,
+                                      max_handle_growth_per_hour=0.0, max_pending_regions=510))
+        (with_threads, code_a), (without, code_b) = runs
+        self.assertEqual(code_a, code_b)
+        self.assertEqual(with_threads["criteria"], without["criteria"])
+        for key in ("resources", "handle_steps", "pending_regions", "delivered_actions_max",
+                    "ended", "warmup_s", "latency_ms", "slow_observations", "samples"):
+            self.assertEqual(with_threads[key], without[key], key)
+        self.assertEqual(with_threads["handle_steps"][0]["t_s"], 1800.0)  # not vacuous
+        self.assertEqual(with_threads["thread_changes"][0]["added"],
+                         [{"start_module": "UIAutomationCore.dll"}])
+        self.assertEqual(without["thread_changes"], [])
+        self.assertEqual(without["counts"]["thread_reads_failed"], 150)
+        counts = {k: v for k, v in with_threads["counts"].items()}
+        self.assertEqual(counts, {k: v for k, v in without["counts"].items()
+                                  if k != "thread_reads_failed"})
 
 
 class SlowThresholdFlag(unittest.TestCase):
