@@ -946,6 +946,69 @@ mod tests {
         );
     }
 
+    /// Appendix A.1 of the preprint as corrected in v0.7.1, and its formal model (Lean:
+    /// `stale_request_never_passes`, `stale_request_codes_after_journal`,
+    /// `staleTarget_only_on_current_snapshot`), pinned to this implementation. A reference to
+    /// an earlier observation never reaches the revision check: it is refused with
+    /// `STALE_SNAPSHOT`, or with the session or the epoch mismatch when those differ as well,
+    /// because they are checked first. A stale revision is reported only against the current
+    /// snapshot.
+    #[test]
+    fn a_reference_to_an_earlier_observation_never_reaches_the_revision_check() {
+        let a = button(bx(0.0, 0.0, 10.0, 10.0), "A");
+        let (first, _) = observe(&Registry::new("s", 1), std::slice::from_ref(&a));
+        let (old_snapshot, old_epoch) = (first.snapshot_id(), first.geometry_epoch());
+
+        // Same epoch. The element changes, so its revision moves on: the old reference quotes
+        // an old snapshot and an old revision, and it is refused for the snapshot.
+        let disabled = Observation {
+            affordance: Affordance {
+                enabled: false,
+                ..Affordance::TEXT_NODE
+            },
+            ..a.clone()
+        };
+        let (second, _) = observe(&first, &[disabled]);
+        assert_eq!(second.get(id(1)).unwrap().revision, 2);
+        let stale = ActionRef {
+            snapshot_id: old_snapshot,
+            ..action(&second, "e1", 1)
+        };
+        assert_eq!(
+            second.check_action(&stale, Delivery::DryRun),
+            Err(ActionRejection::StaleSnapshot)
+        );
+        // The same old revision against the current snapshot is the only way to a stale target.
+        assert_eq!(
+            second.check_action(&action(&second, "e1", 1), Delivery::DryRun),
+            Err(ActionRejection::StaleTarget)
+        );
+
+        // A new geometric epoch (a change of display scale) and a new observation. The old
+        // reference quotes the old epoch too, and the epoch is checked before the snapshot.
+        let (third, _) = second
+            .observe(old_epoch + 1, &[a], AssociationPolicy::default())
+            .expect("a valid policy");
+        let older = ActionRef {
+            geometry_epoch: old_epoch,
+            snapshot_id: old_snapshot,
+            ..action(&third, "e1", 1)
+        };
+        assert_eq!(
+            third.check_action(&older, Delivery::DryRun),
+            Err(ActionRejection::EpochMismatch)
+        );
+        // With another session as well, the session is checked before both.
+        let foreign = ActionRef {
+            session_id: "other",
+            ..older
+        };
+        assert_eq!(
+            third.check_action(&foreign, Delivery::DryRun),
+            Err(ActionRejection::SessionMismatch)
+        );
+    }
+
     /// UT-41 (OR-47): retired, unknown and malformed IDs are not found.
     #[test]
     fn ut_41_missing_target_is_rejected() {

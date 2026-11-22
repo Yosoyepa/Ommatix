@@ -1515,6 +1515,128 @@ mod tests {
             Closure::BudgetExhausted => panic!("one touched end closes within two rounds"),
         }
     }
+
+    /// One step of equation (9) of the preprint, taken at once over every box that meets the
+    /// region: the `Phi` of its formal model (`lean/Ommatix/Closure.lean` in the preprint
+    /// package). The boxes lie inside the bounds here, so the clipping of the equation is the
+    /// identity.
+    fn simultaneous_step(region: BBox, supports: &[BBox], relations: &[(BBox, BBox)]) -> BBox {
+        let mut grown = region;
+        for support in supports {
+            if region.overlaps(support) {
+                grown = grown.union(support);
+            }
+        }
+        for (a, b) in relations {
+            if region.overlaps(a) || region.overlaps(b) {
+                grown = grown.union(a).union(b);
+            }
+        }
+        grown
+    }
+
+    /// The property of the preprint's Proposition 2: the region contains whole every box and
+    /// both boxes of every related pair that it meets.
+    fn is_closed(region: BBox, supports: &[BBox], relations: &[(BBox, BBox)]) -> bool {
+        supports
+            .iter()
+            .all(|s| !region.overlaps(s) || region.contains(s))
+            && relations.iter().all(|(a, b)| {
+                !(region.overlaps(a) || region.overlaps(b))
+                    || (region.contains(a) && region.contains(b))
+            })
+    }
+
+    /// A number in `0..n` as a `u32`, for `0 < n`.
+    fn below_u32(rng: &mut Rng, n: u32) -> u32 {
+        u32::try_from(rng.below(u64::from(n))).unwrap()
+    }
+
+    /// A box with integer corners inside a square of `side`, at most `longest` on each axis,
+    /// so that every comparison of the closure is exact.
+    fn generated_box(rng: &mut Rng, side: u32, longest: u32) -> BBox {
+        let x0 = below_u32(rng, side);
+        let y0 = below_u32(rng, side);
+        let x1 = x0 + 1 + below_u32(rng, (side - x0).min(longest));
+        let y1 = y0 + 1 + below_u32(rng, (side - y0).min(longest));
+        bx(f64::from(x0), f64::from(y0), f64::from(x1), f64::from(y1))
+    }
+
+    /// The formal model of the preprint (Lean: `prop2_for_engine_sweep`,
+    /// `closure_result_agrees`, `haloClose_order_independent`), pinned to this implementation
+    /// on generated evidence. The sequential sweeps of `halo_close` return the least region
+    /// that contains the start and is closed, which is also what iterating the simultaneous
+    /// step of equation (9) returns; the order of the boxes does not change it; and it never
+    /// needs more sweeps than there are supports and relations, plus the one that confirms the
+    /// fixed point (every sweep that changes the region takes in a support or a relation that
+    /// was not inside it).
+    #[test]
+    fn generated_closures_are_the_least_closed_region_whatever_the_order() {
+        const SIDE: u32 = 32;
+        let bounds = bx(0.0, 0.0, f64::from(SIDE), f64::from(SIDE));
+        let mut rng = Rng(0x0C10_5E00_2026_1122);
+        let mut grew = 0_u32;
+        for case in 0..2_000 {
+            let region = generated_box(&mut rng, SIDE, 8);
+            let supports: Vec<BBox> = (0..rng.below(13))
+                .map(|_| generated_box(&mut rng, SIDE, 12))
+                .collect();
+            let relations: Vec<(BBox, BBox)> = (0..rng.below(6))
+                .map(|_| {
+                    (
+                        generated_box(&mut rng, SIDE, 12),
+                        generated_box(&mut rng, SIDE, 12),
+                    )
+                })
+                .collect();
+            let sweeps = supports.len() + relations.len() + 1;
+            let Ok(Closure::Closed(closed)) =
+                halo_close(region, &supports, &relations, bounds, sweeps)
+            else {
+                panic!("case {case}: no fixed point within {sweeps} sweeps");
+            };
+            assert!(closed.contains(&region), "case {case}: the start is lost");
+            assert!(bounds.contains(&closed), "case {case}: outside the bounds");
+            assert!(
+                is_closed(closed, &supports, &relations),
+                "case {case}: a box is cut"
+            );
+
+            let mut least = region;
+            loop {
+                let next = simultaneous_step(least, &supports, &relations);
+                if next == least {
+                    break;
+                }
+                least = next;
+            }
+            assert_eq!(closed, least, "case {case}: not the least closed region");
+
+            let mut reordered = supports.clone();
+            reordered.reverse();
+            let swapped: Vec<(BBox, BBox)> = relations.iter().rev().map(|&(a, b)| (b, a)).collect();
+            assert_eq!(
+                halo_close(region, &reordered, &swapped, bounds, sweeps),
+                Ok(Closure::Closed(closed)),
+                "case {case}: the reversed order gives another region"
+            );
+            if !reordered.is_empty() {
+                let by =
+                    usize::try_from(rng.below(u64::try_from(reordered.len()).unwrap())).unwrap();
+                reordered.rotate_left(by);
+                assert_eq!(
+                    halo_close(region, &reordered, &relations, bounds, sweeps),
+                    Ok(Closure::Closed(closed)),
+                    "case {case}: a rotated order gives another region"
+                );
+            }
+            grew += u32::from(closed != region);
+        }
+        assert!(
+            grew > 900,
+            "the generator must exercise closures that grow, and only {grew} did"
+        );
+    }
 }
 
 #[cfg(test)]

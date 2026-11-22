@@ -344,6 +344,60 @@ mod tests {
         );
     }
 
+    /// The formal model of the preprint (Lean: `describe_invert`, `inversion_invariance`),
+    /// pinned to this implementation on generated crops. UT-28 compares one icon with its own
+    /// inversion. The property that makes the descriptor theme-invariant is wider: for every
+    /// threshold, inverting a crop keeps its mask, flips every valid bit and so keeps its
+    /// distance to *every* prototype, the "not comparable" answer included.
+    #[test]
+    fn inversion_keeps_the_distance_to_every_prototype_on_generated_crops() {
+        let mut comparable = 0_u32;
+        let mut not_comparable = 0_u32;
+        for seed in 0..300_u32 {
+            // Every other crop is quantised to four levels, so that many gradients are zero
+            // and the support is sparse.
+            let crop: Vec<u8> = if seed % 2 == 0 {
+                icon(seed)
+            } else {
+                icon(seed).iter().map(|v| v & 0xC0).collect()
+            };
+            for tau in [1_u8, 3, 16, 64, 128, 255] {
+                let query = gradient_descriptor(&crop, tau).unwrap();
+                let flipped = gradient_descriptor(&inverted(&crop), tau).unwrap();
+                assert_eq!(query.bits & !query.mask, 0, "seed {seed}, tau {tau}");
+                assert_eq!(flipped.mask, query.mask, "seed {seed}, tau {tau}");
+                assert_eq!(
+                    flipped.bits,
+                    query.mask & !query.bits,
+                    "seed {seed}, tau {tau}"
+                );
+                for other in 0..6_u32 {
+                    let prototype =
+                        gradient_descriptor(&icon(10_000 + seed * 7 + other), tau).unwrap();
+                    let distance =
+                        descriptor_distance(&query, &prototype, SupportPolicy::default());
+                    assert_eq!(
+                        descriptor_distance(&flipped, &prototype, SupportPolicy::default()),
+                        distance,
+                        "seed {seed}, tau {tau}, prototype {other}"
+                    );
+                    match distance {
+                        Ok(Some(d)) => {
+                            assert!((0.0..=0.5).contains(&d), "seed {seed}: distance {d}");
+                            comparable += 1;
+                        }
+                        Ok(None) => not_comparable += 1,
+                        Err(error) => panic!("seed {seed}, tau {tau}: {error}"),
+                    }
+                }
+            }
+        }
+        assert!(
+            comparable > 1_000 && not_comparable > 1_000,
+            "both answers must be exercised: {comparable} comparable, {not_comparable} not"
+        );
+    }
+
     /// UT-29 (OR-31, OR-33): flat crops and low support are rejected, not matched.
     #[test]
     fn ut_29_insufficient_support_is_rejected() {
@@ -390,6 +444,31 @@ mod tests {
         assert_eq!(
             descriptor_distance(&a, &a, invalid),
             Err(AppearanceError::InvalidSupportPolicy)
+        );
+    }
+
+    /// Recorded as an open observation (review of 2026-11-22, O3): with a margin of zero an
+    /// exact tie between two labels is not ambiguous, and the label that sorts first is
+    /// returned. Any positive margin makes the same tie unknown.
+    #[test]
+    fn a_zero_margin_resolves_an_exact_tie_by_label_order() {
+        let save = icon(1);
+        let q = descriptor(&save);
+        let mut cache = IconCache::new();
+        cache.insert(curated("Guardar", "editor", &save));
+        cache.insert(curated("Eliminar", "editor", &save));
+        let zero = CachePolicy::new(policy().max_distance, 0.0).unwrap();
+        assert_eq!(
+            cache.lookup(&q, "editor", zero),
+            Ok(IconMatch::Known {
+                label: "Eliminar".to_owned(),
+                distance: 0.0
+            })
+        );
+        let positive = CachePolicy::new(policy().max_distance, f64::MIN_POSITIVE).unwrap();
+        assert_eq!(
+            cache.lookup(&q, "editor", positive),
+            Ok(IconMatch::Unknown(UnknownReason::Ambiguous))
         );
     }
 
