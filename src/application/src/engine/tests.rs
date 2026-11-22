@@ -1559,6 +1559,65 @@ fn an_unverified_effect_still_reports_the_delivered_input() {
     assert_eq!(r.engine.engine_metrics().delivered_actions, 1);
 }
 
+/// Two agents share one engine and act in a generated order, each on the last page it
+/// received. Whatever the order, a snapshot authorises at most one delivery: a click that
+/// cites a snapshot on which input was already delivered, or one that a later observation
+/// replaced, is refused with `STALE_SNAPSHOT` and sends nothing. The engine has no notion of
+/// an agent, so this is a property of its single snapshot counter, and the one a design for
+/// several agents would rest on.
+#[test]
+fn two_agents_on_one_engine_never_deliver_twice_on_one_snapshot() {
+    let mut r = rig(form());
+    r.world().live = true;
+    r.set_policy(live_policy());
+    let mut state = 0x2026_1122_u64;
+    let mut draw = move |n: u64| {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (state >> 33) % n
+    };
+    let mut pages: [Option<ObservePage>; 2] = [None, None];
+    let mut used = std::collections::BTreeSet::new();
+    let (mut delivered, mut refused) = (0_usize, 0_usize);
+    for step in 0..600 {
+        let agent = usize::from(draw(2) == 1);
+        if pages[agent].is_none() || draw(3) == 0 {
+            pages[agent] = Some(r.observe());
+            continue;
+        }
+        let page = pages[agent].as_ref().unwrap();
+        let request_id = format!("a{agent}-{step}");
+        let result = r
+            .engine
+            .execute_action(&live_click(page, &request_id, ExpectedEffect::None));
+        if result.input_delivered() {
+            delivered += 1;
+            assert!(
+                used.insert(page.snapshot_id.clone()),
+                "step {step}: a second delivery on {}",
+                page.snapshot_id
+            );
+        } else {
+            refused += 1;
+            assert_eq!(
+                (result.status, error_code(&result)),
+                (ActionStatus::Rejected, Some(ErrorCode::StaleSnapshot)),
+                "step {step}"
+            );
+        }
+        assert_eq!(
+            r.world().delivered.len(),
+            delivered,
+            "step {step}: the input events are not the deliveries"
+        );
+    }
+    assert!(
+        delivered > 60 && refused > 60,
+        "the order must exercise both outcomes: {delivered} delivered, {refused} refused"
+    );
+}
+
 /// A live click on the Save button of `page`, expecting `effect`.
 fn live_click(page: &ObservePage, request_id: &str, effect: ExpectedEffect) -> ActionRequest {
     ActionRequest {
