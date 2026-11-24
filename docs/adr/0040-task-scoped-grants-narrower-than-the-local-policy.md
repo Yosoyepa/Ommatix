@@ -64,7 +64,16 @@ model cannot read it.
    ticket that the operator's side creates and the host passes to the `attach` mode of ADR-0039.
    The policy store lists the SHA-256 of each ticket next to its grant, so the engine only reads and
    compares, and writes nothing to the store. The ticket selects the grant and is spent at once.
-   Nothing the model writes can name or change a grant.
+   Nothing the model writes can name or change a grant. The ticket reaches `attach` as the path of
+   a file (`--ticket-file`), never as an argument value or an environment variable: an argument is
+   visible in the process list and the environment is inherited by children, while a file can be
+   restricted and removed by the operator after use. `attach` reads it and sends it as one
+   handshake line on the pipe before any MCP message. The broker in `adapter-mcp`, which owns the
+   wire, hashes it: `sha2` 0.11 is already a workspace dependency (`Cargo.toml` line 54), so
+   `adapter-mcp` gains it with no new crate in `Cargo.lock`; the application crate may not depend
+   on it (`src/acceptance/tests/repository.rs`, lines 288–295). The ticket never enters the
+   model's context or a log. The handshake is part of
+   [ADR-0043](0043-local-named-pipe-transport-for-several-clients.md), decision 9.
 4. **Tickets, budgets and terms are per engine process.** Because the engine writes nothing to the
    store, that a ticket was spent, what a budget has left and when a term started are kept in the
    engine's memory. After the engine process restarts, a ticket that the store still lists can
@@ -129,12 +138,8 @@ covers the need without it.
 
 ### Open points
 
-- **Where the ticket's SHA-256 is computed.** `sha2` 0.11 is already a workspace dependency, used
-  by the app, the vision adapter and the acceptance crate (`Cargo.toml` line 54), and not by
-  `adapter-mcp`. The application crate may not depend on it (`src/acceptance/tests/repository.rs`,
-  lines 288–295). If the broker hashes the ticket, `adapter-mcp` gains `sha2`: that changes the
-  adapter's entry in `Cargo.lock`, adds no new crate, and the REL-01 checks must still pass. If the
-  app's store hashes it, nothing changes. This depends on the transport of ADR-0039.
+None is left in this ADR. The transport that carries the ticket has its own open points, in
+ADR-0043.
 
 ## Alternatives considered
 
@@ -232,5 +237,7 @@ llevan; se filtran los valores y la región. Las concesiones necesitan una secci
 nueva del almacén de política; la parte con forma de política se aplica decorando ese almacén y el
 resto se comprueba en el motor. El presupuesto lo gasta toda acción entregada o indeterminada (un
 `type` en dos fases cuenta una vez); ni una purga ni una recarga lo restauran, sólo un tique nuevo.
-Queda abierto dónde se calcula el SHA-256 del tique, que depende del transporte de ADR-0039.
+El tique llega a `attach` como ruta de un archivo, viaja en una primera línea del tubo y el
+intermediario de `adapter-mcp` calcula su SHA-256 (ADR-0043). No queda ningún punto abierto en esta
+ADR.
 Revisada el 2026-11-24 contra el código; la aceptación es del responsable.

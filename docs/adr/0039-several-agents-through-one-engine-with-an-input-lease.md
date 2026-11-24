@@ -61,7 +61,13 @@ published page again without observing: `first_page` and `next_page` are `pub(su
    Several agents reach it through a broker inside the engine process: a module of `adapter-mcp`,
    the adapter that owns the wire format, built on the existing `McpServer` and `Connection`, which
    calls the `Engine` directly as the stdio server does. Agents never start a second engine on the
-   same desktop. How a second process is refused is not decided yet (see Open points).
+   same desktop. The operator, or an agent host's launcher acting with the operator's authority,
+   starts the one engine process with the broker on; an agent-side process never starts an
+   engine, because SEC-04 forbids `Command::new` in production code and an engine started from
+   the agent's side would put authority on the wrong side. A second engine on the same desktop is
+   refused by the transport itself: the pipe's name is fixed per user session and created as the
+   first instance, so a second `serve` with the broker on cannot create it and exits
+   ([ADR-0043](0043-local-named-pipe-transport-for-several-clients.md), decision 4).
 2. **The broker serialises every call into the engine**, as the adapter already does. A check and
    the action it guards stay in one critical section. This is why no fencing token has to reach
    the operating system: the component that checks is the one that acts.
@@ -155,32 +161,21 @@ published page again without observing: `first_page` and `next_page` are `pub(su
     executable that relays its standard input and output to the pipe, so that an MCP host keeps
     starting a stdio server. Each connection keeps the message bounds of ADR-0015.
 
-    **The transport candidate.** A read-only spike by an AI agent, kept outside the repository
-    (U3, `U3-named-pipe.md`, 2026-11-24), found one candidate that meets the three constraints without `unsafe`
-    of our own: the `interprocess` crate, pinned at `=2.4.9`, with `default-features = false` and
-    its synchronous API, one blocking thread per connection and a synchronous line reader that
-    drives `Connection::handle_message`. From the crate's source, the spike reports that it refuses
-    remote clients and takes the first-instance flag by default, and that without its `tokio`
-    feature it pulls in no `tokio`, `mio` or `socket2`. The spike did not run anything: the
-    restriction to the current user, the build on this project's toolchain and flushing under
-    pipelined traffic are unverified. The candidate is not a decision of this ADR. It is adopted
-    only if an experiment supports it, and then under its own ADR, which carries what it needs: an
-    exception to the SEC-04 source check for the `attach` side if that side opens the pipe with
-    `OpenOptions`, the new licences in `docs/thesis/S4_REPRODUCIBILIDAD.md` and a CHANGELOG entry.
-    If the experiment refutes it, the fallback is our own `unsafe` under a new exception in the
-    manner of ADR-0016, also under its own ADR. Nothing about the pipe is promised until then.
+    **The transport is decided in its own ADR.** A spike and an experiment run on 2026-11-24,
+    kept outside the repository, support a Windows named pipe through the `interprocess` crate's
+    synchronous API, with no `unsafe` of our own; it is proposed as
+    [ADR-0043](0043-local-named-pipe-transport-for-several-clients.md), which carries its
+    constraints, costs, open points and required validation, and is built after the broker. The
+    `attach` mode only connects: when no engine listens it fails with a clear error and starts
+    nothing. Nothing about the pipe is promised by this ADR; if ADR-0043's validation refutes it,
+    the fallback is our own `unsafe` under a new exception in the manner of ADR-0016, under its
+    own ADR.
 
 ### Open points
 
-- **Who starts the engine process.** Not decided. With the `attach` relay, either the operator
-  starts the engine (as `serve` with the broker on) before any agent attaches, or the first
-  `attach` starts it. The second needs `Command::new` in production code, which the SEC-04 source
-  check forbids today.
-- **How a second engine on the same desktop is refused.** Decision 1 needs it, and nothing in the
-  code provides it today. A lock file needs `File::create` or `OpenOptions`, which SEC-04 forbids;
-  a pipe that refuses a second instance (the first-instance flag of the transport candidate) would
-  provide it, but only once a transport is adopted. Until then, "one engine per desktop" holds by
-  the operator's practice, not by construction.
+None is left in this ADR. The points that remain open about the transport (a pipe name taken
+before the engine starts, and how the engine refuses to start the broker when elevated) are
+ADR-0043's.
 
 ## Alternatives considered
 
@@ -217,9 +212,8 @@ published page again without observing: `first_page` and `next_page` are `pub(su
 - A client may dry-run but may not act; a dry run on a spent shared page is refused, as today.
 - What a client observed outlives its connection while other clients remain; only the last
   disconnect or the operator's purge deletes it.
-- A named pipe, when it comes, is new attack surface, and the SEC-04 checks must then say exactly
-  which calls are allowed. Its candidate crate adds dependencies and licences that its own ADR
-  must justify.
+- A named pipe is new attack surface; its bounds, its dependencies and its licences are
+  ADR-0043's.
 - No test injects real input.
 
 ## Required validation
@@ -255,8 +249,8 @@ on in-memory streams and the simulated desktop, with a fake clock and fixed seed
   server's on the acceptance scenarios.
 - A ninth client is refused; a full journal quota evicts only its owner's results that delivered
   no input.
-- Supervised, on Windows, once a transport is decided: the pipe rejects a remote client and
-  another user.
+- The transport's own tests, the supervised ones included (another user, an elevated process),
+  are listed in ADR-0043.
 - The state machine of the lease is added to the formal model
   ([ADR-0042](0042-formal-model-as-a-third-oracle.md)). A first model of the rules of the first
   draft exists outside the repository (`MultiAgente.lean`, delivered to the owner with that draft;
@@ -285,7 +279,7 @@ generated interleavings would be a reason to withdraw it.
 The owner's request of 2026-11-22 to connect several agents and let orchestrators direct them.
 Revised on 2026-11-24 after reading the draft against the code
 ([review](../reviews/2026-11-24-adr-0039-0040-against-the-code.md)); the decisions on the open
-points were taken that day under the owner's delegation. Refines ADR-0002, ADR-0006 and ADR-0015;
+points were taken that day under the owner's delegation. The transport is proposed in ADR-0043. Refines ADR-0002, ADR-0006 and ADR-0015;
 relies on ADR-0018, ADR-0025 and ADR-0034. The reasoning uses optimistic concurrency control (Kung
 and Robinson, 1981), leases (Gray and Cheriton, 1989), linearizability (Herlihy and Wing, 1990),
 the argument that a fencing token is only sound when the resource checks it (Kleppmann, 2016) and
@@ -302,7 +296,8 @@ evalúa al entrar en la sección crítica y una entrega en curso termina. Quien 
 página publicada, con su edad en `_meta`, y puede hacer simulaciones. Con un solo cliente el
 arrendamiento es implícito; con el intermediario encendido las concesiones de ADR-0040 rigen
 siempre. Lo que observó un cliente que se fue se conserva hasta que se va el último o el operador
-purga; el motor se purga al irse el último cliente. Primero flujos en memoria; el tubo con nombre,
-con la crate `interprocess` como candidata de un experimento fuera del repositorio, sólo se adopta
-con su propia ADR. Quedan abiertos quién arranca el motor y cómo se impide un segundo motor en el
-mismo escritorio. Revisada el 2026-11-24 contra el código; la aceptación es del responsable.
+purga; el motor se purga al irse el último cliente. El operador arranca el único motor con el
+intermediario encendido; `attach` sólo se conecta y nunca arranca un motor, y un segundo motor no
+puede crear el tubo, cuyo nombre es fijo por sesión de usuario. Primero flujos en memoria; el
+transporte, un tubo con nombre, se propone en ADR-0043. No queda ningún punto abierto en esta ADR;
+los del transporte están en ADR-0043. Revisada el 2026-11-24 contra el código; la aceptación es del responsable.

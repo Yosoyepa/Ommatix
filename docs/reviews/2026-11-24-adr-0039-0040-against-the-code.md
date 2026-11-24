@@ -75,6 +75,9 @@ open depend.
 | D12 | What a client observed stays in the engine until the last client leaves or the operator purges. Chapter 08 §8.4 will say so when the broker is wired. | 0039 decision 10 | Perception state belongs to the desktop, not to a client; the operator's purge file still deletes it at any request boundary. | Planned: a departed client's observations stay until the last disconnect or the operator's purge. |
 | D13 | Transport candidate: a Windows named pipe through the `interprocess` crate (`=2.4.9`, `default-features = false`, synchronous API), one blocking thread per connection with a synchronous line reader driving `Connection::handle_message`. Adopted only if an experiment supports it, and then under its own ADR (an exception to the SEC-04 source check if the `attach` side needs `OpenOptions`, the licences in `S4_REPRODUCIBILIDAD.md`, a CHANGELOG entry). The fallback is our own `unsafe` under a new exception in the manner of ADR-0016. | 0039 decision 12, as a candidate, not a decision of the ADR | A read-only spike kept outside the repository (U3, `U3-named-pipe.md`) found, from the crate's source, that it refuses remote clients and takes the first-instance flag by default and pulls in no `tokio`, `mio` or `socket2`; the other crates it looked at each fail a requirement or a repository check. Not yet run: the restriction to the current user, the build on this toolchain, flushing under pipelined traffic. | The experiment; then the transport's own ADR. |
 | D14 | A spent budget lasts as long as the engine process and belongs to the grant, identified by its ticket's hash. An operator's purge and a reload of the grants file do not restore it; a grant issued again under a new ticket starts a new budget. | 0040 decision 11 | ADR-0034 asks a budget to say what a purge and a reload do. A count of deliveries is not screen data, and restoring authority as a side effect of deleting data would fail open. | Planned: a purge and a reload leave a spent budget spent; a new ticket starts a new one. |
+| D16 | The experiment supports D13, so the transport is the named pipe through `interprocess`'s synchronous API, proposed as [ADR-0043](../adr/0043-local-named-pipe-transport-for-several-clients.md) and built after the broker. Carried from the experiment: the descriptor `D:P(A;;GA;;;OW)`, because the user's own SID cannot be obtained in safe Rust; the bound on clients enforced in the accept loop, because the pipe's instance limit makes a ninth client wait instead of refusing it; `widestring` as a direct dependency; three crates and two licence expressions in the lockfile and in `S4_REPRODUCIBILIDAD.md`. | ADR-0043; 0039 decision 12 points to it | An experiment run on 2026-11-24 in a scratch crate outside the repository: no banned crate; a second listener refused (OS error 5); the read-back descriptor grants the owner only; 10 000 pipelined requests matched and an oversized line refused; eight clients at once; no `unsafe` and no SEC-04 substring in its code. Not tested: a second local user and an elevated process (they need administrator rights), the MSVC host, the real `McpServer` over the pipe. | ADR-0043's required validation, the two administrator checks supervised by the owner before acceptance. |
+| D17 | The operator, or an agent host's launcher acting with the operator's authority, starts the one engine process with the broker on. `attach` only connects: with no engine listening it fails with a clear error and starts nothing. A second engine on the same desktop is refused by the pipe: its name is fixed per user session and created first-instance, so a second `serve` cannot create it and exits. | 0039 decision 1; ADR-0043 decisions 4 and 8 | SEC-04 forbids `Command::new` in production code, and an engine started from the agent's side would put authority on the wrong side; the experiment showed the second listener refused. | Planned in ADR-0043: a second listener refused; `attach` without an engine starts nothing. |
+| D18 | A ticket reaches `attach` as the path of a file (`--ticket-file`), never as an argument value or an environment variable; `attach` sends it as one handshake line before any MCP traffic, and the broker in `adapter-mcp` hashes it with SHA-256 (`sha2`, already in the workspace) and compares it with the grants file. The ticket never enters the model's context or a log. | 0040 decision 3; ADR-0043 decision 9 | An argument is visible in the process list and the environment is inherited by children; a file can be restricted and removed after use. Reading a file is not a call SEC-04 forbids; `adapter-mcp` owns the wire. | Planned in ADR-0043: the handshake on in-memory streams, the ticket never in a reply or a log. |
 
 The same commit takes in the three wording points of the QA pass: the page a client without the
 lease receives has the same `structuredContent` shape as the holder's, each being built with the
@@ -84,13 +87,17 @@ request, as decision 6 says; and the Spanish summary of 0040 lists every point s
 records that the lease state machine exists unwired (`LeaseTable` in `src/application/src/lease.rs`,
 commit `fd53a21`, local branch `feat/lease-machine`).
 
+Three later decisions, D16 to D18, settle the three points the second commit still left open:
+the transport is proposed as its own ADR (D16), who starts the engine and how a second one is
+refused (D17), and where the ticket is hashed (D18). They were folded in by a third commit, which
+also proposes [ADR-0043](../adr/0043-local-named-pipe-transport-for-several-clients.md); neither
+ADR-0039 nor ADR-0040 has an open point left.
+
 ## What stays open
 
-- Who starts the engine process (0039).
-- How a second engine on the same desktop is refused: a lock file needs calls SEC-04 forbids, and
-  the pipe's first-instance refusal waits until a transport is adopted (0039). Until then the "one
-  engine per desktop" rule holds by the operator's practice, not by construction.
-- Where the ticket's SHA-256 is computed, which depends on the transport (0040).
+- In [ADR-0043](../adr/0043-local-named-pipe-transport-for-several-clients.md): a pipe name taken
+  by another process before the engine starts, and how the engine refuses to start the broker
+  when elevated; its acceptance also waits for the two checks that need administrator rights.
 - The lease's time, waiting order and renewal in the formal model, which has no time
   ([ADR-0042](../adr/0042-formal-model-as-a-third-oracle.md)).
 
@@ -98,7 +105,8 @@ commit `fd53a21`, local branch `feat/lease-machine`).
 
 - Every file and line cited above exists at `5c3e363`, except `src/application/src/grant.rs`,
   which is on the local branch `feat/grant-meet` (`dd0579c`), and `src/application/src/lease.rs`,
-  which is on `feat/lease-machine` (`fd53a21`).
+  which is on `feat/lease-machine` (`fd53a21`). The files and lines that ADR-0043 cites were
+  checked at the commit that proposes it.
 - The ADRs, this record and the index are documentation; the repository invariants
   (`cargo test -p ommatix-acceptance --test repository`) and the thesis checks
   (`referencia_ejecutable/run_tests.py`, `validar_paquete.py`) were run on the change.

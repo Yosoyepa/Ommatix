@@ -67,6 +67,7 @@ continuity abstain with a new ID and a recorded reason. ADR-0027, accepted the s
 | [0040](0040-task-scoped-grants-narrower-than-the-local-policy.md) | Give each agent a task-scoped grant that can only narrow the local policy | Proposed (2026-11-22); revised 2026-11-24 against the code; nothing wired |
 | [0041](0041-two-performance-candidates-decided-by-measurement.md) | Measure two performance candidates before adopting either: one inference for several regions, and accessibility evidence reused between observations | Proposed (2026-11-22); draft, nothing measured |
 | [0042](0042-formal-model-as-a-third-oracle.md) | Keep a machine-checked model of the core algorithms as a third oracle, tied to the code by generated tests | Proposed (2026-11-22); the three tests exist, the model is outside the repository |
+| [0043](0043-local-named-pipe-transport-for-several-clients.md) | Serve several clients over a local named pipe, through a safe wrapper crate and a synchronous loop | Proposed (2026-11-24); draft, nothing implemented |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They
