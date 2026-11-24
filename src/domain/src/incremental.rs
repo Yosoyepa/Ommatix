@@ -1576,6 +1576,7 @@ mod tests {
         let bounds = bx(0.0, 0.0, f64::from(SIDE), f64::from(SIDE));
         let mut rng = Rng(0x0C10_5E00_2026_1122);
         let mut grew = 0_u32;
+        let mut stayed = 0_u32;
         for case in 0..2_000 {
             let region = generated_box(&mut rng, SIDE, 8);
             let supports: Vec<BBox> = (0..rng.below(13))
@@ -1631,10 +1632,11 @@ mod tests {
                 );
             }
             grew += u32::from(closed != region);
+            stayed += u32::from(closed == region);
         }
         assert!(
-            grew > 900,
-            "the generator must exercise closures that grow, and only {grew} did"
+            grew > 900 && stayed > 900,
+            "the generator must exercise both kinds of closure: {grew} grew and {stayed} stayed as they started (more than 900 of each expected)"
         );
     }
 }
