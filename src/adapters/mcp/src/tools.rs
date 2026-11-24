@@ -13,8 +13,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::dto::{
-    self, EngineMetricsOutput, ExecuteActionOutput, InvalidArguments, ObserveScreenOutput,
-    ToolErrorOutput,
+    self, EngineMetricsOutput, ExecuteActionOutput, InvalidArguments, LeaseArgument,
+    ObserveScreenOutput, ToolErrorOutput,
 };
 use crate::schemas;
 
@@ -35,6 +35,12 @@ pub const ACTION_TIMINGS_META_KEY: &str = "io.ommatix/action_timings";
 
 /// `_meta` key of an `observe_screen` result's accessibility completeness.
 pub const ACCESSIBILITY_META_KEY: &str = "io.ommatix/accessibility";
+
+/// `_meta` key of where a broker's client stands with respect to the input lease, and whether
+/// its page is the one already published (ADR-0039, proposed). Only the broker emits it, on
+/// `observe_screen` and `execute_action`, when the request carried `lease` or more than one
+/// client is connected; the stdio server never does.
+pub const LEASE_META_KEY: &str = "io.ommatix/lease";
 
 /// The tool descriptors, sorted by name (the order of `tools/list`).
 pub(crate) fn descriptors() -> Vec<Tool> {
@@ -83,7 +89,8 @@ pub(crate) enum CallError {
 /// A tool call whose arguments passed the tool's input schema.
 #[derive(Debug, Clone)]
 pub(crate) enum ToolCall {
-    Observe(ObserveRequest),
+    /// An observation, with the `lease` argument when the client sent one.
+    Observe(ObserveRequest, Option<LeaseArgument>),
     Act(ActionRequest),
     Metrics,
 }
@@ -91,8 +98,8 @@ pub(crate) enum ToolCall {
 /// Parses one tool call, without touching the engine.
 pub(crate) fn parse(name: &str, arguments: &Value) -> Result<ToolCall, CallError> {
     match name {
-        OBSERVE_SCREEN => dto::parse_observe_args(arguments)
-            .map(ToolCall::Observe)
+        OBSERVE_SCREEN => dto::parse_observe_call(arguments)
+            .map(|(request, lease)| ToolCall::Observe(request, lease))
             .map_err(CallError::InvalidArguments),
         EXECUTE_ACTION => dto::parse_action_args(arguments)
             .map(ToolCall::Act)
@@ -137,6 +144,9 @@ impl ToolOutput {
 }
 
 /// Runs one tool. The engine is locked for the whole call: it is the single writer.
+///
+/// This is the stdio server: its one client holds everything, so a `lease` argument is
+/// accepted and changes nothing, and no result carries [`LEASE_META_KEY`].
 pub(crate) fn call(
     engine: &Mutex<Engine>,
     name: &str,
@@ -145,7 +155,7 @@ pub(crate) fn call(
     let call = parse(name, arguments)?;
     let mut engine = engine.lock().unwrap_or_else(PoisonError::into_inner);
     Ok(match call {
-        ToolCall::Observe(request) => {
+        ToolCall::Observe(request, _lease) => {
             let result = engine.observe_screen(&request);
             observation(&engine, result)
         }

@@ -13,13 +13,13 @@ use std::time::Duration;
 
 use common::{call, call_ok, error_code, modern_meta};
 use ommatix_adapter_mcp::{
-    Broker, BrokerConnection, BrokerError, Connection, DEFAULT_MAX_MESSAGE_BYTES, McpConfig,
-    McpServer,
+    Broker, BrokerConnection, BrokerError, Connection, DEFAULT_MAX_MESSAGE_BYTES, LEASE_META_KEY,
+    McpConfig, McpServer,
 };
 use ommatix_adapter_sim::fixture::{FixtureActuator, FixtureCapturer};
 use ommatix_adapter_sim::{FixtureDesktop, FixtureScene, confirmed};
 use ommatix_application::contract::ValidatedAction;
-use ommatix_application::lease::{Acquired, ClientId, LeaseChange, LeaseRefusal};
+use ommatix_application::lease::{Acquired, ClientId, LeaseChange, LeaseRefusal, Standing};
 use ommatix_application::{
     CapturedFrame, Clock, DeliveryReceipt, Engine, EngineConfig, FrameCapturer, Grant, LeaseTable,
     LocalPolicy, ManualClock, NoAccessibility, OsActuator, PolicyStore, PortError, Ports,
@@ -190,9 +190,13 @@ struct World {
 
 impl World {
     fn new() -> Self {
+        Self::with_scene(scene())
+    }
+
+    fn with_scene(scene: FixtureScene) -> Self {
         let clock = Arc::new(ManualClock::new());
         Self {
-            desktop: FixtureDesktop::new(scene(), clock.clone()),
+            desktop: FixtureDesktop::new(scene, clock.clone()),
             clock,
             operator: Operator::new(),
             captures: Arc::default(),
@@ -386,7 +390,7 @@ fn value_of(page: &Value) -> Option<&str> {
 // ---- 1. a delivery spends the snapshot for every client ----
 
 #[test]
-fn after_one_clients_delivery_another_clients_action_on_that_snapshot_is_stale() {
+fn it_09_after_one_clients_delivery_another_clients_action_on_that_snapshot_is_stale() {
     let rig = rig();
     let mut a = rig.connect(Some(full()));
     let mut b = rig.connect(Some(full()));
@@ -413,7 +417,7 @@ fn after_one_clients_delivery_another_clients_action_on_that_snapshot_is_stale()
 // ---- 2. a non-holder is served the published page ----
 
 #[test]
-fn a_non_holders_observation_is_the_published_page_and_moves_nothing() {
+fn it_10_a_non_holders_observation_is_the_published_page_and_moves_nothing() {
     let rig = rig();
     let mut a = rig.connect(Some(full()));
     let mut b = rig.connect(Some(full()));
@@ -426,7 +430,25 @@ fn a_non_holders_observation_is_the_published_page_and_moves_nothing() {
     let keys = |r: &Value| -> BTreeSet<String> {
         r["_meta"].as_object().unwrap().keys().cloned().collect()
     };
-    assert_eq!(keys(&served), keys(&holder), "no new _meta key");
+    assert_eq!(keys(&served), keys(&holder), "the same _meta keys");
+    // That the page is shared, and its age, are run-dependent: `_meta` only (ADR-0039).
+    assert_eq!(
+        holder["_meta"][LEASE_META_KEY],
+        json!({ "state": "holder", "number": 1, "position": null, "shared": false,
+                "age_ms": null })
+    );
+    assert_eq!(
+        served["_meta"][LEASE_META_KEY],
+        json!({ "state": "none", "number": null, "position": null, "shared": true,
+                "age_ms": 0 })
+    );
+    for key in ["shared", LEASE_META_KEY] {
+        assert!(
+            !served["structuredContent"].to_string().contains(key),
+            "{key}"
+        );
+        assert!(!served["content"].to_string().contains(key), "{key}");
+    }
     assert_eq!(rig.world.captures(), captures, "nothing is captured");
     assert_eq!(metrics(&mut b)["observations"], observations);
 
@@ -438,7 +460,7 @@ fn a_non_holders_observation_is_the_published_page_and_moves_nothing() {
 // ---- 3. no lease, no input, no screen text ----
 
 #[test]
-fn a_live_action_without_the_lease_delivers_nothing_and_quotes_no_screen_text() {
+fn it_11_a_live_action_without_the_lease_delivers_nothing_and_quotes_no_screen_text() {
     let rig = rig();
     let mut a = rig.connect(Some(full()));
     let mut b = rig.connect(Some(full()));
@@ -474,7 +496,7 @@ fn a_live_action_without_the_lease_delivers_nothing_and_quotes_no_screen_text() 
 // ---- 4. the term ends ----
 
 #[test]
-fn when_the_term_ends_and_another_client_acquires_the_former_holder_is_refused() {
+fn it_12_when_the_term_ends_and_another_client_acquires_the_former_holder_is_refused() {
     let rig = rig();
     let mut a = rig.connect(Some(full()));
     let mut b = rig.connect(Some(full()));
@@ -496,7 +518,7 @@ fn when_the_term_ends_and_another_client_acquires_the_former_holder_is_refused()
 // ---- 5. a disconnect, the stop and a purge end the lease ----
 
 #[test]
-fn the_holder_disconnecting_ends_the_lease() {
+fn it_13_the_holder_disconnecting_ends_the_lease() {
     let rig = rig();
     let a = rig.connect(Some(full()));
     let mut b = rig.connect(Some(full()));
@@ -513,7 +535,7 @@ fn the_holder_disconnecting_ends_the_lease() {
 }
 
 #[test]
-fn the_operators_stop_ends_the_lease_and_refuses_every_delivery_whoever_holds_it() {
+fn it_13_the_operators_stop_ends_the_lease_and_refuses_every_delivery_whoever_holds_it() {
     let rig = rig();
     let mut a = rig.connect(Some(full()));
     let mut b = rig.connect(Some(full()));
@@ -550,7 +572,7 @@ fn the_operators_stop_ends_the_lease_and_refuses_every_delivery_whoever_holds_it
 }
 
 #[test]
-fn an_operator_purge_honoured_at_the_next_request_ends_the_lease() {
+fn it_13_an_operator_purge_honoured_at_the_next_request_ends_the_lease() {
     let rig = rig();
     let mut a = rig.connect(Some(full()));
     let mut b = rig.connect(Some(full()));
@@ -576,7 +598,7 @@ fn an_operator_purge_honoured_at_the_next_request_ends_the_lease() {
 // ---- 6. grants ----
 
 #[test]
-fn a_client_without_a_grant_observes_without_values_and_never_delivers() {
+fn it_14_a_client_without_a_grant_observes_without_values_and_never_delivers() {
     // Alone: it holds the lease implicitly, and still delivers nothing.
     let rig = rig();
     let mut alone = rig.connect(None);
@@ -611,7 +633,7 @@ fn a_client_without_a_grant_observes_without_values_and_never_delivers() {
 }
 
 #[test]
-fn a_grant_that_leaves_the_application_out_is_refused_at_the_gate() {
+fn it_14_a_grant_that_leaves_the_application_out_is_refused_at_the_gate() {
     let rig = rig();
     let mut conn = rig.connect(Some(elsewhere()));
     let page = observe(&mut conn);
@@ -625,7 +647,7 @@ fn a_grant_that_leaves_the_application_out_is_refused_at_the_gate() {
 }
 
 #[test]
-fn two_clients_with_different_read_values_get_their_own_view_of_one_snapshot() {
+fn it_14_two_clients_with_different_read_values_get_their_own_view_of_one_snapshot() {
     let rig = rig();
     let mut shown = rig.connect(Some(full()));
     let mut hidden = rig.connect(Some(blind()));
@@ -651,7 +673,7 @@ fn two_clients_with_different_read_values_get_their_own_view_of_one_snapshot() {
 // ---- 7. a non-holder's dry run ----
 
 #[test]
-fn a_non_holders_dry_run_is_judged_by_the_gate_on_the_current_page_only() {
+fn it_15_a_non_holders_dry_run_is_judged_by_the_gate_on_the_current_page_only() {
     let rig = rig();
     let mut a = rig.connect(Some(full()));
     let mut b = rig.connect(Some(full()));
@@ -681,7 +703,7 @@ fn a_non_holders_dry_run_is_judged_by_the_gate_on_the_current_page_only() {
 // ---- 8. request identifiers per client ----
 
 #[test]
-fn two_clients_with_one_request_id_get_their_own_results_and_each_retry_replays_its_own() {
+fn it_16_two_clients_with_one_request_id_get_their_own_results_and_each_retry_replays_its_own() {
     let rig = rig();
     let mut a = rig.connect(Some(full()));
     let mut b = rig.connect(Some(full()));
@@ -745,17 +767,19 @@ fn delivered_then_lost_the_lease() -> LostLease {
 }
 
 /// A tool result without the stage timings of the gate: a replay runs no gate, so it has none,
-/// as on the stdio server.
+/// as on the stdio server. Without the lease's `_meta` too: it tells where the client stands
+/// now, which is not part of the replayed result.
 fn without_action_timings(result: &Value) -> Value {
     let mut result = result.clone();
     if let Some(meta) = result.get_mut("_meta").and_then(Value::as_object_mut) {
         meta.remove(ommatix_adapter_mcp::ACTION_TIMINGS_META_KEY);
+        meta.remove(LEASE_META_KEY);
     }
     result
 }
 
 #[test]
-fn a_client_that_lost_the_lease_gets_its_own_delivered_result_back_on_a_retry() {
+fn it_16_a_client_that_lost_the_lease_gets_its_own_delivered_result_back_on_a_retry() {
     let mut s = delivered_then_lost_the_lease();
     let retry = act_result(&mut s.a, s.a_request.clone());
     assert_eq!(retry["structuredContent"], s.a_first["structuredContent"]);
@@ -766,6 +790,11 @@ fn a_client_that_lost_the_lease_gets_its_own_delivered_result_back_on_a_retry() 
     assert_eq!(
         without_action_timings(&retry),
         without_action_timings(&s.a_first)
+    );
+    assert_eq!(s.a_first["_meta"][LEASE_META_KEY]["state"], "holder");
+    assert_eq!(
+        retry["_meta"][LEASE_META_KEY]["state"], "none",
+        "the replay comes with where a stands now"
     );
     assert!(
         delivered(&retry["structuredContent"]),
@@ -780,7 +809,7 @@ fn a_client_that_lost_the_lease_gets_its_own_delivered_result_back_on_a_retry() 
 }
 
 #[test]
-fn a_retry_with_other_arguments_after_losing_the_lease_is_a_request_conflict() {
+fn it_16_a_retry_with_other_arguments_after_losing_the_lease_is_a_request_conflict() {
     let mut s = delivered_then_lost_the_lease();
     let mut other = target(&s.b_page, "input", "a-live", true);
     other["request_id"] = s.a_request["request_id"].clone();
@@ -792,7 +821,7 @@ fn a_retry_with_other_arguments_after_losing_the_lease_is_a_request_conflict() {
 }
 
 #[test]
-fn a_live_request_new_to_the_clients_journal_still_needs_the_lease() {
+fn it_16_a_live_request_new_to_the_clients_journal_still_needs_the_lease() {
     let mut s = delivered_then_lost_the_lease();
     for _ in 0..2 {
         // Refused, so never recorded: the retry is refused again.
@@ -803,7 +832,7 @@ fn a_live_request_new_to_the_clients_journal_still_needs_the_lease() {
 }
 
 #[test]
-fn a_client_cannot_replay_another_clients_request_id() {
+fn it_16_a_client_cannot_replay_another_clients_request_id() {
     let s = delivered_then_lost_the_lease();
     let mut c = s.rig.connect(Some(full()));
     let refused = act(&mut c, s.a_request.clone());
@@ -812,7 +841,7 @@ fn a_client_cannot_replay_another_clients_request_id() {
 }
 
 #[test]
-fn a_retry_from_a_new_connection_finds_nothing() {
+fn it_16_a_retry_from_a_new_connection_finds_nothing() {
     let s = delivered_then_lost_the_lease();
     let LostLease {
         rig, a, a_request, ..
@@ -827,7 +856,7 @@ fn a_retry_from_a_new_connection_finds_nothing() {
 // ---- 9. the bound, and leaving frees everything ----
 
 #[test]
-fn a_ninth_client_is_refused_and_a_client_that_left_leaves_nothing_behind() {
+fn it_17_a_ninth_client_is_refused_and_a_client_that_left_leaves_nothing_behind() {
     let world = World::new();
     for (bound, term) in [(9, TERM), (0, TERM), (1, Duration::ZERO)] {
         let error = Broker::new(
@@ -889,7 +918,7 @@ fn a_ninth_client_is_refused_and_a_client_that_left_leaves_nothing_behind() {
 // ---- 10. the last client purges, the others do not ----
 
 #[test]
-fn only_the_last_client_to_leave_purges_the_engine() {
+fn it_18_only_the_last_client_to_leave_purges_the_engine() {
     let rig = rig();
     let mut a = rig.connect(Some(full()));
     let mut b = rig.connect(Some(full()));
@@ -1048,7 +1077,7 @@ fn scripted_session(twin: &mut Twin) {
 }
 
 #[test]
-fn one_client_whose_grant_equals_the_policy_gets_the_stdio_servers_responses_byte_for_byte() {
+fn it_19_one_client_whose_grant_equals_the_policy_gets_the_stdio_servers_responses_byte_for_byte() {
     // The modern profile.
     let mut twin = Twin::new(McpConfig::default(), true);
     twin.request("server/discover", json!({}));
@@ -1089,7 +1118,7 @@ fn served_lines(output: Vec<u8>) -> Vec<String> {
 }
 
 #[test]
-fn oversized_and_malformed_messages_keep_the_stdio_servers_bounds_and_codes() {
+fn it_19_oversized_and_malformed_messages_keep_the_stdio_servers_bounds_and_codes() {
     let observe = json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/call",
                           "params": { "_meta": modern_meta(), "name": "observe_screen",
                                       "arguments": {} } })
@@ -1164,7 +1193,7 @@ fn oversized_and_malformed_messages_keep_the_stdio_servers_bounds_and_codes() {
 // ---- the lock poisoned by a panic fails closed ----
 
 #[test]
-fn a_call_that_panics_under_the_lock_leaves_the_broker_closed_to_every_request() {
+fn it_20_a_call_that_panics_under_the_lock_leaves_the_broker_closed_to_every_request() {
     let rig = rig();
     let mut a = rig.connect(Some(full()));
     let page = observe(&mut a);
@@ -1446,16 +1475,125 @@ fn assert_no_screen_text(response: &Value) {
     }
 }
 
+/// How the clients of a generated run ask for the lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drive {
+    /// Through [`BrokerConnection::acquire`] and [`BrokerConnection::release`].
+    Methods,
+    /// Only through the `lease` argument of `observe_screen` (ADR-0039, decision 5), with every
+    /// `io.ommatix/lease` `_meta` compared with the sequential run's prediction.
+    Wire,
+}
+
+/// The `io.ommatix/lease` `_meta` a response must carry, built here from the sequential run's
+/// table, independently of the broker's serializer.
+fn predicted_lease(standing: Standing, shared_age: Option<Duration>) -> Value {
+    let (state, number, position) = match standing {
+        Standing::Holder { number } => ("holder", json!(number), Value::Null),
+        Standing::Waiting { position } => ("waiting", Value::Null, json!(position)),
+        Standing::None => ("none", Value::Null, Value::Null),
+    };
+    json!({
+        "state": state,
+        "number": number,
+        "position": position,
+        "shared": shared_age.is_some(),
+        "age_ms": shared_age.map(|age| u64::try_from(age.as_millis()).unwrap()),
+    })
+}
+
+/// Checks a response's `io.ommatix/lease` against the sequential run: present exactly when the
+/// request carried `lease` or more than one client is connected (ADR-0039, decision 5).
+fn check_lease_meta(
+    model: &Model,
+    client: ClientId,
+    result: &Value,
+    asked: bool,
+    shared_age: Option<Duration>,
+    step: usize,
+) {
+    let meta = result
+        .get("_meta")
+        .and_then(|meta| meta.get(LEASE_META_KEY));
+    if asked || model.connected.len() > 1 {
+        let expected = predicted_lease(model.leases.standing(client), shared_age);
+        assert_eq!(meta, Some(&expected), "step {step}: {result}");
+    } else {
+        assert_eq!(
+            meta, None,
+            "step {step}: a sole client that did not ask: {result}"
+        );
+    }
+}
+
+/// What an observation answered, checked against the sequential run, which it updates: a new
+/// snapshot for a client that publishes, the published page served again otherwise, or
+/// `STALE_SNAPSHOT` with nothing published. Returns the served page's age when it was served.
+fn observed(
+    model: &mut Model,
+    slot: &mut Slot,
+    result: &Value,
+    publishes: bool,
+    values: bool,
+    now: Duration,
+    step: usize,
+) -> Option<Duration> {
+    let page = result["structuredContent"].clone();
+    let mut shared_age = None;
+    if publishes {
+        let snapshot = page["snapshot_id"].as_str().expect("a page").to_owned();
+        if let Some(previous) = &model.current {
+            assert_ne!(previous.id, snapshot, "step {step}: a new snapshot");
+        }
+        model.current = Some(Snap {
+            id: snapshot,
+            captured: now,
+            spent: false,
+        });
+        model.saw(Seen::Published);
+    } else if let Some(snap) = &model.current {
+        assert_eq!(page["snapshot_id"], snap.id.as_str(), "step {step}: served");
+        shared_age = Some(now.saturating_sub(snap.captured));
+        model.saw(Seen::Served);
+    } else {
+        assert_eq!(code(&page), Some("STALE_SNAPSHOT"), "step {step}: {page}");
+        model.saw(Seen::NothingPublished);
+    }
+    if page["elements"].is_array() {
+        let shown = value_of(&page).is_some();
+        assert_eq!(shown, values && slot.kind.reads_values(), "step {step}");
+        model.saw(if shown {
+            Seen::ValuesShown
+        } else {
+            Seen::ValuesHidden
+        });
+        slot.page = Some(page);
+    }
+    shared_age
+}
+
 #[test]
+fn it_21_generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_its_grant() {
+    generated_run(Drive::Methods);
+}
+
+#[test]
+fn it_21_generated_interleavings_that_ask_for_the_lease_only_on_the_wire_keep_every_invariant() {
+    generated_run(Drive::Wire);
+}
+
 #[allow(clippy::too_many_lines)] // one generated run: each kind of step beside its model
-fn generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_its_grant() {
+fn generated_run(drive: Drive) {
     const STEPS: usize = 5_000;
     const SLOTS: usize = 5;
     const MAX_CLIENTS: usize = 4;
     let world = World::new();
     let broker = world.broker(McpConfig::default(), MAX_CLIENTS);
     let mut model = Model::new(MAX_CLIENTS);
-    let mut rng = Rng(0x0B40_4E55);
+    let mut rng = Rng(match drive {
+        Drive::Methods => 0x0B40_4E55,
+        Drive::Wire => 0x5EED_0001,
+    });
     let mut slots: Vec<Option<Slot>> = (0..SLOTS).map(|_| None).collect();
     let mut next_request = 0_u64;
     // The witness: every delivery, in the order the broker's lock was taken (one thread).
@@ -1516,7 +1654,7 @@ fn generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_
                 }
             }
             (_, false) => {}
-            (10..=19, true) => {
+            (10..=19, true) if drive == Drive::Methods => {
                 let slot = slots[index].as_ref().unwrap();
                 let id = slot.conn.client();
                 model.enter();
@@ -1536,7 +1674,7 @@ fn generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_
                     Err(_) => Seen::RenewalRefused,
                 });
             }
-            (20..=25, true) => {
+            (20..=25, true) if drive == Drive::Methods => {
                 let slot = slots[index].as_ref().unwrap();
                 let id = slot.conn.client();
                 model.enter();
@@ -1559,40 +1697,67 @@ fn generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_
                 world.advance(Duration::from_millis(u64::try_from(millis).unwrap()));
                 model.saw(Seen::TimeMoved);
             }
+            // The lease asked for on the wire: the request boundary, the call's entry, the
+            // lease operation at the call's instant, then the settlement and the observation.
+            (10..=25, true) => {
+                let acquire = dice <= 19;
+                let slot = slots[index].as_mut().unwrap();
+                let id = slot.conn.client();
+                let values = rng.chance(50);
+                model.enter();
+                model.enter();
+                let answer = if acquire {
+                    let expected = model.leases.acquire(id, now);
+                    model.apply(&expected.change);
+                    expected.result.map(Some)
+                } else {
+                    let expected = model.leases.release(id, now);
+                    model.apply(&expected.change);
+                    expected.result.map(|()| None)
+                };
+                let settled = model.leases.publishes(id, now);
+                model.apply(&settled.change);
+                let publishes = settled.result.unwrap();
+                let lease = if acquire { "acquire" } else { "release" };
+                let result = observe_with(
+                    &mut slot.conn,
+                    json!({ "include_values": values, "lease": lease }),
+                );
+                let shared_age = observed(&mut model, slot, &result, publishes, values, now, step);
+                check_lease_meta(&model, id, &result, true, shared_age, step);
+                // The table's own answer, told independently of `standing`.
+                let state = &result["_meta"][LEASE_META_KEY];
+                model.saw(match answer {
+                    Ok(Some(Acquired::Granted { number })) => {
+                        assert_eq!(state["number"], number, "step {step}");
+                        Seen::Granted
+                    }
+                    Ok(Some(Acquired::Renewed { number })) => {
+                        assert_eq!(state["number"], number, "step {step}");
+                        Seen::Renewed
+                    }
+                    Ok(Some(Acquired::Queued { position })) => {
+                        assert_eq!(state["position"], position, "step {step}");
+                        Seen::Queued
+                    }
+                    Ok(Some(Acquired::Implicit)) => {
+                        assert_eq!(state["state"], "holder", "step {step}");
+                        Seen::Implicit
+                    }
+                    Ok(None) => Seen::Released,
+                    Err(_) if acquire => Seen::RenewalRefused,
+                    Err(_) => Seen::ReleaseRefused,
+                });
+            }
             (36..=52, true) => {
                 let slot = slots[index].as_mut().unwrap();
                 let id = slot.conn.client();
                 let values = rng.chance(50);
                 let publishes = model.tool(id, now, true);
                 let result = observe_with(&mut slot.conn, json!({ "include_values": values }));
-                let page = result["structuredContent"].clone();
-                if publishes {
-                    let snapshot = page["snapshot_id"].as_str().expect("a page").to_owned();
-                    if let Some(previous) = &model.current {
-                        assert_ne!(previous.id, snapshot, "step {step}: a new snapshot");
-                    }
-                    model.current = Some(Snap {
-                        id: snapshot,
-                        captured: now,
-                        spent: false,
-                    });
-                    model.saw(Seen::Published);
-                } else if let Some(snap) = &model.current {
-                    assert_eq!(page["snapshot_id"], snap.id.as_str(), "step {step}: served");
-                    model.saw(Seen::Served);
-                } else {
-                    assert_eq!(code(&page), Some("STALE_SNAPSHOT"), "step {step}: {page}");
-                    model.saw(Seen::NothingPublished);
-                }
-                if page["elements"].is_array() {
-                    let shown = value_of(&page).is_some();
-                    assert_eq!(shown, values && slot.kind.reads_values(), "step {step}");
-                    model.saw(if shown {
-                        Seen::ValuesShown
-                    } else {
-                        Seen::ValuesHidden
-                    });
-                    slot.page = Some(page);
+                let shared_age = observed(&mut model, slot, &result, publishes, values, now, step);
+                if drive == Drive::Wire {
+                    check_lease_meta(&model, id, &result, false, shared_age, step);
                 }
             }
             (53..=86, true) => {
@@ -1615,7 +1780,11 @@ fn generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_
                 let live = arguments["dry_run"] == false;
                 let request_id = arguments["request_id"].as_str().unwrap().to_owned();
                 let holds = model.tool(id, now, false);
-                let response = act(&mut slot.conn, arguments.clone());
+                let whole = act_result(&mut slot.conn, arguments.clone());
+                if drive == Drive::Wire {
+                    check_lease_meta(&model, id, &whole, false, None, step);
+                }
+                let response = whole["structuredContent"].clone();
                 assert_no_screen_text(&response);
                 slot.last = Some(arguments.clone());
                 // A client's own retry reaches the engine whoever holds the lease (ADR-0039,
@@ -1704,7 +1873,10 @@ fn generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_
                 let slot = slots[index].as_mut().unwrap();
                 let id = slot.conn.client();
                 model.tool(id, now, false);
-                let _ = metrics(&mut slot.conn);
+                let result = call_ok(slot.conn.connection(), 1, "get_engine_metrics", json!({}));
+                if drive == Drive::Wire {
+                    assert!(result["_meta"].get(LEASE_META_KEY).is_none(), "step {step}");
+                }
                 model.saw(Seen::Metrics);
             }
         }
@@ -1747,7 +1919,7 @@ fn generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_
 
 #[test]
 #[allow(clippy::too_many_lines)] // each thread's steps beside the checks of their log
-fn concurrent_connections_never_deliver_twice_on_one_snapshot_nor_outside_their_grant() {
+fn it_21_concurrent_connections_never_deliver_twice_on_one_snapshot_nor_outside_their_grant() {
     const STEPS: usize = 500;
     let world = World::new();
     // Two clients of each kind of grant, the bound of the engine's journals.
@@ -1880,4 +2052,377 @@ fn concurrent_connections_never_deliver_twice_on_one_snapshot_nor_outside_their_
         !retained.grant_installed,
         "every grant was installed and removed inside one critical section"
     );
+}
+
+// ---- CT-12: where a client stands, in `_meta` (ADR-0039, proposed, decision 5) ----
+
+/// A result's `io.ommatix/lease`, if it has one.
+fn lease_of(result: &Value) -> Option<&Value> {
+    result
+        .get("_meta")
+        .and_then(|meta| meta.get(LEASE_META_KEY))
+}
+
+/// The `io.ommatix/lease` value a test expects.
+fn standing(state: &str, number: Option<u64>, position: Option<u64>, age_ms: Option<u64>) -> Value {
+    json!({
+        "state": state,
+        "number": number,
+        "position": position,
+        "shared": age_ms.is_some(),
+        "age_ms": age_ms,
+    })
+}
+
+#[test]
+fn ct_12_a_sole_client_is_silent_until_it_sends_lease_and_is_then_told_it_holds_the_lease() {
+    let rig = rig();
+    let mut a = rig.connect(Some(full()));
+    let observed = observe_with(&mut a, json!({}));
+    assert_eq!(lease_of(&observed), None, "{observed}");
+    let page = observed["structuredContent"].clone();
+    let acted = act_result(&mut a, click(&page, "a1", false));
+    assert_eq!(lease_of(&acted), None, "{acted}");
+    for lease in ["acquire", "release"] {
+        let asked = observe_with(&mut a, json!({ "lease": lease }));
+        assert_eq!(asked["isError"], false, "{asked}");
+        assert_eq!(
+            lease_of(&asked),
+            Some(&standing("holder", None, None, None)),
+            "the implicit lease has no number: {asked}"
+        );
+        let page = asked["structuredContent"].clone();
+        let acted = act_result(&mut a, click(&page, &format!("after-{lease}"), true));
+        assert!(delivered(&acted["structuredContent"]), "{acted}");
+        assert_eq!(lease_of(&acted), None, "the action did not ask: {acted}");
+    }
+    let metrics = call_ok(a.connection(), 1, "get_engine_metrics", json!({}));
+    assert_eq!(lease_of(&metrics), None);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // one story of three clients, each step beside its `_meta`
+fn ct_12_with_two_clients_every_observation_and_action_says_where_the_client_stands() {
+    let rig = rig();
+    let mut a = rig.connect(Some(full()));
+    let mut b = rig.connect(Some(full()));
+
+    // a's implicit lease became lease 1 when b connected. With nothing published yet, b gets
+    // the broker's STALE_SNAPSHOT and its standing; a, the holder, publishes.
+    let first = observe_with(&mut b, json!({}));
+    assert_eq!(code(&first["structuredContent"]), Some("STALE_SNAPSHOT"));
+    assert_eq!(
+        lease_of(&first),
+        Some(&standing("none", None, None, None)),
+        "{first}"
+    );
+    let held = observe_with(&mut a, json!({}));
+    assert_eq!(
+        lease_of(&held),
+        Some(&standing("holder", Some(1), None, None))
+    );
+    rig.world.advance(Duration::from_millis(300));
+
+    // b is served a's page, 300 ms old; asking for the lease, it waits first in line.
+    let served = observe_with(&mut b, json!({}));
+    assert_eq!(
+        lease_of(&served),
+        Some(&standing("none", None, None, Some(300)))
+    );
+    assert_eq!(
+        served["structuredContent"]["snapshot_id"],
+        held["structuredContent"]["snapshot_id"]
+    );
+    let waiting = observe_with(&mut b, json!({ "lease": "acquire" }));
+    assert_eq!(
+        lease_of(&waiting),
+        Some(&standing("waiting", None, Some(1), Some(300)))
+    );
+    let mut c = rig.connect(Some(full()));
+    let second = observe_with(&mut c, json!({ "lease": "acquire" }));
+    assert_eq!(
+        lease_of(&second),
+        Some(&standing("waiting", None, Some(2), Some(300)))
+    );
+
+    // An action is never a shared page; metrics never carry the lease.
+    let page = held["structuredContent"].clone();
+    let dry = act_result(&mut b, click(&page, "b1", false));
+    assert_eq!(dry["structuredContent"]["status"], "simulated");
+    assert_eq!(
+        lease_of(&dry),
+        Some(&standing("waiting", None, Some(1), None))
+    );
+    let refused = act_result(&mut c, click(&page, "c1", true));
+    assert!(refused_without_lease(&refused["structuredContent"]));
+    assert_eq!(
+        lease_of(&refused),
+        Some(&standing("waiting", None, Some(2), None))
+    );
+    let live = act_result(&mut a, click(&page, "a1", true));
+    assert!(delivered(&live["structuredContent"]), "{live}");
+    assert_eq!(
+        lease_of(&live),
+        Some(&standing("holder", Some(1), None, None))
+    );
+    let metrics = call_ok(a.connection(), 1, "get_engine_metrics", json!({}));
+    assert_eq!(lease_of(&metrics), None);
+
+    // a releases on the wire: the lease passes to b as lease 2 and spends the page; a is served
+    // that spent page and b, the new holder, publishes.
+    let released = observe_with(&mut a, json!({ "lease": "release" }));
+    assert_eq!(
+        lease_of(&released),
+        Some(&standing("none", None, None, Some(300)))
+    );
+    let stale = act_result(&mut b, click(&page, "b2", true));
+    assert_eq!(code(&stale["structuredContent"]), Some("STALE_SNAPSHOT"));
+    assert_eq!(
+        lease_of(&stale),
+        Some(&standing("holder", Some(2), None, None))
+    );
+    let fresh = observe_with(&mut b, json!({}));
+    assert_eq!(
+        lease_of(&fresh),
+        Some(&standing("holder", Some(2), None, None))
+    );
+    assert_ne!(
+        fresh["structuredContent"]["snapshot_id"],
+        page["snapshot_id"]
+    );
+    let moved_up = observe_with(&mut c, json!({}));
+    assert_eq!(
+        lease_of(&moved_up),
+        Some(&standing("waiting", None, Some(1), Some(0)))
+    );
+
+    // b's term ends: c is granted lease 3 when it next enters, and publishes.
+    rig.world.advance(TERM);
+    let turn = observe_with(&mut c, json!({}));
+    assert_eq!(
+        lease_of(&turn),
+        Some(&standing("holder", Some(3), None, None))
+    );
+    let after = observe_with(&mut b, json!({}));
+    assert_eq!(
+        lease_of(&after),
+        Some(&standing("none", None, None, Some(0)))
+    );
+
+    // Down to one client, which never asked: silent again.
+    drop(b);
+    drop(c);
+    let alone = observe_with(&mut a, json!({}));
+    assert_eq!(lease_of(&alone), None, "{alone}");
+}
+
+#[test]
+fn ct_12_what_the_lease_table_refuses_is_told_in_meta_and_the_observation_is_answered() {
+    let rig = rig();
+    let mut a = rig.connect(Some(full()));
+    let mut b = rig.connect(Some(full()));
+    // The holder renews while nobody waits.
+    let renewed = observe_with(&mut a, json!({ "lease": "acquire" }));
+    assert_eq!(
+        lease_of(&renewed),
+        Some(&standing("holder", Some(1), None, None)),
+        "a renewal keeps its number"
+    );
+    assert_eq!(b.acquire(), Ok(Acquired::Queued { position: 1 }));
+
+    // A renewal while b waits is refused by the table: a still holds lease 1 and observes.
+    let refused = observe_with(&mut a, json!({ "lease": "acquire" }));
+    assert_eq!(refused["isError"], false, "{refused}");
+    assert!(refused["structuredContent"]["elements"].is_array());
+    assert_eq!(
+        lease_of(&refused),
+        Some(&standing("holder", Some(1), None, None))
+    );
+    // b does not hold the lease and releases: refused by the table, b keeps its place.
+    let not_holder = observe_with(&mut b, json!({ "lease": "release" }));
+    assert_eq!(not_holder["isError"], false, "{not_holder}");
+    assert_eq!(
+        lease_of(&not_holder),
+        Some(&standing("waiting", None, Some(1), Some(0)))
+    );
+    // b asks again and keeps its place.
+    let again = observe_with(&mut b, json!({ "lease": "acquire" }));
+    assert_eq!(
+        lease_of(&again),
+        Some(&standing("waiting", None, Some(1), Some(0)))
+    );
+}
+
+#[test]
+fn ct_12_with_nothing_published_a_waiter_gets_stale_snapshot_and_its_standing() {
+    let rig = rig();
+    let a = rig.connect(Some(full()));
+    let mut b = rig.connect(Some(full()));
+    assert!(matches!(a.acquire(), Ok(Acquired::Renewed { number: 1 })));
+    let nothing = observe_with(&mut b, json!({ "lease": "acquire" }));
+    assert_eq!(nothing["isError"], true, "{nothing}");
+    assert_eq!(
+        code(&nothing["structuredContent"]),
+        Some("STALE_SNAPSHOT"),
+        "{nothing}"
+    );
+    assert_eq!(
+        lease_of(&nothing),
+        Some(&standing("waiting", None, Some(1), None)),
+        "no page was served"
+    );
+}
+
+#[test]
+fn ct_12_lease_is_applied_before_the_observation_and_goes_with_a_cursor() {
+    let rig = rig();
+    let mut a = rig.connect(Some(full()));
+    let mut b = rig.connect(Some(full()));
+    let first = observe_with(&mut a, json!({ "limit": 1 }))["structuredContent"].clone();
+    let cursor = first["next_cursor"].clone();
+    assert!(cursor.is_string(), "{first}");
+
+    // b waits and reads the second page of a's snapshot through the cursor.
+    let paged = observe_with(
+        &mut b,
+        json!({ "limit": 1, "cursor": cursor, "lease": "acquire" }),
+    );
+    assert_eq!(paged["isError"], false, "{paged}");
+    assert_eq!(
+        paged["structuredContent"]["snapshot_id"],
+        first["snapshot_id"]
+    );
+    assert_ne!(
+        paged["structuredContent"]["elements"], first["elements"],
+        "the page the cursor names"
+    );
+    assert_eq!(
+        lease_of(&paged),
+        Some(&standing("waiting", None, Some(1), Some(0)))
+    );
+
+    // a's term ends; b's next `acquire` finds the lease passed to it before it observes, so
+    // this very observation publishes a new snapshot.
+    rig.world.advance(TERM);
+    let granted = observe_with(&mut b, json!({ "lease": "acquire" }));
+    assert_eq!(
+        lease_of(&granted),
+        Some(&standing("holder", Some(2), None, None))
+    );
+    assert_ne!(
+        granted["structuredContent"]["snapshot_id"],
+        first["snapshot_id"]
+    );
+    let page = granted["structuredContent"].clone();
+    assert!(delivered(&act(&mut b, click(&page, "b1", true))));
+}
+
+/// A window with many labelled buttons: its first page does not fit in a 4 KiB message.
+fn crowded_scene() -> FixtureScene {
+    let mut scene = FixtureScene::new(640, 640);
+    for i in 0..40_u32 {
+        let y = f64::from(i) * 15.0;
+        scene.add_control(confirmed(Role::Button, bx(10.0, y, 600.0, y + 12.0)));
+        scene.add_word(
+            format!("Button-number-{i:02}-with-a-long-label-for-size"),
+            bx(15.0, y + 1.0, 590.0, y + 11.0),
+        );
+    }
+    scene
+}
+
+#[test]
+fn ct_12_an_observation_too_large_for_one_message_keeps_its_lease_meta() {
+    let world = World::with_scene(crowded_scene());
+    let config = McpConfig {
+        max_message_bytes: 4096,
+        ..McpConfig::default()
+    };
+    let broker = world.broker(config, 8);
+    let mut a = broker.connect(Some(full())).unwrap();
+    let mut b = broker.connect(Some(full())).unwrap();
+    let too_large = observe_with(&mut a, json!({}));
+    assert_eq!(
+        code(&too_large["structuredContent"]),
+        Some("LIMIT_EXCEEDED")
+    );
+    assert_eq!(
+        lease_of(&too_large),
+        Some(&standing("holder", Some(1), None, None))
+    );
+    let asked = observe_with(&mut b, json!({ "lease": "acquire" }));
+    assert_eq!(code(&asked["structuredContent"]), Some("LIMIT_EXCEEDED"));
+    assert_eq!(
+        lease_of(&asked),
+        Some(&standing("waiting", None, Some(1), Some(0))),
+        "the lease was applied, and the client learns where it stands"
+    );
+    // The stdio server's own LIMIT_EXCEEDED carries no lease.
+    let mut stdio = world.server(config).connect();
+    let response = call_ok(
+        &mut stdio,
+        1,
+        "observe_screen",
+        json!({ "lease": "acquire" }),
+    );
+    assert_eq!(code(&response["structuredContent"]), Some("LIMIT_EXCEEDED"));
+    assert_eq!(lease_of(&response), None);
+}
+
+// ---- CT-13: the stdio server accepts `lease` and changes nothing ----
+
+/// One modern `tools/call` line.
+fn tool_line(id: u64, name: &str, arguments: &Value) -> String {
+    json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": { "_meta": modern_meta(), "name": name, "arguments": arguments } })
+    .to_string()
+}
+
+#[test]
+fn ct_13_the_stdio_server_accepts_lease_and_answers_byte_for_byte_as_without_it() {
+    {
+        let config = McpConfig::default();
+        let (with_world, without_world) = (World::new(), World::new());
+        let mut with = with_world.server(config).connect();
+        let mut without = without_world.server(config).connect();
+        let mut id = 0;
+        let mut both = |name: &str, plain: Value, lease: Option<&str>| -> Value {
+            id += 1;
+            let mut asked = plain.clone();
+            if let Some(lease) = lease {
+                asked["lease"] = json!(lease);
+            }
+            let line = with.handle_message(tool_line(id, name, &asked).as_bytes());
+            let other = without.handle_message(tool_line(id, name, &plain).as_bytes());
+            assert_eq!(line, other, "{name} with lease {lease:?}");
+            let response: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            assert_eq!(lease_of(&response["result"]), None, "{response}");
+            response["result"].clone()
+        };
+        let first =
+            both("observe_screen", json!({ "limit": 2 }), Some("acquire"))["structuredContent"]
+                .clone();
+        let cursor = first["next_cursor"].clone();
+        both(
+            "observe_screen",
+            json!({ "limit": 2, "cursor": cursor }),
+            Some("release"),
+        );
+        let page = both(
+            "observe_screen",
+            json!({ "include_values": true }),
+            Some("release"),
+        )["structuredContent"]
+            .clone();
+        both("execute_action", click(&page, "dry", false), None);
+        assert!(delivered(
+            &both("execute_action", click(&page, "live", true), None)["structuredContent"]
+        ));
+        both("observe_screen", json!({}), Some("acquire"));
+        both("get_engine_metrics", json!({}), None);
+        // The invalid value is refused on the stdio server too.
+        let mut bad = with_world.server(config).connect();
+        let refused = call(&mut bad, 1, "observe_screen", json!({ "lease": "x" }));
+        assert_eq!(error_code(&refused), -32602, "{refused}");
+    }
 }

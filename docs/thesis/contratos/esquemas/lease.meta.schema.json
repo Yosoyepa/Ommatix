@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Arrendamiento de entrada de un cliente del intermediario (ADR-0039, propuesta; sólo _meta)",
+  "type": "object",
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": [
+        "holder",
+        "waiting",
+        "none"
+      ]
+    },
+    "number": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "position": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "shared": {
+      "type": "boolean"
+    },
+    "age_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    }
+  },
+  "required": [
+    "state",
+    "number",
+    "position",
+    "shared",
+    "age_ms"
+  ],
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "holder"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "position": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "waiting"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "number": {
+            "type": "null"
+          },
+          "position": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "none"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "number": {
+            "type": "null"
+          },
+          "position": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "shared": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "age_ms": {
+            "type": "integer"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "age_ms": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}

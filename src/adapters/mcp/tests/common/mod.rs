@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use ommatix_adapter_mcp::{Connection, MODERN_PROTOCOL_VERSION, McpConfig, McpServer};
+use ommatix_adapter_mcp::{Broker, Connection, MODERN_PROTOCOL_VERSION, McpConfig, McpServer};
 use ommatix_application::contract::ValidatedAction;
 use ommatix_application::{
     ActionFreshness, CapturedFrame, Clock, DeliveryReceipt, Engine, EngineConfig, FrameCapturer,
@@ -307,12 +307,29 @@ pub fn freshness_engine_with_scope(scope: ActionFreshness) -> Engine {
     )
 }
 
+/// A broker (ADR-0039, proposed) over the same doubles as [`engine_with`]: one engine, at most
+/// eight clients, leases of ten seconds.
+pub fn broker_with(scene: Scene, policy: LocalPolicy, config: McpConfig) -> Broker {
+    let (engine, ports) = build_ports(scene, Arc::new(FixedPolicy(policy)), None, None);
+    Broker::new(engine, ports, config, Duration::from_secs(10), 8).expect("a valid broker")
+}
+
 fn build_engine(
     scene: Scene,
     policy: Arc<dyn PolicyStore>,
     costs: Option<Costs>,
     freshness_scope: Option<ActionFreshness>,
 ) -> Engine {
+    let (config, ports) = build_ports(scene, policy, costs, freshness_scope);
+    Engine::new(config, ports)
+}
+
+fn build_ports(
+    scene: Scene,
+    policy: Arc<dyn PolicyStore>,
+    costs: Option<Costs>,
+    freshness_scope: Option<ActionFreshness>,
+) -> (EngineConfig, Ports) {
     let clock = Arc::new(ManualClock::new());
     let costs_in_use = costs.unwrap_or_default();
     let pixels = vec![0x80_u8; scene.width as usize * scene.height as usize * 4];
@@ -347,7 +364,7 @@ fn build_engine(
     let mut config = EngineConfig::new(SESSION_ID);
     config.concurrent_stages = costs.is_none();
     config.action_freshness = freshness_scope.unwrap_or_default();
-    Engine::new(config, ports)
+    (config, ports)
 }
 
 pub fn server_with(scene: Scene, config: McpConfig) -> McpServer {

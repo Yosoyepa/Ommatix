@@ -93,5 +93,45 @@
     "schema": "contratos/esquemas/action_freshness_diff.meta.schema.json",
     "example": "contratos/ejemplos_invalidos/freshness_diff_con_geometria.json",
     "valid": false
+  },
+  {
+    "example": "contratos/ejemplos/observe_lease_input.json",
+    "schema": "contratos/esquemas/observe_screen.input.schema.json",
+    "valid": true
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/observe_lease_desconocido.json",
+    "schema": "contratos/esquemas/observe_screen.input.schema.json",
+    "valid": false
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/observe_lease_nulo.json",
+    "schema": "contratos/esquemas/observe_screen.input.schema.json",
+    "valid": false
+  },
+  {
+    "example": "contratos/ejemplos_invalidos/observe_lease_no_texto.json",
+    "schema": "contratos/esquemas/observe_screen.input.schema.json",
+    "valid": false
+  },
+  {
+    "schema": "contratos/esquemas/lease.meta.schema.json",
+    "example": "contratos/ejemplos/lease_meta.json",
+    "valid": true
+  },
+  {
+    "schema": "contratos/esquemas/lease.meta.schema.json",
+    "example": "contratos/ejemplos_invalidos/lease_meta_con_texto.json",
+    "valid": false
+  },
+  {
+    "schema": "contratos/esquemas/lease.meta.schema.json",
+    "example": "contratos/ejemplos_invalidos/lease_meta_campo_extra.json",
+    "valid": false
+  },
+  {
+    "schema": "contratos/esquemas/lease.meta.schema.json",
+    "example": "contratos/ejemplos_invalidos/lease_meta_espera_con_numero.json",
+    "valid": false
   }
 ]

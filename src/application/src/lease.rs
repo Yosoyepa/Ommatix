@@ -132,6 +132,18 @@ pub enum Acquired {
     Implicit,
 }
 
+/// Where a client stands with respect to the lease ([`LeaseTable::standing`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Standing {
+    /// The client holds the lease: an explicit one under its number, or, as the only client,
+    /// the implicit one, which has no number.
+    Holder { number: Option<u64> },
+    /// The client waits at this position, counted from 1 for the next client to be served.
+    Waiting { position: usize },
+    /// The client neither holds the lease nor waits for it.
+    None,
+}
+
 /// The explicit lease: its holder, its number and the instant it ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Lease {
@@ -360,6 +372,29 @@ impl LeaseTable {
         Self::finish(step, result)
     }
 
+    /// Where `client` stands as of the last settled instant (ADR-0039, decision 5: what the
+    /// broker reports with each response). It reads and changes nothing, settles no time and
+    /// takes no `now`: the caller asks it right after the operation that settled the call.
+    /// A client the table does not know stands nowhere.
+    pub fn standing(&self, client: ClientId) -> Standing {
+        if !self.clients.contains(&client) {
+            return Standing::None;
+        }
+        match self.lease {
+            Some(lease) if lease.client == client => Standing::Holder {
+                number: Some(lease.number),
+            },
+            None if self.implicit_holder() == Some(client) => Standing::Holder { number: None },
+            _ => self
+                .queue
+                .iter()
+                .position(|waiter| *waiter == client)
+                .map_or(Standing::None, |index| Standing::Waiting {
+                    position: index + 1,
+                }),
+        }
+    }
+
     /// The client that holds the lease, explicitly or implicitly, as of the last settled
     /// instant.
     fn holder(&self) -> Option<ClientId> {
@@ -491,6 +526,119 @@ mod tests {
     #[test]
     fn a_zero_term_cannot_build_a_table() {
         assert!(LeaseTable::new(NonZeroUsize::new(1).unwrap(), Duration::ZERO).is_none());
+    }
+
+    #[test]
+    fn standing_tells_the_holder_its_number_the_waiters_their_place_and_changes_nothing() {
+        let mut table = table();
+        let a = connect(&mut table, at(0));
+        assert_eq!(
+            table.standing(a),
+            Standing::Holder { number: None },
+            "the implicit lease has no number"
+        );
+        let b = connect(&mut table, at(1));
+        let c = connect(&mut table, at(1));
+        assert_eq!(table.standing(a), Standing::Holder { number: Some(1) });
+        assert_eq!(table.standing(b), Standing::None);
+        assert_eq!(
+            table.acquire(c, at(2)).result,
+            Ok(Acquired::Queued { position: 1 })
+        );
+        assert_eq!(
+            table.acquire(b, at(2)).result,
+            Ok(Acquired::Queued { position: 2 })
+        );
+        let before = table.clone();
+        assert_eq!(table.standing(c), Standing::Waiting { position: 1 });
+        assert_eq!(table.standing(b), Standing::Waiting { position: 2 });
+        assert_eq!(table, before, "asking changes nothing");
+
+        // The lease passes to c at the end of a's term; b moves up.
+        assert!(!delivers(&mut table, a, at(11)));
+        assert_eq!(table.standing(a), Standing::None);
+        assert_eq!(table.standing(c), Standing::Holder { number: Some(2) });
+        assert_eq!(table.standing(b), Standing::Waiting { position: 1 });
+
+        // A client that left, or never came, stands nowhere.
+        assert!(table.disconnect(b, at(12)).result.is_ok());
+        assert_eq!(table.standing(b), Standing::None);
+        assert_eq!(table.standing(ClientId(99)), Standing::None);
+
+        // The stop revokes: nobody holds, nobody waits.
+        assert_eq!(
+            table.acquire(a, at(12)).result,
+            Ok(Acquired::Queued { position: 1 })
+        );
+        let _ = table.revoke();
+        assert_eq!(table.standing(a), Standing::None);
+        assert_eq!(table.standing(c), Standing::None);
+    }
+
+    #[test]
+    fn standing_agrees_with_may_deliver_and_with_every_answer_of_acquire() {
+        let mut table = table();
+        let mut clients = Vec::new();
+        let mut seed: u64 = 0x5EED_0042;
+        let mut next = |n: u64| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (seed >> 33) % n
+        };
+        for step in 0..4_000_u64 {
+            let now = Duration::from_millis(step * 700);
+            match next(5) {
+                0 if clients.len() < BOUND => clients.push(connect(&mut table, now)),
+                1 if !clients.is_empty() => {
+                    let index =
+                        usize::try_from(next(u64::try_from(clients.len()).unwrap())).unwrap();
+                    let gone = clients.remove(index);
+                    assert!(table.disconnect(gone, now).result.is_ok());
+                }
+                2 if !clients.is_empty() => {
+                    let index =
+                        usize::try_from(next(u64::try_from(clients.len()).unwrap())).unwrap();
+                    let asker = clients[index];
+                    let standing = match table.acquire(asker, now).result {
+                        Ok(Acquired::Granted { number } | Acquired::Renewed { number }) => {
+                            Standing::Holder {
+                                number: Some(number),
+                            }
+                        }
+                        Ok(Acquired::Queued { position }) => Standing::Waiting { position },
+                        Ok(Acquired::Implicit) => Standing::Holder { number: None },
+                        Err(_) => table.standing(asker),
+                    };
+                    assert_eq!(table.standing(asker), standing, "step {step}");
+                }
+                3 if !clients.is_empty() => {
+                    let index =
+                        usize::try_from(next(u64::try_from(clients.len()).unwrap())).unwrap();
+                    let _ = table.release(clients[index], now);
+                }
+                _ => {}
+            }
+            // Settle at `now`, then compare: exactly the holder may deliver, and the waiters'
+            // places are 1, 2, … without a gap.
+            let mut places = Vec::new();
+            for client in clients.clone() {
+                let holds = delivers(&mut table, client, now);
+                match table.standing(client) {
+                    Standing::Holder { .. } => assert!(holds, "step {step}"),
+                    Standing::Waiting { position } => {
+                        assert!(!holds, "step {step}");
+                        places.push(position);
+                    }
+                    Standing::None => assert!(!holds, "step {step}"),
+                }
+            }
+            places.sort_unstable();
+            assert!(
+                places.iter().enumerate().all(|(i, p)| *p == i + 1),
+                "step {step}: {places:?}"
+            );
+        }
     }
 
     #[test]

@@ -31,7 +31,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::config::McpConfig;
-use crate::tools::{self, CallError, OBSERVE_SCREEN, ToolOutput};
+use crate::tools::{self, CallError, LEASE_META_KEY, OBSERVE_SCREEN, ToolOutput};
 
 /// The modern MCP profile, always served.
 pub const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
@@ -458,7 +458,9 @@ impl Connection {
 }
 
 /// Encodes a tool result for the profile, within `limit` bytes: an observation page that
-/// does not fit becomes a `LIMIT_EXCEEDED` tool error asking for a smaller request.
+/// does not fit becomes a `LIMIT_EXCEEDED` tool error asking for a smaller request. That error
+/// keeps the broker's [`LEASE_META_KEY`] entry, if the page had one: the `lease` argument was
+/// already applied, and the client must still learn where it stands.
 ///
 /// Any other result (above all an `execute_action` one, the agent's only record of input
 /// that may have reached the OS) is never replaced: it sheds its text duplicate and its
@@ -469,11 +471,18 @@ impl Connection {
 fn encode_tool(id: &Value, output: ToolOutput, modern: bool, limit: usize) -> String {
     let encode = |result: &Value| envelope(id, Some(result), None);
     if output.tool == OBSERVE_SCREEN {
+        let lease = output
+            .meta
+            .iter()
+            .find(|(key, _)| *key == LEASE_META_KEY)
+            .cloned();
         let line = encode(&call_result(output, modern, Shape::Full));
         if line.len() <= limit {
             return line;
         }
-        let reduced = call_result(tools::limit_exceeded(limit), modern, Shape::Full);
+        let mut exceeded = tools::limit_exceeded(limit);
+        exceeded.meta.extend(lease);
+        let reduced = call_result(exceeded, modern, Shape::Full);
         return fit(id, &encode(&reduced), limit);
     }
     // Small results: the copy kept for the lean fallback is cheap.

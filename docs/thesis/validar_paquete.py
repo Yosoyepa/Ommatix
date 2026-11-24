@@ -73,8 +73,28 @@ def main() -> int:
                     check(f'frescura_d0_rechazo:{no}',r.get('structuredContent',{}).get('error',{}).get('code')=='STALE_SNAPSHOT')
                     payload=json.dumps(r.get('structuredContent',{}))+json.dumps(r.get('content',[]))
                     check(f'frescura_d0_solo_meta:{no}',all(key not in payload for key in ('freshness_diff','total_tiles','group_tiles','touches_target')))
+                lease=r.get('_meta',{}).get('io.ommatix/lease')
+                if lease is not None:
+                    errors=list(Draft202012Validator(schemas['contratos/esquemas/lease.meta.schema.json']).iter_errors(lease))
+                    check(f'arrendamiento_meta:{no}',not errors)
+                    payload=json.dumps(r.get('structuredContent',{}))+json.dumps(r.get('content',[]))
+                    check(f'arrendamiento_solo_meta:{no}','io.ommatix/lease' not in payload and '"shared"' not in payload)
                 if 'structuredContent' in r:
                     check(f'contenido_consistente:{no}',json.loads(r['content'][0]['text'])==r['structuredContent'])
+    # ADR-0039 (propuesta): el argumento `lease` admite sólo dos palabras, y el `_meta` del
+    # arrendamiento sólo números, booleanos, null y tres palabras cerradas: ningún valor puede
+    # llevar texto de la pantalla o del agente.
+    lease_in=schemas['contratos/esquemas/observe_screen.input.schema.json']
+    check('arrendamiento_entrada',lease_in.get('additionalProperties') is False and lease_in.get('properties',{}).get('lease')=={'type':'string','enum':['acquire','release']})
+    lease_meta=schemas['contratos/esquemas/lease.meta.schema.json']
+    props=lease_meta.get('properties',{})
+    def closed(prop):
+        types=prop.get('type'); types=types if isinstance(types,list) else [types]
+        if 'string' in types:
+            return types==['string'] and set(prop.get('enum',[None]))<={'holder','waiting','none'}
+        return set(types)<={'integer','boolean','null'}
+    check('arrendamiento_meta_cerrado',lease_meta.get('additionalProperties') is False and sorted(lease_meta.get('required',[]))==sorted(props)
+          and sorted(props)==['age_ms','number','position','shared','state'] and all(closed(x) for x in props.values()),str(sorted(props)))
     # Estos dos archivos forman un diálogo ilustrativo completo por IDs.
     reqs=[json.loads(line) for line in (ROOT/'contratos/ejemplos/mcp_moderno_solicitudes.jsonl').read_text(encoding='utf-8').splitlines() if line.strip()]
     resps=[json.loads(line) for line in (ROOT/'contratos/ejemplos/mcp_moderno_respuestas.jsonl').read_text(encoding='utf-8').splitlines() if line.strip()]

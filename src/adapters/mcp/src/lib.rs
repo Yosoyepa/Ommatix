@@ -23,9 +23,10 @@
 //! - [`Connection`] is the transport-independent protocol core: envelope validation,
 //!   profile selection and routing ([`protocol`] documents every rule and error code).
 //! - [`Broker`] serves several connections on one engine under a single input lease and each
-//!   client's grant (ADR-0039, ADR-0040); each [`BrokerConnection`] speaks the same protocol
-//!   through a [`Connection`]. Nothing outside this crate's tests constructs one yet: the
-//!   binary serves stdio only.
+//!   client's grant (ADR-0039 and ADR-0040, proposed); each [`BrokerConnection`] speaks the
+//!   same protocol through a [`Connection`]. A client asks for the lease with the `lease`
+//!   argument of `observe_screen` and learns where it stands under [`LEASE_META_KEY`].
+//!   Nothing outside this crate's tests constructs one yet: the binary serves stdio only.
 //! - [`McpConfig`] is the `[mcp]` configuration section.
 //! - [`dto`] holds the wire DTOs and their mapping to the application contract types.
 //! - [`schemas`] embeds the contract's JSON schemas from `docs/thesis/contratos/esquemas/`.
@@ -47,7 +48,10 @@
 //! go only in the result `_meta`: the stage timings of an observation under
 //! [`TIMINGS_META_KEY`] with whether its accessibility evidence is complete under
 //! [`ACCESSIBILITY_META_KEY`], and the stage timings of an action (gate, freshness capture,
-//! delivery, focus confirmation, verification) under [`ACTION_TIMINGS_META_KEY`]. Expected domain
+//! delivery, focus confirmation, verification) under [`ACTION_TIMINGS_META_KEY`]; on a broker's
+//! connection, where the client stands with respect to the input lease under
+//! [`LEASE_META_KEY`] (never on the stdio server, which accepts `observe_screen`'s `lease`
+//! argument and ignores it). Expected domain
 //! errors are tool results with `isError: true`; malformed messages, unknown methods or
 //! tools, arguments that violate an input schema and version problems are JSON-RPC errors.
 //!
@@ -83,5 +87,5 @@ pub use protocol::{
 pub use server::McpServer;
 pub use tools::{
     ACCESSIBILITY_META_KEY, ACTION_TIMINGS_META_KEY, EXECUTE_ACTION, GET_ENGINE_METRICS,
-    OBSERVE_SCREEN, PLAN_META_KEY, TIMINGS_META_KEY,
+    LEASE_META_KEY, OBSERVE_SCREEN, PLAN_META_KEY, TIMINGS_META_KEY,
 };

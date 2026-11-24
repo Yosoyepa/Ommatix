@@ -61,3 +61,8 @@ BDD-59,RF-11,UT-65,features/06_accion_segura.feature,Un cambio en una ventana po
 BDD-60,RF-11,UT-68,features/06_accion_segura.feature,Una ventana que sube sobre el objetivo rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-61,RF-11,UT-69,features/06_accion_segura.feature,Un cambio de la ventana de primer plano rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-62,RF-11,UT-70,features/06_accion_segura.feature,Un objetivo no atestiguado como opaco compara la pantalla entera,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-63,RF-19,IT-10,features/09_varios_agentes.feature,Dos agentes y un arrendamiento,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-64,RF-19,IT-12,features/09_varios_agentes.feature,"El arrendamiento pasa al siguiente agente, que observa antes de actuar",EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-65,RF-19,IT-14,features/09_varios_agentes.feature,Un agente sin concesión observa sin valores y no entrega,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-66,RF-19,IT-16,features/09_varios_agentes.feature,El reintento de una petición entregada después de perder el arrendamiento,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-67,RF-19,IT-19,features/09_varios_agentes.feature,Para un agente solo no cambia nada,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE

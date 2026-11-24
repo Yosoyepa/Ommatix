@@ -12,13 +12,19 @@
 //!
 //! 1. The clock is read once. The operator's purge request is honoured as the stdio server
 //!    honours it, and a purge or the operator's stop revokes the lease.
-//! 2. The lease is settled for the caller at that instant; when it passed to another client,
+//! 2. The `lease` argument of `observe_screen`, when sent, is applied at that instant:
+//!    `acquire` asks for the lease and `release` releases it, exactly as
+//!    [`BrokerConnection::acquire`] and [`BrokerConnection::release`] do. What the lease
+//!    table refuses (a renewal while another client waits, a release by a client that does
+//!    not hold the lease, time exhausted) is no error for the caller: the observation is
+//!    answered and `_meta` says where the client stands.
+//! 3. The lease is settled for the caller at that instant; when it passed to another client,
 //!    the published snapshot is spent, so that the new holder observes before it acts.
-//! 3. The caller's grant is installed for the length of the call: the gate and the view
+//! 4. The caller's grant is installed for the length of the call: the gate and the view
 //!    decide under the meet of the operator's policy and that grant. A client without a valid
 //!    grant is served under [`Grant::default`], which permits no live input and no values
 //!    (ADR-0040, decision 7).
-//! 4. `observe_screen` publishes a new snapshot only for the holder, or for any client while
+//! 5. `observe_screen` publishes a new snapshot only for the holder, or for any client while
 //!    nobody holds the lease; any other client gets the published page served again for it,
 //!    or `STALE_SNAPSHOT` when nothing is published. `execute_action` runs a dry run for any
 //!    client (decision 4), and a client's own retry, a request identifier its journal holds,
@@ -29,9 +35,13 @@
 //!    gate with `POLICY_DENIED`, delivering and recording nothing. `get_engine_metrics` is
 //!    answered as by the stdio server.
 //!
-//! Responses have the stdio server's shape: no new field and no new `_meta` key. The lease is
-//! asked for through [`BrokerConnection::acquire`] and [`BrokerConnection::release`]; a sole
-//! client holds it implicitly and needs neither.
+//! Responses have the stdio server's shape, with one addition in `_meta`: on `observe_screen`
+//! and `execute_action`, when the request carried `lease` or more than one client is connected,
+//! the key [`LEASE_META_KEY`] says where the client stands (`holder`, `waiting` or `none`, the
+//! lease's number, the place in the queue) and whether the page is the one already published,
+//! with its age (ADR-0039, proposed, decision 5). A sole client that never sends `lease` holds
+//! the lease implicitly and gets the stdio server's responses byte for byte. The lease can also
+//! be asked for through [`BrokerConnection::acquire`] and [`BrokerConnection::release`].
 //!
 //! A client that leaves takes its lease, its place in the queue, its journal and its grant
 //! with it; the last one to leave purges the engine, as the end of the stdio server's
@@ -57,9 +67,10 @@ use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::config::McpConfig;
+use crate::dto::{self, LeaseArgument};
 use crate::protocol::{Backend, Connection};
 use crate::server::exchange;
-use crate::tools::{self, CallError, ToolCall, ToolOutput};
+use crate::tools::{self, CallError, LEASE_META_KEY, ToolCall, ToolOutput};
 
 /// The refusal of a live action from a client that does not hold the lease and whose journal
 /// does not know its request identifier (ADR-0039, decisions 4 and 6). It names the limit and
@@ -296,25 +307,44 @@ impl Backend for Member {
         let state = &mut *guard;
         let now = state.clock.now();
         state.enter();
+        // The `lease` argument first, at the call's instant (ADR-0039, decision 5). The table's
+        // answer is not an error for the caller: `_meta` reports where the client stands.
+        let asked = match &call {
+            ToolCall::Observe(_, Some(lease)) => {
+                let change = match lease {
+                    LeaseArgument::Acquire => state.leases.acquire(self.client, now).change,
+                    LeaseArgument::Release => state.leases.release(self.client, now).change,
+                };
+                state.apply(&change);
+                true
+            }
+            _ => false,
+        };
         let settled = match call {
-            ToolCall::Observe(_) => state.leases.publishes(self.client, now),
+            ToolCall::Observe(..) => state.leases.publishes(self.client, now),
             ToolCall::Act(_) | ToolCall::Metrics => state.leases.may_deliver(self.client, now),
         };
         state.apply(&settled.change);
         // A client the table does not know neither publishes nor delivers.
         let holds = settled.result.unwrap_or(false);
+        let reports = asked || state.grants.len() > 1;
         let granted = Arc::clone(&state.granted);
         let _installed = granted.install(state.grants.get(&self.client).cloned().flatten());
         let engine = &mut state.engine;
-        Ok(match call {
-            ToolCall::Observe(request) if holds => {
+        // The age of the published page when this response serves it again.
+        let mut shared_age = None;
+        let mut output = match call {
+            ToolCall::Observe(request, _) if holds => {
                 let result = engine.observe_screen(&request);
                 tools::observation(engine, result)
             }
-            ToolCall::Observe(request) => {
+            ToolCall::Observe(request, _) => {
                 let result = engine
                     .serve_published(&request)
                     .and_then(|page| page.ok_or_else(nothing_published));
+                if result.is_ok() {
+                    shared_age = engine.published_age();
+                }
                 tools::observation(engine, result)
             }
             // A client's own retry is answered from its journal before the lease is asked for:
@@ -328,8 +358,15 @@ impl Backend for Member {
                 tools::action(&result, engine.last_action_timings())
             }
             ToolCall::Act(request) => tools::action(&refused_without_lease(&request), None),
-            ToolCall::Metrics => tools::metrics(engine),
-        })
+            ToolCall::Metrics => return Ok(tools::metrics(engine)),
+        };
+        if reports {
+            let standing = state.leases.standing(self.client);
+            output
+                .meta
+                .push((LEASE_META_KEY, dto::lease_meta(standing, shared_age)));
+        }
+        Ok(output)
     }
 }
 
