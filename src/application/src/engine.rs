@@ -289,6 +289,19 @@ impl Engine {
         self.client_journals.remove(&client);
     }
 
+    /// Whether the journal of `client` holds `request_id`, whatever the arguments it was
+    /// recorded with (ADR-0039, decision 11). An action of `client` with that identifier is
+    /// answered from the journal, as a replay of the stored result or as `REQUEST_CONFLICT`,
+    /// and never reaches the gate or the actuator, so the broker passes a client's own retry to
+    /// the engine even when that client does not hold the input lease. It looks at no other
+    /// client's journal and at none of the actions executed on behalf of no client, and changes
+    /// nothing.
+    pub fn knows_request(&self, client: ClientId, request_id: &str) -> bool {
+        self.client_journals
+            .get(&client)
+            .is_some_and(|journal| journal.contains(request_id))
+    }
+
     /// Marks the published snapshot as spent, as a delivery does (ADR-0039, decision 7): until
     /// the next observation, the gate refuses every action that cites it with
     /// `STALE_SNAPSHOT`, dry runs included. Called when the lease passes to another client

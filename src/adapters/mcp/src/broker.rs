@@ -21,9 +21,13 @@
 //! 4. `observe_screen` publishes a new snapshot only for the holder, or for any client while
 //!    nobody holds the lease; any other client gets the published page served again for it,
 //!    or `STALE_SNAPSHOT` when nothing is published. `execute_action` runs a dry run for any
-//!    client (decision 4); live input reaches the gate only for the holder, and any other
-//!    client's is refused before the gate with `POLICY_DENIED`, delivering and recording
-//!    nothing. `get_engine_metrics` is answered as by the stdio server.
+//!    client (decision 4), and a client's own retry, a request identifier its journal holds,
+//!    goes to the engine whoever holds the lease: the engine answers it from the journal (a
+//!    replay, or `REQUEST_CONFLICT` for other arguments) and never delivers it again, so a
+//!    client whose input was delivered learns so even after it lost the lease. Any other live
+//!    input reaches the gate only for the holder, and any other client's is refused before the
+//!    gate with `POLICY_DENIED`, delivering and recording nothing. `get_engine_metrics` is
+//!    answered as by the stdio server.
 //!
 //! Responses have the stdio server's shape: no new field and no new `_meta` key. The lease is
 //! asked for through [`BrokerConnection::acquire`] and [`BrokerConnection::release`]; a sole
@@ -57,9 +61,9 @@ use crate::protocol::{Backend, Connection};
 use crate::server::exchange;
 use crate::tools::{self, CallError, ToolCall, ToolOutput};
 
-/// The refusal of a live action from a client that does not hold the lease (ADR-0039,
-/// decisions 4 and 6). It names the limit and quotes nothing from the screen or the agent
-/// (ADR-0021, ADR-0040 decision 9).
+/// The refusal of a live action from a client that does not hold the lease and whose journal
+/// does not know its request identifier (ADR-0039, decisions 4 and 6). It names the limit and
+/// quotes nothing from the screen or the agent (ADR-0021, ADR-0040 decision 9).
 const NO_LEASE: &str = "live input needs the input lease and this client does not hold it; \
                         nothing was delivered";
 
@@ -313,7 +317,13 @@ impl Backend for Member {
                     .and_then(|page| page.ok_or_else(nothing_published));
                 tools::observation(engine, result)
             }
-            ToolCall::Act(request) if request.dry_run || holds => {
+            // A client's own retry is answered from its journal before the lease is asked for:
+            // a known identifier never reaches the gate (ADR-0039, decision 11).
+            ToolCall::Act(request)
+                if request.dry_run
+                    || holds
+                    || engine.knows_request(self.client, &request.request_id) =>
+            {
                 let result = engine.execute_action_for(self.client, &request);
                 tools::action(&result, engine.last_action_timings())
             }

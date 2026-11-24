@@ -152,6 +152,11 @@ impl Journal {
         self.entries.keys().cloned().collect()
     }
 
+    /// Whether this journal holds `request_id`, whatever the arguments it was recorded with.
+    pub fn contains(&self, request_id: &str) -> bool {
+        self.entries.contains_key(request_id)
+    }
+
     pub fn lookup(&self, request_id: &str, hash: u64) -> Lookup {
         match self.entries.get(request_id) {
             None => Lookup::New,

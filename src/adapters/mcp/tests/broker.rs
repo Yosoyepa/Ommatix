@@ -704,6 +704,126 @@ fn two_clients_with_one_request_id_get_their_own_results_and_each_retry_replays_
     assert_eq!(rig.world.events(), 1, "the replay delivered nothing new");
 }
 
+// ---- a client's own retry is answered before the lease is asked for ----
+
+/// A client that delivered and then lost the lease to another client, which observed again.
+struct LostLease {
+    rig: Rig,
+    a: BrokerConnection,
+    b: BrokerConnection,
+    /// The arguments of a's delivered request and the whole tool result it got.
+    a_request: Value,
+    a_first: Value,
+    /// b's lease number and its page.
+    b_lease: u64,
+    b_page: Value,
+}
+
+fn delivered_then_lost_the_lease() -> LostLease {
+    let rig = rig();
+    let mut a = rig.connect(Some(full()));
+    let mut b = rig.connect(Some(full()));
+    let page = observe(&mut a);
+    let a_request = click(&page, "a-live", true);
+    let a_first = act_result(&mut a, a_request.clone());
+    assert!(delivered(&a_first["structuredContent"]), "{a_first}");
+    a.release().unwrap();
+    let Ok(Acquired::Granted { number: b_lease }) = b.acquire() else {
+        panic!("b is granted the lease");
+    };
+    let b_page = observe(&mut b);
+    assert_eq!(rig.world.events(), 1);
+    LostLease {
+        rig,
+        a,
+        b,
+        a_request,
+        a_first,
+        b_lease,
+        b_page,
+    }
+}
+
+/// A tool result without the stage timings of the gate: a replay runs no gate, so it has none,
+/// as on the stdio server.
+fn without_action_timings(result: &Value) -> Value {
+    let mut result = result.clone();
+    if let Some(meta) = result.get_mut("_meta").and_then(Value::as_object_mut) {
+        meta.remove(ommatix_adapter_mcp::ACTION_TIMINGS_META_KEY);
+    }
+    result
+}
+
+#[test]
+fn a_client_that_lost_the_lease_gets_its_own_delivered_result_back_on_a_retry() {
+    let mut s = delivered_then_lost_the_lease();
+    let retry = act_result(&mut s.a, s.a_request.clone());
+    assert_eq!(retry["structuredContent"], s.a_first["structuredContent"]);
+    assert_eq!(
+        retry["content"], s.a_first["content"],
+        "the same text block"
+    );
+    assert_eq!(
+        without_action_timings(&retry),
+        without_action_timings(&s.a_first)
+    );
+    assert!(
+        delivered(&retry["structuredContent"]),
+        "it learns it was delivered"
+    );
+    assert_eq!(s.rig.world.events(), 1, "nothing new is delivered");
+
+    // The other client's lease and page are untouched.
+    assert_eq!(s.b.acquire(), Ok(Acquired::Renewed { number: s.b_lease }));
+    assert!(delivered(&act(&mut s.b, click(&s.b_page, "b-live", true))));
+    assert_eq!(s.rig.world.events(), 2);
+}
+
+#[test]
+fn a_retry_with_other_arguments_after_losing_the_lease_is_a_request_conflict() {
+    let mut s = delivered_then_lost_the_lease();
+    let mut other = target(&s.b_page, "input", "a-live", true);
+    other["request_id"] = s.a_request["request_id"].clone();
+    let refused = act(&mut s.a, other);
+    assert_eq!(code(&refused), Some("REQUEST_CONFLICT"), "{refused}");
+    assert!(!delivered(&refused));
+    assert_eq!(s.rig.world.events(), 1);
+    assert!(delivered(&act(&mut s.b, click(&s.b_page, "b-live", true))));
+}
+
+#[test]
+fn a_live_request_new_to_the_clients_journal_still_needs_the_lease() {
+    let mut s = delivered_then_lost_the_lease();
+    for _ in 0..2 {
+        // Refused, so never recorded: the retry is refused again.
+        let refused = act(&mut s.a, click(&s.b_page, "a-new", true));
+        assert!(refused_without_lease(&refused), "{refused}");
+    }
+    assert_eq!(s.rig.world.events(), 1);
+}
+
+#[test]
+fn a_client_cannot_replay_another_clients_request_id() {
+    let s = delivered_then_lost_the_lease();
+    let mut c = s.rig.connect(Some(full()));
+    let refused = act(&mut c, s.a_request.clone());
+    assert!(refused_without_lease(&refused), "{refused}");
+    assert_eq!(s.rig.world.events(), 1);
+}
+
+#[test]
+fn a_retry_from_a_new_connection_finds_nothing() {
+    let s = delivered_then_lost_the_lease();
+    let LostLease {
+        rig, a, a_request, ..
+    } = s;
+    a.close();
+    let mut again = rig.connect(Some(full()));
+    let refused = act(&mut again, a_request);
+    assert!(refused_without_lease(&refused), "{refused}");
+    assert_eq!(rig.world.events(), 1);
+}
+
 // ---- 9. the bound, and leaving frees everything ----
 
 #[test]
@@ -1171,6 +1291,7 @@ enum Seen {
     GateDenied,
     LiveStale,
     Replayed,
+    ReplayedWithoutLease,
     Stopped,
     Resumed,
     Purged,
@@ -1179,7 +1300,7 @@ enum Seen {
     Metrics,
 }
 
-const EVERY_OUTCOME: [Seen; 29] = [
+const EVERY_OUTCOME: [Seen; 30] = [
     Seen::Connected,
     Seen::ConnectRefused,
     Seen::Left,
@@ -1203,6 +1324,7 @@ const EVERY_OUTCOME: [Seen; 29] = [
     Seen::GateDenied,
     Seen::LiveStale,
     Seen::Replayed,
+    Seen::ReplayedWithoutLease,
     Seen::Stopped,
     Seen::Resumed,
     Seen::Purged,
@@ -1496,15 +1618,24 @@ fn generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_
                 let response = act(&mut slot.conn, arguments.clone());
                 assert_no_screen_text(&response);
                 slot.last = Some(arguments.clone());
-                let reaches_engine = !live || holds;
-                let journal = model.journals.entry(id).or_default();
-                let replay = journal.get(&request_id).cloned().filter(|_| reaches_engine);
+                // A client's own retry reaches the engine whoever holds the lease (ADR-0039,
+                // decision 11); anything else live needs the lease.
+                let replay = model
+                    .journals
+                    .get(&id)
+                    .and_then(|journal| journal.get(&request_id))
+                    .cloned();
+                let reaches_engine = !live || holds || replay.is_some();
                 let outcome = if let Some(stored) = replay {
                     assert_eq!(
                         response, stored,
                         "step {step}: a retry replays its own result"
                     );
-                    Seen::Replayed
+                    if live && !holds {
+                        Seen::ReplayedWithoutLease
+                    } else {
+                        Seen::Replayed
+                    }
                 } else if !reaches_engine {
                     assert!(refused_without_lease(&response), "step {step}: {response}");
                     Seen::NoLease
@@ -1541,7 +1672,8 @@ fn generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_
                         .insert(request_id, response.clone());
                     outcome
                 };
-                if delivered(&response) && outcome != Seen::Replayed {
+                let replayed = matches!(outcome, Seen::Replayed | Seen::ReplayedWithoutLease);
+                if delivered(&response) && !replayed {
                     assert!(
                         slot.kind.delivers(),
                         "step {step}: a {:?} client",
@@ -1614,6 +1746,7 @@ fn generated_interleavings_deliver_once_per_snapshot_only_from_the_holder_under_
 // ---- 14. real threads ----
 
 #[test]
+#[allow(clippy::too_many_lines)] // each thread's steps beside the checks of their log
 fn concurrent_connections_never_deliver_twice_on_one_snapshot_nor_outside_their_grant() {
     const STEPS: usize = 500;
     let world = World::new();
@@ -1635,7 +1768,7 @@ fn concurrent_connections_never_deliver_twice_on_one_snapshot_nor_outside_their_
         .collect();
     let clock = world.clock.clone();
 
-    let logs: Vec<(Kind, Vec<Value>)> = std::thread::scope(|scope| {
+    let logs: Vec<(Kind, Vec<(Value, bool)>)> = std::thread::scope(|scope| {
         let handles: Vec<_> = connections
             .into_iter()
             .zip(kinds)
@@ -1644,10 +1777,13 @@ fn concurrent_connections_never_deliver_twice_on_one_snapshot_nor_outside_their_
                 let clock = clock.clone();
                 scope.spawn(move || {
                     let mut rng = Rng(0xC0FF_EE00 + u64::try_from(thread).unwrap());
-                    let mut log = Vec::new();
+                    // Each action's response, and whether it is a new request rather than a
+                    // replay of a recorded one.
+                    let mut log: Vec<(Value, bool)> = Vec::new();
                     let mut page: Option<Value> = None;
+                    let mut last: Option<(Value, Value)> = None;
                     for step in 0..STEPS {
-                        match rng.below(10) {
+                        match rng.below(12) {
                             0 => {
                                 let _ = conn.acquire();
                             }
@@ -1671,13 +1807,34 @@ fn concurrent_connections_never_deliver_twice_on_one_snapshot_nor_outside_their_
                                     page = Some(observed);
                                 }
                             }
-                            _ => {
+                            6..=9 => {
                                 let Some(page) = &page else { continue };
                                 let live = rng.chance(80);
                                 let id = format!("t{thread}-{step}");
-                                let response = act(&mut conn, click(page, &id, live));
+                                let arguments = click(page, &id, live);
+                                let response = act(&mut conn, arguments.clone());
                                 assert_no_screen_text(&response);
-                                log.push(response);
+                                log.push((response.clone(), true));
+                                last = Some((arguments, response));
+                            }
+                            _ => {
+                                // A retry of this client's last request, whoever holds the lease.
+                                let Some((arguments, first)) = last.clone() else {
+                                    continue;
+                                };
+                                let response = act(&mut conn, arguments.clone());
+                                assert_no_screen_text(&response);
+                                if refused_without_lease(&first) {
+                                    // Never recorded: the retry is a new request.
+                                    log.push((response.clone(), true));
+                                    last = Some((arguments, response));
+                                } else {
+                                    assert_eq!(
+                                        response, first,
+                                        "a {kind:?} client's retry replays its own result"
+                                    );
+                                    log.push((response, false));
+                                }
                             }
                         }
                     }
@@ -1692,7 +1849,7 @@ fn concurrent_connections_never_deliver_twice_on_one_snapshot_nor_outside_their_
     let mut per_snapshot: BTreeMap<String, usize> = BTreeMap::new();
     let mut deliveries = 0;
     for (kind, log) in &logs {
-        for response in log.iter().filter(|r| delivered(r)) {
+        for (response, _) in log.iter().filter(|(r, new)| *new && delivered(r)) {
             assert!(kind.delivers(), "a {kind:?} client delivered: {response}");
             let snapshot = response["snapshot_id"].as_str().unwrap().to_owned();
             *per_snapshot.entry(snapshot).or_default() += 1;
@@ -1708,9 +1865,15 @@ fn concurrent_connections_never_deliver_twice_on_one_snapshot_nor_outside_their_
     let refusals = logs
         .iter()
         .flat_map(|(_, log)| log)
-        .filter(|r| refused_without_lease(r))
+        .filter(|(r, _)| refused_without_lease(r))
         .count();
     assert!(refusals > 0, "the lease refused something");
+    let replays = logs
+        .iter()
+        .flat_map(|(_, log)| log)
+        .filter(|(_, new)| !new)
+        .count();
+    assert!(replays > 0, "retries were replayed");
     let retained = broker.retained().unwrap();
     assert!(retained.clients.is_empty());
     assert!(
