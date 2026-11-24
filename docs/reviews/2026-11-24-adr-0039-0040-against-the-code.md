@@ -98,12 +98,27 @@ of that first draft of ADR-0043, and D20, from the experiment D19 asked for: the
 of service becomes a decision of ADR-0043, backed by that experiment, and the accept loop's
 refusal and the handshake are bounded.
 
+An independent QA pass of that fourth commit found that ADR-0043 described a process holding the
+pipe's name only as a reader and a would-be impersonator. It is also an MCP server: with or
+without a ticket, it can answer the relay as if it were the engine, give the agent fabricated
+observations, whose labels may carry instructions for the model, and report action results that
+never happened; the identification-level client does not prevent that. A fifth commit says so in
+the Context, decision 12, Consequences and the Spanish summary, widens the open point to verifying
+who owns the pipe before any MCP traffic is relayed, and states what limits the damage (that
+process holds no engine, so nothing it reports is delivered to the desktop through this relay, and
+the relay gives the agent no other authority) and what does not (an agent misled by what it was
+told, and whatever else its host lets it do). The same commit corrects sentences the fourth left
+stale: Provenance and Approval, which still said the ADR meets the SEC-04 source check as it
+stands; and the bound of the SEC-04 exception, which claimed the file could never create a file
+without also refusing `.creation_disposition(`, a renamed import or another custom flag.
+
 ## What stays open
 
 - In [ADR-0043](../adr/0043-local-named-pipe-transport-for-several-clients.md): how `attach` could
-  verify who owns the pipe before it sends the ticket, since a process that took the name first
-  can no longer act as the user but could still read the ticket and the traffic; and how the
-  engine refuses to start the broker when elevated. Its acceptance waits for the checks that need
+  verify who owns the pipe before it relays any MCP traffic, since a process that took the name
+  first can no longer act as the user but could still read the ticket and the requests and answer
+  the agent as if it were the engine; and how the engine refuses to start the broker when
+  elevated. Its acceptance waits for the checks that need
   administrator rights (a second user, also as the squatter, and an elevated process); the MSVC
   host and the real `McpServer` over the pipe are unproved too.
 - The lease's time, waiting order and renewal in the formal model, which has no time

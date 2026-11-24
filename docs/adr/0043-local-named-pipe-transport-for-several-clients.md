@@ -3,9 +3,9 @@
 - **Status:** Proposed
 - **Date:** 2026-11-24
 - **Approval:** Pending. Draft written by an AI agent (Claude) on 2026-11-24 under the owner's
-  delegation, from a spike and an experiment run on 2026-11-24, kept outside the repository.
-  Acceptance is the owner's, and it must wait for the two supervised checks of Required
-  validation. Nothing in it is implemented.
+  delegation, from a spike and two experiments run on 2026-11-24, kept outside the repository.
+  Acceptance is the owner's, and it must wait for the checks of Required validation that the owner
+  supervises. Nothing in it is implemented.
 
 ## Context
 
@@ -17,7 +17,8 @@ channel to be decided separately, and [ADR-0040](0040-task-scoped-grants-narrowe
 needs it to carry the ticket that selects a client's grant. This ADR decides it, for Windows only.
 
 The repository constrains the choice as follows. Each fact was checked in this repository at the
-commit of this ADR unless it says it comes from the spike, which names its upstream source.
+commit of this ADR unless it says it comes from the spike, which names its upstream source, or
+from an experiment.
 
 - **No `unsafe` of our own outside two modules.** The workspace sets `unsafe_code = "forbid"`
   (`Cargo.toml`, lines 67–68). [ADR-0016](0016-bounded-unsafe-for-windows-capture-and-input.md)
@@ -87,6 +88,12 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
   the ticket, all of the agent's MCP traffic, and the connecting user's identity to act with. A
   process of the same user already has that identity; another user's process, or a service, does
   not.
+- **A process that holds the name is also an MCP server.** Whatever quality of service the client
+  sets, the process that owns the pipe answers the relay: it can reply to the agent's requests as
+  if it were the engine, with or without a ticket, hand the agent fabricated observations (whose
+  labels may carry instructions written for the model) and report action results that never
+  happened. The quality of service of a client limits what the server can do as the user; it says
+  nothing about who the server is.
 - **From the first experiment:** its lockfile had no banned crate, and adds three crates the
   repository's lockfile lacks (`interprocess`, `doctest-file`, a proc-macro, and `recvmsg`, both
   `0BSD`), while `widestring` 1.2.1 and `windows-sys` 0.61.2 are already in it at the same
@@ -194,8 +201,9 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
 11. **Windows only.** No other platform gets a transport in this ADR.
 12. **`attach` connects at identification level, and nothing higher.** The client side of the pipe
     opens it with `SECURITY_SQOS_PRESENT` and `SECURITY_IDENTIFICATION`, so the server it reaches
-    may learn who connected but cannot act as that user. This is a requirement of the transport,
-    not optional hardening. The crate's own client cannot set it, so `attach` opens the handle with
+    may learn who connected but cannot act as that user. It does not make the server the engine: a
+    process that holds the name can still answer as one (see Context and the first open point).
+    This is a requirement of the transport, not optional hardening. The crate's own client cannot set it, so `attach` opens the handle with
     one `std::fs::OpenOptions` call (read, write, `FILE_FLAG_OVERLAPPED` as a custom flag,
     `security_qos_flags(SECURITY_IDENTIFICATION)`) and wraps it, safely, into the crate's stream.
     `FILE_FLAG_OVERLAPPED` is mandatory in that call: the crate's conversion assumes an
@@ -210,31 +218,40 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
       production file keeps failing on `OpenOptions`, and that file keeps failing on every other
       forbidden substring;
     - in that file the substring is allowed on the lines that need it and nowhere else: its two
-      `use` lines and one `OpenOptions::new(` call; the test fails on a second call;
+      `use` lines, which may not rename it (`as`), and one `OpenOptions::new(` call; the test
+      fails on a second call;
     - the file contains only the function that opens the client handle and wraps it; it opens a
-      path it builds itself from the fixed prefix `\\.\pipe\` and the per-session name, and the
-      test refuses in it `.create(`, `.create_new(`, `.truncate(` and `.append(`, so the exception
-      can never create, truncate or extend a file.
+      path it builds itself from the fixed prefix `\\.\pipe\` and the per-session name; its one
+      custom flag is the `FILE_FLAG_OVERLAPPED` constant; and the test refuses in it `.create(`,
+      `.create_new(`, `.truncate(`, `.append(` and `.creation_disposition(`, so the exception
+      cannot create, truncate or extend a file.
 
     The second experiment (see Context) showed what this decision needs: the wrapped handle
     carries traffic in both directions at once with no `unsafe` of our own, and a server that
     impersonates such a client gets identification level and cannot open what the user can,
     while with the crate's default client it can. Identification level still lets that server
-    learn who connected and read what the client sends, the ticket included, which is why
-    verifying the server before the ticket is sent remains an open point. If a later check
+    learn who connected, read what the client sends, the ticket included, and answer the agent as
+    if it were the engine, which is why verifying the server before anything is relayed remains an
+    open point. If a later check
     refutes this decision, the fallback is our own `unsafe` under an exception in the manner of
     ADR-0016, under its own ADR.
 
 ### Open points
 
-- **Verifying who owns the pipe before the ticket is sent.** Decision 12 keeps a process that took
-  the name first from acting as the user, and the engine then refuses to start, which fails
-  closed. It does not keep that process from learning who connected, or from reading the ticket
-  and the agent's traffic, if an `attach` connects to it. How `attach` could check, before it
-  sends the ticket, that the server is this user's engine (by the server's process or the pipe's
-  owner), and how the name is derived so that another user cannot predict and take it, are not
-  decided; the calls that tell who owns a pipe are not in the crate's safe API. A process of the same user is outside what the grant
-  defends against (ADR-0040); another user's is not.
+- **Verifying who owns the pipe before anything is relayed.** Decision 12 keeps a process that
+  took the name first from acting as the user, and the real engine then refuses to start, with an
+  error that says the name is taken. It does not keep that process from learning who connected,
+  from reading the ticket and the agent's requests, or from answering them as if it were the
+  engine, with or without a ticket: fabricated observations, whose labels may carry instructions
+  for the model, and action results that never happened. What limits the damage as the design
+  stands: that process holds no engine, so nothing it reports is delivered to the desktop through
+  this relay, and the relay gives the agent no other authority. What it does not limit: an agent
+  misled by what it was told, and whatever else that agent's host lets it do with other tools.
+  How `attach` could check, before it relays any MCP traffic, the ticket included, that the server
+  is this user's engine (by the server's process or the pipe's owner), and how the name is
+  derived so that another user cannot predict and take it, are not decided; the calls that tell
+  who owns a pipe are not in the crate's safe API. A process of the same user is outside what the
+  grant defends against (ADR-0040); another user's is not.
 - **How the engine refuses to start the broker when elevated.** The only integrity read in the
   code is the input adapter's, under ADR-0016 and only with `sendinput`. Reusing it through the
   composition root, or another way, is not decided; until then decision 6 is the operator's rule.
@@ -250,7 +267,7 @@ From the spike, each with its reason:
 - **The crate's own client, as the first draft had it:** it sets no quality of service, so a
   process that took the name first could act as the connecting user. Rejected as failing open.
 - **A broader SEC-04 exception (a relaxed pattern, or `OpenOptions` allowed in a crate):** it
-  would let any later file open or create files unseen. One file, one substring, once.
+  would let any later file open or create files unseen. One file, one substring, one call.
 - **`winpipe`:** refuses remote clients, but passes no security descriptor (the default, readable
   by Everyone) and does not create the first instance exclusively.
 - **`named_pipe`:** creates the first instance exclusively, but does not refuse remote clients,
@@ -290,9 +307,11 @@ From the spike, each with its reason:
   handshake; no authority without a ticket, which travels in a file, on one line, and never
   through the model; the grant's meet with the operator's policy (ADR-0040); and the switch that
   is off by default. What does not: a process that takes the name first can still read the ticket
-  and the traffic of an `attach` that connects to it (open point).
-- **One exception to the SEC-04 source check**, the first: one file, one substring, once, with the
-  calls that could create or change a file refused in that file. The test that enforces SEC-04
+  and the traffic of an `attach` that connects to it, and answer the agent as if it were the
+  engine, with fabricated observations and invented action results; it holds no engine, so it
+  delivers nothing to the desktop through this relay, but it can mislead the agent (open point).
+- **One exception to the SEC-04 source check**, the first: one file, one substring, one call, with
+  the calls that could create or change a file refused in that file. The test that enforces SEC-04
   changes with the implementation to carry it.
 - **Two serving loops.** The pipe uses a synchronous reader next to the asynchronous one of stdio;
   both must keep the same bounds, and the tests compare them.
@@ -332,8 +351,9 @@ New planned tests, with identifiers to be assigned in the matrix when the ADR is
 - `attach` retries a busy pipe (231) a bounded number of times and then fails; with no engine (2)
   it fails at once.
 - The SEC-04 source check fails if `OpenOptions` appears in any other production file, on any
-  line of the allowed file other than its two `use` lines and one `OpenOptions::new(` call, or
-  with `.create(`, `.create_new(`, `.truncate(` or `.append(` in that file.
+  line of the allowed file other than its two `use` lines and one `OpenOptions::new(` call, if a
+  `use` line renames it, or with `.create(`, `.create_new(`, `.truncate(`, `.append(` or
+  `.creation_disposition(` in that file.
 - A client that disconnects in mid-message, or never reads, does not disturb the others.
 - `attach` with no engine listening fails and starts no process.
 - The repository's SEC-04 source and lockfile checks and the REL-01 checks pass with the new crates.
@@ -364,8 +384,9 @@ refusal and the handshake's bounds; the second experiment answered the first of 
 [ADR-0039](0039-several-agents-through-one-engine-with-an-input-lease.md) (decisions 1 and 12) and
 [ADR-0040](0040-task-scoped-grants-narrower-than-the-local-policy.md) (decision 3); keeps the
 bounds of [ADR-0015](0015-mcp-transport-on-rmcp-wire-types.md) and the scope of
-[ADR-0016](0016-bounded-unsafe-for-windows-capture-and-input.md); meets the SEC-04 and REL-01
-checks of `src/acceptance/tests/repository.rs` as they stand.
+[ADR-0016](0016-bounded-unsafe-for-windows-capture-and-input.md); meets the SEC-04 lockfile check
+and the REL-01 checks of `src/acceptance/tests/repository.rs` as they stand, and the SEC-04 source
+check with the one named exception of decision 12.
 
 ## Resumen (ES)
 
@@ -384,7 +405,11 @@ obtiene nivel de identificación. Un tubo ocupado se reintenta un número acotad
 ausente significa que no hay motor. Un cliente rechazado no bloquea la
 aceptación de otros. El tique llega en un archivo acotado, sin saltos de línea, y viaja en una
 primera línea acotada; una primera línea demasiado larga o mal formada cierra la conexión sin
-concesión. Cuesta tres crates y dos licencias. Quedan abiertos cómo comprobar quién es dueño del
-tubo antes de enviar el tique y cómo se niega el motor a arrancar elevado. No se acepta sin probar
+concesión. Cuesta tres crates y dos licencias. Un proceso que ocupe antes el nombre no puede
+actuar como el usuario, pero sí leer el tique y las peticiones y responder como si fuera el motor:
+observaciones inventadas, que pueden llevar instrucciones para el modelo, y resultados de acciones
+que no ocurrieron; no entrega nada al escritorio por este canal, pero puede engañar al agente.
+Quedan abiertos cómo comprobar quién es dueño del tubo antes de retransmitir cualquier mensaje y
+cómo se niega el motor a arrancar elevado. No se acepta sin probar
 antes, con el responsable, un segundo usuario (también como ocupante del nombre) y un proceso
 elevado; tampoco están probados el anfitrión MSVC ni el `McpServer` real sobre el tubo.
