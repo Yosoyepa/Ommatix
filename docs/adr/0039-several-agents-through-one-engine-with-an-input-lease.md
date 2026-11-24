@@ -1,85 +1,170 @@
 # 0039. Serve several agents through one engine, with a single lease over the observe-and-act cycle
 
 - **Status:** Proposed
-- **Date:** 2026-11-22
-- **Approval:** Pending. Draft written by an AI agent at the owner's request; nothing in it is
-  implemented, and no measurement supports it yet.
+- **Date:** 2026-11-22; revised 2026-11-24
+- **Approval:** Pending. Draft written by an AI agent at the owner's request on 2026-11-22. On
+  2026-11-24 the draft was revised against the code, under the owner's delegation, by an AI agent
+  (Claude): the findings and the decisions taken on them are recorded in
+  [the review of that day](../reviews/2026-11-24-adr-0039-0040-against-the-code.md). Acceptance is
+  still the owner's. Nothing in it is wired into the product, and no measurement supports it yet.
 
 ## Context
 
-One engine process serves one connection: `McpServer::serve_stdio` reads the process's standard
-input until it closes ([ADR-0002](0002-mcp-stdio-with-explicit-profiles.md),
-[ADR-0015](0015-mcp-transport-on-rmcp-wire-types.md)). The process has one session identifier
-(`wiring::session_id`), one registry, one snapshot counter and one request journal. An agent host
-that wants a second agent on the same desktop can only start a second process.
+**What the MCP adapter already does.** `McpServer` is `Clone` over one `Arc<Mutex<Engine>>`, and
+its clones share that engine (`src/adapters/mcp/src/server.rs`, lines 18–28). `serve` is generic
+over any byte stream (`AsyncRead` and `AsyncWrite`, lines 68–82); `serve_stdio` is that method on
+the process's standard input and output (lines 62–66). Each served stream is its own `Connection`,
+with its own protocol profile, over the shared engine (`protocol.rs`, lines 70–90). A tool call
+holds the engine's lock for the whole of the engine's work on it (`tools.rs`, lines 108–179), so
+calls are already serialised. What the adapter does not have is any notion of which connection a
+call came from.
 
-Two processes on one desktop break a guarantee the engine gives today. Inside one process, any
+**Today one connection is the session.** The executable serves one connection
+([ADR-0002](0002-mcp-stdio-with-explicit-profiles.md),
+[ADR-0015](0015-mcp-transport-on-rmcp-wire-types.md)): `serve` in `src/app/src/main.rs` builds one
+engine and calls `serve_stdio` (lines 36–70). The process has one session identifier
+(`wiring::session_id`), one registry, one snapshot counter and one request journal. When any
+served connection ends, however it ends, `serve` purges the engine (`server.rs`, lines 79–81;
+`Engine::purge`, chapter 08 §8.4; pinned by `src/adapters/mcp/tests/sec_07_deletion.rs`). With two
+connections on one engine, the first to leave would delete the state the other is using. An agent
+host that wants a second agent on the same desktop can today only start a second process.
+
+**Two processes on one desktop break a guarantee the engine gives today.** Inside one process, any
 delivery spends the snapshot: a reference to an earlier observation is refused with
 `STALE_SNAPSHOT` (chapter 07; `identity.rs`,
 `a_reference_to_an_earlier_observation_never_reaches_the_revision_check`; at the level of the
 engine, `two_agents_on_one_engine_never_deliver_twice_on_one_snapshot`, in which two agents share
-one engine in a generated order and no snapshot ever authorises two deliveries). That rule is what makes
-an action a compare-and-swap on the state the agent saw. It is a property of one counter. With two
-processes, a delivery by the first does not spend the snapshot of the second, and the second acts on
-a screen it has not seen. The last look before a delivery (the engine captures the
+one engine in a generated order and no snapshot ever authorises two deliveries). That rule is what
+makes an action a compare-and-swap on the state the agent saw. It is a property of one counter.
+With two processes, a delivery by the first does not spend the snapshot of the second, and the
+second acts on a screen it has not seen. The last look before a delivery (the engine captures the
 screen again and refuses if it differs from the committed base) and the age bound of
-[ADR-0025](0025-bound-authorisations-by-snapshot-and-evidence-age.md) narrow that gap; they were not designed to close it.
+[ADR-0025](0025-bound-authorisations-by-snapshot-and-evidence-age.md) narrow that gap; they were
+not designed to close it.
 
 The desktop itself is one resource: one pointer, one keyboard focus, one foreground window. Several
 agents can share what they see. They cannot share input without an order.
 
-A second fact shapes the design. In the current engine every `observe_screen` publishes a new
-snapshot, and only the latest snapshot authorises an action. If two agents shared one engine with no
-other rule, an agent that only looks would invalidate the reference another agent is about to use.
-A reader would cancel a writer, and two active agents could starve each other.
+**Every observation publishes.** In the current engine every `observe_screen` without a cursor
+publishes a new snapshot (`Engine::observe_screen`, `src/application/src/engine.rs`, lines
+231–251), and only the latest unspent snapshot authorises an action, a dry run included
+(`act.rs`, lines 294–298). If two agents shared one engine with no other rule, an agent that only
+looks would invalidate the reference another agent is about to use. A reader would cancel a
+writer, and two active agents could starve each other. There is also no public way to serve the
+published page again without observing: `first_page` and `next_page` are `pub(super)`
+(`src/application/src/engine/view.rs`, lines 166–197), and a cursor binds the effective
+`include_values` (line 185).
 
 ## Decision
 
 1. **One engine per desktop session stays the only owner** of capture, perception state and input.
    Several agents reach it through a broker inside the engine process: a module of `adapter-mcp`,
-   the adapter that owns the wire format, which calls the `Engine` directly as the stdio server
-   does. They never start a second engine on the same desktop; a second process refuses to start
-   with live input while the first holds the desktop.
-2. **The broker serialises every call into the engine**, as the message loop does today. A check and
-   the action it guards stay in one critical section. This is why no fencing token has to reach the
-   operating system: the component that checks is the one that acts.
+   the adapter that owns the wire format, built on the existing `McpServer` and `Connection`, which
+   calls the `Engine` directly as the stdio server does. Agents never start a second engine on the
+   same desktop. How a second process is refused is not decided yet (see Open points).
+2. **The broker serialises every call into the engine**, as the adapter already does. A check and
+   the action it guards stay in one critical section. This is why no fencing token has to reach
+   the operating system: the component that checks is the one that acts.
 3. **A client is a connection.** The broker gives each connection a `client_id`. The agent does not
    choose it and never has to quote a secret. The session identifier stays one per process.
 4. **One lease covers the observe-and-act cycle.** At most one client holds it. While it is held:
-   only the holder's `observe_screen` publishes a new snapshot; only the holder's `execute_action`
-   reaches the gate; any other client's `observe_screen` returns the page already published, marked
-   as shared and with its age, which authorises nothing for that client; any other client's
-   `execute_action` is refused before the gate and delivers no input. A dry run needs no lease.
-   With several clients connected and no holder, any client's observation publishes a snapshot, as
-   today, and no client delivers: a live action always needs the lease.
-5. **The lease is bounded.** It has a term measured on the engine's monotonic clock and a number
-   that grows with every grant, kept on the research record. It ends when the term ends, when the
-   holder releases it or disconnects, on the operator's stop and on a purge
-   ([ADR-0028](0028-operator-purge-file.md)). Waiting clients are served in arrival order, and a holder
-   cannot renew while another client waits. Granting the lease spends the current snapshot: a new
-   holder observes before it acts.
-6. **With one client connected the broker is transparent**: that client holds the lease implicitly
-   and every response is the one the engine gives today.
-7. **The journal is kept per client.** The key is the pair of client and request identifier, so two
-   agents may use the same request identifier. The total bound of
-   [ADR-0034](0034-propose-fail-closed-retained-state-budgets.md) stays, split by a quota per
-   client so that one agent cannot evict the entries of another.
-8. **Local transport only.** On Windows, a named pipe that rejects remote clients, is restricted to
-   the current user and refuses to start when the name is already taken. An `attach` mode of the
-   executable relays standard input and output to the pipe, so an MCP host keeps starting a stdio
-   server as it does now. The number of clients is bounded, and each connection keeps the message
-   bounds of ADR-0015.
+   - only the holder's `observe_screen` publishes a new snapshot;
+   - only the holder's live `execute_action` reaches the gate; any other client's live action is
+     refused before the gate with `POLICY_DENIED`, delivers no input, and the reason goes on the
+     research record, never into the message;
+   - any other client's `observe_screen` returns the page already published, built again for that
+     client (its own `include_values`, its own grant), which authorises nothing that client could
+     not do anyway. The page is the same `structuredContent` as for the holder; that it is shared,
+     and its age on the engine's clock, depend on the run, so by engineering rule 1 they go in
+     `_meta`, never in `structuredContent`. This needs an engine method that serves the published
+     snapshot again, per client, without capturing; the engine has none today.
+   - **A dry run needs no lease.** A client without the lease may dry-run on the shared page. A
+     dry run delivers nothing, reads no policy and spends nothing (`act.rs`, lines 329–331), so
+     refusing it would only hide what the client already knows. It still meets every check that
+     comes before that line today: the snapshot must be the current, unspent one (lines 294–298),
+     and the target's age bound of ADR-0025 applies (line 327). Once the holder delivers, or the
+     lease passes to another client, the shared page is spent and a dry run on it is refused with
+     `STALE_SNAPSHOT`, as now.
 
-Open points for the owner, because each changes the dossier:
+   With several clients connected and no holder, any client's observation publishes a snapshot,
+   as today, and no client delivers: a live action always needs the lease.
+5. **How the lease is asked for (formerly O1).** An optional `lease` argument of `observe_screen`,
+   with the values `acquire` and `release`. The contract keeps its three tools; the input schema of
+   `observe_screen` in chapter 07 gains the argument when this ADR is accepted. Whether the client
+   holds the lease, waits, or has no lease is reported with the page; it depends on the other
+   clients, so it goes in `_meta` like the page's age. A fourth tool was rejected (see
+   Alternatives), and a lease assigned only from the operator's side would make every orchestrator
+   need the operator's harness for the ordinary case.
+6. **The refusal code (formerly O2) is `POLICY_DENIED`.** Chapter 07 §7.7 (line 59) classes
+   `POLICY_DENIED` as a decision code and `PERMISSION_DENIED` as an adapter code; a missing lease
+   is the engine's decision, not an adapter's failure. No new code is added.
+7. **The lease is bounded.** It has a term and a number that grows with every grant, kept on the
+   research record. **The term (formerly O3)** is the validity window of ADR-0025
+   (`[engine] max_snapshot_age_ms`, 10 000 ms by default, `src/app/src/config.rs` line 144): it
+   covers one observe-and-act cycle, which ADR-0025 already bounds. At most eight clients are
+   connected at once; a ninth is refused. The lease ends when its term ends, when the holder
+   releases it or disconnects, on the operator's stop and on a purge
+   ([ADR-0028](0028-operator-purge-file.md)). Waiting clients are served in arrival order. Granting
+   the lease spends the current snapshot: a new holder observes before it acts.
+8. **When the lease is evaluated.** Validity is evaluated once, when a call enters the critical
+   section, on the engine's injected clock. A delivery already in progress completes: a two-phase
+   `type` ([ADR-0018](0018-two-phase-type-with-element-level-focus-confirmation.md)) polls the clock
+   between its click and its keys (`act.rs`, lines 557–600), and must not lose the lease between
+   them. A holder renews by asking for the lease again, and only when nobody waits; a renewal keeps
+   the lease's number, starts a new term and spends nothing.
+9. **With one client connected the lease is transparent.** That client holds the lease implicitly,
+   without asking for it. When a second client connects, the implicit lease becomes an ordinary
+   lease whose term starts at that moment: an attach neither cancels a running agent at once nor
+   leaves it an unbounded lease. The transparency covers the lease only. With the broker on, the
+   grants of [ADR-0040](0040-task-scoped-grants-narrower-than-the-local-policy.md) govern every
+   client, a single one included: a client without a valid grant observes without values and
+   delivers nothing. With the broker off nothing changes.
+10. **A client's own state goes when it leaves; the engine is purged when the last one leaves.** A
+    connection that ends deletes that client's state: its lease, its place in the queue, its
+    entries in the journal. The engine itself is purged, as `serve` does today, when the last
+    connection ends. With one client this is today's behaviour, so SEC-07 keeps its meaning; with
+    several, one agent leaving cannot erase what the others are using.
+11. **The journal is kept per client.** The key becomes the pair of client and request identifier,
+    so two agents may use the same request identifier. What is bounded today is only the evictable
+    part: `JOURNAL_CAPACITY = 1024` results that delivered no input
+    (`src/application/src/engine/journal.rs`, lines 7–20); delivered and indeterminate results are
+    kept for the session without bound, keyed today by `request_id` alone (lines 92–99), and
+    [ADR-0034](0034-propose-fail-closed-retained-state-budgets.md) was accepted as documentation
+    only, with no budget. A quota per client can therefore only split the evictable part, so that
+    one agent cannot evict another's results that delivered nothing; it bounds nothing that is not
+    bounded today.
+12. **Transport: in-memory streams first.** The broker is built and tested on in-memory streams
+    (`serve` already accepts any stream) and on the simulated desktop. The local transport is a
+    separate spike and a separate decision, which must meet these constraints as the code stands:
+    - the SEC-04 source check forbids `tokio::net`, `OpenOptions`, `File::create` and
+      `Command::new` in production code (`src/acceptance/tests/repository.rs`, lines 142–173);
+      `tokio`'s named pipes live in `tokio::net`;
+    - the SEC-04 lockfile check forbids `mio` and `socket2` in every lockfile (lines 228–262), and
+      `tokio`'s `net` feature depends on both;
+    - [ADR-0016](0016-bounded-unsafe-for-windows-capture-and-input.md) allows `unsafe` only in the
+      capture and input adapters; the MCP adapter and the app keep `forbid`.
 
-- **O1. How a client asks for the lease.** Proposed: an optional argument of `observe_screen`
-  (`lease`: `acquire` or `release`) and a `lease` object in the page. The contract keeps its three
-  tools; the schemas of chapter 07 change. The alternative is a lease assigned only from the
-  operator's side (see [ADR-0040](0040-task-scoped-grants-narrower-than-the-local-policy.md)).
-- **O2. The refusal code for a client without the lease.** Proposed: `POLICY_DENIED`, with the
-  reason on the research record. A new code would be clearer and changes chapter 07.
-- **O3. The term and the bound on clients.** Proposed defaults: the validity window of ADR-0025 for
-  the term, eight clients.
+    The intended shape stays a Windows named pipe that rejects remote clients, is restricted to the
+    current user and refuses to start when the name is taken, with an `attach` mode of the
+    executable that relays its standard input and output to the pipe, so that an MCP host keeps
+    starting a stdio server. Nothing about the pipe is promised until that spike has reported. Each
+    connection keeps the message bounds of ADR-0015.
+
+### Open points
+
+- **Who starts the engine process.** Not decided. With the `attach` relay, either the operator
+  starts the engine (as `serve` with the broker on) before any agent attaches, or the first
+  `attach` starts it. The second needs `Command::new` in production code, which the SEC-04 source
+  check forbids today.
+- **How a second engine on the same desktop is refused.** Decision 1 needs it, and nothing in the
+  code provides it today. A lock file needs `File::create` or `OpenOptions`, which SEC-04 forbids;
+  a pipe that refuses a second instance would provide it, but only after the transport spike.
+  Until one of the two is decided, "one engine per desktop" holds by the operator's practice, not
+  by construction.
+- **What chapter 08 §8.4 says about the end of a session.** Today the end of the MCP session
+  deletes the engine's state. Under decision 10, with several clients, what a client that left had
+  observed stays in the engine until the last client leaves. Accepting this ADR changes §8.4 and
+  the meaning of SEC-07 for several clients.
 
 ## Alternatives considered
 
@@ -96,6 +181,10 @@ Open points for the owner, because each changes the dossier:
   the model proves.
 - **A fourth tool for the lease:** the contract has exactly three tools; this needs a stronger
   reason than convenience.
+- **A `serve` per connection that never purges:** simpler, and it drops the deletion at the end of
+  the session that SEC-07 pins. Purging on the last disconnect keeps it for the one-client case.
+- **Refusing dry runs without the lease:** it would hide only what the client already has.
+- **A new refusal code for a missing lease:** clearer, and it changes chapter 07 for no safety gain.
 - **A TCP port on the loopback interface:** it is a network socket, which SEC-04 forbids in
   production code, and any local user could reach it.
 
@@ -103,63 +192,93 @@ Open points for the owner, because each changes the dossier:
 
 - Agents can cooperate on one desktop with one order of deliveries, and an orchestrator can decide
   who acts.
+- The broker is smaller than the first draft suggested: the shared engine, the serialisation and
+  the stream-generic `serve` exist. What is new is the client identity, the lease, the per-client
+  journal key, the per-client page and the purge on the last disconnect.
 - The engine gains state that outlives a request: the lease, the waiting list, the clients. Each
   needs a bound and a test, in the manner of ADR-0034.
-- A non-holder plans on a page that may be as old as the lease term. The page says so.
-- A named pipe is new attack surface. The source check of SEC-04 must say exactly which calls are
-  allowed, and [ADR-0016](0016-bounded-unsafe-for-windows-capture-and-input.md) decides whether the pipe needs
-  `unsafe` or a safe wrapper.
-- The broker is transport-independent, so all of its logic is tested on in-memory streams and the
-  simulated desktop. No test injects real input.
+- A non-holder plans on a page that may be as old as the lease term. Its `_meta` says so.
+- A client may dry-run but may not act; a dry run on a spent shared page is refused, as today.
+- A named pipe, when it comes, is new attack surface, and the SEC-04 checks must then say exactly
+  which calls are allowed.
+- No test injects real input.
 
 ## Required validation
 
 New planned tests, with identifiers to be assigned in the matrix when the ADR is accepted. All run
-on the simulated desktop with a fake clock and fixed seeds.
+on in-memory streams and the simulated desktop, with a fake clock and fixed seeds.
 
-- Two clients, one engine: after the first client's delivery, the second client's request that cites
-  the earlier snapshot is refused with `STALE_SNAPSHOT`, and the simulated actuator records nothing.
-- While one client holds the lease, another client's `observe_screen` returns the shared page, the
-  snapshot counter does not move, and the holder's next action still passes.
-- A live action from a client without the lease delivers no input event and its refusal carries no
-  text from the screen ([ADR-0021](0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md)).
+- Two clients, one engine: after the first client's delivery, the second client's request that
+  cites the earlier snapshot is refused with `STALE_SNAPSHOT`, and the simulated actuator records
+  nothing.
+- While one client holds the lease, another client's `observe_screen` returns the published page
+  rebuilt for it, the snapshot counter does not move, its `_meta` carries the page's age and its
+  `structuredContent` does not, and the holder's next action still passes.
+- A live action from a client without the lease is refused with `POLICY_DENIED`, delivers no input
+  event and its refusal carries no text from the screen
+  ([ADR-0021](0021-pin-every-loaded-artefact-and-keep-text-out-of-errors.md)).
+- A client without the lease dry-runs on the current shared page; after the holder's delivery the
+  same dry run is refused with `STALE_SNAPSHOT`.
 - The term ends: another client gets the lease and the former holder's action is refused.
-- A disconnect, the operator's stop and a purge each end the lease.
+- A two-phase `type` whose term ends between its click and its keys completes; the next call is
+  refused.
+- A holder renews while nobody waits, with the same number; it cannot renew while another waits.
+- One client holds the lease implicitly; when a second connects, the first keeps it for one term
+  and then loses it.
+- A disconnect, the operator's stop and a purge each end the lease. A connection that ends while
+  others remain leaves the published snapshot and the others' journal entries in place and deletes
+  its own; the last connection that ends purges the engine.
 - Generated interleavings of observe, act, acquire and release by several clients keep three
   invariants: at most one holder; every delivery came from the holder and cited the current
   snapshot; the deliveries are those of some sequential run.
-- With one client, the broker's responses equal the stdio server's on the acceptance scenarios.
-- A client beyond the bound is refused; a full journal quota evicts only its owner's entries.
-- Supervised, on Windows: the pipe rejects a remote client and another user.
+- With one client holding a grant equal to the local policy, the broker's responses equal the stdio
+  server's on the acceptance scenarios.
+- A ninth client is refused; a full journal quota evicts only its owner's results that delivered
+  no input.
+- Supervised, on Windows, once a transport is decided: the pipe rejects a remote client and
+  another user.
 - The state machine of the lease is added to the formal model
-  ([ADR-0042](0042-formal-model-as-a-third-oracle.md)). A first model of the rules of this draft
-  exists outside the repository (`MultiAgente.lean`, delivered to the owner with this draft; Lean 4
-  core, no `sorry`). It proves
-  that in any trace with any number of clients each snapshot authorises at most one delivery
-  (`one_delivery_per_snapshot`), that a delivery is recorded exactly when the holder cited the
-  current, unspent snapshot, that an observer without the lease changes nothing, and that a new
-  holder must observe first. It does not model time, the waiting order or the transport.
+  ([ADR-0042](0042-formal-model-as-a-third-oracle.md)). A first model of the rules of the first
+  draft exists outside the repository (`MultiAgente.lean`, delivered to the owner with that draft;
+  Lean 4 core, no `sorry`). It proves that in any trace with any number of clients each snapshot
+  authorises at most one delivery (`one_delivery_per_snapshot`), that a delivery is recorded
+  exactly when the holder cited the current, unspent snapshot, that an observer without the lease
+  changes nothing, and that a new holder must observe first. It does not model time, the waiting
+  order, renewal or the transport, so decisions 7 and 8 are not in it yet.
+
+The first building blocks of the pair of ADRs exist unwired on local branches: the grant of
+ADR-0040 (`Grant` in `src/application/src/grant.rs`, commit `dd0579c`, branch `feat/grant-meet`).
+Nothing of the broker exists yet.
 
 ## Reversibility
 
 The broker is a module of the MCP adapter behind a switch that stays off. With the switch off the
-executable serves stdio exactly as today. Removing the module removes the feature; the domain and the
-application crates change only where the journal takes a client in its key. A failure of any
-invariant above on generated interleavings would be a reason to withdraw it.
+executable serves stdio exactly as today, purge on disconnect included. Removing the module removes
+the feature; the domain and the application crates change only where the journal takes a client in
+its key and where the published page is served again. A failure of any invariant above on
+generated interleavings would be a reason to withdraw it.
 
 ## Provenance
 
 The owner's request of 2026-11-22 to connect several agents and let orchestrators direct them.
-Refines ADR-0002, ADR-0006 and ADR-0015; relies on ADR-0025 and ADR-0034. The reasoning uses
-optimistic concurrency control (Kung and Robinson, 1981), leases (Gray and Cheriton, 1989),
-linearizability (Herlihy and Wing, 1990), the argument that a fencing token is only sound when the
-resource checks it (Kleppmann, 2016) and time-of-check-to-time-of-use races (Bishop and Dilger,
-1996). None of these is in chapter 11 yet; adding them is part of accepting this ADR.
+Revised on 2026-11-24 after reading the draft against the code
+([review](../reviews/2026-11-24-adr-0039-0040-against-the-code.md)); the decisions on the open
+points were taken that day under the owner's delegation. Refines ADR-0002, ADR-0006 and ADR-0015;
+relies on ADR-0018, ADR-0025 and ADR-0034. The reasoning uses optimistic concurrency control (Kung
+and Robinson, 1981), leases (Gray and Cheriton, 1989), linearizability (Herlihy and Wing, 1990),
+the argument that a fencing token is only sound when the resource checks it (Kleppmann, 2016) and
+time-of-check-to-time-of-use races (Bishop and Dilger, 1996). None of these is in chapter 11 yet;
+adding them is part of accepting this ADR.
 
 ## Resumen (ES)
 
-Varios agentes se conectan a un único motor por escritorio a través de un intermediario interno, y
-un solo arrendamiento, acotado en el tiempo, cubre el ciclo de observar y actuar. La regla actual
-(toda entrega gasta la instantánea) ya da la seguridad entre agentes si el contador es uno solo; el
-arrendamiento añade orden y evita que un agente que sólo mira invalide al que actúa. Con un cliente
-el comportamiento es el de hoy. Quedan tres puntos abiertos que tocan el dosier.
+Varios agentes se conectan a un único motor por escritorio a través de un intermediario dentro del
+adaptador MCP, que ya comparte un motor tras un mutex y sirve cualquier flujo. Un solo
+arrendamiento, acotado por la ventana de vigencia de ADR-0025, cubre el ciclo de observar y actuar:
+se pide con un argumento `lease` de `observe_screen`, su ausencia se rechaza con `POLICY_DENIED`, se
+evalúa al entrar en la sección crítica y una entrega en curso termina. Quien no lo tiene recibe la
+página publicada, con su edad en `_meta`, y puede hacer simulaciones. Con un solo cliente el
+arrendamiento es implícito; con el intermediario encendido las concesiones de ADR-0040 rigen
+siempre. El motor se purga al irse el último cliente. Primero flujos en memoria; el tubo con nombre
+es otra decisión. Quedan abiertos quién arranca el motor, cómo se impide un segundo motor y el
+cambio de §8.4. Revisada el 2026-11-24 contra el código; la aceptación es del responsable.
