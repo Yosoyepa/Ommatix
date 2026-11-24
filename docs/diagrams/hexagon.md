@@ -5,6 +5,11 @@ dependency; nothing points out of the domain.*
 *Disposición en crates según ADR-0014, a partir de S2b. Las flechas indican la dirección de
 la dependencia; nada sale del dominio.*
 
+*`ommatix-adapter-mcp` also holds the broker of the proposed ADR-0039 (several agents, one input
+lease); only its tests construct it, and the composition root does not.*
+*`ommatix-adapter-mcp` contiene también el intermediario de la propuesta ADR-0039 (varios
+agentes, un arrendamiento de entrada); sólo sus pruebas lo construyen, no la raíz de composición.*
+
 ```mermaid
 flowchart TB
     subgraph app["ommatix (src/app): composition root and CLI"]

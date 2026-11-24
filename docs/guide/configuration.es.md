@@ -112,7 +112,7 @@ El servidor MCP expone tres herramientas, con los schemas JSON del dossier:
 
 | Herramienta | Hace |
 |---|---|
-| `observe_screen` | Observa la pantalla y devuelve una página del snapshot nuevo: `session_id`, `snapshot_id`, `geometry_epoch`, elementos con `target_id`, `revision`, rol, etiqueta y accionabilidad, nunca coordenadas; `query`, `limit` y un `cursor` atado al snapshot |
+| `observe_screen` | Observa la pantalla y devuelve una página del snapshot nuevo: `session_id`, `snapshot_id`, `geometry_epoch`, elementos con `target_id`, `revision`, rol, etiqueta y accionabilidad, nunca coordenadas; `query`, `limit` y un `cursor` atado al snapshot; un `lease` opcional (`acquire` o `release`) se acepta y no hace nada en este servidor de un solo agente |
 | `execute_action` | `click`, `type` o `scroll` sobre un `target_id` en una revisión esperada; dry run por defecto; devuelve `simulated`, `rejected`, `input_delivered`, `effect_observed` o `indeterminate` |
 | `get_engine_metrics` | Modo, observaciones, acciones rechazadas y entregadas, regiones pendientes, si hay modelos cargados |
 
@@ -121,5 +121,13 @@ Los errores del dominio vuelven como resultados de herramienta con `isError: tru
 `_meta` del resultado: los tiempos por etapa bajo `io.ommatix/timings` y si la evidencia de
 accesibilidad es completa bajo `io.ommatix/accessibility` (`observe_screen`), y los tiempos
 por etapa de la acción bajo `io.ommatix/action_timings` (`execute_action`).
+
+El ejecutable sirve a un solo agente por stdio. En el adaptador MCP existe un intermediario que
+permite a varios agentes compartir un motor con un arrendamiento de entrada y una concesión por
+cliente, detrás de las propuestas
+[ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md) y
+[ADR-0040](../adr/0040-task-scoped-grants-narrower-than-the-local-policy.md); el ejecutable
+todavía no puede alcanzarlo (no hay transporte), así que nada de lo que aquí se configura lo
+afecta.
 
 Véase [control del operador](live-input.es.md) para la parada, purga y alcance por ventanas.

@@ -14,5 +14,9 @@ Contexto visual no confiable"];
  agent -> motor [label="intención / referencias",dir=both];
  operator -> policy; policy -> motor [label="autoriza o bloquea"];
  motor -> os [label="sólo eventos autorizados",dir=both];
- {rank=same; agent; operator;} {rank=same; motor; policy;}
+ others [label="Otros agentes / hosts MCP
+ADR-0039 (propuesta): un arrendamiento,
+una concesión por cliente",style="rounded,dashed"];
+ others -> motor [label="mismo motor",style=dashed];
+ {rank=same; agent; operator; others;} {rank=same; motor; policy;}
 }

@@ -10,7 +10,7 @@ La referencia ejecutable en Python usa algoritmos sencillos para probar invarian
 
 ### Entradas, salidas y precondiciones
 
-Entradas: frame actual, último frame base confirmado, regiones sucias pendientes y soportes visuales del último snapshot. Salida: plan de regiones a procesar y razón de selección, sin mutar aún el snapshot publicado. Precondiciones: dimensiones positivas y acotadas, stride válido, buffer suficiente, formato/epoch compatibles. Un cambio incompatible fuerza procesamiento completo.
+Entradas: frame actual, último frame base confirmado, regiones sucias pendientes y soportes visuales del último snapshot. Salida: plan de regiones a procesar y razón de selección, sin mutar aún el snapshot publicado. Precondiciones: dimensiones positivas y acotadas, stride válido, buffer suficiente, formato/epoch compatibles. Un cambio incompatible fuerza procesamiento completo. Con el intermediario de ADR-0039 (propuesta), sólo la observación del titular del arrendamiento ejecuta este algoritmo; la de otro cliente no captura ni percibe: recibe la página ya publicada y no cambia la base ni las regiones pendientes.
 
 Se usa tamaño inicial de tile 64×64 para mantener la nomenclatura original. No se vincula ese tamaño a IDs. Los bordes derecho e inferior tienen tamaño parcial; se visitan todos sus píxeles. Para un frame 1920×1080 hay `ceil(1920/64)*ceil(1080/64)=510` celdas [D].
 
@@ -180,7 +180,7 @@ Límite: el algoritmo 1 relee la accesibilidad sólo en las regiones que cambian
 
 ### Seguridad de ejecución
 
-La petición incluye `session_id`, `snapshot_id`, `target_id` y `expected_revision`. Se valida contra el registro confirmado. Identidad persistente y vigencia no son lo mismo: conservar “e7” no permite ejecutar una petición del snapshot anterior. El MVP rechaza referencias obsoletas de forma conservadora.
+La petición incluye `session_id`, `snapshot_id`, `target_id` y `expected_revision`. Se valida contra el registro confirmado. Identidad persistente y vigencia no son lo mismo: conservar “e7” no permite ejecutar una petición del snapshot anterior. El MVP rechaza referencias obsoletas de forma conservadora. Con el intermediario de ADR-0039 (propuesta), el paso del arrendamiento a otro cliente gasta el snapshot publicado igual que una entrega: ninguna referencia a él autoriza ya una acción, y el nuevo titular observa antes de actuar. Los identificadores siguen siendo los mismos para todos los clientes.
 
 No se intenta resolver una referencia desconocida buscando un label parecido a 150 px. Una nueva observación puede permitir al agente seleccionar la entidad correcta de forma explícita. El coste de un round-trip adicional es preferible a ejecutar una acción potencialmente distinta.
 

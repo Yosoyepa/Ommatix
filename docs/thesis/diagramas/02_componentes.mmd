@@ -14,3 +14,7 @@ flowchart TD
   G --> ACT[Actuador del SO]
   ACT --> V[Verificador de efecto]
   V --> CO
+  BR["Intermediario (ADR-0039, propuesta): clientes, arrendamiento, concesión por cliente"]
+  MCP -.-> BR
+  BR -.-> CO
+  BR -.-> G

@@ -4,7 +4,10 @@ All diagrams are [Mermaid](https://mermaid.js.org) inside Markdown, so GitHub re
 diffs stay reviewable. Labels are in English and captions are bilingual. The first four are
 the thesis views of [`docs/thesis/diagramas/`](../thesis/diagramas/README.md), whose Spanish
 sources stay canonical; the hexagon shows how ADR-0014 lays those components out in crates,
-and the engine view shows the code as of S2b.
+and the engine view shows the code as of S2b. These views show what the executable does: one
+agent over stdio. The Spanish sources of the context, components and action views also show the
+broker of the proposed [ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md),
+which exists in `ommatix-adapter-mcp` and cannot be reached from the executable yet.
 
 | Diagram | Shows |
 |---|---|

@@ -19,6 +19,9 @@ Vigencia • foco • permisos"];
 Recibo de entrega"];
  v [label="Verificador de efecto
 Confirmación o incertidumbre"];
+ b [label="Intermediario (ADR-0039, propuesta)
+Clientes • arrendamiento • concesión",style="rounded,dashed"];
+ m->b [style=dashed]; b->c [style=dashed]; b->g [style=dashed];
  m->c->p->f->t->s;
  m->g; s->g; g->a->v; v->c [style=dashed,label="reobservación",constraint=false];
  {rank=same;s;v;} {rank=same;t;a;} {rank=same;f;g;}
