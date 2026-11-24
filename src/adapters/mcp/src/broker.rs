@@ -38,9 +38,10 @@
 //!
 //! Responses have the stdio server's shape, with one addition in `_meta`: on `observe_screen`
 //! and `execute_action`, when the request carried `lease` or more than one client is connected,
-//! the key [`LEASE_META_KEY`] says where the client stands (`holder`, `waiting` or `none`, the
-//! lease's number, the place in the queue) and whether the page is the one already published,
-//! with its age (ADR-0039, proposed, decision 5). A sole client that never sends `lease` holds
+//! the key [`LEASE_META_KEY`](crate::LEASE_META_KEY) says where the client stands (`holder`,
+//! `waiting` or `none`, the lease's number, the place in the queue) and whether the page is the
+//! one already published, with its age (ADR-0039, proposed, decision 5). A response that carries
+//! no page (a tool error, `LIMIT_EXCEEDED` included) reports no shared page. A sole client that never sends `lease` holds
 //! the lease implicitly and gets the stdio server's responses byte for byte. The lease can also
 //! be asked for through [`BrokerConnection::acquire`] and [`BrokerConnection::release`].
 //!
@@ -68,10 +69,10 @@ use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::config::McpConfig;
-use crate::dto::{self, LeaseArgument};
+use crate::dto::LeaseArgument;
 use crate::protocol::{Backend, Connection};
 use crate::server::exchange;
-use crate::tools::{self, CallError, LEASE_META_KEY, ToolCall, ToolOutput};
+use crate::tools::{self, CallError, LeaseReport, ToolCall, ToolOutput};
 
 /// The refusal of a live action from a client that does not hold the lease and whose journal
 /// does not know its request identifier (ADR-0039, decisions 4 and 6). It names the limit and
@@ -362,10 +363,10 @@ impl Backend for Member {
             ToolCall::Metrics => return Ok(tools::metrics(engine)),
         };
         if reports {
-            let standing = state.leases.standing(self.client);
-            output
-                .meta
-                .push((LEASE_META_KEY, dto::lease_meta(standing, shared_age)));
+            output.lease = Some(LeaseReport {
+                standing: state.leases.standing(self.client),
+                shared_age,
+            });
         }
         Ok(output)
     }

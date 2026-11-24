@@ -372,6 +372,12 @@ fn broker_session_responses() -> Vec<Value> {
         json!({ "include_values": true }),
     );
     send(b.connection(), "get_engine_metrics", json!({}));
+    // A tool error on an observation: a cursor that names no published page.
+    send(
+        a.connection(),
+        "observe_screen",
+        json!({ "cursor": "not-a-cursor", "include_values": true }),
+    );
     send(b.connection(), "observe_screen", json!({ "lease": VALUE }));
     send(b.connection(), "observe_screen", json!({ VALUE: CAPTION }));
     send(a.connection(), "execute_action", json!({ "action": TYPED }));
@@ -461,6 +467,17 @@ fn it_06_telemetry_carries_numbers_only_and_nothing_from_the_screen() {
         .filter_map(|r| r["result"]["_meta"].get(LEASE_META_KEY))
         .count();
     assert!(leases >= 8, "{leases} broker results reported the lease");
+    // Tool errors carry the key too, and with no page they report no shared page (R-U4c-1).
+    let on_errors: Vec<&Value> = responses[stdio..]
+        .iter()
+        .filter(|r| r["result"]["isError"] == true)
+        .filter_map(|r| r["result"]["_meta"].get(LEASE_META_KEY))
+        .collect();
+    assert!(on_errors.len() >= 2, "{on_errors:?}");
+    for lease in on_errors {
+        assert_eq!(lease["shared"], false, "{lease}");
+        assert!(lease["age_ms"].is_null(), "{lease}");
+    }
     let mut meta_count = 0;
     for response in &responses {
         let Some(meta) = response["result"].get("_meta") else {

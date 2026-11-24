@@ -19,7 +19,9 @@ use ommatix_adapter_mcp::{
 use ommatix_adapter_sim::fixture::{FixtureActuator, FixtureCapturer};
 use ommatix_adapter_sim::{FixtureDesktop, FixtureScene, confirmed};
 use ommatix_application::contract::ValidatedAction;
-use ommatix_application::lease::{Acquired, ClientId, LeaseChange, LeaseRefusal, Standing};
+use ommatix_application::lease::{
+    Acquired, ClientId, LeaseChange, LeaseRefusal, Released, Standing,
+};
 use ommatix_application::{
     CapturedFrame, Clock, DeliveryReceipt, Engine, EngineConfig, FrameCapturer, Grant, LeaseTable,
     LocalPolicy, ManualClock, NoAccessibility, OsActuator, PolicyStore, PortError, Ports,
@@ -1308,6 +1310,7 @@ enum Seen {
     Implicit,
     RenewalRefused,
     Released,
+    LeftQueue,
     ReleaseRefused,
     Published,
     Served,
@@ -1330,7 +1333,7 @@ enum Seen {
     Metrics,
 }
 
-const EVERY_OUTCOME: [Seen; 30] = [
+const EVERY_OUTCOME: [Seen; 31] = [
     Seen::Connected,
     Seen::ConnectRefused,
     Seen::Left,
@@ -1341,6 +1344,7 @@ const EVERY_OUTCOME: [Seen; 30] = [
     Seen::Implicit,
     Seen::RenewalRefused,
     Seen::Released,
+    Seen::LeftQueue,
     Seen::ReleaseRefused,
     Seen::Published,
     Seen::Served,
@@ -1593,7 +1597,7 @@ fn generated_run(drive: Drive) {
     let mut model = Model::new(MAX_CLIENTS);
     let mut rng = Rng(match drive {
         Drive::Methods => 0x0B40_4E55,
-        Drive::Wire => 0x5EED_0003,
+        Drive::Wire => 0x5EED_0006,
     });
     let mut slots: Vec<Option<Slot>> = (0..SLOTS).map(|_| None).collect();
     let mut next_request = 0_u64;
@@ -1687,10 +1691,10 @@ fn generated_run(drive: Drive) {
                     expected.result.map_err(BrokerError::Lease),
                     "step {step}"
                 );
-                model.saw(if actual.is_ok() {
-                    Seen::Released
-                } else {
-                    Seen::ReleaseRefused
+                model.saw(match actual {
+                    Ok(Released::LeftQueue) => Seen::LeftQueue,
+                    Ok(_) => Seen::Released,
+                    Err(_) => Seen::ReleaseRefused,
                 });
             }
             (26..=35, true) => {
@@ -1707,6 +1711,7 @@ fn generated_run(drive: Drive) {
                 let values = rng.chance(50);
                 model.enter();
                 model.enter();
+                let mut left_queue = false;
                 let answer = if acquire {
                     let expected = model.leases.acquire(id, now);
                     model.apply(&expected.change);
@@ -1714,6 +1719,7 @@ fn generated_run(drive: Drive) {
                 } else {
                     let expected = model.leases.release(id, now);
                     model.apply(&expected.change);
+                    left_queue = expected.result == Ok(Released::LeftQueue);
                     expected.result.map(|_| None)
                 };
                 let settled = model.leases.publishes(id, now);
@@ -1745,6 +1751,7 @@ fn generated_run(drive: Drive) {
                         assert_eq!(state["state"], "holder", "step {step}");
                         Seen::Implicit
                     }
+                    Ok(None) if left_queue => Seen::LeftQueue,
                     Ok(None) => Seen::Released,
                     Err(_) if acquire => Seen::RenewalRefused,
                     Err(_) => Seen::ReleaseRefused,
@@ -2262,7 +2269,7 @@ fn ct_12_a_waiter_that_releases_leaves_the_queue_and_asks_again_at_the_back() {
     let mut b = rig.connect(Some(full()));
     let mut c = rig.connect(Some(full()));
     let mut d = rig.connect(Some(full()));
-    let _ = observe_with(&mut a, json!({}));
+    let a_page = observe_with(&mut a, json!({}))["structuredContent"].clone();
     for (conn, position) in [(&mut b, 1), (&mut c, 2), (&mut d, 3)] {
         let asked = observe_with(conn, json!({ "lease": "acquire" }));
         assert_eq!(
@@ -2277,6 +2284,13 @@ fn ct_12_a_waiter_that_releases_leaves_the_queue_and_asks_again_at_the_back() {
     assert_eq!(
         lease_of(&left),
         Some(&standing("none", None, None, Some(0)))
+    );
+    // A waiter leaving passes the lease to nobody and spends nothing: the holder still delivers
+    // on the snapshot it already has.
+    let held = act(&mut a, click(&a_page, "a1", true));
+    assert!(
+        delivered(&held),
+        "a waiter's leaving spent the snapshot: {held}"
     );
     for (conn, position) in [(&mut c, 1), (&mut d, 2)] {
         let moved = observe_with(conn, json!({}));
@@ -2318,7 +2332,7 @@ fn ct_12_a_waiter_that_releases_leaves_the_queue_and_asks_again_at_the_back() {
         lease_of(&first),
         Some(&standing("waiting", None, Some(1), Some(0)))
     );
-    assert_eq!(rig.world.events(), 1);
+    assert_eq!(rig.world.events(), 2, "a's delivery and d's");
 }
 
 #[test]
@@ -2339,6 +2353,10 @@ fn ct_12_with_nothing_published_a_waiter_gets_stale_snapshot_and_its_standing() 
         Some(&standing("waiting", None, Some(1), None)),
         "no page was served"
     );
+    let lease = lease_of(&nothing).unwrap();
+    assert_eq!(lease["shared"], false);
+    assert_eq!(lease["age_ms"], Value::Null);
+    common::assert_valid("lease.meta", lease);
 }
 
 #[test]
@@ -2418,13 +2436,32 @@ fn ct_12_an_observation_too_large_for_one_message_keeps_its_lease_meta() {
         lease_of(&too_large),
         Some(&standing("holder", Some(1), None, None))
     );
+    // Non-holders whose shared page is too large: the lease was applied and each client learns
+    // where it stands, but the error carries no page, so no shared page and no age (R-U4c-1).
+    // Time passes first, so that a page's age copied onto the error would not be 0.
+    let mut c = broker.connect(Some(full())).unwrap();
+    world.advance(Duration::from_millis(300));
     let asked = observe_with(&mut b, json!({ "lease": "acquire" }));
+    assert_eq!(asked["isError"], true, "{asked}");
     assert_eq!(code(&asked["structuredContent"]), Some("LIMIT_EXCEEDED"));
     assert_eq!(
         lease_of(&asked),
-        Some(&standing("waiting", None, Some(1), Some(0))),
+        Some(&standing("waiting", None, Some(1), None)),
         "the lease was applied, and the client learns where it stands"
     );
+    let plain = observe_with(&mut c, json!({}));
+    assert_eq!(code(&plain["structuredContent"]), Some("LIMIT_EXCEEDED"));
+    assert_eq!(lease_of(&plain), Some(&standing("none", None, None, None)));
+    // The holder's own page, too large again.
+    let again = observe_with(&mut a, json!({}));
+    assert_eq!(code(&again["structuredContent"]), Some("LIMIT_EXCEEDED"));
+    assert_eq!(
+        lease_of(&again),
+        Some(&standing("holder", Some(1), None, None))
+    );
+    for result in [&too_large, &asked, &plain, &again] {
+        common::assert_valid("lease.meta", lease_of(result).unwrap());
+    }
     // The stdio server's own LIMIT_EXCEEDED carries no lease.
     let mut stdio = world.server(config).connect();
     let response = call_ok(

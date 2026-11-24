@@ -3,11 +3,14 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use std::time::Duration;
+
 use ommatix_application::Engine;
 use ommatix_application::contract::{
     ActionRequest, ActionResult, ActionTimings, ErrorCode, NextStep, ObservePage, ObserveRequest,
     ToolError, limits,
 };
+use ommatix_application::lease::Standing;
 use rmcp::model::Tool;
 use serde::Serialize;
 use serde_json::Value;
@@ -122,6 +125,20 @@ pub(crate) struct ToolOutput {
     pub is_error: bool,
     /// Run-dependent values for the result `_meta`.
     pub meta: Vec<(&'static str, Value)>,
+    /// Where the broker's client stands, rendered under [`LEASE_META_KEY`] by
+    /// [`ToolOutput::lease_meta`]; `None` on the stdio server and whenever the broker does not
+    /// report the lease.
+    pub lease: Option<LeaseReport>,
+}
+
+/// What the broker reports about the lease for one result (ADR-0039, proposed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LeaseReport {
+    /// Where the client stands after the call's lease operation and settlement.
+    pub standing: Standing,
+    /// The age of the published page, when the page the call produced is that page served
+    /// again; `None` when the call published it or produced no page.
+    pub shared_age: Option<Duration>,
 }
 
 impl ToolOutput {
@@ -135,7 +152,24 @@ impl ToolOutput {
             text,
             is_error,
             meta: Vec::new(),
+            lease: None,
         }
+    }
+
+    /// The `_meta` value under [`LEASE_META_KEY`], if the broker reports the lease. This is the
+    /// only place it is rendered, and an error result never carries a page: on it `shared` is
+    /// `false` and `age_ms` is `null` whatever the report says, so a page replaced by an error
+    /// (`LIMIT_EXCEEDED`) or any other tool error cannot claim a shared page. `state`, `number`
+    /// and `position` are kept: the client must still learn where it stands (R-U4c-1).
+    pub(crate) fn lease_meta(&self) -> Option<Value> {
+        self.lease.map(|report| {
+            let shared_age = if self.is_error {
+                None
+            } else {
+                report.shared_age
+            };
+            dto::lease_meta(report.standing, shared_age)
+        })
     }
 
     pub(crate) fn tool_error(tool: &'static str, error: &ToolError) -> Self {

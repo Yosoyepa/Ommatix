@@ -459,8 +459,9 @@ impl Connection {
 
 /// Encodes a tool result for the profile, within `limit` bytes: an observation page that
 /// does not fit becomes a `LIMIT_EXCEEDED` tool error asking for a smaller request. That error
-/// keeps the broker's [`LEASE_META_KEY`] entry, if the page had one: the `lease` argument was
-/// already applied, and the client must still learn where it stands.
+/// keeps the broker's lease report, if the page had one: the `lease` argument was already
+/// applied, and the client must still learn where it stands. Being an error, it renders with no
+/// shared page ([`ToolOutput::lease_meta`]).
 ///
 /// Any other result (above all an `execute_action` one, the agent's only record of input
 /// that may have reached the OS) is never replaced: it sheds its text duplicate and its
@@ -471,17 +472,13 @@ impl Connection {
 fn encode_tool(id: &Value, output: ToolOutput, modern: bool, limit: usize) -> String {
     let encode = |result: &Value| envelope(id, Some(result), None);
     if output.tool == OBSERVE_SCREEN {
-        let lease = output
-            .meta
-            .iter()
-            .find(|(key, _)| *key == LEASE_META_KEY)
-            .cloned();
+        let lease = output.lease;
         let line = encode(&call_result(output, modern, Shape::Full));
         if line.len() <= limit {
             return line;
         }
         let mut exceeded = tools::limit_exceeded(limit);
-        exceeded.meta.extend(lease);
+        exceeded.lease = lease;
         let reduced = call_result(exceeded, modern, Shape::Full);
         return fit(id, &encode(&reduced), limit);
     }
@@ -532,6 +529,7 @@ const LEAN_TEXT: &str = "The result is in structuredContent.";
 /// run-dependent values in `_meta`.
 fn call_result(output: ToolOutput, modern: bool, shape: Shape) -> Value {
     let full = shape == Shape::Full;
+    let lease = output.lease_meta();
     let text = if full {
         output.text
     } else {
@@ -549,6 +547,9 @@ fn call_result(output: ToolOutput, modern: bool, shape: Shape) -> Value {
     if full {
         for (key, value) in output.meta {
             meta.insert(key.to_owned(), value);
+        }
+        if let Some(lease) = lease {
+            meta.insert(LEASE_META_KEY.to_owned(), lease);
         }
     }
     if !meta.is_empty() {
@@ -717,6 +718,33 @@ mod tests {
             structured: page,
             is_error: false,
             meta: Vec::new(),
+            lease: None,
+        }
+    }
+
+    /// R-U4c-1: an error result carries no page, so its lease `_meta` reports no shared page and
+    /// no age, whatever the report it was given; where the client stands is kept.
+    #[test]
+    fn ct_12_an_error_result_reports_no_shared_page_whatever_its_lease_report_says() {
+        use ommatix_application::lease::Standing;
+
+        use crate::tools::LeaseReport;
+
+        let report = LeaseReport {
+            standing: Standing::Waiting { position: 2 },
+            shared_age: Some(std::time::Duration::from_millis(300)),
+        };
+        let mut page = observe_output(1);
+        page.lease = Some(report);
+        let mut error = tools::limit_exceeded(4096);
+        error.lease = Some(report);
+        for (output, shared, age) in [(page, true, json!(300)), (error, false, Value::Null)] {
+            let result = call_result(output, true, Shape::Full);
+            let lease = &result["_meta"][LEASE_META_KEY];
+            assert_eq!(lease["state"], "waiting", "{result}");
+            assert_eq!(lease["position"], 2);
+            assert_eq!(lease["shared"], shared, "{result}");
+            assert_eq!(lease["age_ms"], age, "{result}");
         }
     }
 
