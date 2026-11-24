@@ -46,6 +46,10 @@ pub enum LeaseRefusal {
     /// runs to its end.
     #[error("the lease cannot be renewed while another client waits")]
     RenewalRefused,
+    /// No lease can be granted or renewed: its end, `now + term`, does not fit in a
+    /// [`Duration`]. The table's time never runs backwards, so none ever will be again.
+    #[error("no lease can be granted: its end would not fit in a duration")]
+    TimeExhausted,
 }
 
 /// Why a lease ended (ADR-0039, decision 5).
@@ -144,6 +148,18 @@ struct Lease {
 /// and the first waiter is granted at `now`. A `now` earlier than one already seen is read as
 /// the latest one, so time never runs backwards in the table. Collections are ordered, so equal
 /// histories give equal tables.
+///
+/// Durations. The only sum on durations is a lease's end, `now + term`, and it is checked: a
+/// lease is granted only when its end fits in a [`Duration`], so every lease lasts exactly its
+/// term and ends strictly after the instant it was granted at. When the sum does not fit, no
+/// lease is granted, and since the table's time never runs backwards none ever will be again:
+/// [`LeaseTable::acquire`] is refused with [`LeaseRefusal::TimeExhausted`] (to grant, to queue
+/// or to renew; a renewal refused this way leaves the lease to run to its end); a lease that
+/// ends grants nobody and empties the queue; and a second connection leaves the first client's
+/// implicit lease without making it an ordinary one, so nobody holds the lease and nobody
+/// delivers. A sole client's implicit lease has no term and is not affected. Because every
+/// operation settles time and every lease ends after the instant it was granted at, a lease
+/// always ends later than the last `now` the table has seen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeaseTable {
     max_clients: NonZeroUsize,
@@ -187,8 +203,9 @@ impl LeaseTable {
     /// Connects a new client (ADR-0039, decision 3). A first client holds the lease
     /// implicitly. When a second client connects while the first holds it implicitly, that
     /// implicit lease becomes an ordinary lease of the first client: a new number, a term that
-    /// starts at `now`, and nothing spent. Refused with [`LeaseRefusal::TooManyClients`] at the
-    /// bound, or when no identifier is left to give.
+    /// starts at `now`, and nothing spent; when that term's end cannot be represented, the first
+    /// client keeps no lease and nobody holds it. Refused with [`LeaseRefusal::TooManyClients`]
+    /// at the bound, or when no identifier is left to give.
     pub fn connect(&mut self, now: Duration) -> Outcome<ClientId> {
         let mut step = self.begin(now);
         let result = if self.clients.len() >= self.max_clients.get() || self.next_client == u64::MAX
@@ -208,7 +225,8 @@ impl LeaseTable {
     }
 
     /// Disconnects `client`: removes it, its place in the queue and its lease if it holds one,
-    /// in which case the first waiter is granted at once (ADR-0039, decision 5).
+    /// in which case the first waiter is granted at once (ADR-0039, decision 5), unless no
+    /// lease can be granted any more (see [`LeaseTable`], durations).
     pub fn disconnect(&mut self, client: ClientId, now: Duration) -> Outcome<()> {
         let mut step = self.begin(now);
         let result = if self.clients.remove(&client) {
@@ -228,46 +246,55 @@ impl LeaseTable {
     /// Asks for the lease (ADR-0039, decisions 4 and 5). Nobody holds it: the client is
     /// granted. Another client holds it: the client joins the queue once, in arrival order.
     /// The client holds it: a renewal to `now + term` under the same number, allowed only when
-    /// nobody waits.
+    /// nobody waits. A sole client holds it implicitly and nothing changes. When `now + term`
+    /// does not fit in a [`Duration`], every other case is refused with
+    /// [`LeaseRefusal::TimeExhausted`] and nothing changes.
     pub fn acquire(&mut self, client: ClientId, now: Duration) -> Outcome<Acquired> {
         let mut step = self.begin(now);
+        let ends_at = step.now.checked_add(self.term);
+        let granted_now = self.lease.filter(|lease| {
+            lease.client == client
+                && step
+                    .change
+                    .granted
+                    .last()
+                    .is_some_and(|grant| grant.number == lease.number)
+        });
         let result = if !self.clients.contains(&client) {
             Err(LeaseRefusal::UnknownClient)
-        } else if let Some(lease) = self.lease {
-            let granted_now = step
-                .change
-                .granted
-                .last()
-                .is_some_and(|grant| grant.number == lease.number);
-            if granted_now && lease.client == client {
-                Ok(Acquired::Granted {
-                    number: lease.number,
-                })
-            } else if lease.client != client {
-                let position =
-                    if let Some(index) = self.queue.iter().position(|waiter| *waiter == client) {
+        } else if self.implicit_holder() == Some(client) {
+            Ok(Acquired::Implicit)
+        } else if let Some(lease) = granted_now {
+            Ok(Acquired::Granted {
+                number: lease.number,
+            })
+        } else if let Some(ends_at) = ends_at {
+            match self.lease {
+                Some(lease) if lease.client != client => {
+                    let position = if let Some(index) =
+                        self.queue.iter().position(|waiter| *waiter == client)
+                    {
                         index + 1
                     } else {
                         self.queue.push_back(client);
                         self.queue.len()
                     };
-                Ok(Acquired::Queued { position })
-            } else if self.queue.is_empty() {
-                self.lease = Some(Lease {
-                    ends_at: step.now.saturating_add(self.term),
-                    ..lease
-                });
-                Ok(Acquired::Renewed {
-                    number: lease.number,
-                })
-            } else {
-                Err(LeaseRefusal::RenewalRefused)
+                    Ok(Acquired::Queued { position })
+                }
+                Some(lease) if self.queue.is_empty() => {
+                    self.lease = Some(Lease { ends_at, ..lease });
+                    Ok(Acquired::Renewed {
+                        number: lease.number,
+                    })
+                }
+                Some(_) => Err(LeaseRefusal::RenewalRefused),
+                None => self
+                    .grant(client, &mut step)
+                    .map(|number| Acquired::Granted { number })
+                    .ok_or(LeaseRefusal::TimeExhausted),
             }
-        } else if self.implicit_holder() == Some(client) {
-            Ok(Acquired::Implicit)
         } else {
-            let number = self.grant(client, &mut step);
-            Ok(Acquired::Granted { number })
+            Err(LeaseRefusal::TimeExhausted)
         };
         Self::finish(step, result)
     }
@@ -293,7 +320,9 @@ impl LeaseTable {
 
     /// The operator's stop or a purge (ADR-0039, decision 5): the lease ends and the queue is
     /// emptied, and nobody is granted; clients ask again. A sole client still holds the lease
-    /// implicitly afterwards; the operator's stop itself is enforced by the engine's gate.
+    /// implicitly afterwards; the operator's stop itself is enforced by the engine's gate. It
+    /// takes no `now` and settles nothing: a lease always ends later than the last `now` the
+    /// table has seen (see [`LeaseTable`], durations), so there is nothing to settle.
     pub fn revoke(&mut self) -> LeaseChange {
         let mut step = Step {
             now: self.latest,
@@ -394,8 +423,13 @@ impl LeaseTable {
         }
     }
 
-    /// Grants the lease to the first waiter still connected, if any.
+    /// Grants the lease to the first waiter still connected, if any. When no lease can be
+    /// granted any more, nobody is granted and the queue is emptied: no waiter could be served.
     fn grant_first_waiter(&mut self, step: &mut Step) {
+        if step.now.checked_add(self.term).is_none() {
+            self.queue.clear();
+            return;
+        }
         while let Some(waiter) = self.queue.pop_front() {
             if self.clients.contains(&waiter) {
                 self.grant(waiter, step);
@@ -404,19 +438,22 @@ impl LeaseTable {
         }
     }
 
-    /// Grants a lease of one term from the settled instant. The number grows by one per grant;
-    /// it would stop growing only after `u64::MAX` grants, which no process reaches.
-    fn grant(&mut self, client: ClientId, step: &mut Step) -> u64 {
+    /// Grants a lease of one term from the settled instant and returns its number, or grants
+    /// nothing and returns `None` when the end, `now + term`, does not fit in a [`Duration`].
+    /// The number grows by one per grant; it would stop growing only after `u64::MAX` grants,
+    /// which no process reaches.
+    fn grant(&mut self, client: ClientId, step: &mut Step) -> Option<u64> {
+        let ends_at = step.now.checked_add(self.term)?;
         let number = self.next_number;
         self.next_number = self.next_number.saturating_add(1);
         self.lease = Some(Lease {
             client,
             number,
-            ends_at: step.now.saturating_add(self.term),
+            ends_at,
         });
         step.change.granted.push(LeaseGrant { client, number });
         self.track(step);
-        number
+        Some(number)
     }
 }
 
@@ -863,18 +900,156 @@ mod tests {
         let mut table = LeaseTable::new(NonZeroUsize::new(2).unwrap(), Duration::MAX).unwrap();
         let a = connect(&mut table, almost_max);
         let b = connect(&mut table, almost_max);
-        assert!(delivers(&mut table, a, almost_max));
-        let ended = table.may_deliver(a, Duration::MAX);
-        assert_eq!(
-            ended.result,
-            Ok(false),
-            "the end saturated at the last instant"
+        assert!(
+            !delivers(&mut table, a, almost_max),
+            "no lease whose end cannot be represented"
         );
+        let ended = table.may_deliver(a, Duration::MAX);
+        assert_eq!(ended.result, Ok(false), "nobody holds the lease");
         assert!(
             publishes(&mut table, b, Duration::ZERO),
             "now never runs backwards"
         );
         assert!(!delivers(&mut table, a, Duration::ZERO));
+    }
+
+    // ----- the end of representable time (review R-U2-1) -----
+
+    /// The last instant at which a lease of `TERM` can be granted: it ends at `Duration::MAX`.
+    fn last_fit() -> Duration {
+        Duration::MAX.checked_sub(TERM).unwrap()
+    }
+
+    fn after_last_fit() -> Duration {
+        last_fit().checked_add(Duration::from_nanos(1)).unwrap()
+    }
+
+    /// The clients that may deliver at `now`, asked one after the other at the same instant.
+    fn deliverers(table: &mut LeaseTable, clients: &[ClientId], now: Duration) -> Vec<ClientId> {
+        clients
+            .iter()
+            .copied()
+            .filter(|client| delivers(table, *client, now))
+            .collect()
+    }
+
+    #[test]
+    fn a_lease_granted_at_the_last_instant_that_fits_lasts_its_whole_term() {
+        let mut table = table();
+        let a = connect(&mut table, last_fit());
+        let b = connect(&mut table, last_fit());
+        let before_end = Duration::MAX.checked_sub(Duration::from_nanos(1)).unwrap();
+        assert_eq!(deliverers(&mut table, &[a, b], last_fit()), [a]);
+        assert_eq!(deliverers(&mut table, &[a, b], before_end), [a]);
+        let ended = table.may_deliver(a, Duration::MAX);
+        assert_eq!(ended.result, Ok(false), "it ends at Duration::MAX");
+        assert_eq!(ended.change.ended[0].cause, EndCause::Term);
+        assert_eq!(deliverers(&mut table, &[a, b], Duration::MAX), []);
+    }
+
+    #[test]
+    fn no_lease_is_granted_one_nanosecond_after_the_last_instant_that_fits() {
+        let mut table = table();
+        let a = connect(&mut table, after_last_fit());
+        let second = table.connect(after_last_fit());
+        let b = second.result.unwrap();
+        assert_eq!(
+            second.change.granted,
+            [],
+            "the implicit lease does not turn ordinary"
+        );
+        assert!(!second.change.spend_snapshot);
+        for client in [a, b] {
+            let asked = table.acquire(client, after_last_fit());
+            assert_eq!(asked.result, Err(LeaseRefusal::TimeExhausted));
+            assert!(asked.change.is_empty());
+            assert!(publishes(&mut table, client, after_last_fit()));
+        }
+        assert_eq!(deliverers(&mut table, &[a, b], after_last_fit()), []);
+    }
+
+    #[test]
+    fn at_the_end_of_time_two_clients_never_deliver_at_the_same_instant() {
+        let mut table = table();
+        let a = connect(&mut table, at(0));
+        let b = connect(&mut table, at(0));
+        let asked = table.acquire(b, Duration::MAX);
+        assert_eq!(asked.result, Err(LeaseRefusal::TimeExhausted));
+        assert_eq!(
+            asked.change.granted,
+            [],
+            "a's lease ended and nobody was granted"
+        );
+        assert_eq!(deliverers(&mut table, &[a, b], Duration::MAX), []);
+        assert_eq!(deliverers(&mut table, &[b, a], Duration::MAX), []);
+    }
+
+    #[test]
+    fn at_the_end_of_time_waiters_are_not_granted_and_the_queue_is_emptied() {
+        let mut table = table();
+        let a = connect(&mut table, at(0));
+        let b = connect(&mut table, at(0));
+        let c = connect(&mut table, at(0));
+        let _ = table.acquire(b, at(1));
+        let _ = table.acquire(c, at(1));
+        let settled = table.may_deliver(b, Duration::MAX);
+        assert_eq!(settled.result, Ok(false), "b could not be granted");
+        assert_eq!(settled.change.granted, []);
+        assert!(!settled.change.spend_snapshot);
+        assert_eq!(deliverers(&mut table, &[a, b, c], Duration::MAX), []);
+        assert_eq!(deliverers(&mut table, &[c, b, a], Duration::MAX), []);
+        assert_eq!(
+            table.acquire(c, Duration::MAX).result,
+            Err(LeaseRefusal::TimeExhausted),
+            "c no longer waits and cannot ask again"
+        );
+    }
+
+    #[test]
+    fn a_renewal_whose_end_cannot_be_represented_is_refused_and_the_lease_runs_to_its_end() {
+        let mut table = table();
+        let five = Duration::from_secs(5);
+        let granted_at = last_fit().checked_sub(five).unwrap();
+        let a = connect(&mut table, granted_at);
+        let b = connect(&mut table, granted_at);
+        let end = Duration::MAX.checked_sub(five).unwrap();
+        let refused = table.acquire(a, after_last_fit());
+        assert_eq!(refused.result, Err(LeaseRefusal::TimeExhausted));
+        assert!(refused.change.is_empty());
+        let before_end = end.checked_sub(Duration::from_nanos(1)).unwrap();
+        assert_eq!(deliverers(&mut table, &[a, b], before_end), [a]);
+        assert_eq!(deliverers(&mut table, &[a, b], end), []);
+    }
+
+    #[test]
+    fn a_waiter_left_alone_at_the_end_of_time_holds_the_implicit_lease() {
+        let mut table = table();
+        let a = connect(&mut table, last_fit());
+        let b = connect(&mut table, last_fit());
+        let _ = table.acquire(b, last_fit());
+        let gone = table.disconnect(a, after_last_fit());
+        assert_eq!(gone.change.granted, [], "no ordinary lease fits");
+        assert!(
+            gone.change.spend_snapshot,
+            "b did not hold the lease before"
+        );
+        assert_eq!(
+            table.acquire(b, Duration::MAX).result,
+            Ok(Acquired::Implicit)
+        );
+        assert!(delivers(&mut table, b, Duration::MAX));
+    }
+
+    #[test]
+    fn a_sole_clients_implicit_lease_has_no_term_and_outlasts_the_end_of_time() {
+        let mut table = table();
+        let a = connect(&mut table, Duration::MAX);
+        assert!(delivers(&mut table, a, Duration::MAX));
+        assert!(publishes(&mut table, a, Duration::MAX));
+        assert_eq!(
+            table.acquire(a, Duration::MAX).result,
+            Ok(Acquired::Implicit)
+        );
     }
 
     // ----- generated interleavings against a reference model -----
@@ -926,6 +1101,7 @@ mod tests {
         unknown: u64,
         too_many: u64,
         implicit: u64,
+        time_exhausted: u64,
     }
 
     /// The reference model: the engine's snapshot counter as the broker would drive it, and
@@ -1004,6 +1180,11 @@ mod tests {
                     self.grant(grant, now)?;
                 }
             }
+            if self.lease.is_none() && now.checked_add(TERM).is_none() {
+                // No lease can be granted any more: nobody waits for one.
+                self.waiting.clear();
+                self.told.clear();
+            }
             if change.spend_snapshot {
                 self.seen.spends += 1;
                 if self.honour_spend {
@@ -1059,7 +1240,14 @@ mod tests {
                     ));
                 }
             }
-            self.lease = Some((grant.client, grant.number, now.saturating_add(TERM)));
+            // Invariant 12: a lease ends strictly after the instant it was granted at, by
+            // exactly its term (compared with the table in `check`).
+            let Some(end) = now.checked_add(TERM).filter(|end| *end > now) else {
+                return Err(format!(
+                    "invariant 12: {grant:?} granted at {now:?}, where its end cannot be represented"
+                ));
+            };
+            self.lease = Some((grant.client, grant.number, end));
             Ok(())
         }
 
@@ -1225,9 +1413,9 @@ mod tests {
                 if !model.waiting.is_empty() || !outcome.change.is_empty() {
                     return Err("invariant 5: a renewal with a client waiting".into());
                 }
-                match model.lease {
-                    Some((holder, held, _)) if holder == client && held == number => {
-                        model.lease = Some((client, number, now.saturating_add(TERM)));
+                match (model.lease, now.checked_add(TERM)) {
+                    (Some((holder, held, _)), Some(end)) if holder == client && held == number => {
+                        model.lease = Some((client, number, end));
                     }
                     _ => return Err("a renewal of a lease the model did not hold".into()),
                 }
@@ -1246,6 +1434,12 @@ mod tests {
                 model.seen.queued += 1;
             }
             Ok(Acquired::Implicit) => model.seen.implicit += 1,
+            Err(LeaseRefusal::TimeExhausted) => {
+                if now.checked_add(TERM).is_some() {
+                    return Err("refused for exhausted time while a lease still fits".into());
+                }
+                model.seen.time_exhausted += 1;
+            }
             Err(LeaseRefusal::RenewalRefused) => {
                 if model.waiting.is_empty() {
                     return Err("a renewal refused with nobody waiting".into());
@@ -1339,11 +1533,11 @@ mod tests {
     }
 
     /// One generated run; returns what it saw, or the first invariant broken.
-    fn run(seed: u64, steps: usize, honour_spend: bool) -> Result<Seen, String> {
+    fn run(seed: u64, start: Duration, steps: usize, honour_spend: bool) -> Result<Seen, String> {
         let mut rng = Rng(seed);
         let mut table = table();
         let mut model = Model::new(honour_spend);
-        let mut now = Duration::ZERO;
+        let mut now = start;
         let mut history = Vec::with_capacity(steps);
         for step in 0..steps {
             let op = generate(&mut rng, &table, table.next_client);
@@ -1390,12 +1584,23 @@ mod tests {
 
     const SEEDS: [u64; 4] = [1, 0x5EED, 0xC0FF_EE11, 0x0DD5_EED5];
     const STEPS: usize = 4_000;
+    /// Seeds of runs that start 150 terms before the end of representable time: time moves by
+    /// about 400 terms in a run, so each run crosses the last instant at which a lease fits.
+    const SEEDS_NEAR_THE_END: [u64; 2] = [0xE1D, 0x0F_714E];
+
+    fn near_the_end() -> Duration {
+        Duration::MAX.checked_sub(TERM * 150).unwrap()
+    }
 
     #[test]
     fn generated_interleavings_keep_the_lease_invariants() {
         let mut total = Seen::default();
-        for seed in SEEDS {
-            let seen = run(seed, STEPS, true).unwrap_or_else(|broken| panic!("{broken}"));
+        let runs = SEEDS
+            .map(|seed| (seed, Duration::ZERO))
+            .into_iter()
+            .chain(SEEDS_NEAR_THE_END.map(|seed| (seed, near_the_end())));
+        for (seed, start) in runs {
+            let seen = run(seed, start, STEPS, true).unwrap_or_else(|broken| panic!("{broken}"));
             total.grants += seen.grants;
             total.queued += seen.queued;
             total.renewals += seen.renewals;
@@ -1412,6 +1617,7 @@ mod tests {
             total.unknown += seen.unknown;
             total.too_many += seen.too_many;
             total.implicit += seen.implicit;
+            total.time_exhausted += seen.time_exhausted;
         }
         for (what, count) in [
             ("grants", total.grants),
@@ -1427,6 +1633,7 @@ mod tests {
             ("unknown clients", total.unknown),
             ("clients beyond the bound", total.too_many),
             ("implicit acquires", total.implicit),
+            ("acquires refused for exhausted time", total.time_exhausted),
         ] {
             assert!(count > 0, "no {what} in {total:?}");
         }
@@ -1447,7 +1654,7 @@ mod tests {
     fn the_reference_model_catches_a_caller_that_does_not_spend_on_a_new_holder() {
         let caught: Vec<String> = SEEDS
             .iter()
-            .filter_map(|seed| run(*seed, STEPS, false).err())
+            .filter_map(|seed| run(*seed, Duration::ZERO, STEPS, false).err())
             .collect();
         assert!(!caught.is_empty(), "no seed caught the missing spend");
         assert!(
