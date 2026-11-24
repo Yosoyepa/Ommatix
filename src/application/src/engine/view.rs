@@ -168,7 +168,8 @@ fn stale_cursor() -> ToolError {
 impl Engine {
     /// The page `observe_screen` gives for `request` on the snapshot already published, served
     /// again without capturing, without perception and without publishing (ADR-0039,
-    /// decision 4): what a client that does not hold the lease receives. The first page, or with
+    /// decision 4): what a client receives while another client holds the lease (with nobody
+    /// holding it, a client's observation publishes instead). The first page, or with
     /// a cursor the page it names, with the query and paging of `request`; values are shown
     /// only when `request` asks and the policy read now allows them, so each caller gets its own
     /// page from the same snapshot. `degraded` says, as on a cursor page, whether actions are

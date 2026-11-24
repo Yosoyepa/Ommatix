@@ -416,7 +416,7 @@ fn it_09_after_one_clients_delivery_another_clients_action_on_that_snapshot_is_s
     );
 }
 
-// ---- 2. a non-holder is served the published page ----
+// ---- 2. while another client holds the lease, a non-holder is served the published page ----
 
 #[test]
 fn it_10_a_non_holders_observation_is_the_published_page_and_moves_nothing() {

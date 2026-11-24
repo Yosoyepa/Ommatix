@@ -3,9 +3,11 @@ Característica: Varios agentes sobre un motor con un arrendamiento de entrada
   Varios agentes comparten un motor a través del intermediario del adaptador MCP (ADR-0039,
   propuesta). Un solo arrendamiento cubre el ciclo de observar y actuar: se pide con el
   argumento `lease` de `observe_screen` y `_meta` dice dónde está cada cliente. Sólo quien lo
-  tiene publica y entrega; los demás reciben la página ya publicada y no entregan. Cada cliente
-  actúa bajo su propia concesión (ADR-0040, propuesta). Los escenarios corren sobre el
-  escritorio simulado y un doble del actuador; el ejecutable todavía no sirve el intermediario.
+  tiene entrega. Mientras un cliente lo tiene, sólo su observación captura y publica, y los
+  demás reciben la página ya publicada; cuando nadie lo tiene, la observación de cualquiera
+  publica. Cada cliente actúa bajo su propia concesión (ADR-0040, propuesta). Los escenarios
+  corren sobre el escritorio simulado y un doble del actuador; el ejecutable todavía no sirve el
+  intermediario.
 
   @BDD-63 @RF-19 @IT-10
   Escenario: BDD-63 Dos agentes y un arrendamiento
