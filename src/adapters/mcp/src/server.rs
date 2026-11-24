@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use ommatix_application::Engine;
 use rmcp::model::Tool;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
 use crate::config::McpConfig;
 use crate::protocol::Connection;
@@ -13,7 +13,7 @@ use crate::tools;
 use crate::transport::{Frame, LineReader};
 
 /// Read buffer per connection; an oversized line is discarded in chunks of this size.
-const READ_CHUNK: usize = 8 * 1024;
+pub(crate) const READ_CHUNK: usize = 8 * 1024;
 
 /// Serves the Ommatix tools over MCP.
 ///
@@ -76,13 +76,11 @@ impl McpServer {
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
     {
-        let outcome = exchange(
-            &mut self.connect(),
+        let mut lines = LineReader::new(
+            BufReader::with_capacity(READ_CHUNK, reader),
             self.config.message_limit(),
-            reader,
-            &mut writer,
-        )
-        .await;
+        );
+        let outcome = exchange(&mut self.connect(), &mut lines, &mut writer).await;
         self.purge();
         outcome
     }
@@ -98,32 +96,82 @@ impl McpServer {
     }
 }
 
+/// What the message loop does with one frame read from the stream.
+pub(crate) enum Step {
+    /// The input ended: the connection is over.
+    End,
+    /// Nothing to write (a notification, a client response, a blank line).
+    Silent,
+    /// One response line, with its `\n`, to write and flush.
+    Write(String),
+}
+
+/// The protocol of the bounded message loop (ADR-0015) for one frame: a message is handled by
+/// the connection, an oversized line is answered with `-32600` and the connection survives it,
+/// the end of input ends the loop. Both loops below call it, so they answer alike.
+pub(crate) fn step(connection: &mut Connection, frame: Frame) -> Step {
+    let response = match frame {
+        Frame::Eof => return Step::End,
+        Frame::Message(message) => connection.handle_message(&message),
+        Frame::Oversized => Some(connection.oversized_message_response()),
+    };
+    match response {
+        Some(mut line) => {
+            line.push('\n');
+            Step::Write(line)
+        }
+        None => Step::Silent,
+    }
+}
+
 /// The bounded message loop (ADR-0015) of one connection over a byte stream: one JSON-RPC
 /// message per line in each direction, handled in arrival order, and no incoming line longer
-/// than `limit` bytes buffered. Returns at end of input or on an I/O error. The stdio server
-/// and the broker's connections share it.
+/// than the reader's limit buffered. Returns at end of input or on an I/O error. The stdio
+/// server and the broker's connections share it; [`exchange_blocking`] is the same loop over
+/// blocking streams.
 pub(crate) async fn exchange<R, W>(
     connection: &mut Connection,
-    limit: usize,
-    reader: R,
+    lines: &mut LineReader<R>,
     writer: &mut W,
 ) -> io::Result<()>
 where
-    R: AsyncRead + Unpin,
+    R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    let mut lines = LineReader::new(BufReader::with_capacity(READ_CHUNK, reader), limit);
     loop {
-        let response = match lines.next_frame().await? {
-            Frame::Eof => break,
-            Frame::Message(message) => connection.handle_message(&message),
-            Frame::Oversized => Some(connection.oversized_message_response()),
-        };
-        if let Some(mut line) = response {
-            line.push('\n');
-            writer.write_all(line.as_bytes()).await?;
-            writer.flush().await?;
+        match step(connection, lines.next_frame().await?) {
+            Step::End => break,
+            Step::Silent => {}
+            Step::Write(line) => {
+                writer.write_all(line.as_bytes()).await?;
+                writer.flush().await?;
+            }
         }
     }
     writer.flush().await
+}
+
+/// [`exchange`] over a blocking reader and writer, for a transport that gives each connection a
+/// thread (ADR-0043): the same framing, the same [`step`] for every frame, one reply written and
+/// flushed at a time.
+pub(crate) fn exchange_blocking<R, W>(
+    connection: &mut Connection,
+    lines: &mut LineReader<R>,
+    writer: &mut W,
+) -> io::Result<()>
+where
+    R: io::BufRead,
+    W: io::Write,
+{
+    loop {
+        match step(connection, lines.next_frame_blocking()?) {
+            Step::End => break,
+            Step::Silent => {}
+            Step::Write(line) => {
+                writer.write_all(line.as_bytes())?;
+                writer.flush()?;
+            }
+        }
+    }
+    writer.flush()
 }
