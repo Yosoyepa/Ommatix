@@ -27,11 +27,11 @@ mod window_scope;
 pub use clock::ManualClock;
 pub use engine::{
     ActionFreshness, Engine, EngineConfig, FreshnessProbeCounts, FreshnessProbeGroup,
-    IconResolverConfig, JOURNAL_CAPACITY, OccluderFallback, OccluderProbeCounts, Ports,
-    VerifyParams, grey_grid,
+    IconResolverConfig, JOURNAL_CAPACITY, JOURNAL_CAPACITY_PER_CLIENT, JOURNAL_CLIENTS,
+    OccluderFallback, OccluderProbeCounts, Ports, VerifyParams, grey_grid,
 };
 pub use error::{PortError, error_chain};
-pub use grant::Grant;
+pub use grant::{Grant, GrantedPolicy, InstalledGrant};
 pub use lease::LeaseTable;
 pub use ports::{
     AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame,

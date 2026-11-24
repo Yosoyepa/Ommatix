@@ -8,6 +8,8 @@
 //! shown (the request's `include_values` and the policy's together). A cursor is only
 //! honoured while its snapshot is the published one and the view it paged still holds.
 
+use std::time::Duration;
+
 use ommatix_domain::fusion::normalized;
 
 use super::Engine;
@@ -164,6 +166,45 @@ fn stale_cursor() -> ToolError {
 }
 
 impl Engine {
+    /// The page `observe_screen` gives for `request` on the snapshot already published, served
+    /// again without capturing, without perception and without publishing (ADR-0039,
+    /// decision 4): what a client that does not hold the lease receives. The first page, or with
+    /// a cursor the page it names, with the query and paging of `request`; values are shown
+    /// only when `request` asks and the policy read now allows them, so each caller gets its own
+    /// page from the same snapshot. `degraded` says, as on a cursor page, whether actions are
+    /// blocked on the published snapshot.
+    ///
+    /// `Ok(None)` when nothing is published. It moves no counter, spends nothing and leaves the
+    /// registry as it is: an action that cites the snapshot is judged as before the call.
+    ///
+    /// # Errors
+    ///
+    /// The errors of `observe_screen` for a request out of bounds or a cursor that does not
+    /// name the published snapshot with this view.
+    pub fn serve_published(
+        &self,
+        request: &ObserveRequest,
+    ) -> Result<Option<ObservePage>, ToolError> {
+        check_request(request)?;
+        let (Some(published), Some(measured)) = (self.store.published(), self.measured.as_ref())
+        else {
+            return Ok(None);
+        };
+        if let Some(cursor) = &request.cursor {
+            return self.next_page(request, cursor).map(Some);
+        }
+        let degraded = !self.store.actions_allowed();
+        Ok(Some(self.page(published, measured, request, 0, degraded)))
+    }
+
+    /// How old the published snapshot's capture is on the injected clock, `None` when nothing
+    /// is published. It depends on the run, so it belongs in MCP `_meta`, never in
+    /// `structuredContent` (engineering rule 1, ADR-0039, decision 4).
+    pub fn published_age(&self) -> Option<Duration> {
+        let published = self.store.published()?;
+        Some(self.ports.clock.now().saturating_sub(published.captured_at))
+    }
+
     /// The first page of the snapshot just committed.
     pub(super) fn first_page(&self, request: &ObserveRequest) -> Result<ObservePage, ToolError> {
         let published = self.store.published().ok_or_else(stale_cursor)?;

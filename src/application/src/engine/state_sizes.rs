@@ -14,7 +14,11 @@ impl Engine {
             .map(|p| &p.registry)
             .or(self.purged_identity.as_ref());
         let cache = self.config.icons.as_ref().map(|c| c.cache.prototypes());
-        let (journal, evictable) = self.journal.sizes();
+        // Every journal together: the one of no client and each client's (ADR-0039).
+        let journals = || std::iter::once(&self.journal).chain(self.client_journals.values());
+        let (journal, evictable) = journals()
+            .map(super::journal::Journal::sizes)
+            .fold((0, 0), |(a, b), (c, d)| (a + c, b + d));
         let (windows, window_targets) = published
             .and_then(|p| p.windows.as_ref())
             .map_or((0, 0), super::freshness::WindowSnapshot::sizes);
@@ -39,7 +43,9 @@ impl Engine {
             ("journal_evictable", evictable),
             (
                 "journal_payload_storage_bytes",
-                self.journal.retained_payload_bytes(),
+                journals()
+                    .map(super::journal::Journal::retained_payload_bytes)
+                    .sum(),
             ),
             (
                 "controls",

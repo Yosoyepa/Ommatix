@@ -1,7 +1,8 @@
 //! The action gate (SDD §2.9, ADR-0007) and the honest delivery report (chapter 07 §7.5).
 //!
 //! Order: arguments → `request_id` deduplication → a snapshot that reflects the last
-//! observation and has not been spent by a delivery → session, epoch, snapshot, target,
+//! observation and has not been spent (by a delivery, or by
+//! [`Engine::spend_snapshot`](super::Engine::spend_snapshot)) → session, epoch, snapshot, target,
 //! revision and actionability (the registry's checks) → the action's own needs → dry run
 //! (`simulated`, the default) or, only when the operator's policy allows it, a live
 //! actuator exists and attests an allowlisted foreground application, a freshness check
@@ -43,12 +44,13 @@ use ommatix_domain::identity::{
 use ommatix_domain::incremental::{BgraFrame, dirty_tiles};
 
 use super::accessibility::focus_is_on;
-use super::journal::{Lookup, arguments_hash};
+use super::journal::{JOURNAL_CAPACITY_PER_CLIENT, Journal, Lookup, arguments_hash};
 use super::{ActionFreshness, Engine, aged_out};
 use crate::contract::{
     ActionKind, ActionRequest, ActionResult, ActionTimings, ErrorCode, ExpectedEffect,
     ObservedEffect, ToolError, ValidatedAction, limits,
 };
+use crate::lease::ClientId;
 use crate::ports::LocalPolicy;
 use crate::window_scope::{window_scope_applies, window_scope_problem};
 
@@ -222,7 +224,13 @@ impl Outcome {
 }
 
 impl Engine {
-    pub(super) fn act(&mut self, request: &ActionRequest) -> ActionResult {
+    /// Runs one action; `client` names the journal it is deduplicated in (`None`: the journal
+    /// of the actions executed on behalf of no client).
+    pub(super) fn act(
+        &mut self,
+        client: Option<ClientId>,
+        request: &ActionRequest,
+    ) -> ActionResult {
         // A replay or a refusal before the gate has no timings of its own.
         self.action_timings = None;
         let reply = |outcome: Outcome| ActionResult {
@@ -239,7 +247,16 @@ impl Engine {
             return reply(Outcome::rejected(error));
         }
         let hash = arguments_hash(request);
-        match self.journal.lookup(&request.request_id, hash) {
+        let known = match client {
+            None => self.journal.lookup(&request.request_id, hash),
+            Some(client) => self
+                .client_journals
+                .get(&client)
+                .map_or(Lookup::New, |journal| {
+                    journal.lookup(&request.request_id, hash)
+                }),
+        };
+        match known {
             Lookup::Replay(stored) => return stored,
             Lookup::Conflict => {
                 self.counters.rejected_actions += 1;
@@ -272,8 +289,14 @@ impl Engine {
         } else if result.delivered {
             self.counters.delivered_actions += 1;
         }
-        self.journal
-            .record(&request.request_id, hash, result.clone());
+        let journal = match client {
+            None => &mut self.journal,
+            Some(client) => self
+                .client_journals
+                .entry(client)
+                .or_insert_with(|| Journal::new(JOURNAL_CAPACITY_PER_CLIENT)),
+        };
+        journal.record(&request.request_id, hash, result.clone());
         result
     }
 

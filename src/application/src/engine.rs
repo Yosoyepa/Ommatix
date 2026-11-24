@@ -10,7 +10,8 @@
 //! - [`view`]: the agent's view of the published snapshot (query filter, value redaction,
 //!   pagination with a cursor bound to the snapshot).
 //! - [`act`]: the action gate of SDD §2.9 and the honest delivery report.
-//! - [`journal`]: `request_id` deduplication without storing typed text.
+//! - [`journal`]: `request_id` deduplication without storing typed text, per client when an
+//!   action is executed on behalf of one (ADR-0039).
 
 mod accessibility;
 mod act;
@@ -24,6 +25,7 @@ mod view;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -36,6 +38,7 @@ use crate::contract::{
     ActionRequest, ActionResult, ActionTimings, EngineMetrics, EngineMode, ObservationPlan,
     ObservePage, ObserveRequest, StageTimings, TimingsSource, ToolError,
 };
+use crate::lease::ClientId;
 use crate::ports::{
     AccessibilityProvider, Clock, FrameCapturer, OsActuator, PolicyStore, TextRecognizer,
     VisionDetector,
@@ -46,7 +49,7 @@ pub use freshness::{
     OccluderProbeCounts,
 };
 pub use icons::{IconResolverConfig, grey_grid};
-pub use journal::JOURNAL_CAPACITY;
+pub use journal::{JOURNAL_CAPACITY, JOURNAL_CAPACITY_PER_CLIENT, JOURNAL_CLIENTS};
 
 use journal::Journal;
 use observe::{Measured, Published};
@@ -164,6 +167,9 @@ pub struct Engine {
     ports: Ports,
     store: SnapshotStore<Published>,
     journal: Journal,
+    /// The journals of the actions executed on behalf of a client (ADR-0039, decision 11),
+    /// each bounded by [`JOURNAL_CAPACITY_PER_CLIENT`]. Empty while no client is named.
+    client_journals: BTreeMap<ClientId, Journal>,
     counters: Counters,
     /// Input was handed to the actuator since the last commit (whatever its outcome): the
     /// published snapshot may no longer show the screen and cannot be acted on again.
@@ -186,6 +192,7 @@ impl Engine {
             ports,
             store: SnapshotStore::new(),
             journal: Journal::new(JOURNAL_CAPACITY),
+            client_journals: BTreeMap::new(),
             counters: Counters::default(),
             snapshot_spent: false,
             action_timings: None,
@@ -196,8 +203,9 @@ impl Engine {
 
     /// Deletes the engine's state and cache (chapter 08 §8.4): the published snapshot with its
     /// tracks, evidence, icon labels and timings, the committed base frame (overwritten when
-    /// nothing else holds it), the pending regions and the request journal. Nothing is
-    /// published until the next observation, and actions are refused until then.
+    /// nothing else holds it), the pending regions and the request journal, every client's
+    /// included. Nothing is published until the next observation, and actions are refused
+    /// until then.
     ///
     /// Kept: the configuration and the operator's files, which are not the engine's state, and
     /// the identity counters (session, geometry epoch, snapshot and target counters), so that
@@ -208,6 +216,7 @@ impl Engine {
             self.purged_identity = Some(published.registry.purged());
         }
         self.journal = Journal::new(JOURNAL_CAPACITY);
+        self.client_journals.clear();
         self.action_timings = None;
         self.measured = None;
     }
@@ -252,7 +261,43 @@ impl Engine {
 
     /// Validates and (dry-run by default) performs one action on a target by ID.
     pub fn execute_action(&mut self, request: &ActionRequest) -> ActionResult {
-        self.act(request)
+        self.act(None, request)
+    }
+
+    /// [`Engine::execute_action`] on behalf of `client` (ADR-0039, decision 11): the same gate
+    /// and the same report, journaled under the pair of `client` and the `request_id`. Another
+    /// client, or [`Engine::execute_action`], may use the same `request_id` without replaying
+    /// this result; a retry by `client` replays it and delivers nothing new. The results of
+    /// `client` that reported no input are bounded by [`JOURNAL_CAPACITY_PER_CLIENT`], and only
+    /// `client`'s own are ever forgotten to keep that bound.
+    ///
+    /// It checks no lease and no grant: the caller decides who may call it, and applies the
+    /// client's grant through the policy store
+    /// ([`GrantedPolicy`](crate::grant::GrantedPolicy), ADR-0040).
+    pub fn execute_action_for(
+        &mut self,
+        client: ClientId,
+        request: &ActionRequest,
+    ) -> ActionResult {
+        self.act(Some(client), request)
+    }
+
+    /// Forgets every journal entry of `client` (ADR-0039, decision 10): a client that left
+    /// cannot retry, and a new connection is a new client. The entries of other clients and of
+    /// [`Engine::execute_action`], the published snapshot and the registry are untouched.
+    pub fn forget_client(&mut self, client: ClientId) {
+        self.client_journals.remove(&client);
+    }
+
+    /// Marks the published snapshot as spent, as a delivery does (ADR-0039, decision 7): until
+    /// the next observation, the gate refuses every action that cites it with
+    /// `STALE_SNAPSHOT`, dry runs included. Called when the lease passes to another client
+    /// ([`LeaseChange::spend_snapshot`](crate::lease::LeaseChange::spend_snapshot)), so that the
+    /// new holder observes before it acts. With nothing published it does nothing.
+    pub fn spend_snapshot(&mut self) {
+        if self.store.published().is_some() {
+            self.snapshot_spent = true;
+        }
     }
 
     pub fn engine_metrics(&self) -> EngineMetrics {

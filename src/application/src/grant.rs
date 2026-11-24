@@ -6,12 +6,16 @@
 //! application, a window, live input or the reading of values is allowed under it only when
 //! the policy and the grant both allow it. The operator's stop is not part of a grant.
 //!
-//! This module is pure: no clock, no I/O, no serialisation. Nothing in the engine calls it
-//! yet.
+//! [`GrantedPolicy`] applies a grant to every read of the policy (ADR-0040, decision 6): a
+//! store that wraps the operator's store, into which the caller serving one client installs
+//! that client's grant for the length of the call.
+//!
+//! No clock, no I/O, no serialisation. Nothing outside the tests calls it yet.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use crate::ports::{LocalPolicy, WindowPin};
+use crate::ports::{LocalPolicy, PolicyStore, WindowPin};
 
 /// What a client may do within the local policy (ADR-0040, decision 2), limited to the
 /// policy-shaped limits: applications, window classes, a window pin, live input and the
@@ -111,6 +115,97 @@ impl Grant {
             deliver_input: self.deliver_input && other.deliver_input,
             read_values: self.read_values && other.read_values,
         }
+    }
+}
+
+/// A [`PolicyStore`] that applies the grant of the client being served to the operator's store
+/// it wraps (ADR-0040, decision 6). Give the engine a clone of the `Arc` as its policy port and
+/// keep one to install grants.
+///
+/// While a grant is installed, [`PolicyStore::current`] is [`Grant::narrow`] of the inner
+/// store's policy, read afresh on every call: every read the engine makes (the gate's, the last
+/// look's and the view's) is narrowed, and the operator's stop, read from the inner store each
+/// time, holds under every grant. With no grant installed it is the inner policy unchanged.
+/// The purge request is passed to the inner store untouched.
+///
+/// A client without a valid grant (none, an ended term, a withdrawn grant) is served under
+/// [`Grant::default()`], which permits nothing: no live input and no values (ADR-0040,
+/// decision 7). [`GrantedPolicy::install`] takes the client's grant as an `Option` for that
+/// reason: `None` installs the default grant, never the inner policy.
+pub struct GrantedPolicy {
+    inner: Arc<dyn PolicyStore>,
+    installed: Mutex<Option<Grant>>,
+}
+
+impl std::fmt::Debug for GrantedPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GrantedPolicy")
+            .field("installed", &*self.slot())
+            .finish_non_exhaustive()
+    }
+}
+
+impl GrantedPolicy {
+    /// Wraps the operator's store, with no grant installed.
+    pub fn new(inner: Arc<dyn PolicyStore>) -> Self {
+        Self {
+            inner,
+            installed: Mutex::new(None),
+        }
+    }
+
+    /// Installs the grant of the client about to be served, for as long as the returned guard
+    /// lives. Call it while holding the engine's lock, around exactly one call into the engine
+    /// on behalf of that client. `None` (the client holds no valid grant) installs
+    /// [`Grant::default()`], which permits nothing.
+    ///
+    /// Dropping the guard puts back what was installed before, so an early return or a panic in
+    /// the call cannot leave one client's grant in force for the next caller.
+    #[must_use = "the grant is removed when the guard is dropped"]
+    pub fn install(&self, grant: Option<Grant>) -> InstalledGrant<'_> {
+        let previous = self.slot().replace(grant.unwrap_or_default());
+        InstalledGrant {
+            store: self,
+            previous,
+        }
+    }
+
+    fn slot(&self) -> MutexGuard<'_, Option<Grant>> {
+        // The slot is only replaced whole, so a panic elsewhere cannot leave it half written.
+        self.installed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl PolicyStore for GrantedPolicy {
+    fn current(&self) -> LocalPolicy {
+        let inner = self.inner.current();
+        match &*self.slot() {
+            Some(grant) => grant.narrow(&inner),
+            None => inner,
+        }
+    }
+
+    fn purge_requested(&self) -> bool {
+        self.inner.purge_requested()
+    }
+
+    fn purge_done(&self) {
+        self.inner.purge_done();
+    }
+}
+
+/// A grant installed in a [`GrantedPolicy`]; dropping it puts back what was installed before.
+#[derive(Debug)]
+pub struct InstalledGrant<'a> {
+    store: &'a GrantedPolicy,
+    previous: Option<Grant>,
+}
+
+impl Drop for InstalledGrant<'_> {
+    fn drop(&mut self) {
+        *self.store.slot() = self.previous.take();
     }
 }
 
@@ -603,5 +698,209 @@ mod tests {
                 "{grant:?}"
             );
         }
+    }
+
+    /// The operator's store as the wrapper sees it: a policy the operator may change between
+    /// reads, the stop and a count of purge requests and of purges done.
+    #[derive(Debug, Default)]
+    struct Operator {
+        policy: Mutex<LocalPolicy>,
+        stop: std::sync::atomic::AtomicBool,
+        purge_pending: std::sync::atomic::AtomicBool,
+        purges_done: std::sync::atomic::AtomicUsize,
+    }
+
+    impl Operator {
+        fn set(&self, policy: LocalPolicy) {
+            *self.policy.lock().unwrap() = policy;
+        }
+    }
+
+    impl PolicyStore for Operator {
+        fn current(&self) -> LocalPolicy {
+            let mut policy = self.policy.lock().unwrap().clone();
+            policy.stopped |= self.stop.load(std::sync::atomic::Ordering::SeqCst);
+            policy
+        }
+
+        fn purge_requested(&self) -> bool {
+            self.purge_pending.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        fn purge_done(&self) {
+            self.purge_pending
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            self.purges_done
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    fn wrapped() -> (Arc<Operator>, GrantedPolicy) {
+        let operator = Arc::new(Operator::default());
+        let store = GrantedPolicy::new(operator.clone());
+        (operator, store)
+    }
+
+    #[test]
+    fn an_installed_grant_narrows_every_read_and_dropping_it_restores_the_inner_policy() {
+        let (operator, store) = wrapped();
+        let mut rng = Rng(0x0040_0009);
+        let (mut narrowed, mut unchanged) = (0, 0);
+        for case in 0..CASES {
+            let (first, second, grant) = (policy(&mut rng), policy(&mut rng), grant(&mut rng));
+            operator.set(first.clone());
+            assert_eq!(store.current(), first, "case {case}: nothing installed");
+            {
+                let _installed = store.install(Some(grant.clone()));
+                assert_eq!(store.current(), grant.narrow(&first), "case {case}");
+                // The operator changes the policy during the call: the next read sees it.
+                operator.set(second.clone());
+                assert_eq!(store.current(), grant.narrow(&second), "case {case}");
+                if grant.narrow(&second) == second {
+                    unchanged += 1;
+                } else {
+                    narrowed += 1;
+                }
+            }
+            assert_eq!(store.current(), second, "case {case}: removed");
+        }
+        assert!(
+            narrowed > 0 && unchanged > 0,
+            "{narrowed} narrowed, {unchanged} not"
+        );
+    }
+
+    #[test]
+    fn a_client_without_a_grant_is_served_under_the_default_grant_which_permits_nothing() {
+        let (operator, store) = wrapped();
+        let mut rng = Rng(0x0040_000A);
+        for case in 0..CASES {
+            let policy = policy(&mut rng);
+            operator.set(policy.clone());
+            let _installed = store.install(None);
+            let served = store.current();
+            assert_eq!(served, Grant::default().narrow(&policy), "case {case}");
+            assert!(
+                !served.actuation_enabled && !served.include_values,
+                "case {case}"
+            );
+            assert!(deliveries(&served).iter().all(|permitted| !permitted));
+        }
+    }
+
+    #[test]
+    fn the_wrapper_shows_values_only_when_the_policy_and_the_grant_both_allow_them() {
+        let (operator, store) = wrapped();
+        for (policy_values, grant_values) in
+            [(false, false), (false, true), (true, false), (true, true)]
+        {
+            operator.set(LocalPolicy {
+                include_values: policy_values,
+                ..LocalPolicy::default()
+            });
+            let _installed = store.install(Some(Grant {
+                read_values: grant_values,
+                ..Grant::default()
+            }));
+            assert_eq!(
+                store.current().include_values,
+                policy_values && grant_values,
+                "policy {policy_values}, grant {grant_values}"
+            );
+        }
+    }
+
+    /// One call on behalf of a client, which returns early when the engine refuses.
+    fn call_that_returns_early(
+        store: &GrantedPolicy,
+        grant: &Grant,
+        refused: bool,
+    ) -> Result<(), ()> {
+        let _installed = store.install(Some(grant.clone()));
+        if refused {
+            return Err(());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn neither_an_early_return_nor_a_panic_leaves_a_grant_installed_and_guards_nest() {
+        let (operator, store) = wrapped();
+        let open = LocalPolicy {
+            actuation_enabled: true,
+            include_values: true,
+            allowed_applications: APPLICATIONS.map(str::to_owned).to_vec(),
+            ..LocalPolicy::default()
+        };
+        operator.set(open.clone());
+        let only_a = Grant {
+            applications: ["a.exe".to_owned()].into(),
+            deliver_input: true,
+            ..Grant::default()
+        };
+        assert!(call_that_returns_early(&store, &only_a, true).is_err());
+        assert_eq!(store.current(), open, "after an early return");
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _installed = store.install(Some(only_a.clone()));
+            panic!("the call panicked");
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(store.current(), open, "after a panic");
+
+        let outer = store.install(Some(only_a.clone()));
+        {
+            let _inner = store.install(None);
+            assert_eq!(store.current(), Grant::default().narrow(&open));
+        }
+        assert_eq!(
+            store.current(),
+            only_a.narrow(&open),
+            "the outer grant is back"
+        );
+        drop(outer);
+        assert_eq!(store.current(), open);
+    }
+
+    #[test]
+    fn the_operator_stop_and_the_purge_request_reach_the_inner_store_under_every_grant() {
+        let (operator, store) = wrapped();
+        let mut rng = Rng(0x0040_000B);
+        for case in 0..CASES {
+            let (policy, grant) = (policy(&mut rng), grant(&mut rng));
+            operator.set(LocalPolicy {
+                stopped: false,
+                ..policy
+            });
+            let stop = rng.chance(1, 2);
+            operator
+                .stop
+                .store(stop, std::sync::atomic::Ordering::SeqCst);
+            let installed = rng.chance(2, 3).then(|| store.install(Some(grant)));
+            assert_eq!(store.current().stopped, stop, "case {case}");
+            if stop {
+                assert!(
+                    deliveries(&store.current())
+                        .iter()
+                        .all(|permitted| !permitted)
+                );
+            }
+            drop(installed);
+        }
+
+        let _installed = store.install(None);
+        assert!(!store.purge_requested());
+        operator
+            .purge_pending
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(store.purge_requested(), "the request is the operator's");
+        store.purge_done();
+        assert!(!operator.purge_requested());
+        assert_eq!(
+            operator
+                .purges_done
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
     }
 }
