@@ -1,9 +1,12 @@
 # 0041. Measure two performance candidates before adopting either: one inference for several regions, and accessibility evidence reused between observations
 
 - **Status:** Proposed
-- **Date:** 2026-11-22
+- **Date:** 2026-11-22; revised 2026-11-24
 - **Approval:** Pending. Draft written by an AI agent at the owner's request. Nothing was measured
-  for it; it proposes what to measure and the rule that would decide.
+  for it; it proposes what to measure and the rule that would decide. On 2026-11-24 an AI agent
+  (Claude) brought the mosaic's margin rule in step with the geometry built for it, under the
+  owner's delegation; that rule is for the owner to confirm. The geometry exists unwired on a
+  local branch; nothing calls it.
 
 ## Context
 
@@ -43,7 +46,12 @@ loop and against the full refresh:
 - *Batch:* the crops of the plan as one batch at one input size, if the exported model accepts a
   batch dimension.
 - *Mosaic:* the crops packed into one canvas with a margin between them, one inference, the boxes
-  mapped back, and any detection that touches a margin discarded.
+  mapped back, and any detection that enters a margin discarded. A detection that lies inside its
+  tile, its edge coinciding with the tile's edge without entering the margin, is kept: the rule
+  to adopt A below asks for detections equal to those of the per-region loop, and that loop keeps
+  an element flush with the edge of its crop, so discarding it would lose elements at the edges
+  of regions by construction. This reading was decided on 2026-11-24 under the owner's
+  delegation, when the geometry was built, and is for the owner to confirm.
 
 Rule to adopt A: on the cohort of ADR-0030, the plan with two to four regions has a lower median and
 a lower p95 than the full refresh, and the detections equal those of the per-region loop on the
@@ -100,8 +108,13 @@ observation, those of a full read taken at the same instant.
 
 - Step 0 produces span data from the reference hardware, recorded with the machine and the commit.
 - A: the paired measurement of ADR-0030 repeated with each variant; equality of detections on the
-  evaluation set; a deterministic test that the mosaic maps boxes back exactly and drops detections
-  on a margin, on synthetic frames.
+  evaluation set; a deterministic test that the mosaic maps boxes back exactly, drops detections
+  that enter a margin and keeps one that fills its tile, on synthetic frames. The geometry and
+  that test exist, unwired and with no identifier, on the local branch `feat/mosaic-layout`
+  (`src/domain/src/mosaic.rs`: `plan_mosaic` packs the regions in shelves with a margin,
+  `MosaicLayout::to_frame` maps a detection back or discards it, and the test
+  `a_detection_filling_its_tile_is_kept_and_one_quarter_pixel_more_is_not` pins the edge rule).
+  It packs no pixels and runs no detector; the measurements are all still to take.
 - B: the paired measurement of chapter 09 with UI Automation; a differential test on scripted
   sessions of the simulated desktop in which the reused evidence equals a full read at every step,
   including steps where the fake provider drops or delays its events; a test that reused evidence
@@ -124,4 +137,8 @@ Dos etapas no escalan con el tamaño del cambio: el detector hace una inferencia
 lectura de UI Automation tarda unos 117 ms cambie lo que cambie. Se proponen dos candidatos, cada uno
 tras un interruptor apagado y con su regla de decisión escrita antes de medir: una sola inferencia
 para las regiones de un plan, y reutilizar la evidencia de accesibilidad donde no cambió ningún
-píxel, sin alargar nunca su vigencia. Antes de ambos, medir en qué se van esos 117 ms.
+píxel, sin alargar nunca su vigencia. Antes de ambos, medir en qué se van esos 117 ms. En el
+mosaico se descarta la detección que entra en un margen y se conserva la que coincide con el borde
+de su tesela sin entrar en él, porque la regla de adopción exige igualdad con el bucle por región;
+lo decidió un agente por delegación y lo confirma el responsable. La geometría existe en una rama
+local, sin conectar y sin medir.

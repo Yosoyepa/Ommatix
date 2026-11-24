@@ -5,8 +5,10 @@
 - **Approval:** Pending. Draft written by an AI agent at the owner's request on 2026-11-22. On
   2026-11-24 the draft was revised against the code, under the owner's delegation, by an AI agent
   (Claude): the findings and the decisions taken on them are recorded in
-  [the review of that day](../reviews/2026-11-24-adr-0039-0040-against-the-code.md). Acceptance is
-  still the owner's. Nothing in it is wired into the product.
+  [the review of that day](../reviews/2026-11-24-adr-0039-0040-against-the-code.md), and the text
+  was later brought in step with the code written for it. Acceptance is still the owner's. Its
+  policy-shaped part exists as code on local branches, unpublished and not wired into the
+  executable (see "What exists"); its other limits, the grants file and the tickets do not.
 
 ## Context
 
@@ -94,15 +96,17 @@ model cannot read it.
    sets the calling client's grant under the engine's lock for the length of the call, and every
    read of the policy, the gate's, the last look's and the view's, then returns the meet. The rest
    (the action kind, the budget, the term and the region) is checked in the engine, because the
-   region needs the target's box, which only the engine's registry knows. The policy-shaped meet
-   exists, unwired, as `Grant::narrow` and `Grant::meet` in `src/application/src/grant.rs` (commit
-   `dd0579c`, local branch `feat/grant-meet`); the other four limits are not in it. The lease of
-   ADR-0039 exists unwired too (`LeaseTable` in `src/application/src/lease.rs`, commit `fd53a21`,
-   local branch `feat/lease-machine`).
+   region needs the target's box, which only the engine's registry knows. The policy-shaped part
+   is built this way on local branches: `Grant::narrow` and `Grant::meet`, and `GrantedPolicy`,
+   the decorating store, into which the broker installs the calling client's grant under its one
+   lock for the length of the call (see "What exists"). The other four limits are not built
+   (decision 12).
 7. **Fail closed, for every client.** With the broker on, a client without a valid grant (none, an
    ended term, a withdrawn grant) may observe without values and may deliver nothing. This holds for
    a single client too: the transparency of ADR-0039 covers the lease only. With the broker off
-   nothing changes.
+   nothing changes. As built, such a client is served under the default grant, which allows no
+   application, no live input and no values: installing no grant installs that one, never the
+   operator's policy unchanged.
 8. **What is observed is not filtered by application.** A grant filters the values (both the policy
    and the grant must allow them) and, when it has a region, leaves out of the client's page every
    element that is not inside the region. It does not filter elements by application: an element
@@ -131,6 +135,12 @@ model cannot read it.
     deliveries is not screen data, so a purge has no reason to delete it, and restoring authority
     as a side effect of deleting data would fail open; issuing a new ticket is the operator's
     explicit act.
+12. **A grant's other limits come later, in a unit of their own.** The kinds of action, the
+    delivery budget of decisions 10 and 11, the term and the region are added after the broker,
+    on their own, because the broker and the engine must each check some of them and they are
+    better reviewed alone than inside the broker. Until then a grant cannot express them, so
+    nothing claims to enforce them: a client holds what its grant allows within the policy for as
+    long as its connection lasts, with no budget, no term and no region.
 
 Deferred: delegation from inside the contract (an orchestrator model that issues grants through a
 tool). It would need a control tool and a change of chapter 07; the harness on the operator's side
@@ -181,12 +191,13 @@ ADR-0043.
 
 ## Required validation
 
-New planned tests, with identifiers to be assigned in the matrix when the ADR is accepted, on the
-simulated desktop with a fake clock and fixed seeds.
+Planned tests, on the simulated desktop with a fake clock and fixed seeds. Those of the
+policy-shaped part now exist on local branches; "What exists" below says which, and under which
+identifiers, which are named there because this branch's matrix does not have them yet. The rest
+are still only planned.
 
 - On generated policies, grants and actions: whatever the meet permits, the policy permits; the meet
-  is the same in either order; narrowing twice equals narrowing by both. (The policy-shaped part
-  exists, unwired, with these properties on generated cases: `grant.rs` on `feat/grant-meet`.)
+  is the same in either order; narrowing twice equals narrowing by both.
 - A client without a grant delivers no input event, a single client included. A client whose grant
   excludes the target's application, window, action kind or region delivers none either, each
   refused with `POLICY_DENIED` and a message naming its limit.
@@ -208,6 +219,38 @@ simulated desktop with a fake clock and fixed seeds.
   (`MultiAgente.lean`, delivered to the owner with the first draft): the meet permits exactly what
   both sides permit (`permits_meet_iff`), so no grant and no chain of grants permits what the policy
   refuses, and the meet is commutative, associative and idempotent.
+
+## What exists (2026-11-24)
+
+On local branches, unpublished and not wired into the executable (branches are named rather than
+commits, because their heads move):
+
+- **`Grant`, its narrowing and its meet** (`feat/grant-meet`, `src/application/src/grant.rs`): a
+  grant carries the applications, the window classes per application, an optional window pin,
+  whether the client may deliver live input and whether it may read values. The default grant
+  allows nothing. The broker binds a grant to a client by keeping one per connection, given when
+  the client is admitted (`Broker::connect`).
+- **The policy store that applies a grant** (`feat/engine-clients`, `GrantedPolicy` in
+  `grant.rs`): it wraps the operator's store; while a client's grant is installed every read of
+  the policy is narrowed by it, the operator's stop is read afresh each time, and dropping the
+  installation puts back what was there, so an early return or a panic cannot leave one client's
+  grant in force for the next.
+- **The broker** (`feat/broker`, `src/adapters/mcp/src/broker.rs`) installs the calling client's
+  grant under its one lock for the length of each tool call; a client admitted without a grant is
+  served under the default grant (decision 7).
+
+Of Required validation: the three laws of the meet, and narrowing by generated grants, are unit
+tests of `grant.rs` on `feat/grant-meet`, with no identifier. On `feat/lease-on-the-wire`, IT-14
+(`src/adapters/mcp/tests/broker.rs`) covers a client without a grant, alone and with others
+(it observes without values and delivers nothing), a grant that leaves out the target's
+application (refused at the gate with `POLICY_DENIED`), and two clients with different
+permission to read values, each of which sees its own view of one snapshot. The rest is still only
+planned: the window, action-kind and region limits as refusals, the budget, the term, a withdrawn
+grant, the grants file, the ticket, the region filter on observations, and the meet in the formal
+model.
+
+What does not exist: the kinds of action, the budget, the term and the region (decision 12); the
+grants file and its reader (decision 5); tickets and their handshake (decision 3, ADR-0043).
 
 ## Reversibility
 
@@ -238,6 +281,10 @@ nueva del almacén de política; la parte con forma de política se aplica decor
 resto se comprueba en el motor. El presupuesto lo gasta toda acción entregada o indeterminada (un
 `type` en dos fases cuenta una vez); ni una purga ni una recarga lo restauran, sólo un tique nuevo.
 El tique llega a `attach` como ruta de un archivo, viaja en una primera línea del tubo y el
-intermediario de `adapter-mcp` calcula su SHA-256 (ADR-0043). No queda ningún punto abierto en esta
-ADR.
+intermediario de `adapter-mcp` calcula su SHA-256 (ADR-0043). Existen en ramas locales, sin
+conectar al ejecutable, `Grant` con su estrechamiento y su encuentro, el almacén que aplica la
+concesión bajo el cerrojo del motor y el intermediario, que sirve sin concesión válida bajo la
+concesión por defecto; los tipos de acción, el presupuesto, el plazo, la región, el archivo de
+concesiones y los tiques no existen y llegarán en una unidad propia. No queda ningún punto abierto
+en esta ADR.
 Revisada el 2026-11-24 contra el código; la aceptación es del responsable.

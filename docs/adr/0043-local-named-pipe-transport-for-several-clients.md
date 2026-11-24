@@ -11,10 +11,14 @@
 
 [ADR-0039](0039-several-agents-through-one-engine-with-an-input-lease.md) lets several agents reach
 one engine through a broker inside the engine process, built and tested first on in-memory streams
-(its decision 12). An MCP host starts a stdio server per agent, so agents in different hosts can
-only reach one running engine through a local channel between processes. ADR-0039 asks for that
-channel to be decided separately, and [ADR-0040](0040-task-scoped-grants-narrower-than-the-local-policy.md)
-needs it to carry the ticket that selects a client's grant. This ADR decides it, for Windows only.
+(its decision 12). That broker now exists on local branches, unwired (`Broker` and
+`BrokerConnection` in `src/adapters/mcp/src/broker.rs`, branch `feat/broker`); what it lacks to
+serve agents in different hosts is this channel, the `attach` mode and the switch in the
+executable, none of which exists. An MCP host starts a stdio server per agent, so agents in
+different hosts can only reach one running engine through a local channel between processes.
+ADR-0039 asks for that channel to be decided separately, and
+[ADR-0040](0040-task-scoped-grants-narrower-than-the-local-policy.md) needs it to carry the ticket
+that selects a client's grant. This ADR decides it, for Windows only.
 
 The repository constrains the choice as follows. Each fact was checked in this repository at the
 commit of this ADR unless it says it comes from the spike, which names its upstream source, or
@@ -47,9 +51,10 @@ from an experiment.
   `tokio`'s `AsyncRead` and `AsyncWrite` (`src/adapters/mcp/src/server.rs`, lines 68–82); it reads
   in chunks of 8 KiB (line 16), writes each reply followed by `\n` and flushes it (lines 110–114),
   and purges the engine when the stream ends (lines 79–81), which ADR-0039 decision 10 replaces
-  for the broker. The connection itself is synchronous: `Connection::handle_message` takes one
-  line and returns the reply to write, or none (`protocol.rs`, line 112), and takes the engine's
-  lock only inside the call.
+  for the broker: the broker's `BrokerConnection::serve`, on its branch, runs the same loop over
+  the same streams and purges the engine only when the last client leaves. The connection
+  itself is synchronous: `Connection::handle_message` takes one line and returns the reply to
+  write, or none (`protocol.rs`, line 112), and takes the engine's lock only inside the call.
 - **The message bounds of [ADR-0015](0015-mcp-transport-on-rmcp-wire-types.md).** At most
   `max_message_bytes` per line in each direction, 64 KiB by default and never below 4 096
   (`src/adapters/mcp/src/config.rs`, lines 3–10 and 43–45). The existing line reader buffers at
@@ -128,8 +133,8 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
   descriptor and the client (both need administrator rights; the impersonation test ran as one
   user, so it shows the level rule, not the effect on another account), a pipe created by another
   user before the engine, a client handle opened without `FILE_FLAG_OVERLAPPED` (the crate
-  documents that it then may deadlock), a remote machine, the MSVC host, the real `McpServer`
-  over the pipe, and long runs.
+  documents that it then may deadlock), a remote machine, the MSVC host, the real broker over
+  the pipe, and long runs.
 
 ## Decision
 
@@ -185,10 +190,11 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    by the operator after use. `attach` reads it (a read is not a call SEC-04 forbids) and sends it
    as the first line on the pipe, before any MCP message; with no ticket file the line is empty.
    The broker hashes the line with SHA-256 (`sha2`, already a workspace dependency, added to
-   `adapter-mcp`) and compares it with the grants file of ADR-0040. A connection whose handshake
-   is empty, or names no listed, unspent ticket, has no grant and falls under ADR-0040's
-   fail-closed rule. The ticket is never written to a log, never echoed on the wire and never
-   reaches the model. Both ends bound it:
+   `adapter-mcp`) and compares it with the grants file of ADR-0040 (neither exists yet: the
+   broker built so far is given each client's grant by its caller, `Broker::connect`). A
+   connection whose handshake is empty, or names no listed, unspent ticket, has no grant and
+   falls under ADR-0040's fail-closed rule. The ticket is never written to a log, never echoed
+   on the wire and never reaches the model. Both ends bound it:
    - on the broker, the handshake is read by the same bounded reader as every other line; a
      handshake longer than the bound, or one that is neither empty nor of the ticket's form,
      closes the connection at once and grants nothing, and no MCP message is read from it;
@@ -324,8 +330,8 @@ New planned tests, with identifiers to be assigned in the matrix when the ADR is
   limit accepted, one byte over it answered with `-32600`, the connection still up), and the same
   frames as the asynchronous reader on generated input; the handshake (a valid ticket selects its
   grant, an empty, unknown or spent one gives none, the ticket never appears in a reply or a log).
-- On Windows, a loopback pipe test with the real `McpServer` and the simulated desktop: a session
-  over the pipe answers as the same session over stdio.
+- On Windows, a loopback pipe test with the real broker and the simulated desktop: a session over
+  the pipe answers as the same session over stdio.
 - A second listener on the same name is refused, and the second `serve` exits with its error.
 - A client beyond the bound is told so and closed; the others are not disturbed. A client beyond
   the bound that never reads does not stall accepting: the next client is accepted at once.
@@ -371,8 +377,9 @@ The transport exists only with the broker switched on, which is off by default; 
 executable serves stdio as today. Removing it removes a module of `adapter-mcp`, the `attach` mode
 and three crates from the lockfile. A failure of the supervised checks, or of flushing under load,
 moves the transport to the fallback above under its own ADR, and so does a failure of the
-identification-level client on the MSVC host or with the real `McpServer`; a defect in the descriptor, in the first-instance refusal or in
-the client's quality of service withdraws it until fixed. Removing the transport removes the
+identification-level client on the MSVC host or with the real broker; a defect in the
+descriptor, in the first-instance refusal or in the client's quality of service withdraws it until
+fixed. Removing the transport removes the
 SEC-04 exception with it.
 
 ## Provenance
@@ -412,4 +419,5 @@ que no ocurrieron; no entrega nada al escritorio por este canal, pero puede enga
 Quedan abiertos cómo comprobar quién es dueño del tubo antes de retransmitir cualquier mensaje y
 cómo se niega el motor a arrancar elevado. No se acepta sin probar
 antes, con el responsable, un segundo usuario (también como ocupante del nombre) y un proceso
-elevado; tampoco están probados el anfitrión MSVC ni el `McpServer` real sobre el tubo.
+elevado; tampoco están probados el anfitrión MSVC ni el intermediario real sobre el tubo. El
+intermediario existe ya en una rama local, sin conectar; el transporte no.
