@@ -19,6 +19,7 @@ mod clock;
 pub mod contract;
 mod engine;
 mod error;
+pub mod grant;
 pub mod ports;
 mod window_scope;
 
@@ -29,6 +30,7 @@ pub use engine::{
     VerifyParams, grey_grid,
 };
 pub use error::{PortError, error_chain};
+pub use grant::Grant;
 pub use ports::{
     AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame,
     Clock, DeliveryReceipt, FrameCapturer, LocalPolicy, NativeIdentity, NoAccessibility,
