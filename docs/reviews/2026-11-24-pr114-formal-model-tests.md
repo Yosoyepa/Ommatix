@@ -42,10 +42,12 @@ Run for this review:
 
 Taken from the verdict file, not re-run here:
 
-- The MSVC and Windows-feature jobs were not run (no MSVC on that machine).
 - The verdict's own runs of the five named tests (C2: four in `ommatix-domain`, one in
   `ommatix-application`) and of the `repository` suite (C7) agree with the counts above.
-- The Lean model and the ADR checks (C8) and the code-to-record checks (C9) were read by the QA run;
-  they were not re-run here.
+- The form of the four ADR drafts (C8) and the statements the record of 2026-11-22 makes about the
+  code (C9) were checked by the QA run and were not re-run for this commit. The Lean model that
+  record mentions (12 modules, 186 theorems) and `MultiAgente.lean` are outside the repository, and
+  neither QA run read or verified them, so nothing in this review vouches for the model.
 
-Not done: the review record's mutation checks for the other generated tests were not repeated here.
+Not run: the MSVC and Windows-feature jobs (no MSVC Build Tools on that machine, per `AGENTS.md`).
+Not repeated here: the four mutation checks that the 2026-11-22 record describes. This review ran only the one mutation of R114-1 above.
