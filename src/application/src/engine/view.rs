@@ -198,8 +198,10 @@ impl Engine {
     }
 
     /// How old the published snapshot's capture is on the injected clock, `None` when nothing
-    /// is published. It depends on the run, so it belongs in MCP `_meta`, never in
-    /// `structuredContent` (engineering rule 1, ADR-0039, decision 4).
+    /// is published. It is the age a page built at the same instant carries as `age_ms` in
+    /// `structuredContent`, the contract's existing run-dependent field, measured on the same
+    /// clock; the broker repeats it in `io.ommatix/lease`, beside `shared`, when it serves the
+    /// published page again (ADR-0039, proposed; decision D30 of the 2026-11-24 plan).
     pub fn published_age(&self) -> Option<Duration> {
         let published = self.store.published()?;
         Some(self.ports.clock.now().saturating_sub(published.captured_at))

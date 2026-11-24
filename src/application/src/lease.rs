@@ -12,7 +12,9 @@
 //!
 //! This module is pure: no clock, no I/O, no threads, no serialisation. Time comes in as the
 //! argument `now`, the value of [`Clock::now`](crate::Clock::now) when the call entered the
-//! engine's critical section. Nothing in the engine calls it yet.
+//! engine's critical section. The engine does not call it: the broker of the MCP adapter
+//! (ADR-0039, proposed) drives it under its one lock, and nothing in the executable constructs a
+//! broker yet.
 
 use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroUsize;

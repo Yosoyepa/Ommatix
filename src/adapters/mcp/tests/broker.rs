@@ -431,7 +431,8 @@ fn it_10_a_non_holders_observation_is_the_published_page_and_moves_nothing() {
         r["_meta"].as_object().unwrap().keys().cloned().collect()
     };
     assert_eq!(keys(&served), keys(&holder), "the same _meta keys");
-    // That the page is shared, and its age, are run-dependent: `_meta` only (ADR-0039).
+    // That the page is shared is said only in `_meta`; its age is also the page's own `age_ms`
+    // in `structuredContent`, which `io.ommatix/lease` repeats (ADR-0039; decision D30).
     assert_eq!(
         holder["_meta"][LEASE_META_KEY],
         json!({ "state": "holder", "number": 1, "position": null, "shared": false,

@@ -1,7 +1,8 @@
-//! Several clients on one engine (ADR-0039, ADR-0040), as the broker will drive it: the snapshot
-//! spent from outside, the journal per client, the published page served again and the policy
-//! store that applies the grant of the client being served. Nothing outside these tests calls
-//! them yet.
+//! Several clients on one engine (ADR-0039, ADR-0040, proposed), as the broker of the MCP adapter
+//! drives it: the snapshot spent from outside, the journal per client, the published page served
+//! again and the policy store that applies the grant of the client being served. These tests call
+//! them directly; the broker's own tests are in `ommatix-adapter-mcp`, and nothing in the
+//! executable constructs a broker yet.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroUsize;
@@ -648,7 +649,7 @@ fn the_gate_and_the_view_decide_under_the_installed_grant() {
     assert_eq!(r.engine.serve_published(&asked), Ok(None));
 }
 
-// ---- everything together, as the broker will use it ----
+// ---- everything together, as the broker uses it ----
 
 /// What a client was given when it connected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
