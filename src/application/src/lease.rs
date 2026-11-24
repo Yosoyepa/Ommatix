@@ -5,8 +5,10 @@
 //! and only the holder may deliver input; with several clients and no holder every observation
 //! publishes and nobody delivers. A lease has a number that grows with every grant and a term
 //! measured on the engine's monotonic clock; waiting clients are served in arrival order, and a
-//! holder cannot renew while another client waits. With exactly one client connected and no
-//! explicit lease, that client holds the lease implicitly, as the engine behaves today.
+//! holder cannot renew while another client waits. A waiting client that releases leaves the
+//! queue (decision D29 of the 2026-11-24 plan): the others keep their order, and it may ask again
+//! later, at the back. With exactly one client connected and no explicit lease, that client holds
+//! the lease implicitly, as the engine behaves today.
 //!
 //! This module is pure: no clock, no I/O, no threads, no serialisation. Time comes in as the
 //! argument `now`, the value of [`Clock::now`](crate::Clock::now) when the call entered the
@@ -39,8 +41,9 @@ pub enum LeaseRefusal {
     /// The bound on connected clients is reached (ADR-0039, decision 8).
     #[error("the bound on connected clients is reached")]
     TooManyClients,
-    /// Only the holder of the lease may release it.
-    #[error("the client does not hold the lease")]
+    /// The client asked to release, and it neither holds the lease nor waits for it: nothing
+    /// changed. (A waiter that releases leaves the queue: [`Released::LeftQueue`].)
+    #[error("the client neither holds the lease nor waits for it")]
     NotHolder,
     /// The holder asked to renew while another client waits (ADR-0039, decision 5): the lease
     /// runs to its end.
@@ -130,6 +133,21 @@ pub enum Acquired {
     Queued { position: usize },
     /// The asker is the only client and holds the lease implicitly; nothing changed.
     Implicit,
+}
+
+/// What [`LeaseTable::release`] did for the client that asked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Released {
+    /// The client held the lease and released it; the lease passed at once to the first
+    /// waiter, if any. This includes a waiter granted the lease while the same call settled time:
+    /// by then it is the holder.
+    Lease,
+    /// The client is the only one and holds the lease implicitly; it keeps it and nothing changed.
+    Implicit,
+    /// The client was waiting and left the queue. Nothing else changed: the holder, the lease's
+    /// number and the order of the other waiters stay as they were, and nothing is spent, since
+    /// the lease passed to nobody. Asking again puts the client at the back of the queue.
+    LeftQueue,
 }
 
 /// Where a client stands with respect to the lease ([`LeaseTable::standing`]).
@@ -311,19 +329,28 @@ impl LeaseTable {
         Self::finish(step, result)
     }
 
-    /// Releases the lease of its holder, and grants it at once to the first waiter (ADR-0039,
-    /// decision 5). The implicit lease of a sole client cannot be released: the call succeeds
-    /// and the client keeps it. Any other client is refused with [`LeaseRefusal::NotHolder`].
-    pub fn release(&mut self, client: ClientId, now: Duration) -> Outcome<()> {
+    /// Releases what `client` has of the lease, after settling time at `now`.
+    ///
+    /// - The holder releases the lease, which passes at once to the first waiter (ADR-0039,
+    ///   decision 5): [`Released::Lease`]. A waiter that the settling of this same call granted
+    ///   the lease is the holder by then, and releases it the same way.
+    /// - A sole client keeps its implicit lease, which cannot be released: [`Released::Implicit`].
+    /// - A waiter leaves the queue (decision D29): [`Released::LeftQueue`]. The others keep their
+    ///   order and nothing is spent.
+    /// - Any other client neither holds nor waits: [`LeaseRefusal::NotHolder`], nothing changes.
+    pub fn release(&mut self, client: ClientId, now: Duration) -> Outcome<Released> {
         let mut step = self.begin(now);
         let result = if !self.clients.contains(&client) {
             Err(LeaseRefusal::UnknownClient)
         } else if self.lease.is_some_and(|lease| lease.client == client) {
             self.end_lease(EndCause::Released, &mut step);
             self.grant_first_waiter(&mut step);
-            Ok(())
+            Ok(Released::Lease)
         } else if self.implicit_holder() == Some(client) {
-            Ok(())
+            Ok(Released::Implicit)
+        } else if let Some(index) = self.queue.iter().position(|waiter| *waiter == client) {
+            self.queue.remove(index);
+            Ok(Released::LeftQueue)
         } else {
             Err(LeaseRefusal::NotHolder)
         };
@@ -842,17 +869,141 @@ mod tests {
     }
 
     #[test]
-    fn only_the_holder_can_release_and_a_waiter_keeps_its_place() {
+    fn only_the_holder_can_release_the_lease_and_a_waiter_that_releases_leaves_the_queue() {
         let mut table = table();
         let a = connect(&mut table, at(0));
         let b = connect(&mut table, at(0));
         let _ = table.acquire(b, at(1));
-        assert_eq!(table.release(b, at(2)).result, Err(LeaseRefusal::NotHolder));
+        assert_eq!(table.release(b, at(2)).result, Ok(Released::LeftQueue));
         assert_eq!(
             table.acquire(b, at(2)).result,
             Ok(Acquired::Queued { position: 1 })
         );
         assert!(delivers(&mut table, a, at(2)));
+    }
+
+    #[test]
+    fn a_waiter_that_releases_leaves_the_queue_and_the_others_keep_their_order() {
+        let mut table = table();
+        let a = connect(&mut table, at(0));
+        let b = connect(&mut table, at(0));
+        let c = connect(&mut table, at(0));
+        let d = connect(&mut table, at(0));
+        for (waiter, position) in [(b, 1), (c, 2), (d, 3)] {
+            assert_eq!(
+                table.acquire(waiter, at(1)).result,
+                Ok(Acquired::Queued { position })
+            );
+        }
+        let left = table.release(c, at(2));
+        assert_eq!(left.result, Ok(Released::LeftQueue));
+        assert!(
+            left.change.is_empty(),
+            "the lease passed to nobody: {left:?}"
+        );
+        assert_eq!(table.standing(a), Standing::Holder { number: Some(1) });
+        assert_eq!(table.standing(b), Standing::Waiting { position: 1 });
+        assert_eq!(table.standing(c), Standing::None);
+        assert_eq!(table.standing(d), Standing::Waiting { position: 2 });
+        // The lease passes to b, then to d: c, which left, is never granted.
+        let passed = table.release(a, at(3));
+        assert_eq!(passed.result, Ok(Released::Lease));
+        assert_eq!(
+            passed.change.granted,
+            vec![LeaseGrant {
+                client: b,
+                number: 2
+            }]
+        );
+        let passed = table.release(b, at(4));
+        assert_eq!(
+            passed.change.granted,
+            vec![LeaseGrant {
+                client: d,
+                number: 3
+            }]
+        );
+        assert_eq!(table.standing(c), Standing::None);
+    }
+
+    #[test]
+    fn a_waiter_that_left_the_queue_asks_again_at_the_back() {
+        let mut table = table();
+        let _a = connect(&mut table, at(0));
+        let b = connect(&mut table, at(0));
+        let c = connect(&mut table, at(0));
+        let _ = table.acquire(b, at(1));
+        let _ = table.acquire(c, at(1));
+        assert_eq!(table.release(b, at(2)).result, Ok(Released::LeftQueue));
+        assert_eq!(table.standing(c), Standing::Waiting { position: 1 });
+        assert_eq!(
+            table.acquire(b, at(3)).result,
+            Ok(Acquired::Queued { position: 2 }),
+            "at the back, behind c"
+        );
+        // When a's term ends, c is served first.
+        assert!(!delivers(&mut table, b, at(10)));
+        assert_eq!(table.standing(c), Standing::Holder { number: Some(2) });
+        assert_eq!(table.standing(b), Standing::Waiting { position: 1 });
+    }
+
+    #[test]
+    fn a_waiter_granted_while_its_release_settles_time_releases_the_lease() {
+        let mut table = table();
+        let _a = connect(&mut table, at(0));
+        let b = connect(&mut table, at(0));
+        let c = connect(&mut table, at(0));
+        let _ = table.acquire(b, at(1));
+        let _ = table.acquire(c, at(1));
+        // a's lease ends at 10: settling time grants b, which then releases the lease to c.
+        let released = table.release(b, at(10));
+        assert_eq!(released.result, Ok(Released::Lease));
+        assert_eq!(
+            released.change.granted,
+            vec![
+                LeaseGrant {
+                    client: b,
+                    number: 2
+                },
+                LeaseGrant {
+                    client: c,
+                    number: 3
+                }
+            ]
+        );
+        assert_eq!(
+            released
+                .change
+                .ended
+                .iter()
+                .map(|end| end.cause)
+                .collect::<Vec<_>>(),
+            vec![EndCause::Term, EndCause::Released]
+        );
+        assert!(released.change.spend_snapshot);
+        assert_eq!(table.standing(b), Standing::None);
+        assert_eq!(table.standing(c), Standing::Holder { number: Some(3) });
+    }
+
+    #[test]
+    fn a_release_by_a_client_that_neither_holds_nor_waits_changes_nothing() {
+        let mut table = table();
+        let a = connect(&mut table, at(0));
+        let b = connect(&mut table, at(0));
+        let c = connect(&mut table, at(0));
+        let _ = table.acquire(b, at(1));
+        let before = table.clone();
+        let refused = table.release(c, at(1));
+        assert_eq!(refused.result, Err(LeaseRefusal::NotHolder));
+        assert!(refused.change.is_empty());
+        assert_eq!(table, before);
+        assert_eq!(table.standing(a), Standing::Holder { number: Some(1) });
+        assert_eq!(table.standing(b), Standing::Waiting { position: 1 });
+        // A sole client's release keeps its implicit lease.
+        let mut alone = self::table();
+        let only = connect(&mut alone, at(0));
+        assert_eq!(alone.release(only, at(1)).result, Ok(Released::Implicit));
+        assert_eq!(alone.standing(only), Standing::Holder { number: None });
     }
 
     #[test]
@@ -1246,6 +1397,7 @@ mod tests {
         stale_citations: u64,
         spends: u64,
         not_holder: u64,
+        left_queue: u64,
         unknown: u64,
         too_many: u64,
         implicit: u64,
@@ -1504,8 +1656,31 @@ mod tests {
                 let outcome = table.release(client, now);
                 model.absorb(table, &outcome.change, now)?;
                 match outcome.result {
-                    Ok(()) => {}
-                    Err(LeaseRefusal::NotHolder) => model.seen.not_holder += 1,
+                    Ok(Released::Lease | Released::Implicit) => {}
+                    Ok(Released::LeftQueue) => {
+                        // Only a waiter leaves, the lease passes to nobody, and the others keep
+                        // their order (the queue is compared with the model in `check`).
+                        if !model.waiting.contains(&client) {
+                            return Err(format!("{client:?} left a queue it was not in"));
+                        }
+                        if outcome
+                            .change
+                            .ended
+                            .iter()
+                            .any(|end| end.cause == EndCause::Released)
+                        {
+                            return Err("a waiter leaving released a lease".into());
+                        }
+                        model.waiting.retain(|waiter| *waiter != client);
+                        model.told.remove(&client);
+                        model.seen.left_queue += 1;
+                    }
+                    Err(LeaseRefusal::NotHolder) => {
+                        if model.waiting.contains(&client) || model.holder == Some(client) {
+                            return Err(format!("{client:?} refused while it held or waited"));
+                        }
+                        model.seen.not_holder += 1;
+                    }
                     Err(refusal) => count_unknown(model, Some(refusal))?,
                 }
             }
@@ -1762,6 +1937,7 @@ mod tests {
             total.stale_citations += seen.stale_citations;
             total.spends += seen.spends;
             total.not_holder += seen.not_holder;
+            total.left_queue += seen.left_queue;
             total.unknown += seen.unknown;
             total.too_many += seen.too_many;
             total.implicit += seen.implicit;
@@ -1778,6 +1954,7 @@ mod tests {
             ("stale citations", total.stale_citations),
             ("spent snapshots", total.spends),
             ("refused releases", total.not_holder),
+            ("waiters that left the queue", total.left_queue),
             ("unknown clients", total.unknown),
             ("clients beyond the bound", total.too_many),
             ("implicit acquires", total.implicit),

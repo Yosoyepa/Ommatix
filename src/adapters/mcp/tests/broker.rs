@@ -1592,7 +1592,7 @@ fn generated_run(drive: Drive) {
     let mut model = Model::new(MAX_CLIENTS);
     let mut rng = Rng(match drive {
         Drive::Methods => 0x0B40_4E55,
-        Drive::Wire => 0x5EED_0001,
+        Drive::Wire => 0x5EED_0003,
     });
     let mut slots: Vec<Option<Slot>> = (0..SLOTS).map(|_| None).collect();
     let mut next_request = 0_u64;
@@ -1713,7 +1713,7 @@ fn generated_run(drive: Drive) {
                 } else {
                     let expected = model.leases.release(id, now);
                     model.apply(&expected.change);
-                    expected.result.map(|()| None)
+                    expected.result.map(|_| None)
                 };
                 let settled = model.leases.publishes(id, now);
                 model.apply(&settled.change);
@@ -2238,12 +2238,13 @@ fn ct_12_what_the_lease_table_refuses_is_told_in_meta_and_the_observation_is_ans
         lease_of(&refused),
         Some(&standing("holder", Some(1), None, None))
     );
-    // b does not hold the lease and releases: refused by the table, b keeps its place.
-    let not_holder = observe_with(&mut b, json!({ "lease": "release" }));
+    // c neither holds the lease nor waits, and releases: refused by the table, nothing changes.
+    let mut c = rig.connect(Some(full()));
+    let not_holder = observe_with(&mut c, json!({ "lease": "release" }));
     assert_eq!(not_holder["isError"], false, "{not_holder}");
     assert_eq!(
         lease_of(&not_holder),
-        Some(&standing("waiting", None, Some(1), Some(0)))
+        Some(&standing("none", None, None, Some(0)))
     );
     // b asks again and keeps its place.
     let again = observe_with(&mut b, json!({ "lease": "acquire" }));
@@ -2251,6 +2252,72 @@ fn ct_12_what_the_lease_table_refuses_is_told_in_meta_and_the_observation_is_ans
         lease_of(&again),
         Some(&standing("waiting", None, Some(1), Some(0)))
     );
+}
+
+#[test]
+fn ct_12_a_waiter_that_releases_leaves_the_queue_and_asks_again_at_the_back() {
+    let rig = rig();
+    let mut a = rig.connect(Some(full()));
+    let mut b = rig.connect(Some(full()));
+    let mut c = rig.connect(Some(full()));
+    let mut d = rig.connect(Some(full()));
+    let _ = observe_with(&mut a, json!({}));
+    for (conn, position) in [(&mut b, 1), (&mut c, 2), (&mut d, 3)] {
+        let asked = observe_with(conn, json!({ "lease": "acquire" }));
+        assert_eq!(
+            lease_of(&asked),
+            Some(&standing("waiting", None, Some(position), Some(0)))
+        );
+    }
+
+    // b leaves the queue: it is told it neither holds nor waits; the others move up one place.
+    let left = observe_with(&mut b, json!({ "lease": "release" }));
+    assert_eq!(left["isError"], false, "{left}");
+    assert_eq!(
+        lease_of(&left),
+        Some(&standing("none", None, None, Some(0)))
+    );
+    for (conn, position) in [(&mut c, 1), (&mut d, 2)] {
+        let moved = observe_with(conn, json!({}));
+        assert_eq!(
+            lease_of(&moved),
+            Some(&standing("waiting", None, Some(position), Some(0)))
+        );
+    }
+    // b asks again and waits at the back.
+    let back = observe_with(&mut b, json!({ "lease": "acquire" }));
+    assert_eq!(
+        lease_of(&back),
+        Some(&standing("waiting", None, Some(3), Some(0)))
+    );
+
+    // a's term ends: the lease goes to c, which waited first, not to b, which had been first.
+    rig.world.advance(TERM);
+    let turn = observe_with(&mut c, json!({}));
+    assert_eq!(
+        lease_of(&turn),
+        Some(&standing("holder", Some(2), None, None))
+    );
+    let behind = observe_with(&mut b, json!({}));
+    assert_eq!(
+        lease_of(&behind),
+        Some(&standing("waiting", None, Some(2), Some(0)))
+    );
+    // c releases on the wire: the lease passes to d, then b is first.
+    let _ = observe_with(&mut c, json!({ "lease": "release" }));
+    let next = observe_with(&mut d, json!({}));
+    assert_eq!(
+        lease_of(&next),
+        Some(&standing("holder", Some(3), None, None))
+    );
+    let page = next["structuredContent"].clone();
+    assert!(delivered(&act(&mut d, click(&page, "d1", true))));
+    let first = observe_with(&mut b, json!({}));
+    assert_eq!(
+        lease_of(&first),
+        Some(&standing("waiting", None, Some(1), Some(0)))
+    );
+    assert_eq!(rig.world.events(), 1);
 }
 
 #[test]

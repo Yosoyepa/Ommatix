@@ -14,10 +14,11 @@
 //!    honours it, and a purge or the operator's stop revokes the lease.
 //! 2. The `lease` argument of `observe_screen`, when sent, is applied at that instant:
 //!    `acquire` asks for the lease and `release` releases it, exactly as
-//!    [`BrokerConnection::acquire`] and [`BrokerConnection::release`] do. What the lease
-//!    table refuses (a renewal while another client waits, a release by a client that does
-//!    not hold the lease, time exhausted) is no error for the caller: the observation is
-//!    answered and `_meta` says where the client stands.
+//!    [`BrokerConnection::acquire`] and [`BrokerConnection::release`] do: a waiter's `release`
+//!    takes it out of the queue. What the lease table refuses (a renewal while another client
+//!    waits, a release by a client that neither holds the lease nor waits for it, time
+//!    exhausted) is no error for the caller: the observation is answered and `_meta` says where
+//!    the client stands.
 //! 3. The lease is settled for the caller at that instant; when it passed to another client,
 //!    the published snapshot is spent, so that the new holder observes before it acts.
 //! 4. The caller's grant is installed for the length of the call: the gate and the view
@@ -56,7 +57,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use ommatix_application::contract::{ActionRequest, ActionResult, ErrorCode, ToolError};
-use ommatix_application::lease::{Acquired, ClientId, LeaseChange, LeaseRefusal};
+use ommatix_application::lease::{Acquired, ClientId, LeaseChange, LeaseRefusal, Released};
 use ommatix_application::{
     Clock, Engine, EngineConfig, Grant, GrantedPolicy, JOURNAL_CLIENTS, LeaseTable, PolicyStore,
     Ports,
@@ -427,12 +428,13 @@ impl BrokerConnection {
         outcome.result.map_err(BrokerError::Lease)
     }
 
-    /// Releases the lease this client holds; it passes at once to the first client waiting.
+    /// Releases what this client has of the lease: the lease it holds, which passes at once to
+    /// the first client waiting, or its place in the queue ([`Released`]).
     ///
     /// # Errors
     ///
     /// The lease table's refusal, or [`BrokerError::Unavailable`] after a failed call.
-    pub fn release(&self) -> Result<(), BrokerError> {
+    pub fn release(&self) -> Result<Released, BrokerError> {
         let mut state = self.member.shared.lock()?;
         let now = state.clock.now();
         state.enter();
