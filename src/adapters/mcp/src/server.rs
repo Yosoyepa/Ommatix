@@ -76,7 +76,13 @@ impl McpServer {
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
     {
-        let outcome = self.exchange(reader, &mut writer).await;
+        let outcome = exchange(
+            &mut self.connect(),
+            self.config.message_limit(),
+            reader,
+            &mut writer,
+        )
+        .await;
         self.purge();
         outcome
     }
@@ -90,29 +96,34 @@ impl McpServer {
             .unwrap_or_else(PoisonError::into_inner)
             .purge();
     }
+}
 
-    async fn exchange<R, W>(&self, reader: R, writer: &mut W) -> io::Result<()>
-    where
-        R: AsyncRead + Unpin,
-        W: AsyncWrite + Unpin,
-    {
-        let mut connection = self.connect();
-        let mut lines = LineReader::new(
-            BufReader::with_capacity(READ_CHUNK, reader),
-            self.config.message_limit(),
-        );
-        loop {
-            let response = match lines.next_frame().await? {
-                Frame::Eof => break,
-                Frame::Message(message) => connection.handle_message(&message),
-                Frame::Oversized => Some(connection.oversized_message_response()),
-            };
-            if let Some(mut line) = response {
-                line.push('\n');
-                writer.write_all(line.as_bytes()).await?;
-                writer.flush().await?;
-            }
+/// The bounded message loop (ADR-0015) of one connection over a byte stream: one JSON-RPC
+/// message per line in each direction, handled in arrival order, and no incoming line longer
+/// than `limit` bytes buffered. Returns at end of input or on an I/O error. The stdio server
+/// and the broker's connections share it.
+pub(crate) async fn exchange<R, W>(
+    connection: &mut Connection,
+    limit: usize,
+    reader: R,
+    writer: &mut W,
+) -> io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut lines = LineReader::new(BufReader::with_capacity(READ_CHUNK, reader), limit);
+    loop {
+        let response = match lines.next_frame().await? {
+            Frame::Eof => break,
+            Frame::Message(message) => connection.handle_message(&message),
+            Frame::Oversized => Some(connection.oversized_message_response()),
+        };
+        if let Some(mut line) = response {
+            line.push('\n');
+            writer.write_all(line.as_bytes()).await?;
+            writer.flush().await?;
         }
-        writer.flush().await
     }
+    writer.flush().await
 }
