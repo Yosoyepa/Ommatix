@@ -26,7 +26,8 @@
 //!   client's grant (ADR-0039 and ADR-0040, proposed); each [`BrokerConnection`] speaks the
 //!   same protocol through a [`Connection`]. A client asks for the lease with the `lease`
 //!   argument of `observe_screen` and learns where it stands under [`LEASE_META_KEY`].
-//!   Nothing outside this crate's tests constructs one yet: the binary serves stdio only.
+//!   Nothing in the executable constructs one yet; only tests do (this crate's and the
+//!   acceptance suite's scenarios): the binary serves stdio only.
 //! - [`McpConfig`] is the `[mcp]` configuration section.
 //! - [`dto`] holds the wire DTOs and their mapping to the application contract types.
 //! - [`schemas`] embeds the contract's JSON schemas from `docs/thesis/contratos/esquemas/`.

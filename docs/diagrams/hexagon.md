@@ -6,9 +6,12 @@ dependency; nothing points out of the domain.*
 la dependencia; nada sale del dominio.*
 
 *`ommatix-adapter-mcp` also holds the broker of the proposed ADR-0039 (several agents, one input
-lease); only its tests construct it, and the composition root does not.*
+lease). Nothing in the executable constructs it, the composition root included; only tests do,
+the crate's own and the acceptance suite's scenarios BDD-63 to BDD-67.*
 *`ommatix-adapter-mcp` contiene también el intermediario de la propuesta ADR-0039 (varios
-agentes, un arrendamiento de entrada); sólo sus pruebas lo construyen, no la raíz de composición.*
+agentes, un arrendamiento de entrada). Nada en el ejecutable lo construye, tampoco la raíz de
+composición; sólo lo hacen las pruebas, las del propio crate y los escenarios BDD-63 a BDD-67 de
+la suite de aceptación.*
 
 ```mermaid
 flowchart TB

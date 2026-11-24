@@ -16,7 +16,7 @@ transport: [ADR-0015](../adr/0015-mcp-transport-on-rmcp-wire-types.md).
 
 ```mermaid
 flowchart TD
-  REQ[observe_screen<br/>query · limit · cursor · include_values] --> CUR{cursor?}
+  REQ[Engine::observe_screen<br/>ObserveRequest: query · limit · cursor · include_values] --> CUR{cursor?}
   CUR -->|yes| PAGE[next page of the snapshot<br/>the cursor names]
   CUR -->|no| CAP[FrameCapturer.capture]
   CAP --> PLAN[Region plan, Algorithm 1<br/>against the committed base<br/>+ pending dirty tiles]

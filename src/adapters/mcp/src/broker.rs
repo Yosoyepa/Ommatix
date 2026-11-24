@@ -49,7 +49,8 @@
 //! with it; the last one to leave purges the engine, as the end of the stdio server's
 //! connection does (ADR-0039, decision 10).
 //!
-//! Nothing outside this crate's tests constructs a broker: the executable serves stdio only.
+//! Nothing in the executable constructs a broker; only tests do (this crate's and the acceptance
+//! suite's scenarios): the executable serves stdio only.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;

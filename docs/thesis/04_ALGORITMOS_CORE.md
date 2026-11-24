@@ -10,7 +10,7 @@ La referencia ejecutable en Python usa algoritmos sencillos para probar invarian
 
 ### Entradas, salidas y precondiciones
 
-Entradas: frame actual, último frame base confirmado, regiones sucias pendientes y soportes visuales del último snapshot. Salida: plan de regiones a procesar y razón de selección, sin mutar aún el snapshot publicado. Precondiciones: dimensiones positivas y acotadas, stride válido, buffer suficiente, formato/epoch compatibles. Un cambio incompatible fuerza procesamiento completo. Con el intermediario de ADR-0039 (propuesta), sólo la observación del titular del arrendamiento ejecuta este algoritmo; la de otro cliente no captura ni percibe: recibe la página ya publicada y no cambia la base ni las regiones pendientes.
+Entradas: frame actual, último frame base confirmado, regiones sucias pendientes y soportes visuales del último snapshot. Salida: plan de regiones a procesar y razón de selección, sin mutar aún el snapshot publicado. Precondiciones: dimensiones positivas y acotadas, stride válido, buffer suficiente, formato/epoch compatibles. Un cambio incompatible fuerza procesamiento completo. Con el intermediario de ADR-0039 (propuesta), mientras un cliente tiene el arrendamiento sólo su observación ejecuta este algoritmo y publica; la de otro cliente no captura ni percibe: recibe la página ya publicada y no cambia la base ni las regiones pendientes. Con varios clientes y nadie con el arrendamiento, la observación de cualquiera lo ejecuta y publica.
 
 Se usa tamaño inicial de tile 64×64 para mantener la nomenclatura original. No se vincula ese tamaño a IDs. Los bordes derecho e inferior tienen tamaño parcial; se visitan todos sus píxeles. Para un frame 1920×1080 hay `ceil(1920/64)*ceil(1080/64)=510` celdas [D].
 
