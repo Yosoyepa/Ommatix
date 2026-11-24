@@ -31,8 +31,10 @@
 //!   grant handed in by the caller ([`Broker::connect`]), or by a one-use ticket on the first
 //!   line of its connection ([`Broker::admit`], [`Broker::serve_with_handshake`],
 //!   [`Broker::serve_sync_with_handshake`]), whose grant is asked of an
-//!   [`ommatix_application::GrantStore`] on every call (ADR-0040, ADR-0043, proposed).
-//!   Nothing in the executable constructs one yet; only tests do (this crate's and the
+//!   [`ommatix_application::GrantStore`] on every call (ADR-0040, ADR-0043, proposed). A
+//!   handshake reads a bounded number of bytes, and a listener counts a connection whose
+//!   handshake is not settled against the bound on clients with a [`Reservation`]
+//!   ([`Broker::reserve`]). Nothing in the executable constructs one yet; only tests do (this crate's and the
 //!   acceptance suite's scenarios): the binary serves stdio only, and no transport serves a
 //!   broker yet.
 //! - [`McpConfig`] is the `[mcp]` configuration section.
@@ -88,7 +90,7 @@ mod tools;
 mod transport;
 
 pub use broker::{
-    Admission, Broker, BrokerConnection, BrokerError, BrokerState, MAX_SPENT_TICKETS,
+    Admission, Broker, BrokerConnection, BrokerError, BrokerState, MAX_SPENT_TICKETS, Reservation,
     TICKET_MAX_LEN, TICKET_MIN_LEN,
 };
 pub use config::{DEFAULT_MAX_MESSAGE_BYTES, McpConfig};

@@ -29,13 +29,18 @@ pub(crate) enum Frame {
 /// The framing rules of one stream, fed one buffered chunk at a time: a line ends at `\n`, a
 /// `\r` just before it is dropped, a line over the limit is discarded without being stored, and
 /// at the end of input a final line without its terminator is still a line (an oversized one
-/// is reported once).
+/// is reported once). The bytes of a line it discards are overwritten before they are dropped.
+///
+/// With `cut_oversized` set (the handshake, before a client is admitted), a line over the limit
+/// is reported as [`Frame::Oversized`] as soon as its bytes pass the limit, without reading on to
+/// its end: nothing after that is read, because the connection ends.
 #[derive(Debug)]
 struct Framer {
     limit: usize,
     buf: Vec<u8>,
     discarding: bool,
     terminated: bool,
+    cut_oversized: bool,
 }
 
 impl Framer {
@@ -45,7 +50,14 @@ impl Framer {
             buf: Vec::new(),
             discarding: false,
             terminated: false,
+            cut_oversized: false,
         }
+    }
+
+    /// Drops what the line holds so far, overwriting it first.
+    fn discard(&mut self) {
+        self.buf.fill(0);
+        self.buf.clear();
     }
 
     /// Starts a new frame.
@@ -74,8 +86,11 @@ impl Framer {
         let take = newline.unwrap_or(available.len());
         if !self.discarding {
             if self.buf.len().saturating_add(take) > cap {
+                self.discard();
+                if self.cut_oversized {
+                    return (take, Some(Frame::Oversized));
+                }
                 self.discarding = true;
-                self.buf.clear();
             } else {
                 self.buf.extend_from_slice(&available[..take]);
             }
@@ -97,7 +112,7 @@ impl Framer {
             self.buf.pop();
         }
         if self.buf.len() > self.limit {
-            self.buf.clear();
+            self.discard();
             Frame::Oversized
         } else {
             Frame::Message(std::mem::take(&mut self.buf))
@@ -123,6 +138,15 @@ impl<R> LineReader<R> {
     /// Whether the last frame read ended at its `\n`, rather than at the end of input.
     pub(crate) fn terminated(&self) -> bool {
         self.framer.terminated
+    }
+
+    /// Whether a line over the limit ends the read at once ([`Frame::Oversized`] as soon as its
+    /// bytes pass the limit) instead of being read on to its end. Set for a handshake, so that the
+    /// bytes a peer can make the reader take before it is admitted are bounded by the limit, plus
+    /// one byte, plus one buffer of the inner reader; cleared after it, so that an established
+    /// connection survives an oversized message.
+    pub(crate) fn cut_oversized(&mut self, cut: bool) {
+        self.framer.cut_oversized = cut;
     }
 }
 
