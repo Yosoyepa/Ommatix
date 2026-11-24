@@ -363,8 +363,9 @@ the heads of unpublished branches move.
   `io.ommatix/lease` and its schema `docs/thesis/contratos/esquemas/lease.meta.schema.json`,
   chapter 07, RF-19 with scenarios BDD-63 to BDD-67, the tests below, and a CHANGELOG entry that
   claims 1.0.119, to be renumbered by the owner at merge if the order of the branches changes.
-  Release by a waiting client (decision 7) is being added on the same branch and was not yet
-  committed when this text was written.
+  Release by a waiting client (decision 7) is built on the same branch: `LeaseTable::release`
+  takes a waiter out of the queue (`Released::LeftQueue` in `src/application/src/lease.rs`), and
+  the broker reports it in `io.ommatix/lease`.
 
 Of Required validation, on `feat/lease-on-the-wire` (the IT and CT tests in
 `src/adapters/mcp/tests/broker.rs`, CT-11 in `src/adapters/mcp/tests/ct_lease.rs`):
@@ -385,7 +386,7 @@ Of Required validation, on `feat/lease-on-the-wire` (the IT and CT tests in
 | A ninth client refused | IT-17 |
 | A full journal share evicts only the owner's results | an application test of `feat/engine-clients`, no identifier |
 | The retry that replays after the lease was lost | IT-16 |
-| A waiter that releases leaves the queue | still planned (being added) |
+| A waiter that releases leaves the queue | CT-12 (the row in `docs/thesis/matrices/plan_pruebas.csv` covers it, test `ct_12_a_waiter_that_releases_leaves_the_queue_and_asks_again_at_the_back`); unit tests of `lease.rs`, no identifier |
 | The wire: the argument, the key, the stdio server | CT-11, CT-12, CT-13 |
 | The transport's own tests | not started (ADR-0043) |
 | The lease in the formal model | not started |
