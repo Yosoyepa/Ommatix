@@ -9,7 +9,11 @@ commit before writing it down; where the first reading had a line or a wording w
 says so. Nothing here used the real screen, input or a model, and no production code changes.
 
 The decisions that resolve the findings were taken the same day under the owner's delegation. Both
-ADRs stay **Proposed**: acceptance is still the owner's.
+ADRs stay **Proposed**: acceptance is still the owner's. The revision was made in two commits: the
+first (`1ffb6f4`) resolved the findings with decisions D2 to D9; an independent QA pass by another
+vendor's agent then accepted it and listed three wording points, and decisions D11 to D14, taken
+after it on points the first commit had left open, were folded in by the second (see
+[Decisions taken after the first revision](#decisions-taken-after-the-first-revision)).
 
 ## Findings
 
@@ -21,7 +25,7 @@ planned tests have no identifiers yet; the ADRs assign them on acceptance.
 
 | # | P | Finding | Check | Resolution | Covered by |
 |---|---|---|---|---|---|
-| A1 | P1 | `McpServer::serve` purges the engine when any connection ends (`src/adapters/mcp/src/server.rs`, lines 79–81; pinned by `src/adapters/mcp/tests/sec_07_deletion.rs`). A second client that disconnects would wipe the shared engine, while the draft said a disconnect only ends the lease. | Confirmed. | Decision 10: a connection that ends deletes only its own state (its lease, its place in the queue, its journal entries); the engine is purged when the last connection ends. Chapter 08 §8.4 changes on acceptance (open point). | Planned: a connection that ends while others remain leaves the snapshot and the others' entries; the last one purges. The existing `sec_07_` tests keep the one-client case. |
+| A1 | P1 | `McpServer::serve` purges the engine when any connection ends (`src/adapters/mcp/src/server.rs`, lines 79–81; pinned by `src/adapters/mcp/tests/sec_07_deletion.rs`). A second client that disconnects would wipe the shared engine, while the draft said a disconnect only ends the lease. | Confirmed. | Decision 10: a connection that ends deletes only its own state (its lease, its place in the queue, its journal entries); the engine is purged when the last connection ends. D12: what a departed client observed stays until the last client leaves or the operator purges; chapter 08 §8.4 will say so when the broker is wired. | Planned: a connection that ends while others remain leaves the snapshot and the others' entries; the last one purges. The existing `sec_07_` tests keep the one-client case. |
 | A2 | P2 | The Context said one engine serves one connection. `McpServer` is `Clone` over `Arc<Mutex<Engine>>` (`server.rs`, lines 18–28), `serve` is generic over streams (lines 68–82), each stream is a `Connection` over the shared engine (`protocol.rs`, lines 70–90), and `tools::call` holds the lock for the engine's work on a call (`tools.rs`, lines 108–179). | Confirmed; the plan cited no lines for `server.rs` and `tools.rs`, added here. | The Context states it; the broker is smaller than the draft suggested. | Documentation only. |
 | A3 | P1 | One client holds the lease implicitly and, with no holder, nobody delivers; the draft did not say what happens to the implicit lease when a second client connects. | Confirmed by reading the draft. | Decision 9: the implicit lease becomes an ordinary lease whose term starts when the second client connects. | Planned: one client holds the lease implicitly; when a second connects, the first keeps it for one term and then loses it. |
 | A4 | P1 | ADR-0039 decision 6 (one client: today's behaviour) contradicted ADR-0040 decision 5 (no grant: deliver nothing) for one client without a grant with the broker on. | Confirmed by reading both drafts. | Decision 9 of 0039 and decision 7 of 0040: with the broker on, grants govern every client, a single one included; the transparency covers the lease only. With the broker off nothing changes. | Planned: a single client without a grant delivers nothing; with a grant equal to the policy, the broker answers as the stdio server. |
@@ -29,7 +33,7 @@ planned tests have no identifiers yet; the ADRs assign them on acceptance.
 | A6 | P2 | The shared page was "marked as shared and with its age"; an age depends on the run, so by engineering rule 1 it belongs in `_meta`. No public method serves the published page again: `first_page` and `next_page` are `pub(super)` (`src/application/src/engine/view.rs`, lines 166–197), `observe_screen` without a cursor always observes (`src/application/src/engine.rs`, lines 231–251), and a cursor binds the effective `include_values` (`view.rs`, line 185). | Confirmed. | Decision 4: the age, and whether the page is shared, go in `_meta`; the page is rebuilt per client, which needs a new engine method. The lease state of decision 5 goes in `_meta` for the same reason. | Planned: a non-holder's page carries its age in `_meta` and not in `structuredContent`, and the snapshot counter does not move. |
 | A7 | P2 | The draft spoke of "the total bound of ADR-0034". `JOURNAL_CAPACITY = 1024` bounds only results that delivered no input; delivered and indeterminate results are kept without bound, keyed by `request_id` alone (`src/application/src/engine/journal.rs`, lines 7–20 and 92–99), and ADR-0034 was accepted as documentation only, with no budget. | Confirmed. | Decision 11: the per-client quota can only split the evictable part; it bounds nothing that is not bounded today. | Planned: a full quota evicts only its owner's results that delivered no input. |
 | A8 | P2 | The draft did not say when the lease term is checked. A two-phase `type` polls the clock between its click and its keys (`act.rs`, lines 557–600; ADR-0018). | Confirmed; the plan cited no line, added here. | Decision 8: the lease is evaluated once, when a call enters the critical section; a delivery in progress completes. A holder renews only when nobody waits, with the same number, spending nothing. | Planned: a `type` whose term ends between click and keys completes and the next call is refused; renewal with and without waiters. Not yet in the formal model, which has no time. |
-| A9 | P2 | Transport: `unsafe` is allowed only in the capture and input adapters (ADR-0016), SEC-04 bans sockets, and the lockfile check bans `mio` and `socket2`. The plan's inference was that the client side (`attach`) could open the pipe with `std::fs` alone. | Corrected. The constraints hold (`src/acceptance/tests/repository.rs`, lines 142–173 and 228–262), and there are more: the SEC-04 source check also forbids `tokio::net`, where `tokio`'s named pipes live, and `OpenOptions`, which a read-write open of a pipe with `std::fs` needs. So neither side of the pipe is free of an exception today. | Decision 12: the broker is built and tested on in-memory streams first; the pipe is a separate spike and a separate decision, and the ADR states the three constraints. | Documentation only until the spike. |
+| A9 | P2 | Transport: `unsafe` is allowed only in the capture and input adapters (ADR-0016), SEC-04 bans sockets, and the lockfile check bans `mio` and `socket2`. The plan's inference was that the client side (`attach`) could open the pipe with `std::fs` alone. | Corrected. The constraints hold (`src/acceptance/tests/repository.rs`, lines 142–173 and 228–262), and there are more: the SEC-04 source check also forbids `tokio::net`, where `tokio`'s named pipes live, and `OpenOptions`, which a read-write open of a pipe with `std::fs` needs. So neither side of the pipe is free of an exception today. | Decision 12: the broker is built and tested on in-memory streams first; the pipe is a separate spike and a separate decision, and the ADR states the three constraints. D13 names a candidate, adopted only under its own ADR. | Documentation only until the spike. |
 | A10 | P3 | The draft did not say who starts the engine process that the `attach` relays connect to. | Confirmed. | Listed as open, with the fact that an `attach` that starts the engine needs `Command::new`, which the SEC-04 source check forbids (`repository.rs`, line 159). | Documentation only. |
 
 ### ADR-0040
@@ -58,24 +62,43 @@ planned tests have no identifiers yet; the ADRs assign them on acceptance.
   spent for good.
 - **The age of the shared page and the lease state go in `_meta`**, not in the page.
 
+## Decisions taken after the first revision
+
+The first commit left five points open. Four decisions of the same day, under the same delegation,
+settle two of them (D11 and D14 the budget of 0040, D12 the retained observations of 0039), which
+are no longer listed as open, and name a transport candidate (D13), on which the three points still
+open depend.
+
+| # | Decision | Where | Reason | Covered by |
+|---|---|---|---|---|
+| D11 | A grant's delivery budget is spent by every action whose result the journal keeps as possible input: delivered input or `indeterminate` (`src/application/src/engine/journal.rs`, lines 22–25). A two-phase `type` counts once. A dry run and a refusal spend nothing. | 0040 decision 10 | Fail closed: an attempt whose effect is unknown may have reached the desktop. ADR-0034 asks any budget to define this. | Planned: the budget on generated sequences, with delivered, indeterminate and two-phase results. |
+| D12 | What a client observed stays in the engine until the last client leaves or the operator purges. Chapter 08 §8.4 will say so when the broker is wired. | 0039 decision 10 | Perception state belongs to the desktop, not to a client; the operator's purge file still deletes it at any request boundary. | Planned: a departed client's observations stay until the last disconnect or the operator's purge. |
+| D13 | Transport candidate: a Windows named pipe through the `interprocess` crate (`=2.4.9`, `default-features = false`, synchronous API), one blocking thread per connection with a synchronous line reader driving `Connection::handle_message`. Adopted only if an experiment supports it, and then under its own ADR (an exception to the SEC-04 source check if the `attach` side needs `OpenOptions`, the licences in `S4_REPRODUCIBILIDAD.md`, a CHANGELOG entry). The fallback is our own `unsafe` under a new exception in the manner of ADR-0016. | 0039 decision 12, as a candidate, not a decision of the ADR | A read-only spike kept outside the repository (U3, `U3-named-pipe.md`) found, from the crate's source, that it refuses remote clients and takes the first-instance flag by default and pulls in no `tokio`, `mio` or `socket2`; the other crates it looked at each fail a requirement or a repository check. Not yet run: the restriction to the current user, the build on this toolchain, flushing under pipelined traffic. | The experiment; then the transport's own ADR. |
+| D14 | A spent budget lasts as long as the engine process and belongs to the grant, identified by its ticket's hash. An operator's purge and a reload of the grants file do not restore it; a grant issued again under a new ticket starts a new budget. | 0040 decision 11 | ADR-0034 asks a budget to say what a purge and a reload do. A count of deliveries is not screen data, and restoring authority as a side effect of deleting data would fail open. | Planned: a purge and a reload leave a spent budget spent; a new ticket starts a new one. |
+
+The same commit takes in the three wording points of the QA pass: the page a client without the
+lease receives has the same `structuredContent` shape as the holder's, each being built with the
+client's own `include_values` and grant (0039 decision 4); in the alternatives of 0040, only the
+region's box and the target's role come from the registry, while the action kind comes from the
+request, as decision 6 says; and the Spanish summary of 0040 lists every point still open. It also
+records that the lease state machine exists unwired (`LeaseTable` in `src/application/src/lease.rs`,
+commit `fd53a21`, local branch `feat/lease-machine`).
+
 ## What stays open
 
 - Who starts the engine process (0039).
 - How a second engine on the same desktop is refused: a lock file needs calls SEC-04 forbids, and
-  the pipe's first-instance refusal waits for the transport spike (0039). Until then the "one
+  the pipe's first-instance refusal waits until a transport is adopted (0039). Until then the "one
   engine per desktop" rule holds by the operator's practice, not by construction.
-- The text of chapter 08 §8.4 for several clients: what a client that left had observed stays
-  until the last client leaves (0039).
-- How a budget counts an indeterminate attempt and a two-phase `type`, as ADR-0034 asks of any
-  budget (0040).
-- Where the ticket's SHA-256 is computed (0040).
+- Where the ticket's SHA-256 is computed, which depends on the transport (0040).
 - The lease's time, waiting order and renewal in the formal model, which has no time
   ([ADR-0042](../adr/0042-formal-model-as-a-third-oracle.md)).
 
 ## Evidence
 
 - Every file and line cited above exists at `5c3e363`, except `src/application/src/grant.rs`,
-  which is on the local branch `feat/grant-meet` (`dd0579c`).
+  which is on the local branch `feat/grant-meet` (`dd0579c`), and `src/application/src/lease.rs`,
+  which is on `feat/lease-machine` (`fd53a21`).
 - The ADRs, this record and the index are documentation; the repository invariants
   (`cargo test -p ommatix-acceptance --test repository`) and the thesis checks
   (`referencia_ejecutable/run_tests.py`, `validar_paquete.py`) were run on the change.

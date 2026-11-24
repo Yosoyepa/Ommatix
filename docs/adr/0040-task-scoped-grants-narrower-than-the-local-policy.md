@@ -87,7 +87,9 @@ model cannot read it.
    (the action kind, the budget, the term and the region) is checked in the engine, because the
    region needs the target's box, which only the engine's registry knows. The policy-shaped meet
    exists, unwired, as `Grant::narrow` and `Grant::meet` in `src/application/src/grant.rs` (commit
-   `dd0579c`, local branch `feat/grant-meet`); the other four limits are not in it.
+   `dd0579c`, local branch `feat/grant-meet`); the other four limits are not in it. The lease of
+   ADR-0039 exists unwired too (`LeaseTable` in `src/application/src/lease.rs`, commit `fd53a21`,
+   local branch `feat/lease-machine`).
 7. **Fail closed, for every client.** With the broker on, a client without a valid grant (none, an
    ended term, a withdrawn grant) may observe without values and may deliver nothing. This holds for
    a single client too: the transparency of ADR-0039 covers the lease only. With the broker off
@@ -102,8 +104,24 @@ model cannot read it.
 9. **A refusal names the limit, not the screen.** A grant limit refuses with `POLICY_DENIED`, as the
    policy's own refusals do today (`act.rs`, lines 116–132), and the message names which limit
    applied without quoting the screen or the agent.
-10. **A budget is spent by a delivery**, not by a request, a dry run or a refusal, and the count is
-    on the research record with the lease number of ADR-0039.
+10. **What spends a budget.** A grant's delivery budget is spent by every action whose result the
+    journal keeps for the session as possible input: a result that reports delivered input
+    (`input_delivered`, `effect_observed`) or an `indeterminate` one
+    (`src/application/src/engine/journal.rs`, lines 22–25). An attempt whose effect is unknown may
+    have reached the desktop, so it counts: that fails closed. A two-phase `type`
+    ([ADR-0018](0018-two-phase-type-with-element-level-focus-confirmation.md)) is one action and
+    counts once, whether its keys were sent or only its click. A request, a dry run and a refusal
+    spend nothing. The count is on the research record with the lease number of ADR-0039. This is
+    the counting [ADR-0034](0034-propose-fail-closed-retained-state-budgets.md) asks any budget to
+    define.
+11. **What restores a budget: only a new ticket.** A grant's spent budget lasts as long as the
+    engine process (decision 4) and belongs to the grant, identified by its ticket's hash. An
+    operator's purge ([ADR-0028](0028-operator-purge-file.md)) deletes perception state and the
+    journal and does not restore a budget; reading the grants file again, changed or not, does not
+    restore it either. A grant issued again under a new ticket starts a new budget. A count of
+    deliveries is not screen data, so a purge has no reason to delete it, and restoring authority
+    as a side effect of deleting data would fail open; issuing a new ticket is the operator's
+    explicit act.
 
 Deferred: delegation from inside the contract (an orchestrator model that issues grants through a
 tool). It would need a control tool and a change of chapter 07; the harness on the operator's side
@@ -111,13 +129,6 @@ covers the need without it.
 
 ### Open points
 
-- **How a budget counts an indeterminate attempt and a two-phase `type`, and what a purge does to
-  it.** [ADR-0034](0034-propose-fail-closed-retained-state-budgets.md) asks any budget to define its
-  counting for two-phase `type` and indeterminate attempts, and its behaviour under policy reloads,
-  purge and the session's lifecycle. Decision 10 says "a delivery", and a result can be
-  `indeterminate` with or without a delivered click. Counting every result the journal keeps as
-  having reported input (`delivered` or `indeterminate`, `src/application/src/engine/journal.rs`
-  lines 22–25) would fail closed; it is not decided here.
 - **Where the ticket's SHA-256 is computed.** `sha2` 0.11 is already a workspace dependency, used
   by the app, the vision adapter and the acceptance crate (`Cargo.toml` line 54), and not by
   `adapter-mcp`. The application crate may not depend on it (`src/acceptance/tests/repository.rs`,
@@ -139,8 +150,13 @@ covers the need without it.
   it needs window evidence on every element, which is a dossier change.
 - **A spent-list of tickets in the store:** it survives a restart, and it makes the engine write to
   the operator's store for the first time.
-- **Applying the whole grant in a check before the engine:** the region and the target's kind need
-  the registry, which only the engine has.
+- **Applying the whole grant in a check before the engine:** the region needs the target's box,
+  which, like the target's role, comes from the engine's registry, and only the engine has it. The
+  action kind comes from the request and could be checked anywhere; the region could not.
+- **Restoring a budget on a purge or a reload:** it would give authority back as a side effect of
+  deleting data or of reading a file again.
+- **Counting only the results that report delivered input:** an `indeterminate` attempt may have
+  reached the desktop, so leaving it out would fail open.
 
 ## Consequences and cost
 
@@ -169,7 +185,11 @@ simulated desktop with a fake clock and fixed seeds.
 - A client without a grant delivers no input event, a single client included. A client whose grant
   excludes the target's application, window, action kind or region delivers none either, each
   refused with `POLICY_DENIED` and a message naming its limit.
-- The budget is never exceeded on generated sequences, and a dry run or a refusal does not spend it.
+- The budget is never exceeded on generated sequences; a delivered or `indeterminate` result spends
+  one, a two-phase `type` spends one whether or not its keys were sent, and a dry run or a refusal
+  spends nothing.
+- An operator's purge and a reload of the grants file leave a spent budget spent; the same grant
+  under a new ticket starts a new budget.
 - A grant that ends or is withdrawn refuses the next action; the stop refuses it whatever the grant.
   A grants file that is missing or malformed grants nothing.
 - A ticket attaches once in one engine process; a second use is refused. After a restart of the
@@ -195,7 +215,7 @@ which the meet permitted something the policy refused would be a defect to fix b
 The owner's request of 2026-11-22 for safer agent actions and orchestrators over several agents.
 Revised on 2026-11-24 after reading the draft against the code
 ([review](../reviews/2026-11-24-adr-0039-0040-against-the-code.md)); the decisions were taken that
-day under the owner's delegation. Refines ADR-0007 and ADR-0020; relies on ADR-0034. The reasoning
+day under the owner's delegation. Refines ADR-0007 and ADR-0020; relies on ADR-0018, ADR-0028 and ADR-0034. The reasoning
 is the principle of least privilege, fail-safe defaults and complete mediation (Saltzer and
 Schroeder, 1975), capabilities as authority that is designated and can be attenuated (Dennis and Van
 Horn, 1966; Miller, 2006) and the confused deputy (Hardy, 1988). None of these is in chapter 11 yet;
@@ -210,5 +230,7 @@ sin concesión válida se observa sin valores y no se entrega nada. Tiques, pres
 valen por proceso del motor. Lo observado no se filtra por aplicación, porque los elementos no la
 llevan; se filtran los valores y la región. Las concesiones necesitan una sección y una lectura
 nueva del almacén de política; la parte con forma de política se aplica decorando ese almacén y el
-resto se comprueba en el motor. Queda abierto cómo cuenta el presupuesto un intento indeterminado.
+resto se comprueba en el motor. El presupuesto lo gasta toda acción entregada o indeterminada (un
+`type` en dos fases cuenta una vez); ni una purga ni una recarga lo restauran, sólo un tique nuevo.
+Queda abierto dónde se calcula el SHA-256 del tique, que depende del transporte de ADR-0039.
 Revisada el 2026-11-24 contra el código; la aceptación es del responsable.

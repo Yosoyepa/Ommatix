@@ -74,9 +74,11 @@ published page again without observing: `first_page` and `next_page` are `pub(su
      research record, never into the message;
    - any other client's `observe_screen` returns the page already published, built again for that
      client (its own `include_values`, its own grant), which authorises nothing that client could
-     not do anyway. The page is the same `structuredContent` as for the holder; that it is shared,
-     and its age on the engine's clock, depend on the run, so by engineering rule 1 they go in
-     `_meta`, never in `structuredContent`. This needs an engine method that serves the published
+     not do anyway. The page has the same `structuredContent` shape as the holder's, each client's
+     page being built from the same snapshot with its own `include_values` and its own grant, so
+     two clients may receive different elements and values. That the page is shared, and its age
+     on the engine's clock, depend on the run, so by engineering rule 1 they go in `_meta`, never
+     in `structuredContent`. This needs an engine method that serves the published
      snapshot again, per client, without capturing; the engine has none today.
    - **A dry run needs no lease.** A client without the lease may dry-run on the shared page. A
      dry run delivers nothing, reads no policy and spends nothing (`act.rs`, lines 329–331), so
@@ -123,7 +125,11 @@ published page again without observing: `first_page` and `next_page` are `pub(su
     connection that ends deletes that client's state: its lease, its place in the queue, its
     entries in the journal. The engine itself is purged, as `serve` does today, when the last
     connection ends. With one client this is today's behaviour, so SEC-07 keeps its meaning; with
-    several, one agent leaving cannot erase what the others are using.
+    several, one agent leaving cannot erase what the others are using. What a client that left had
+    observed stays in the engine until the last client leaves or the operator purges: perception
+    state belongs to the desktop, not to a client, and the operator's purge file
+    ([ADR-0028](0028-operator-purge-file.md)) still deletes it at any request boundary. Chapter 08
+    §8.4 will say so when the broker is wired.
 11. **The journal is kept per client.** The key becomes the pair of client and request identifier,
     so two agents may use the same request identifier. What is bounded today is only the evictable
     part: `JOURNAL_CAPACITY = 1024` results that delivered no input
@@ -147,8 +153,22 @@ published page again without observing: `first_page` and `next_page` are `pub(su
     The intended shape stays a Windows named pipe that rejects remote clients, is restricted to the
     current user and refuses to start when the name is taken, with an `attach` mode of the
     executable that relays its standard input and output to the pipe, so that an MCP host keeps
-    starting a stdio server. Nothing about the pipe is promised until that spike has reported. Each
-    connection keeps the message bounds of ADR-0015.
+    starting a stdio server. Each connection keeps the message bounds of ADR-0015.
+
+    **The transport candidate.** A read-only spike by an AI agent, kept outside the repository
+    (U3, `U3-named-pipe.md`, 2026-11-24), found one candidate that meets the three constraints without `unsafe`
+    of our own: the `interprocess` crate, pinned at `=2.4.9`, with `default-features = false` and
+    its synchronous API, one blocking thread per connection and a synchronous line reader that
+    drives `Connection::handle_message`. From the crate's source, the spike reports that it refuses
+    remote clients and takes the first-instance flag by default, and that without its `tokio`
+    feature it pulls in no `tokio`, `mio` or `socket2`. The spike did not run anything: the
+    restriction to the current user, the build on this project's toolchain and flushing under
+    pipelined traffic are unverified. The candidate is not a decision of this ADR. It is adopted
+    only if an experiment supports it, and then under its own ADR, which carries what it needs: an
+    exception to the SEC-04 source check for the `attach` side if that side opens the pipe with
+    `OpenOptions`, the new licences in `docs/thesis/S4_REPRODUCIBILIDAD.md` and a CHANGELOG entry.
+    If the experiment refutes it, the fallback is our own `unsafe` under a new exception in the
+    manner of ADR-0016, also under its own ADR. Nothing about the pipe is promised until then.
 
 ### Open points
 
@@ -158,13 +178,9 @@ published page again without observing: `first_page` and `next_page` are `pub(su
   check forbids today.
 - **How a second engine on the same desktop is refused.** Decision 1 needs it, and nothing in the
   code provides it today. A lock file needs `File::create` or `OpenOptions`, which SEC-04 forbids;
-  a pipe that refuses a second instance would provide it, but only after the transport spike.
-  Until one of the two is decided, "one engine per desktop" holds by the operator's practice, not
-  by construction.
-- **What chapter 08 §8.4 says about the end of a session.** Today the end of the MCP session
-  deletes the engine's state. Under decision 10, with several clients, what a client that left had
-  observed stays in the engine until the last client leaves. Accepting this ADR changes §8.4 and
-  the meaning of SEC-07 for several clients.
+  a pipe that refuses a second instance (the first-instance flag of the transport candidate) would
+  provide it, but only once a transport is adopted. Until then, "one engine per desktop" holds by
+  the operator's practice, not by construction.
 
 ## Alternatives considered
 
@@ -199,8 +215,11 @@ published page again without observing: `first_page` and `next_page` are `pub(su
   needs a bound and a test, in the manner of ADR-0034.
 - A non-holder plans on a page that may be as old as the lease term. Its `_meta` says so.
 - A client may dry-run but may not act; a dry run on a spent shared page is refused, as today.
+- What a client observed outlives its connection while other clients remain; only the last
+  disconnect or the operator's purge deletes it.
 - A named pipe, when it comes, is new attack surface, and the SEC-04 checks must then say exactly
-  which calls are allowed.
+  which calls are allowed. Its candidate crate adds dependencies and licences that its own ADR
+  must justify.
 - No test injects real input.
 
 ## Required validation
@@ -227,7 +246,8 @@ on in-memory streams and the simulated desktop, with a fake clock and fixed seed
   and then loses it.
 - A disconnect, the operator's stop and a purge each end the lease. A connection that ends while
   others remain leaves the published snapshot and the others' journal entries in place and deletes
-  its own; the last connection that ends purges the engine.
+  its own; what the departed client had observed stays until the last connection ends or the
+  operator's purge file is honoured; the last connection that ends purges the engine.
 - Generated interleavings of observe, act, acquire and release by several clients keep three
   invariants: at most one holder; every delivery came from the holder and cited the current
   snapshot; the deliveries are those of some sequential run.
@@ -247,8 +267,10 @@ on in-memory streams and the simulated desktop, with a fake clock and fixed seed
   order, renewal or the transport, so decisions 7 and 8 are not in it yet.
 
 The first building blocks of the pair of ADRs exist unwired on local branches: the grant of
-ADR-0040 (`Grant` in `src/application/src/grant.rs`, commit `dd0579c`, branch `feat/grant-meet`).
-Nothing of the broker exists yet.
+ADR-0040 (`Grant` in `src/application/src/grant.rs`, commit `dd0579c`, branch `feat/grant-meet`)
+and the lease state machine of this ADR (`LeaseTable` in `src/application/src/lease.rs`, commit
+`fd53a21`, branch `feat/lease-machine`, on top of the former), pure, with time passed in by the
+caller. Nothing calls either yet, and nothing of the broker or the transport exists.
 
 ## Reversibility
 
@@ -279,6 +301,8 @@ se pide con un argumento `lease` de `observe_screen`, su ausencia se rechaza con
 evalúa al entrar en la sección crítica y una entrega en curso termina. Quien no lo tiene recibe la
 página publicada, con su edad en `_meta`, y puede hacer simulaciones. Con un solo cliente el
 arrendamiento es implícito; con el intermediario encendido las concesiones de ADR-0040 rigen
-siempre. El motor se purga al irse el último cliente. Primero flujos en memoria; el tubo con nombre
-es otra decisión. Quedan abiertos quién arranca el motor, cómo se impide un segundo motor y el
-cambio de §8.4. Revisada el 2026-11-24 contra el código; la aceptación es del responsable.
+siempre. Lo que observó un cliente que se fue se conserva hasta que se va el último o el operador
+purga; el motor se purga al irse el último cliente. Primero flujos en memoria; el tubo con nombre,
+con la crate `interprocess` como candidata de un experimento fuera del repositorio, sólo se adopta
+con su propia ADR. Quedan abiertos quién arranca el motor y cómo se impide un segundo motor en el
+mismo escritorio. Revisada el 2026-11-24 contra el código; la aceptación es del responsable.
