@@ -37,6 +37,9 @@
 //!   ([`Broker::reserve`]). Nothing in the executable constructs one yet; only tests do (this crate's and the
 //!   acceptance suite's scenarios): the binary serves stdio only, and no transport serves a
 //!   broker yet.
+//! - With the cargo feature `broker-pipe`, on Windows, `pipe` serves a broker over a local
+//!   named pipe and opens that pipe as a client (ADR-0043, proposed): `pipe::PipeServer`,
+//!   `pipe::connect` and `pipe::relay`. Off by default; nothing in the executable uses it yet.
 //! - [`McpConfig`] is the `[mcp]` configuration section.
 //! - [`dto`] holds the wire DTOs and their mapping to the application contract types.
 //! - [`schemas`] embeds the contract's JSON schemas from `docs/thesis/contratos/esquemas/`.
@@ -83,6 +86,8 @@
 mod broker;
 pub mod config;
 pub mod dto;
+#[cfg(feature = "broker-pipe")]
+pub mod pipe;
 pub mod protocol;
 pub mod schemas;
 mod server;

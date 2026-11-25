@@ -28,15 +28,15 @@ Las pruebas `sec_06_*` hacen lo contrario con archivos temporales falsos, nunca 
 
 ## 3. Licencias del grafo de dependencias
 
-`cargo metadata --locked` lista 243 paquetes para todas las plataformas: los 10 del espacio de trabajo (`MIT OR Apache-2.0`, más abajo) y **233 de terceros**. Todos los de terceros declaran licencia; ninguno es copyleft fuerte. Las expresiones distintas y cuántos paquetes tiene cada una:
+`cargo metadata --locked` lista 248 paquetes para todas las plataformas, con las funciones por defecto: los 10 del espacio de trabajo (`MIT OR Apache-2.0`, más abajo) y **238 de terceros**. Todos los de terceros declaran licencia; ninguno es copyleft fuerte. Las expresiones distintas y cuántos paquetes tiene cada una:
 
 | Expresión | Paquetes |
 |---|---|
-| `MIT OR Apache-2.0` | 126 |
-| `MIT` | 42 |
+| `MIT OR Apache-2.0` | 129 |
+| `MIT` | 43 |
 | `Unicode-3.0` | 18 |
 | `Apache-2.0 OR MIT` | 12 |
-| `Unlicense OR MIT` | 6 |
+| `Unlicense OR MIT` | 7 |
 | `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT` | 4 |
 | `MIT/Apache-2.0` | 3 |
 | `BlueOak-1.0.0` | 3 |
@@ -54,6 +54,8 @@ Las pruebas `sec_06_*` hacen lo contrario con archivos temporales falsos, nunca 
 | `(MIT OR Apache-2.0) AND Unicode-3.0` | 1 |
 
 El paquete con `LGPL-2.1-or-later` la ofrece como alternativa (`OR`): se usa bajo MIT.
+
+**Con la función `broker-pipe`** (el tubo con nombre de Windows de ADR-0043, propuesto; desactivada por defecto y solo en Windows) entran tres paquetes más en `Cargo.lock`, que la lista anterior no cuenta porque no están en el grafo por defecto: `interprocess` 2.4.9 (`0BSD OR Apache-2.0`), `doctest-file` 1.1.1 y `recvmsg` 1.0.0 (`0BSD`). Ninguno es copyleft. `widestring` 1.2.1 (`MIT OR Apache-2.0`) ya estaba en `Cargo.lock` con la misma versión.
 
 **Licencias propias.** El código del repositorio (los crates, `tools/` y las aplicaciones de prueba de `tools/s4`) es `MIT OR Apache-2.0`: `Cargo.toml` y los manifiestos de `tools/s4/testapp` y `tools/s4/testeditor` lo declaran, y los textos están en [`LICENSE-MIT`](../../LICENSE-MIT) y [`LICENSE-APACHE`](../../LICENSE-APACHE). Los documentos (el dossier, `docs/` y los README) son CC BY 4.0 ([`LICENSE-DOCS`](../../LICENSE-DOCS)). Lo decidió el responsable el 15 de octubre de 2026.
 
