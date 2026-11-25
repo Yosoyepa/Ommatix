@@ -32,6 +32,7 @@ import pixel_runner as pr  # noqa: E402
 import pixel_win32 as w32  # noqa: E402
 import run_goal as rg  # noqa: E402
 from test_campaign import Series  # noqa: E402
+import routing_isolation  # noqa: E402
 
 HEARTBEAT = textwrap.dedent('''
     import pathlib, sys, time
@@ -41,6 +42,15 @@ HEARTBEAT = textwrap.dedent('''
         beat.write_text(str(time.monotonic()))
         time.sleep(0.1)
 ''')
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 def spawn_args(tmp: Path, name="child.py"):

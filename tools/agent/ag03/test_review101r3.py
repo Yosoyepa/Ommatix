@@ -30,9 +30,19 @@ import pixel_runner as pr  # noqa: E402
 import pixel_win32 as w32  # noqa: E402
 import run_goal as rg  # noqa: E402
 from test_campaign import Series  # noqa: E402
+import routing_isolation  # noqa: E402
 
 TERMINAL = json.dumps({"tool": "click", "ok": False, "code": "FOREGROUND_NOT_TARGET_PROCESS", "reserved": True,
                        "terminal": "safety"})
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 def run_threaded(series, extra=()):

@@ -27,9 +27,19 @@ import run_goal as rg  # noqa: E402
 from pin_support import PIN_SHA, launch_ok  # noqa: E402
 from test_runner import (END, GOALS, BY_ID, FakeApp, FakeEditorRun, FakeSampler, click, final, init_event,  # noqa: E402
                          refused, session, shot)
+import routing_isolation  # noqa: E402
 
 PRE = {"privacy_reading_recorded": True, "oi1_recorded": True, "owner_go_ahead": True}
 GOOD_ANSWER = "\n".join(f"IMAGE {n + 1}: WORD={w} SHAPE={s}" for n, (w, s) in enumerate(gate.expected_answers()))
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 def cache_root_sha256(environ=None, override=None):

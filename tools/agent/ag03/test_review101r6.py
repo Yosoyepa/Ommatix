@@ -33,8 +33,18 @@ import run_goal as rg  # noqa: E402
 from test_campaign import Series  # noqa: E402
 from test_review101r4 import beating, interrupting_wait  # noqa: E402
 from test_review101r5 import child, end_child  # noqa: E402
+import routing_isolation  # noqa: E402
 
 NAMES = [n for n in ("SIGINT", "SIGTERM", "SIGBREAK") if hasattr(signal, n)]
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 def raising_handler(*_):

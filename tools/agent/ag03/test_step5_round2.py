@@ -27,9 +27,19 @@ import pixel_win32 as w32  # noqa: E402
 import run_goal as rg  # noqa: E402
 from test_step5 import (JobWorld, NativeWorld, S3LockDispositionTests, S3OwnershipBeforeTheChildExistsTests,  # noqa: E402
                         error_code)
+import routing_isolation  # noqa: E402
 
 ACCESS_NEEDED = 0x0001 | 0x0008 | 0x0010  # DESKTOP_READOBJECTS | DESKTOP_HOOKCONTROL | DESKTOP_JOURNALRECORD
 MEDIUM, HIGH, LOW = 0x2000, 0x3000, 0x1000
+
+
+def setUpModule():
+    # Not refused by the developer's own provider-routing variables (routing_isolation).
+    routing_isolation.start()
+
+
+def tearDownModule():
+    routing_isolation.stop()
 
 
 class R1041KeyStateAccessTests(unittest.TestCase):
