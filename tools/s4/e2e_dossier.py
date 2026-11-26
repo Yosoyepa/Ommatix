@@ -1406,6 +1406,12 @@ def main() -> int:
     p.add_argument("--debug-grounding", action="store_true")
     args = p.parse_args()
     args.restart = "each"
+    # One coordinate space before anything reads a window, the cursor or UI Automation (the
+    # driver's rule: declare_one_coordinate_space).
+    problem = driver.declare_one_coordinate_space()
+    if problem:
+        driver.log("abort", reason=problem)
+        return 2
 
     try:
         driver.freshness_config(args)
