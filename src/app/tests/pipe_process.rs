@@ -3,7 +3,7 @@
 //! through their standard streams, over the simulated desktop (never the screen, never input),
 //! with real named pipes between the processes. And, in every build, the stdio path: the switch
 //! off gives the session the committed bytes (`fixtures/stdio_session.golden`), the same with the
-//! feature on and off.
+//! feature on and off, compared raw except for the run-dependent numbers [`masked`] names.
 //!
 //! The pipe tests need a Windows build with `--features broker-pipe`; each names its pipe after
 //! this test process, so tests run in parallel and never meet another engine.
@@ -148,70 +148,113 @@ fn stdio_session() -> String {
     .concat()
 }
 
-/// A reply with its run-dependent values set to zero: the stage timings of `_meta`, the
-/// `age_ms` of a page, and the server's version (which every release changes).
-fn normalised(line: &str) -> String {
-    fn zero_numbers(value: &mut Value) {
-        match value {
-            Value::Number(_) => *value = json!(0),
-            Value::Array(items) => items.iter_mut().for_each(zero_numbers),
-            Value::Object(map) => map.values_mut().for_each(zero_numbers),
-            _ => {}
-        }
-    }
-    fn walk(value: &mut Value) {
-        match value {
-            Value::Object(map) => {
-                for (key, inner) in map.iter_mut() {
-                    match key.as_str() {
-                        "io.ommatix/timings" | "io.ommatix/action_timings" | "age_ms" => {
-                            zero_numbers(inner);
-                        }
-                        "io.modelcontextprotocol/serverInfo" => inner["version"] = json!("*"),
-                        "text" if inner.is_string() => {
-                            // The text block repeats `structuredContent` as JSON.
-                            if let Ok(mut parsed) =
-                                serde_json::from_str::<Value>(inner.as_str().unwrap_or(""))
-                            {
-                                walk(&mut parsed);
-                                *inner = json!(parsed.to_string());
-                            }
-                        }
-                        _ => walk(inner),
-                    }
-                }
-            }
-            Value::Array(items) => items.iter_mut().for_each(walk),
-            _ => {}
-        }
-    }
-    let mut value: Value = serde_json::from_str(line).expect("a JSON-RPC line");
-    walk(&mut value);
-    value.to_string()
+/// The keys whose values depend on the run, each with the reason, in the two spellings a reply
+/// carries them: plainly, and inside the escaped JSON of a `content[].text` block.
+///
+/// - `io.ommatix/timings` and `io.ommatix/action_timings`: measured stage durations, an object
+///   of numbers in `_meta` (every number in it is masked);
+/// - `age_ms`: the time since the page's snapshot, a number (masked only where it is a number:
+///   the schema's `"age_ms":{"minimum":0}` in `tools/list` is stable and compared).
+const TIMING_KEYS: [&str; 4] = [
+    "\"io.ommatix/timings\":",
+    "\\\"io.ommatix/timings\\\":",
+    "\"io.ommatix/action_timings\":",
+    "\\\"io.ommatix/action_timings\\\":",
+];
+const AGE_KEYS: [&str; 2] = ["\"age_ms\":", "\\\"age_ms\\\":"];
+
+/// The length of the JSON number at the start of `rest` (digits, sign, point, exponent).
+fn number_len(rest: &str) -> usize {
+    rest.bytes()
+        .take_while(|b| b.is_ascii_digit() || matches!(b, b'-' | b'+' | b'.' | b'e' | b'E'))
+        .count()
 }
 
-/// IT-33: with the switch off, `serve` over stdio emits the committed bytes, run-dependent
-/// numbers aside, on stdout and on stderr. This test runs in every build, so the build with
-/// `broker-pipe` and the build without it are held to the same file.
+/// The raw bytes of the stdio wire with only the values of [`TIMING_KEYS`] and [`AGE_KEYS`]
+/// replaced by `0`: each value's own span, nothing around it. Delimiters, escaping, line
+/// endings, property order and every other byte stay as they were.
+fn masked(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    loop {
+        let next = TIMING_KEYS
+            .iter()
+            .chain(AGE_KEYS.iter())
+            .filter_map(|key| rest.find(key).map(|at| (at, *key)))
+            .min_by_key(|(at, _)| *at);
+        let Some((at, key)) = next else {
+            out.push_str(rest);
+            return out;
+        };
+        let after = at + key.len();
+        out.push_str(&rest[..after]);
+        rest = &rest[after..];
+        if AGE_KEYS.contains(&key) {
+            let n = number_len(rest);
+            if n > 0 {
+                out.push('0');
+                rest = &rest[n..];
+            }
+            continue;
+        }
+        // A timings object: `{`, then `"name":number` pairs (escaped or not), then `}`.
+        let close = rest.find('}').expect("a timings object ends");
+        let object = &rest[..=close];
+        assert!(
+            object.starts_with('{') && !object[1..].contains('{'),
+            "a timings object is flat: {object}"
+        );
+        let mut inner = object;
+        while let Some(colon) = inner.find(':') {
+            out.push_str(&inner[..=colon]);
+            inner = &inner[colon + 1..];
+            let n = number_len(inner);
+            assert!(n > 0, "a timing is a number: {object}");
+            out.push('0');
+            inner = &inner[n..];
+        }
+        out.push_str(inner);
+        rest = &rest[close + 1..];
+    }
+}
+
+/// IT-33: with the switch off, `serve` over stdio emits the committed bytes on stdout and on
+/// stderr, compared raw: only the run-dependent numbers of [`masked`] are replaced, each for its
+/// stated reason. This test runs in every build, so the build with `broker-pipe` and the build
+/// without it are held to the same file.
 #[test]
 fn it_33_with_the_switch_off_serve_over_stdio_emits_the_committed_bytes() {
-    let golden = include_str!("fixtures/stdio_session.golden").replace("\r\n", "\n");
+    let golden = include_str!("fixtures/stdio_session.golden");
     let sandbox = Sandbox::new("parity");
     let output = sandbox.run(&["serve", "--session-id", "parity"], &stdio_session());
     assert!(output.status.success(), "{:?}", output.status);
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    let mut actual = String::from("# stdout\n");
-    for line in stdout.lines() {
-        actual.push_str(&normalised(line));
-        actual.push('\n');
+    let actual = format!("# stdout\n{}# stderr\n{stderr}", masked(&stdout));
+    if actual != golden {
+        // The whole session, between markers, so that a deliberate change can be reviewed.
+        eprintln!("---- actual stdio session ----\n{actual}---- end ----");
     }
-    actual.push_str("# stderr\n");
-    actual.push_str(&stderr.replace("\r\n", "\n"));
     assert!(
         actual == golden,
-        "the stdio session differs from fixtures/stdio_session.golden:\n{actual}"
+        "the stdio session differs from fixtures/stdio_session.golden"
     );
+}
+
+/// The mask replaces each run-dependent value's own span and nothing else.
+#[test]
+fn it_33_the_mask_touches_only_the_run_dependent_values() {
+    let line = "{\"a\":1,\"_meta\":{\"io.ommatix/timings\":{\"x_us\":12,\"y_us\":3}},\
+                \"age_ms\":40,\"s\":{\"age_ms\":{\"minimum\":0}},\
+                \"text\":\"{\\\"age_ms\\\":7,\\\"io.ommatix/action_timings\\\":{\\\"t_us\\\":99}}\"}\n";
+    assert_eq!(
+        masked(line),
+        "{\"a\":1,\"_meta\":{\"io.ommatix/timings\":{\"x_us\":0,\"y_us\":0}},\
+         \"age_ms\":0,\"s\":{\"age_ms\":{\"minimum\":0}},\
+         \"text\":\"{\\\"age_ms\\\":0,\\\"io.ommatix/action_timings\\\":{\\\"t_us\\\":0}}\"}\n"
+    );
+    let stable = "{\"jsonrpc\":\"2.0\", \"id\":1}\r\n";
+    assert_eq!(masked(stable), stable);
 }
 
 /// IT-33: a build without the feature (or off Windows) refuses `[mcp] transport = "pipe"` at
@@ -303,11 +346,17 @@ mod pipe {
         receive
     }
 
-    /// Everything a child wrote on a stream, collected on a thread of its own.
-    fn collect(stream: impl Read + Send + 'static) -> Arc<Mutex<Vec<u8>>> {
-        let collected = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::clone(&collected);
-        thread::spawn(move || {
+    /// Everything a child wrote on a stream, collected on a thread of its own, which ends at the
+    /// stream's end.
+    struct Collected {
+        bytes: Arc<Mutex<Vec<u8>>>,
+        reader: thread::JoinHandle<()>,
+    }
+
+    fn collect(stream: impl Read + Send + 'static) -> Collected {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&bytes);
+        let reader = thread::spawn(move || {
             let mut stream = stream;
             let mut buffer = [0_u8; 4096];
             while let Ok(n) = stream.read(&mut buffer) {
@@ -317,11 +366,26 @@ mod pipe {
                 sink.lock().unwrap().extend_from_slice(&buffer[..n]);
             }
         });
-        collected
+        Collected { bytes, reader }
     }
 
-    fn text(collected: &Arc<Mutex<Vec<u8>>>) -> String {
-        String::from_utf8_lossy(&collected.lock().unwrap()).into_owned()
+    impl Collected {
+        /// What has been collected so far.
+        fn text(&self) -> String {
+            String::from_utf8_lossy(&self.bytes.lock().unwrap()).into_owned()
+        }
+
+        /// Everything, once the stream has ended (the writer's process exited and nothing else
+        /// holds the stream); a test fails instead of waiting longer than [`PATIENCE`].
+        fn to_end(self) -> String {
+            let deadline = Instant::now() + PATIENCE;
+            while !self.reader.is_finished() {
+                assert!(Instant::now() < deadline, "the stream did not end");
+                thread::sleep(Duration::from_millis(10));
+            }
+            self.reader.join().unwrap();
+            String::from_utf8_lossy(&self.bytes.lock().unwrap()).into_owned()
+        }
     }
 
     fn wait(child: &mut Child) -> ExitStatus {
@@ -339,7 +403,7 @@ mod pipe {
     struct Engine {
         child: Child,
         _stdin: ChildStdin,
-        stdout: Arc<Mutex<Vec<u8>>>,
+        stdout: Collected,
         stderr: Arc<Mutex<Vec<String>>>,
     }
 
@@ -418,7 +482,7 @@ mod pipe {
         child: Child,
         stdin: Option<ChildStdin>,
         replies: Receiver<String>,
-        stderr: Arc<Mutex<Vec<u8>>>,
+        stderr: Option<Collected>,
         next_id: u64,
     }
 
@@ -439,7 +503,7 @@ mod pipe {
             let mut child = sandbox.command(&args).spawn().expect("the binary starts");
             let stdin = child.stdin.take();
             let replies = lines_of(child.stdout.take().unwrap());
-            let stderr = collect(child.stderr.take().unwrap());
+            let stderr = Some(collect(child.stderr.take().unwrap()));
             Self {
                 child,
                 stdin,
@@ -459,7 +523,7 @@ mod pipe {
             let line = self
                 .replies
                 .recv_timeout(PATIENCE)
-                .unwrap_or_else(|_| panic!("no reply; stderr: {}", text(&self.stderr)));
+                .unwrap_or_else(|_| panic!("no reply; stderr: {}", self.stderr_so_far()));
             serde_json::from_str(&line).expect("a JSON-RPC reply")
         }
 
@@ -484,26 +548,31 @@ mod pipe {
                 .any(|e| e.get("text").is_some())
         }
 
-        /// Closes the input and waits for the exit: the code and stderr.
+        fn stderr_so_far(&self) -> String {
+            self.stderr
+                .as_ref()
+                .map(Collected::text)
+                .unwrap_or_default()
+        }
+
+        /// Closes the input and waits for the exit: the code, the whole of stderr (read to its
+        /// end) and any reply left.
         fn finish(mut self) -> (i32, String, Vec<String>) {
             drop(self.stdin.take());
+            self.exit()
+        }
+
+        /// Waits for the exit without closing the input: the code, the whole of stderr (read to
+        /// its end, so that nothing written just before the exit is missed) and any reply.
+        fn exit(mut self) -> (i32, String, Vec<String>) {
             let status = wait(&mut self.child);
+            let stderr = self.stderr.take().expect("stderr").to_end();
             // The reader thread ends with the process's stdout.
             let mut rest = Vec::new();
             while let Ok(line) = self.replies.recv_timeout(Duration::from_millis(200)) {
                 rest.push(line);
             }
-            (status.code().unwrap_or(-1), text(&self.stderr), rest)
-        }
-
-        /// Waits for the exit without closing the input: the code, stderr and any reply.
-        fn exit(mut self) -> (i32, String, Vec<String>) {
-            let status = wait(&mut self.child);
-            let mut rest = Vec::new();
-            while let Ok(line) = self.replies.recv_timeout(Duration::from_millis(200)) {
-                rest.push(line);
-            }
-            (status.code().unwrap_or(-1), text(&self.stderr), rest)
+            (status.code().unwrap_or(-1), stderr, rest)
         }
     }
 
@@ -571,7 +640,7 @@ mod pipe {
         assert_eq!(code, 0, "{plain_stderr}");
 
         engine.stop();
-        let engine_stdout = text(&engine.stdout);
+        let engine_stdout = engine.stdout.text();
         assert!(
             engine_stdout.is_empty(),
             "serve over the pipe writes nothing on stdout"
