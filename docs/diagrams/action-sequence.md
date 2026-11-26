@@ -30,6 +30,6 @@ sequenceDiagram
     S->>O: validated input
     O-->>S: delivery receipt
     S->>V: check postcondition
-    V-->>A: effect_observed or indeterminate
+    V-->>A: effect_observed, input_delivered or indeterminate
   end
 ```

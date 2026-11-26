@@ -292,7 +292,8 @@ is engaged or cleared. A delivery receipt whose inserted events match the submit
 against the pre-delivery frame within a bounded settle window: the engine captures right
 after delivery and, while nothing changed, again every `[engine] verify_poll_ms` (50 ms) on
 its injected clock until `verify_timeout_ms` (500 ms; 0 is a single check) has elapsed. A
-change is `effect_observed`; none is `indeterminate`, and the input is never sent again; the other effects (focus, value, scroll) are reported `indeterminate`
+change is `effect_observed` (after `type` it is `input_delivered`, with `verified` false:
+the engine does not know how many characters arrived, [ADR-0044](../adr/0044-a-visual-change-does-not-verify-typed-text.md), proposed); none is `indeterminate`, and the input is never sent again; the other effects (focus, value, scroll) are reported `indeterminate`
 until they can be checked.
 Any delivery, whatever its outcome, spends the snapshot: the next action needs a new
 observation (`STALE_SNAPSHOT`), while journal replays still return the stored result.

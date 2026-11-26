@@ -313,7 +313,9 @@ eventos insertados coinciden con los enviados es `input_delivered`; cualquier ot
 entrega dentro de un plazo acotado: el motor captura justo después de entregar y, mientras
 nada cambie, otra vez cada `[engine] verify_poll_ms` (50 ms) con su reloj inyectado hasta que
 pase `verify_timeout_ms` (500 ms; 0 es una sola comprobación). Un cambio es
-`effect_observed`; ninguno es `indeterminate`, y la entrada nunca se reenvía; los demás
+`effect_observed` (tras `type` es `input_delivered`, con `verified` falso: el motor no sabe
+cuántos caracteres llegaron, [ADR-0044](../adr/0044-a-visual-change-does-not-verify-typed-text.md),
+propuesta); ninguno es `indeterminate`, y la entrada nunca se reenvía; los demás
 efectos (foco, valor, desplazamiento) se informan `indeterminate` hasta que puedan
 comprobarse. Cualquier entrega, sea
 cual sea su resultado, agota el snapshot: la acción siguiente necesita una observación nueva

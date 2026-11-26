@@ -61,3 +61,4 @@ BDD-59,RF-11,UT-65,features/06_accion_segura.feature,Un cambio en una ventana po
 BDD-60,RF-11,UT-68,features/06_accion_segura.feature,Una ventana que sube sobre el objetivo rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-61,RF-11,UT-69,features/06_accion_segura.feature,Un cambio de la ventana de primer plano rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-62,RF-11,UT-70,features/06_accion_segura.feature,Un objetivo no atestiguado como opaco compara la pantalla entera,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-73,RF-13,UT-82,features/06_accion_segura.feature,Escritura con cambio visual sin verificar el texto,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
