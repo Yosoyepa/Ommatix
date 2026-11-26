@@ -64,6 +64,7 @@ class FreshnessMeasurementTest(unittest.TestCase):
                         "--app", app, "--ledger", str(root / "ledger"), "--results", str(results),
                         "--target-window-freshness"]
                 with mock.patch.object(program.sys, "argv", argv), \
+                     mock.patch.object(client, "declare_one_coordinate_space", return_value=None), \
                      mock.patch.object(client, "log"), mock.patch.object(client, "use_utf8_stdout"), \
                      mock.patch.object(client.s3, "Server") as server:
                     self.assertEqual(program.main(), 2)
@@ -136,6 +137,7 @@ class FreshnessMeasurementTest(unittest.TestCase):
                 args = SimpleNamespace(config=str(source), results=root / "run" / "results.jsonl",
                                        target_window_freshness=True)
                 with mock.patch.object(program.argparse.ArgumentParser, "parse_args", return_value=args), \
+                     mock.patch.object(client, "declare_one_coordinate_space", return_value=None), \
                      mock.patch.object(client, "log") as log, \
                      mock.patch.object(client, "use_utf8_stdout"), \
                      mock.patch.object(client.s3, "Server") as server:

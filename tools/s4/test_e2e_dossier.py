@@ -2179,5 +2179,48 @@ class DecoyPureTest(unittest.TestCase):
             self.assertNotIn(forbidden, source, forbidden)
 
 
+# ---- one coordinate space (lab session I-1, 2026-11-26; CHANGELOG 1.0.127) ---------------------
+
+
+class DossierOneCoordinateSpaceTest(QuietTest):
+    """The dossier client reads windows and points through the driver: it declares the same
+    per-monitor-v2 awareness at start and refuses to run without it."""
+
+    def run_main(self, declared, app="editor"):
+        order = []
+
+        def declare(api=None):
+            order.append("declare")
+            return declared
+
+        def config_step(args):
+            order.append("config")
+            raise driver.Abort("stop here")
+
+        argv = ["e2e_dossier.py", "--exe", "x.exe", "--config", str(self.tmp / "absent.toml"),
+                "--app", app, "--ledger", str(self.tmp / "l"),
+                "--results", str(self.tmp / "r.jsonl")]
+        engine = mock.Mock(side_effect=AssertionError("the engine was started"))
+        with mock.patch.object(driver, "declare_one_coordinate_space", declare), \
+                mock.patch.object(driver, "freshness_config", config_step), \
+                mock.patch.object(driver.s3, "Server", engine), \
+                mock.patch.object(driver, "log") as log, \
+                mock.patch("sys.argv", argv):
+            code = dossier.main()
+        self.logged = [call.kwargs.get("reason") for call in log.call_args_list
+                       if call.args == ("abort",)]
+        return code, order
+
+    def test_it_declares_before_anything_else_and_stops_when_it_cannot(self):
+        # Every application of the dossier client, so that none of them can skip it.
+        self.assertEqual(sorted(dossier.E2E_ID), ["decoy", "editor", "explorer"])
+        for app in sorted(dossier.E2E_ID):
+            with self.subTest(app=app):
+                self.assertEqual(self.run_main(None, app), (2, ["declare", "config"]))
+                self.assertEqual(self.run_main("dpi: refusing to run", app), (2, ["declare"]))
+                self.assertEqual(self.logged, ["dpi: refusing to run"],
+                                 "the refusal's reason is logged, not a silent exit 2")
+
+
 if __name__ == "__main__":
     unittest.main()

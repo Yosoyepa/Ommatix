@@ -5,6 +5,7 @@ input is sent: the desktop is a fake. Run with:
 python -m unittest discover -s tools/s4 -p "test_*.py"
 """
 
+import ctypes
 import importlib.util
 import json
 import shutil
@@ -2314,6 +2315,253 @@ class IslandRestoreTest(QuietTest):
     def test_the_record_holds_no_names(self):
         _, _, _, record = self.restore()
         self.assertNotIn("Editar", json.dumps(record, ensure_ascii=False))
+
+
+# ---- one coordinate space (lab session I-1, 2026-11-26; CHANGELOG 1.0.127) ---------------------
+
+
+class FakeDpi:
+    """The Win32 DPI calls, faked: `process` and `thread` are what holds after the request
+    ("v2", "unaware", "system", "per_monitor" or None for an unreadable context); `honour` says
+    whether the request turns both into v2. Every call is recorded in order."""
+
+    AWARENESS = {"unaware": 0, "system": 1, "per_monitor": 2}
+
+    def __init__(self, process="unaware", thread="unaware", honour=True, raises=None,
+                 levels=("process", "thread"), extra=None):
+        self.levels = {"process": process, "thread": thread}
+        self.honour, self.raises, self.calls = honour, raises, []
+        self.read_levels, self.extra = levels, extra or {}
+
+    def request_per_monitor_v2(self):
+        self.calls.append("request")
+        if self.raises:
+            raise self.raises
+        if self.honour:
+            self.levels = {"process": "v2", "thread": "v2"}
+
+    def contexts(self):
+        """Only the levels in `read_levels` are returned, plus `extra` (a level not known)."""
+        self.calls.append("read")
+        return {**{level: self.levels[level] for level in self.read_levels}, **self.extra}
+
+    def is_per_monitor_v2(self, context):
+        return context == "v2"
+
+    def awareness(self, context):
+        return self.AWARENESS.get(context, 99)
+
+
+class OneCoordinateSpaceTest(QuietTest):
+    """The client's Win32 points must be in UI Automation's space (physical pixels): it declares
+    per-monitor-v2 DPI awareness at start and refuses to run without it (lab session I-1)."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(driver.ONE_SPACE, {"established": False})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_declaration_is_requested_then_read_back_and_establishes_the_space(self):
+        api = FakeDpi()
+        self.assertIsNone(driver.declare_one_coordinate_space(api))
+        self.assertEqual(api.calls, ["request", "read"], "requested before anything is read")
+        self.assertTrue(driver.ONE_SPACE["established"])
+
+    def test_an_awareness_already_set_to_v2_is_accepted_as_it_is(self):
+        api = FakeDpi(process="v2", thread="v2", honour=False)
+        self.assertIsNone(driver.declare_one_coordinate_space(api))
+
+    def test_anything_but_v2_at_both_levels_refuses_to_run(self):
+        for process, thread in (("unaware", "unaware"), ("system", "system"),
+                                ("per_monitor", "per_monitor"), ("v2", "unaware"),
+                                ("unaware", "v2"), (None, "v2"), ("v2", None)):
+            with mock.patch.dict(driver.ONE_SPACE, {"established": False}):
+                api = FakeDpi(process=process, thread=thread, honour=False)
+                problem = driver.declare_one_coordinate_space(api)
+                self.assertIsNotNone(problem, (process, thread))
+                self.assertIn("refusing to run", problem)
+                self.assertFalse(driver.ONE_SPACE["established"], (process, thread))
+
+    def test_both_levels_must_be_read_back_by_name(self):
+        # A read-back that leaves out a level (or names one the declaration does not know) is a
+        # refusal even when every level it did return is per-monitor v2.
+        for levels, extra in ((("process",), {}), (("thread",), {}), ((), {}),
+                              (("process", "thread"), {"window": "v2"})):
+            with mock.patch.dict(driver.ONE_SPACE, {"established": False}):
+                api = FakeDpi(levels=levels, extra=extra)
+                problem = driver.declare_one_coordinate_space(api)
+                self.assertIsNotNone(problem, (levels, extra))
+                self.assertIn("refusing to run", problem)
+                self.assertFalse(driver.ONE_SPACE["established"], (levels, extra))
+
+    def test_win32dpi_reads_back_the_process_and_the_thread(self):
+        """Win32Dpi over a fake user32/kernel32 (no real DPI call): the request asks for
+        per-monitor v2 for the process, and contexts() reads both levels, each from its call."""
+        v2 = ctypes.c_void_p(driver.DPI_PER_MONITOR_AWARE_V2).value
+        calls = []
+
+        def value(arg):
+            return arg.value if isinstance(arg, ctypes.c_void_p) else arg
+
+        def set_process(ctx):
+            calls.append(("set", value(ctx)))
+            return 1
+
+        def for_process(handle):
+            calls.append(("process", handle))
+            return 0x1111
+
+        def for_thread():
+            calls.append(("thread",))
+            return 0x2222
+
+        user32 = SimpleNamespace(
+            SetProcessDpiAwarenessContext=set_process,
+            GetDpiAwarenessContextForProcess=for_process,
+            GetThreadDpiAwarenessContext=for_thread,
+            AreDpiAwarenessContextsEqual=lambda a, b: (value(a) in (0x1111, 0x2222)
+                                                       and value(b) == v2),
+            GetAwarenessFromDpiAwarenessContext=lambda ctx: 2)
+        kernel32 = SimpleNamespace(GetCurrentProcess=lambda: -1)
+        api = object.__new__(driver.Win32Dpi)
+        api.user32, api.kernel32 = user32, kernel32
+        api.request_per_monitor_v2()
+        self.assertEqual(calls, [("set", v2)])
+        self.assertEqual(api.contexts(), {"process": 0x1111, "thread": 0x2222})
+        self.assertEqual(calls[1:], [("process", -1), ("thread",)])
+        self.assertTrue(api.is_per_monitor_v2(0x2222))
+        self.assertFalse(api.is_per_monitor_v2(0x3333))
+        with mock.patch.dict(driver.ONE_SPACE, {"established": False}):
+            self.assertIsNone(driver.declare_one_coordinate_space(api))
+        # A thread that is not per-monitor v2 refuses, through the same object.
+        user32.GetThreadDpiAwarenessContext = lambda: 0x3333
+        with mock.patch.dict(driver.ONE_SPACE, {"established": False}):
+            self.assertIn("thread per_monitor", driver.declare_one_coordinate_space(api))
+
+    def test_a_declaration_that_raises_refuses_to_run(self):
+        problem = driver.declare_one_coordinate_space(FakeDpi(raises=OSError("no user32")))
+        self.assertIn("refusing to run", problem)
+        self.assertFalse(driver.ONE_SPACE["established"])
+
+    def test_the_point_reads_refuse_before_the_declaration(self):
+        for read in (driver.cursor, lambda: driver.root_window_at((157, 73))):
+            with self.assertRaises(RuntimeError):
+                read()
+
+    def run_main(self, module, argv, declared):
+        """`module.main()` with the declaration faked; every later stage is recorded and stopped
+        at the first one (the M2 configuration step), and the engine must never start."""
+        order = []
+
+        def declare(api=None):
+            order.append("declare")
+            return declared
+
+        def config_step(args):
+            order.append("config")
+            raise driver.Abort("stop here")
+
+        engine = mock.Mock(side_effect=AssertionError("the engine was started"))
+        with mock.patch.object(driver, "declare_one_coordinate_space", declare), \
+                mock.patch.object(driver, "freshness_config", config_step), \
+                mock.patch.object(driver.s3, "Server", engine), \
+                mock.patch.object(driver, "use_utf8_stdout"), \
+                mock.patch.object(driver, "log") as log, \
+                mock.patch("sys.argv", argv):
+            code = module.main()
+        self.logged = [call.kwargs.get("reason") for call in log.call_args_list
+                       if call.args == ("abort",)]
+        return code, order
+
+    def test_the_driver_declares_before_anything_else_and_stops_when_it_cannot(self):
+        argv = ["e2e_driver.py", "--exe", "x.exe", "--config", str(self.tmp / "absent.toml"),
+                "--app", "notepad", "--ledger", str(self.tmp / "l"),
+                "--results", str(self.tmp / "r.jsonl")]
+        self.assertEqual(self.run_main(driver, argv, None), (2, ["declare", "config"]))
+        self.assertEqual(self.run_main(driver, argv, "dpi: refusing to run"), (2, ["declare"]),
+                         "a failed declaration stops before the configuration and the engine")
+        self.assertEqual(self.logged, ["dpi: refusing to run"],
+                         "the refusal's reason is logged, not a silent exit 2")
+
+
+class OneSpaceReplayTest(QuietTest):
+    """I-1's numbers (Notepad 11.2609 at 150 %; hand-written from the record, no capture): the
+    engine left the pointer at physical (157, 73), the centre of `Editar` [116, 49, 83, 48]; the
+    menu's flyout is a top-level popup window at [101, 94, 380, 815] over Notepad's window
+    [-11, -11, 1942, 1150]. UI Automation reads physical pixels; an unaware client's Win32 reads
+    are physical / 1.5. With one space both checks of ADR-0022 hold as written; with the two
+    spaces mixed they fail exactly as I-1 recorded."""
+
+    SCALE = 1.5
+    PHYSICAL_POINT = (157, 73)
+    NOTEPAD, POPUP = 501, 502
+
+    @staticmethod
+    def walk():
+        return [walk_row(0, -1, 0, HOST_RID, "", "Pane", (-2, 49, 1924, 50), cls=ISLAND_CLASS),
+                walk_row(1, 0, 1, "7.2", "", "Pane", (-2, 49, 1924, 50),
+                         cls="InputSiteWindowClass"),
+                walk_row(2, 1, 2, "7.3", "MenuBar", "MenuBar", (-2, 49, 280, 48)),
+                walk_row(3, 2, 3, "7.4", "File", "MenuItem", (4, 49, 100, 48)),
+                walk_row(4, 2, 3, "5.1", "Edit", "MenuItem", (116, 49, 83, 48)),
+                walk_row(5, 2, 3, "7.6", "View", "MenuItem", (212, 49, 60, 48))]
+
+    IDENT = {"runtime_id": "5.1", "automation_id": "Edit", "control_type": "MenuItem"}
+
+    def chain_at(self, point):
+        host = [{"runtime_id": HOST_RID, "automation_id": "", "control_type": "Pane",
+                 "class_name": ISLAND_CLASS, "offscreen": False}]
+        chain, _ = driver.ground_chain(point, lambda x, y: host,
+                                       lambda x, y, rid: (self.walk(), False))
+        return chain
+
+    def unaware(self, point):
+        """What a DPI-unaware client's GetCursorPos reports for a physical point at 150 %."""
+        return round(point[0] / self.SCALE), round(point[1] / self.SCALE)
+
+    def window_at(self, physical, menu_open=True):
+        """The top-level window at a physical point: the popup when open and under it, else
+        Notepad."""
+        x, y = physical
+        if menu_open and 101 <= x < 101 + 380 and 94 <= y < 94 + 815:
+            return self.POPUP
+        return self.NOTEPAD
+
+    def test_one_space_the_post_click_walk_descends_to_the_item(self):
+        chain = self.chain_at(self.PHYSICAL_POINT)
+        self.assertEqual((chain[0]["automation_id"], chain[0]["control_type"]),
+                         ("Edit", "MenuItem"))
+        self.assertTrue(driver.identity_hit(self.IDENT, chain))
+
+    def test_mixed_spaces_reproduce_i1_s_menu_bar(self):
+        point = self.unaware(self.PHYSICAL_POINT)
+        self.assertEqual(point, (105, 49))
+        chain = self.chain_at(point)
+        self.assertEqual(chain[0]["control_type"], "MenuBar", "I-1: MenuBar at depth 2")
+        self.assertFalse(driver.identity_hit(self.IDENT, chain))
+
+    def test_one_space_the_pre_click_window_is_notepad_with_the_menu_open(self):
+        # The centre comes from UI Automation (physical); WindowFromPoint in the declared space
+        # reads it as physical.
+        self.assertEqual(self.window_at(self.PHYSICAL_POINT), self.NOTEPAD)
+        # Mixed: an unaware WindowFromPoint takes the physical centre as logical.
+        as_logical = (self.PHYSICAL_POINT[0] * self.SCALE, self.PHYSICAL_POINT[1] * self.SCALE)
+        self.assertEqual(self.window_at(as_logical), self.POPUP, "I-1: window_mismatch")
+        self.assertEqual(self.window_at(as_logical, menu_open=False), self.NOTEPAD,
+                         "I-1: step 1's pre-click check passed with the menu closed")
+
+    def test_the_driver_s_pre_click_check_holds_in_one_space_and_not_in_mixed_ones(self):
+        for scale, status in ((1.0, "ok"), (self.SCALE, "window_mismatch")):
+            proto = FakeNotepad(["Expanded"])
+            proto.pre_chain = [dict(EDITAR_ROW, runtime_id="5.1")]
+            proto.element_centre = lambda hwnd, label, types: self.PHYSICAL_POINT
+            proto.window_under = (lambda point, s=scale:
+                                  self.window_at((point[0] * s, point[1] * s)))
+            fg = {"hwnd": self.NOTEPAD}
+            ident = dict(self.IDENT)
+            record = proto.pre_click_grounding(2, fg, "Editar", {"role": "unknown"}, ident)
+            self.assertEqual(record["status"], status, scale)
 
 
 class HelperWindowTest(QuietTest):

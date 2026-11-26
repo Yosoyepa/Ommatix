@@ -95,6 +95,11 @@ UI Automation, polled for 2 s after the last click (also when it stops), records
 The mode is Standard when the header's NFC-casefolded name contains «estándar» or «standard» and
 no Scientific-only control is on screen; the header's name is recorded only then.
 
+The client declares per-monitor-v2 DPI awareness for its process at start and refuses to run
+(exit 2, before the engine starts) when it does not hold, so that the cursor and the windows it
+reads through Win32 are in physical pixels, as UI Automation's points and rectangles are
+(``declare_one_coordinate_space``; a DPI-unaware client at 150 % mixed the two spaces).
+
 Live input goes only through the engine's gate; this script never injects input itself.
 It types only into the test application's field. It starts the test application and the
 Calculator itself and closes only the processes it started. Notepad is never started or
@@ -728,10 +733,105 @@ $p = New-Object System.Windows.Point([double]__X__, [double]__Y__)
 $e = [System.Windows.Automation.AutomationElement]::FromPoint($p)
 """ + UIA_DIAG_WALK_PS
 
+# ---- one coordinate space (lab session I-1, 2026-11-26; CHANGELOG 1.0.127) ------------------
+#
+# Every point and rectangle the client reads through UI Automation (its PowerShell scripts:
+# element centres, the island walk, FromPoint) is in physical pixels, whatever the DPI awareness
+# of the reading process. The client's own Win32 reads (GetCursorPos, WindowFromPoint,
+# GetWindowRect) follow the awareness of the calling thread: in a DPI-unaware process at a scale
+# other than 100 % they are logical pixels (at 150 %, physical / 1.5). Mixing the two broke both
+# checks of ADR-0022 on a laptop at 150 % (agent-run, exploratory session I-1): the cursor after
+# the click read about two thirds of its physical value, so the walk descended beside the item,
+# and WindowFromPoint took the item's physical centre as logical and landed in the menu's popup
+# window. At 100 % the two spaces coincide, which is why the supervised rounds never saw it.
+#
+# So the client declares per-monitor-v2 awareness for its PROCESS once, at start, before any
+# window, cursor or UI Automation call, then READS what holds at the process and thread levels;
+# only per-monitor v2 at both passes. Otherwise it refuses to run (exit 2, before the engine is
+# started): there is no fall-back to the mixed spaces. The point reads compared with UI
+# Automation (cursor, root_window_at) refuse to read until it holds. The checks' rules
+# (ADR-0022) are unchanged.
+DPI_PER_MONITOR_AWARE_V2 = -4  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+DPI_AWARENESS_WORDS = {0: "unaware", 1: "system", 2: "per_monitor"}
+DPI_LEVELS = ("process", "thread")  # both must be read back, and both must be v2
+ONE_SPACE = {"established": False}
+
+
+class Win32Dpi:
+    """The Win32 calls the declaration needs, behind one small interface (the tests give a fake)."""
+
+    def __init__(self):
+        self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        for name, restype, argtypes in (
+                ("SetProcessDpiAwarenessContext", wintypes.BOOL, [ctypes.c_void_p]),
+                ("GetThreadDpiAwarenessContext", ctypes.c_void_p, []),
+                ("GetDpiAwarenessContextForProcess", ctypes.c_void_p, [wintypes.HANDLE]),
+                ("AreDpiAwarenessContextsEqual", wintypes.BOOL, [ctypes.c_void_p, ctypes.c_void_p]),
+                ("GetAwarenessFromDpiAwarenessContext", ctypes.c_int, [ctypes.c_void_p])):
+            function = getattr(self.user32, name)
+            function.restype, function.argtypes = restype, argtypes
+        self.kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+
+    def request_per_monitor_v2(self) -> None:
+        # Its result decides nothing: it fails when an awareness was already set (by a manifest
+        # or an earlier call), which may or may not be per-monitor v2. What holds is read below.
+        self.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(DPI_PER_MONITOR_AWARE_V2))
+
+    def contexts(self) -> dict:
+        return {"process": self.user32.GetDpiAwarenessContextForProcess(
+                    self.kernel32.GetCurrentProcess()),
+                "thread": self.user32.GetThreadDpiAwarenessContext()}
+
+    def is_per_monitor_v2(self, context) -> bool:
+        return bool(self.user32.AreDpiAwarenessContextsEqual(
+            ctypes.c_void_p(context), ctypes.c_void_p(DPI_PER_MONITOR_AWARE_V2)))
+
+    def awareness(self, context) -> int:
+        return int(self.user32.GetAwarenessFromDpiAwarenessContext(ctypes.c_void_p(context)))
+
+
+def declare_one_coordinate_space(api=None) -> str | None:
+    """Declares per-monitor-v2 DPI awareness for the process and reads back what holds at the
+    process and thread levels. Returns None when both are per-monitor v2 (and marks the space as
+    established), or the reason the client must not run. Read-only towards every other window."""
+    try:
+        api = Win32Dpi() if api is None else api
+        api.request_per_monitor_v2()
+        found = {}
+        for level, context in api.contexts().items():
+            if not context:
+                found[level] = "unreadable"
+            elif api.is_per_monitor_v2(context):
+                found[level] = "per_monitor_v2"
+            else:
+                found[level] = DPI_AWARENESS_WORDS.get(api.awareness(context), "unknown")
+    except (OSError, AttributeError, TypeError, ValueError) as error:
+        return f"cannot declare DPI awareness ({type(error).__name__}); refusing to run"
+    # Both levels, by name, each per-monitor v2: a level that was not read is a refusal, and
+    # so is a level the declaration does not know.
+    for level in DPI_LEVELS:
+        found.setdefault(level, "not_read")
+    if set(found) != set(DPI_LEVELS) or any(word != "per_monitor_v2" for word in found.values()):
+        levels = ", ".join(f"{level} {word}" for level, word in sorted(found.items()))
+        return ("the process is not per-monitor-v2 DPI aware (" + levels + "): its Win32 "
+                "points would not be in UI Automation's space; refusing to run")
+    ONE_SPACE["established"] = True
+    return None
+
+
+def require_one_coordinate_space() -> None:
+    """A point read compared with UI Automation's points refuses to run in the mixed spaces."""
+    if not ONE_SPACE["established"]:
+        raise RuntimeError("DPI awareness was not declared: a Win32 point would not be in UI "
+                           "Automation's space (declare_one_coordinate_space first)")
+
+
 user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
 
 
 def cursor() -> tuple[int, int]:
+    require_one_coordinate_space()
     pt = wintypes.POINT()
     user32.GetCursorPos(ctypes.byref(pt))
     return int(pt.x), int(pt.y)
@@ -746,7 +846,8 @@ user32.GetAncestor.restype = wintypes.HWND
 
 def root_window_at(point: tuple[int, int]) -> int | None:
     """The top-level window that receives a click at `point` (WindowFromPoint, GA_ROOT). A
-    read-only query."""
+    read-only query, in the declared per-monitor-v2 space (physical pixels, as UI Automation)."""
+    require_one_coordinate_space()
     hwnd = user32.WindowFromPoint(wintypes.POINT(int(point[0]), int(point[1])))
     if not hwnd:
         return None
@@ -3454,6 +3555,11 @@ def main() -> int:
                         "start per invocation, every run checks the initial state first")
     args = p.parse_args()
     use_utf8_stdout()
+    # One coordinate space before anything reads a window, the cursor or UI Automation.
+    problem = declare_one_coordinate_space()
+    if problem:
+        log("abort", reason=problem)
+        return 2
 
     try:
         freshness_config(args)
