@@ -82,7 +82,8 @@ impl fmt::Display for GrantsProblem {
         f.write_str(match self {
             Self::Missing => "it does not exist",
             Self::NotARegularFile => {
-                "it is not a regular file on a disk (a directory, a device or a named pipe is                  refused before anything is read)"
+                "it is not a regular file on a disk (a directory, a device or a named pipe is \
+                 refused before anything is read)"
             }
             Self::Unreadable => "it cannot be read as UTF-8 text",
             Self::TooLarge => "it is larger than 65536 bytes",
@@ -473,6 +474,8 @@ mod tests {
         let store = GrantsFile::new("NUL");
         assert_eq!(store.count(), Err(GrantsProblem::NotARegularFile));
         assert_eq!(store.grant(&[1; 32]), None);
+        let shown = GrantsProblem::NotARegularFile.to_string();
+        assert!(!shown.contains("  "), "{shown:?}");
     }
 
     #[test]

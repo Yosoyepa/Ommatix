@@ -179,7 +179,8 @@ impl std::fmt::Display for TicketError {
             Self::Unreadable(kind) => write!(f, "the ticket file cannot be read ({kind:?})"),
             Self::NotARegularFile => write!(
                 f,
-                "the ticket file is not a regular file on a disk (a directory, a device or a                  named pipe is refused before anything is read)"
+                "the ticket file is not a regular file on a disk (a directory, a device or a \
+                 named pipe is refused before anything is read)"
             ),
             Self::TooLarge => write!(
                 f,
@@ -663,6 +664,15 @@ mod tests {
             read_ticket(Path::new("NUL")).unwrap_err(),
             TicketError::NotARegularFile
         );
+        for refused in [
+            TicketError::Unreadable(io::ErrorKind::NotFound),
+            TicketError::NotARegularFile,
+            TicketError::TooLarge,
+            TicketError::NotATicket,
+        ] {
+            let shown = refused.to_string();
+            assert!(!shown.contains("  ") && !shown.contains('\n'), "{shown:?}");
+        }
     }
 
     #[test]

@@ -364,11 +364,11 @@ mod tests {
         assert!(![0, 1, 2, 3, 4, 5].contains(&BIND_REFUSED));
         assert_eq!(BIND_REFUSED, 7);
         let line = BindRefused {
-            path: r"\.\pipe\ommatix-x".to_owned(),
+            path: r"\\.\pipe\ommatix-x".to_owned(),
         }
         .to_string();
         assert!(
-            line.starts_with(r"cannot serve on the pipe \.\pipe\ommatix-x: "),
+            line.starts_with(r"cannot serve on the pipe \\.\pipe\ommatix-x: "),
             "{line}"
         );
         for says in [

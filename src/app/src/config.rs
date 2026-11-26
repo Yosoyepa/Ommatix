@@ -2008,7 +2008,15 @@ allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
 
         for path in [&syntax, &unknown, &typed, &rule, &binary, &large] {
             let shown = Config::load_closed(path).unwrap_err().to_string();
-            assert!(!shown.contains(MARKER) && !shown.contains('\n'), "{shown}");
+            assert!(
+                !shown.contains(MARKER) && !shown.contains('\n') && !shown.contains("  "),
+                "{shown:?}"
+            );
+        }
+        #[cfg(windows)]
+        {
+            let shown = ConfigProblem::NotARegularFile.to_string();
+            assert!(!shown.contains("  "), "{shown:?}");
         }
         // A valid file loads as `Config::load` loads it.
         let valid = write("valid.toml", pipe);
