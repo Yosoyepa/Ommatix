@@ -303,6 +303,31 @@ impl FrameCapturer for Gated {
     }
 }
 
+/// A port whose destructor, foreign code from the listener's point of view, says on which
+/// thread it runs and then waits for its release.
+struct Teardown {
+    inner: Box<dyn FrameCapturer>,
+    ran: mpsc::Sender<thread::ThreadId>,
+    release: Arc<Release>,
+}
+
+impl FrameCapturer for Teardown {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn capture(&mut self) -> Result<CapturedFrame, PortError> {
+        self.inner.capture()
+    }
+}
+
+impl Drop for Teardown {
+    fn drop(&mut self) {
+        let _ = self.ran.send(thread::current().id());
+        self.release.pass();
+    }
+}
+
 struct World {
     desktop: FixtureDesktop,
     clock: Arc<ManualClock>,
@@ -353,6 +378,40 @@ impl World {
         self.broker_with(McpConfig::default(), 8)
     }
 
+    /// A broker whose capturer, a port the broker owns, says on which thread it is dropped and
+    /// then waits for `release`.
+    fn broker_with_teardown(
+        &self,
+        ran: mpsc::Sender<thread::ThreadId>,
+        release: Arc<Release>,
+    ) -> Broker {
+        let ports = Ports {
+            capturer: Box::new(Teardown {
+                inner: Box::new(Gated {
+                    inner: Box::new(self.desktop.capturer()),
+                    gate: Arc::clone(&self.gate),
+                }),
+                ran,
+                release,
+            }),
+            detector: Box::new(self.desktop.detector()),
+            recognizer: Box::new(self.desktop.recognizer()),
+            accessibility: Box::new(NoAccessibility),
+            actuator: Box::new(Live(self.desktop.actuator(), Arc::clone(&self.delivery))),
+            policy: Arc::new(Operator),
+            clock: self.clock.clone(),
+        };
+        Broker::with_grant_store(
+            EngineConfig::new(SESSION),
+            ports,
+            McpConfig::default(),
+            TERM,
+            8,
+            self.grants.clone(),
+        )
+        .expect("a valid broker")
+    }
+
     fn bounded(&self, max_clients: usize) -> Broker {
         self.broker_with(McpConfig::default(), max_clients)
     }
@@ -398,7 +457,9 @@ const WATCHDOG: Duration = Duration::from_secs(120);
 /// test with a message that names what was awaited when it has not finished. Nothing of the
 /// listener runs on the waiting thread, so a defect that blocks the listener's lock or a join
 /// cannot block this wait; a body stuck past it is leaked by the failing test. A panic of the
-/// body is the test's failure, as if the body had run on the test's thread.
+/// body is the test's failure, as if the body had run on the test's thread. On success the
+/// runner is joined; no body this guards blocks after it has returned (their holds and gates
+/// are released inside the body), so that join waits only for the thread's exit.
 fn watchdog(what: &str, body: fn()) {
     let (done, finished) = mpsc::channel();
     let runner = thread::spawn(move || {
@@ -1474,7 +1535,8 @@ fn shutdown_stops_accepting_at_once_and_connections_end_when_their_clients_act_o
         report.state,
         ShutdownState::Remaining {
             connections: 3,
-            refusing: 0
+            refusing: 0,
+            only_reaper_left: false
         },
         "the count is right while they stay"
     );
@@ -1796,11 +1858,12 @@ fn a_worker_s_place_is_free_only_after_its_thread_is_joined_and_shutdown_says_so
     exiting
         .recv_timeout(PATIENCE)
         .expect("A's worker thread is exiting, held");
-    let held = wait(&server, "A's connection is closed", |s| s.serving == 1);
+    // The reaper enters A's join after all its bookkeeping; the exit hold keeps it there.
+    let held = wait(&server, "the reaper is in A's join", |s| s.joining == 1);
     assert_eq!(
-        (held.connections, held.joined),
-        (2, 0),
-        "A's place stays until its join returns"
+        (held.serving, held.connections, held.joined),
+        (1, 2, 0),
+        "A's place stays while its join is in progress"
     );
     // The bound is full: a client over it is refused while the join is held.
     let mut over = Peer::connect(&name);
@@ -1821,7 +1884,8 @@ fn a_worker_s_place_is_free_only_after_its_thread_is_joined_and_shutdown_says_so
         report.state,
         ShutdownState::Remaining {
             connections: 2,
-            refusing: 1
+            refusing: 1,
+            only_reaper_left: false
         },
         "{report:?}"
     );
@@ -1999,7 +2063,8 @@ fn a_request_that_passed_the_check_before_the_stop_runs_to_its_end() {
         report.state,
         ShutdownState::Remaining {
             connections: 1,
-            refusing: 0
+            refusing: 0,
+            only_reaper_left: false
         },
         "{report:?}"
     );
@@ -2013,4 +2078,70 @@ fn a_request_that_passed_the_check_before_the_stop_runs_to_its_end() {
     assert_eq!(peer.line(), None, "and nothing after it");
     drop(peer);
     assert!(server.shutdown(PATIENCE).complete());
+}
+
+// ---- 15. the third review of the pipe (D43) ----
+
+/// D43 G7: the broker's teardown (here, a port's destructor that says where it runs and then
+/// blocks) never runs on a thread of the listener. After a `Complete` shutdown it has not run;
+/// it runs when the test drops the server, on the test's own thread. The test keeps no other
+/// owner of the broker.
+#[test]
+fn the_broker_s_teardown_runs_on_the_thread_that_drops_a_complete_server() {
+    watchdog(
+        "the broker's teardown after a complete shutdown",
+        the_broker_s_teardown_runs_on_the_thread_that_drops_a_complete_server_body,
+    );
+}
+
+fn the_broker_s_teardown_runs_on_the_thread_that_drops_a_complete_server_body() {
+    let world = World::new();
+    let (ran, teardown) = mpsc::channel();
+    let release = Arc::new(Release::default());
+    let broker = world.broker_with_teardown(ran, Arc::clone(&release));
+    let mut server = PipeServer::bind(broker, unique("teardown")).expect("the pipe binds");
+    let name = server.name().clone();
+    // A client is served (its worker held the broker through its reservation) and leaves.
+    let mut peer = Peer::attach(&name, &ticket(1));
+    assert!(peer.call("observe_screen", &json!({}))["result"].is_object());
+    drop(peer);
+    let report = server.shutdown(PATIENCE);
+    assert!(report.complete(), "{report:?}");
+    assert!(
+        matches!(teardown.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the broker's teardown ran before the server was dropped, on a thread of the listener"
+    );
+    // A helper lets the destructor go once it has said where it runs.
+    let opener = {
+        let release = Arc::clone(&release);
+        thread::spawn(move || {
+            let at = teardown.recv_timeout(PATIENCE);
+            release.open();
+            at
+        })
+    };
+    let here = thread::current().id();
+    drop(server);
+    let at = opener
+        .join()
+        .unwrap()
+        .expect("the broker's teardown ran when the server was dropped");
+    assert_eq!(at, here, "on the thread that dropped the server");
+    assert!(!release.failsafe_fired());
+}
+
+/// D43 A2: a wait too long to represent is no deadline, not an overflow: `wait_until` and
+/// `shutdown` take it and return as they would with any long wait.
+#[test]
+fn a_wait_too_long_to_represent_means_no_deadline() {
+    let world = World::new();
+    let broker = world.broker();
+    let mut server = bind(&broker, "forever");
+    assert!(
+        server
+            .wait_until(Duration::MAX, |s| s.threads == 2)
+            .is_some()
+    );
+    let report = server.shutdown(Duration::MAX);
+    assert!(report.complete(), "{report:?}");
 }
