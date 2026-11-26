@@ -1016,13 +1016,24 @@ fn doc_01_the_scope_rule_refuses_an_acceptance_without_a_note() {
 
 // ---- the perf tools read the wire names the engine really emits (box 7, C5) ----
 
-/// The strings inside the parentheses of `NAME = ("a", "b", ...)` in a Python source.
+/// The strings inside the parentheses of `NAME = ("a", "b", ...)` in a Python source; the tuple
+/// may span several lines (up to the line that closes it), and `#` comments are left out.
 fn python_string_tuple(source: &str, name: &str) -> Vec<String> {
-    let line = source
+    let start = source
         .lines()
-        .find(|l| l.starts_with(&format!("{name} = (")))
+        .position(|l| l.starts_with(&format!("{name} = (")))
         .unwrap_or_else(|| panic!("{name} is not defined"));
-    line.split('"')
+    let mut tuple = String::new();
+    for line in source.lines().skip(start) {
+        let code = line.split('#').next().unwrap_or_default();
+        tuple.push_str(code);
+        tuple.push('\n');
+        if code.contains(')') {
+            break;
+        }
+    }
+    tuple
+        .split('"')
         .skip(1)
         .step_by(2)
         .map(str::to_owned)
@@ -1066,4 +1077,75 @@ fn plan_work_names_in_the_perf_tools_are_the_wire_names() {
             "soak.py spells a plan kind {invented}"
         );
     }
+}
+
+/// The keys of the `timings_meta` object in the order `dto.rs` writes them: the `"x_us":` lines of
+/// that function's `json!` literal. `serde_json` keeps object keys sorted unless its
+/// `preserve_order` feature is on (a dependency may switch it on), so the wire order cannot be read
+/// back from the value; it is read from the source, and the value is checked against it as a set.
+fn timings_meta_source_keys(dto_source: &str) -> Vec<String> {
+    let start = dto_source
+        .find("pub fn timings_meta(")
+        .expect("dto.rs defines timings_meta");
+    let body = &dto_source[start..];
+    let body = &body[..body.find("\n}\n").expect("timings_meta ends")];
+    body.lines()
+        .filter_map(|l| l.trim().strip_prefix('"'))
+        .filter_map(|l| l.split_once("\":"))
+        .map(|(key, _)| key.to_owned())
+        .collect()
+}
+
+/// The soak keeps the stage timings of its slow observations under closed names (box 7, S0
+/// §19.6). They are the keys of the adapter's `timings_meta` without `_us`, so that a stage added
+/// to or renamed in the engine cannot leave the tool silently dropping it, and a fake producer
+/// and consumer cannot agree on a name the engine never emits.
+#[test]
+fn timing_stage_names_in_the_perf_tools_are_the_wire_names() {
+    use ommatix_adapter_mcp::{ACCESSIBILITY_META_KEY, TIMINGS_META_KEY, dto};
+    use ommatix_application::contract::StageTimings;
+
+    let meta = dto::timings_meta(&StageTimings::default());
+    let object = meta.as_object().expect("timings_meta is an object");
+    let strip = |key: &str| {
+        key.strip_suffix("_us")
+            .unwrap_or_else(|| panic!("the wire key {key} ends in _us"))
+            .to_owned()
+    };
+
+    // The serializer's keys, as a set, from the real value.
+    let mut serialized: Vec<String> = object.keys().map(|k| strip(k)).collect();
+    serialized.sort();
+
+    // The wire order, from the serializer's source (the value may not keep it).
+    let in_order: Vec<String> = timings_meta_source_keys(&read("src/adapters/mcp/src/dto.rs"))
+        .iter()
+        .map(|k| strip(k))
+        .collect();
+    let mut sorted_source = in_order.clone();
+    sorted_source.sort();
+    assert_eq!(
+        sorted_source, serialized,
+        "dto.rs's source keys are the serialized ones"
+    );
+    assert_eq!(in_order.len(), 10, "ten stage timings");
+
+    let common = read("tools/perf/perf_common.py");
+    assert_eq!(python_string_tuple(&common, "TIMING_STAGES"), in_order);
+    assert!(
+        common.contains(&format!("TIMINGS_KEY = \"{TIMINGS_META_KEY}\"")),
+        "the tools read the timings under the adapter's key"
+    );
+    assert!(
+        common.contains(&format!("ACCESSIBILITY_KEY = \"{ACCESSIBILITY_META_KEY}\"")),
+        "the tools read the accessibility evidence under the adapter's key"
+    );
+    // The completeness flag the tool reads is the one the adapter writes.
+    let complete = dto::accessibility_meta(true);
+    assert_eq!(complete["complete"], true);
+    assert_eq!(dto::accessibility_meta(false)["complete"], false);
+    assert!(
+        common.contains("\"complete\""),
+        "perf_common reads the `complete` key"
+    );
 }

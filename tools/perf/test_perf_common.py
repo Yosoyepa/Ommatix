@@ -29,6 +29,60 @@ class Statistics(unittest.TestCase):
         self.assertEqual(c.stage_ms({}), {})
 
 
+class TimingStages(unittest.TestCase):
+    """The closed stage names of a response's `_meta`, kept for the slow observations of the
+    soak (box 7). The repository test `timing_stage_names_in_the_perf_tools_are_the_wire_names`
+    binds the tuple to the real serializer."""
+
+    FULL = {"capture_us": 12_000, "plan_us": 300, "detect_us": 80_000, "recognize_us": 41_250,
+            "accessibility_us": 9_000_000, "fuse_us": 700, "track_us": 90, "commit_us": 40,
+            "total_us": 9_500_000, "response_build_us": 1_500}
+
+    def test_the_closed_names_are_the_wire_names_without_the_suffix_in_wire_order(self):
+        self.assertEqual(c.TIMING_STAGES, (
+            "capture", "plan", "detect", "recognize", "accessibility", "fuse", "track", "commit",
+            "total", "response_build"))
+        self.assertEqual(c.ACCESSIBILITY_KEY, "io.ommatix/accessibility")
+
+    def test_the_stage_timings_of_a_response_are_milliseconds_with_three_decimals(self):
+        got = c.timing_stages_ms({c.TIMINGS_KEY: self.FULL})
+        self.assertEqual(list(got), list(c.TIMING_STAGES))
+        self.assertEqual(got["recognize"], 41.25)
+        self.assertEqual(got["plan"], 0.3)
+        self.assertEqual(got["accessibility"], 9000.0)
+        self.assertEqual(c.timing_stages_ms({c.TIMINGS_KEY: {"track_us": 1_234_567}}),
+                         {"track": 1234.567})
+        self.assertEqual(c.timing_stages_ms({c.TIMINGS_KEY: {"plan_us": 1}}), {"plan": 0.001})
+
+    def test_a_key_outside_the_closed_names_is_dropped(self):
+        meta = {c.TIMINGS_KEY: {"detect_us": 5_000, "foo_us": 7_000, "detect": 1, "total": 2,
+                                "": 3, "plan_ms": 4}}
+        self.assertEqual(c.timing_stages_ms(meta), {"detect": 5.0})
+
+    def test_a_null_or_a_value_that_is_not_a_number_is_omitted_and_never_invented(self):
+        meta = {c.TIMINGS_KEY: {"detect_us": 5_000, "response_build_us": None,
+                                "fuse_us": "12", "track_us": [1], "commit_us": True,
+                                "capture_us": {"x": 1}}}
+        self.assertEqual(c.timing_stages_ms(meta), {"detect": 5.0})
+
+    def test_a_response_without_timings_gives_nothing(self):
+        for meta in ({}, {c.TIMINGS_KEY: None}, {c.TIMINGS_KEY: []}, {c.TIMINGS_KEY: "x"},
+                     None, [], "x"):
+            self.assertEqual(c.timing_stages_ms(meta), {}, meta)
+
+    def test_the_completeness_of_the_accessibility_evidence_is_true_false_or_unknown(self):
+        key = c.ACCESSIBILITY_KEY
+        self.assertIs(c.accessibility_complete({key: {"complete": True}}), True)
+        self.assertIs(c.accessibility_complete({key: {"complete": False}}), False)
+        for meta in ({}, {key: None}, {key: {}}, {key: {"complete": None}},
+                     {key: {"complete": "yes"}}, {key: {"complete": 1}}, {key: []}, None, "x"):
+            self.assertIsNone(c.accessibility_complete(meta), meta)
+
+    def test_stage_ms_is_unchanged(self):
+        meta = {c.TIMINGS_KEY: {"foo_us": 1_000, "total_us": 2_000}}
+        self.assertEqual(c.stage_ms(meta), {"foo": 1.0, "total": 2.0})
+
+
 class InputFreeConfiguration(unittest.TestCase):
     def test_the_shipped_operator_configurations_are_input_free(self):
         paths = sorted((c.REPO / "tools" / "s0").glob("*.toml"))
@@ -215,6 +269,154 @@ class ThreadCountOnWindows(unittest.TestCase):
         with mock.patch.object(c, "kernel32", kernel32):
             with mock.patch("ctypes.get_last_error", return_value=18):
                 self.assertEqual(c.thread_count(100), 1)
+        kernel32.CloseHandle.assert_called_once_with(4242)
+
+
+# ---- which thread appeared (box 7, C2): thread ids and their start modules ------------------
+
+class FakeThreadIds(FakeThreads):
+    """A thread snapshot whose entries are ``(owner, thread_id)`` pairs, as ``Win32ThreadIds``
+    returns them; the walk and its failures are those of ``FakeThreads``."""
+
+
+class ThreadIds(unittest.TestCase):
+    def test_only_the_ids_of_the_process_come_back_sorted(self):
+        api = FakeThreadIds([(100, 30), (200, 5), (100, 10), (300, 1), (100, 20)])
+        self.assertEqual(c.thread_ids(100, api), [10, 20, 30])
+        self.assertEqual(api.closed, ["snapshot"])
+
+    def test_a_process_with_no_thread_in_the_snapshot_has_an_empty_list_not_none(self):
+        for owners in ([(200, 1), (300, 2)], []):
+            api = FakeThreadIds(owners)
+            self.assertEqual(c.thread_ids(100, api), [])
+            self.assertEqual(api.closed, ["snapshot"])
+
+    def test_no_snapshot_is_none_and_there_is_no_handle_to_close(self):
+        api = FakeThreadIds([(100, 1)], snapshot=False)
+        self.assertIsNone(c.thread_ids(100, api))
+        self.assertEqual(api.closed, [])
+
+    def test_a_failing_first_or_later_call_is_none_and_the_snapshot_is_still_closed(self):
+        for fail_at in (0, 2):
+            api = FakeThreadIds([(100, 1), (100, 2), (100, 3)], fail_at=fail_at)
+            self.assertIsNone(c.thread_ids(100, api), fail_at)
+            self.assertEqual(api.closed, ["snapshot"])
+
+    def test_the_ids_agree_with_the_count_of_the_same_snapshot(self):
+        owners = [100, 200, 100, 300, 100]
+        ids = c.thread_ids(100, FakeThreadIds([(o, 1000 + i) for i, o in enumerate(owners)]))
+        self.assertEqual(len(ids), c.count_threads(100, FakeThreads(owners)))
+
+
+class ModuleOf(unittest.TestCase):
+    MODULES = [(0x7FF600000000, 0x20000, "ommatix.exe"),
+               (0x7FFA10000000, 0x1000, "tiny.dll"),
+               (0x7FFA20000000, 0x300000, "UIAutomationCore.dll")]
+
+    def test_the_range_is_closed_at_the_base_and_open_at_the_end(self):
+        base, size, name = self.MODULES[2]
+        self.assertEqual(c.module_of(base, self.MODULES), name)
+        self.assertEqual(c.module_of(base + 1, self.MODULES), name)
+        self.assertEqual(c.module_of(base + size - 1, self.MODULES), name)
+        self.assertEqual(c.module_of(base + size, self.MODULES), "unknown")
+        self.assertEqual(c.module_of(base - 1, self.MODULES), "unknown")
+
+    def test_the_list_is_searched_whatever_its_order(self):
+        self.assertEqual(c.module_of(0x7FFA10000000, self.MODULES), "tiny.dll")
+        self.assertEqual(c.module_of(0x7FF600000010, list(reversed(self.MODULES))),
+                         "ommatix.exe")
+
+    def test_no_address_and_a_zero_address_are_unknown(self):
+        self.assertEqual(c.module_of(None, self.MODULES), "unknown")
+        self.assertEqual(c.module_of(0, self.MODULES), "unknown")
+        self.assertEqual(c.module_of(0, [(0, 0x1000, "zero.dll")]), "unknown")
+
+    def test_no_modules_is_unknown_and_a_name_is_only_ever_a_base_name(self):
+        self.assertEqual(c.module_of(0x1234, []), "unknown")
+        self.assertEqual(c.module_of(0x1234, [(0x1000, 0x1000, "C:\\Windows\\ntdll.dll")]),
+                         "ntdll.dll")
+
+
+class ThreadChanges(unittest.TestCase):
+    def test_what_appeared_and_what_vanished_are_sorted(self):
+        self.assertEqual(c.thread_changes([1, 2, 3, 9], [2, 3, 7, 5]),
+                         {"added": [5, 7], "removed": [1, 9]})
+
+    def test_the_same_threads_change_nothing(self):
+        self.assertEqual(c.thread_changes([1, 2], [2, 1]), {"added": [], "removed": []})
+        self.assertEqual(c.thread_changes([], []), {"added": [], "removed": []})
+
+    def test_from_and_to_nothing(self):
+        self.assertEqual(c.thread_changes([], [4, 3]), {"added": [3, 4], "removed": []})
+        self.assertEqual(c.thread_changes([4, 3], []), {"added": [], "removed": [3, 4]})
+
+    def test_the_inputs_are_not_modified(self):
+        before, after = [3, 1], [2, 1]
+        c.thread_changes(before, after)
+        self.assertEqual((before, after), ([3, 1], [2, 1]))
+
+
+@unittest.skipUnless(sys.platform == "win32", "thread start addresses are a Windows call")
+class ThreadStartModulesOnWindows(unittest.TestCase):
+    def test_every_thread_of_this_process_resolves_to_a_module_name(self):
+        release = threading.Event()
+        worker = threading.Thread(target=release.wait)
+        worker.start()
+        try:
+            ids = c.thread_ids(os.getpid(), c.Win32ThreadIds())
+            modules = c.process_modules(os.getpid())
+            starts = {tid: c.thread_start_address(tid) for tid in ids or []}
+        finally:
+            release.set()
+            worker.join()
+        self.assertIsNotNone(ids)
+        self.assertGreaterEqual(len(ids), 2)
+        self.assertEqual(ids, sorted(ids))
+        self.assertTrue(modules)
+        names = {tid: c.module_of(address, modules) for tid, address in starts.items()}
+        print(f"\nstart modules of this process: {sorted(names.values())}", file=sys.stderr)
+        for tid, name in names.items():
+            self.assertTrue(name.lower().endswith((".dll", ".exe")), (tid, starts[tid], name))
+        for base, size, name in modules:
+            self.assertGreater(base, 0)
+            self.assertGreater(size, 0)
+            self.assertEqual(name, os.path.basename(name))
+
+    def test_the_main_module_of_this_process_is_among_the_modules(self):
+        names = {name.lower() for _, _, name in c.process_modules(os.getpid())}
+        self.assertIn(Path(sys.executable).name.lower(), names)
+
+    def test_a_thread_that_does_not_exist_has_no_start_address(self):
+        self.assertIsNone(c.thread_start_address(0xFFFFFFF0))
+
+    def test_a_process_that_does_not_exist_has_no_modules(self):
+        self.assertIsNone(c.process_modules(0xFFFFFFF0))
+
+    def test_the_thread_handle_is_closed_when_the_query_fails(self):
+        kernel32, ntdll = mock.Mock(), mock.Mock()
+        kernel32.OpenThread.return_value = 4242
+        ntdll.NtQueryInformationThread.return_value = -1073741790  # STATUS_ACCESS_DENIED
+        with mock.patch.object(c, "kernel32", kernel32), mock.patch.object(c, "ntdll", ntdll):
+            self.assertIsNone(c.thread_start_address(1))
+        kernel32.CloseHandle.assert_called_once_with(4242)
+
+    def test_the_limited_access_is_tried_when_the_full_one_is_refused(self):
+        kernel32, ntdll = mock.Mock(), mock.Mock()
+        kernel32.OpenThread.side_effect = [None, 4242]
+        ntdll.NtQueryInformationThread.return_value = 0
+        with mock.patch.object(c, "kernel32", kernel32), mock.patch.object(c, "ntdll", ntdll):
+            self.assertIsNone(c.thread_start_address(1))  # the buffer stays 0: no address
+        self.assertEqual([call.args[0] for call in kernel32.OpenThread.call_args_list],
+                         [0x0040, 0x0800])
+        kernel32.CloseHandle.assert_called_once_with(4242)
+
+    def test_the_snapshot_of_ids_is_closed_when_the_walk_fails(self):
+        kernel32 = mock.Mock()
+        kernel32.CreateToolhelp32Snapshot.return_value = 4242
+        kernel32.Thread32First.return_value = 0
+        with mock.patch.object(c, "kernel32", kernel32):
+            with mock.patch("ctypes.get_last_error", return_value=5):
+                self.assertIsNone(c.thread_ids(os.getpid(), c.Win32ThreadIds()))
         kernel32.CloseHandle.assert_called_once_with(4242)
 
 

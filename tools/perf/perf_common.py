@@ -11,6 +11,7 @@ import concurrent.futures
 import importlib.util
 import json
 import math
+import ntpath
 import os
 import statistics
 import subprocess
@@ -31,6 +32,16 @@ PLAN_KEY = "io.ommatix/plan"
 #: agree on a name the engine never emits.
 PLAN_WORK_KINDS = ("full", "regions", "idle")
 PLAN_WORK_FULL = "full"
+ACCESSIBILITY_KEY = "io.ommatix/accessibility"
+#: The stage timings of a response's ``_meta`` under ``TIMINGS_KEY``, as the wire names them
+#: without the ``_us`` suffix, in the order ``dto::timings_meta`` writes them
+#: (``src/adapters/mcp/src/dto.rs``). A closed list: a key outside it is dropped, so that nothing
+#: but these names ever reaches a report (ADR-0012). The repository test ``timing_stage_names_in_
+#: the_perf_tools_are_the_wire_names`` binds this tuple to the real serializer.
+TIMING_STAGES = (
+    "capture", "plan", "detect", "recognize", "accessibility", "fuse", "track", "commit",
+    "total", "response_build",
+)
 
 
 # ---- pure helpers -------------------------------------------------------------------------
@@ -67,6 +78,31 @@ def stage_ms(meta: dict) -> dict:
     """The per-stage timings of a response's ``_meta`` in milliseconds."""
     return {k.removesuffix("_us"): round(v / 1000, 3)
             for k, v in meta.get(TIMINGS_KEY, {}).items() if isinstance(v, (int, float))}
+
+
+def timing_stages_ms(meta) -> dict:
+    """The stage timings of a response's ``_meta`` in milliseconds (three decimals), for the
+    closed names of ``TIMING_STAGES`` only, in that order. A key outside the list is dropped; a
+    ``null`` (``response_build_us`` is null until the page is built), a boolean or any other
+    non-number is omitted, never invented; a response without ``_meta`` timings gives ``{}``."""
+    timings = meta.get(TIMINGS_KEY) if isinstance(meta, dict) else None
+    if not isinstance(timings, dict):
+        return {}
+    stages = {}
+    for stage in TIMING_STAGES:
+        value = timings.get(f"{stage}_us")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            stages[stage] = round(value / 1000, 3)
+    return stages
+
+
+def accessibility_complete(meta) -> bool | None:
+    """Whether the accessibility evidence behind a response was complete, from the engine's own
+    ``io.ommatix/accessibility`` record: True or False, and None when the response carries no
+    such record or its ``complete`` is not a boolean."""
+    record = meta.get(ACCESSIBILITY_KEY) if isinstance(meta, dict) else None
+    complete = record.get("complete") if isinstance(record, dict) else None
+    return complete if isinstance(complete, bool) else None
 
 
 def config_problem(config_text: str) -> str | None:
@@ -138,6 +174,54 @@ def count_threads(pid: int, api) -> int | None:
         return None
     finally:
         api.close(handle)
+
+
+def thread_ids(pid: int, api) -> list[int] | None:
+    """The ids of the threads of ``pid`` in a system thread snapshot, sorted, or None when the
+    snapshot cannot be read: the walk and its error handling are those of ``count_threads``,
+    except that ``first(handle)`` and ``next(handle)`` return the pair ``(owning process id,
+    thread id)`` of the next entry, or None at the end. The Windows calls are ``Win32ThreadIds``;
+    the tests pass a fake. Thread ids mean nothing across runs: they are never written to a
+    report (soak.py keeps them in memory to see which thread appeared)."""
+    handle = api.snapshot()
+    if handle is None:
+        return None
+    try:
+        ids = []
+        entry = api.first(handle)
+        while entry is not None:
+            owner, thread_id = entry
+            if owner == pid:
+                ids.append(thread_id)
+            entry = api.next(handle)
+        return sorted(ids)
+    except OSError:
+        return None
+    finally:
+        api.close(handle)
+
+
+#: What ``module_of`` answers when no module holds the address (or there is no address).
+UNKNOWN_MODULE = "unknown"
+
+
+def module_of(address: int | None, modules: list[tuple[int, int, str]]) -> str:
+    """The base name of the module whose range ``[base, base + size)`` holds ``address``, from a
+    list of ``(base, size, name)``; ``"unknown"`` when none does, and for no address or address 0.
+    Only a base name is returned, never a path (ADR-0012)."""
+    if not address:
+        return UNKNOWN_MODULE
+    for base, size, name in modules:
+        if base <= address < base + size:
+            return ntpath.basename(name) or UNKNOWN_MODULE
+    return UNKNOWN_MODULE
+
+
+def thread_changes(before: list[int], after: list[int]) -> dict:
+    """The thread ids that are in ``after`` and not in ``before`` (``added``) and the other way
+    round (``removed``), each sorted."""
+    was, is_ = set(before), set(after)
+    return {"added": sorted(is_ - was), "removed": sorted(was - is_)}
 
 
 # ---- Windows, read only -------------------------------------------------------------------
@@ -262,6 +346,114 @@ if sys.platform == "win32":
         (the soak records None for that sample and goes on)."""
         return count_threads(pid, Win32Threads())
 
+    class Win32ThreadIds(Win32Threads):
+        """The same thread snapshot, read only, whose entries are ``(owner, thread id)``; the
+        walk is ``thread_ids``."""
+
+        def first(self, handle):
+            return self.pair(kernel32.Thread32First(handle, ctypes.byref(self.entry)))
+
+        def next(self, handle):
+            return self.pair(kernel32.Thread32Next(handle, ctypes.byref(self.entry)))
+
+        def pair(self, ok):
+            owner = self.owner(ok)  # raises OSError on a short entry or a failed walk
+            return None if owner is None else (owner, int(self.entry.th32ThreadID))
+
+    THREAD_QUERY_INFORMATION = 0x0040
+    THREAD_QUERY_LIMITED_INFORMATION = 0x0800
+    PROCESS_QUERY_INFORMATION = 0x0400
+    PROCESS_VM_READ = 0x0010
+    LIST_MODULES_ALL = 3
+    #: ``ThreadQuerySetWin32StartAddress`` of ``THREADINFOCLASS``.
+    THREAD_WIN32_START_ADDRESS = 9
+
+    class ModuleInfo(ctypes.Structure):
+        _fields_ = [("lpBaseOfDll", ctypes.c_void_p), ("SizeOfImage", wintypes.DWORD),
+                    ("EntryPoint", ctypes.c_void_p)]
+
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+
+    kernel32.OpenThread.restype = wintypes.HANDLE
+    kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    ntdll.NtQueryInformationThread.restype = wintypes.LONG  # NTSTATUS: 0 is success
+    ntdll.NtQueryInformationThread.argtypes = [
+        wintypes.HANDLE, wintypes.ULONG, ctypes.c_void_p, wintypes.ULONG,
+        ctypes.POINTER(wintypes.ULONG)]
+    psapi.EnumProcessModulesEx.restype = wintypes.BOOL
+    psapi.EnumProcessModulesEx.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+        wintypes.DWORD]
+    psapi.GetModuleInformation.restype = wintypes.BOOL
+    psapi.GetModuleInformation.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, ctypes.POINTER(ModuleInfo), wintypes.DWORD]
+    psapi.GetModuleBaseNameW.restype = wintypes.DWORD
+    psapi.GetModuleBaseNameW.argtypes = [
+        wintypes.HANDLE, ctypes.c_void_p, wintypes.LPWSTR, wintypes.DWORD]
+
+    def thread_start_address(tid: int) -> int | None:
+        """The Win32 start address of a thread (``ThreadQuerySetWin32StartAddress``), or None
+        when the thread cannot be opened or queried, has exited, or reports no address. Read
+        only; the thread handle is closed on every path."""
+        handle = kernel32.OpenThread(THREAD_QUERY_INFORMATION, False, tid)
+        if not handle:
+            handle = kernel32.OpenThread(THREAD_QUERY_LIMITED_INFORMATION, False, tid)
+        if not handle:
+            return None
+        try:
+            address = ctypes.c_void_p(0)
+            status = ntdll.NtQueryInformationThread(
+                handle, THREAD_WIN32_START_ADDRESS, ctypes.byref(address),
+                ctypes.sizeof(address), None)
+            if status != 0:
+                return None
+            return int(address.value) if address.value else None
+        finally:
+            kernel32.CloseHandle(handle)
+
+    def read_modules(handle) -> list[tuple[int, int, str]] | None:
+        """One pass over the modules of an open process, or None if any call of it fails (a module
+        may unload between the list and its details: the caller tries again)."""
+        capacity = 512
+        for _ in range(8):  # the list may grow between two calls
+            modules = (ctypes.c_void_p * capacity)()
+            needed = wintypes.DWORD(0)
+            if not psapi.EnumProcessModulesEx(
+                    handle, modules, ctypes.sizeof(modules), ctypes.byref(needed),
+                    LIST_MODULES_ALL):
+                return None
+            count = needed.value // ctypes.sizeof(ctypes.c_void_p)
+            if count > capacity:
+                capacity = count + 64
+                continue
+            found = []
+            for i in range(count):
+                info, name = ModuleInfo(), ctypes.create_unicode_buffer(520)
+                if not psapi.GetModuleInformation(
+                        handle, modules[i], ctypes.byref(info), ctypes.sizeof(info)):
+                    return None
+                if not psapi.GetModuleBaseNameW(handle, modules[i], name, len(name)):
+                    return None
+                found.append((int(info.lpBaseOfDll or 0), int(info.SizeOfImage), name.value))
+            return found
+        return None
+
+    def process_modules(pid: int) -> list[tuple[int, int, str]] | None:
+        """``(base, size, base name)`` of every module loaded in a process, or None when the
+        process cannot be opened or any call fails (never an exception). Read only: it asks for
+        query and read access and writes nothing; the process handle is closed on every path."""
+        handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
+        if not handle:
+            return None
+        try:
+            for _ in range(3):  # a module that unloads during one pass makes it fail
+                found = read_modules(handle)
+                if found is not None:
+                    return found
+            return None
+        finally:
+            kernel32.CloseHandle(handle)
+
     class PdhValue(ctypes.Structure):
         _fields_ = [("CStatus", wintypes.DWORD), ("value", ctypes.c_longlong)]
 
@@ -334,6 +526,12 @@ else:  # pragma: no cover - the tools are Windows only; the pure parts import an
         raise OSError("Windows only")
 
     def thread_count(pid: int) -> int | None:
+        raise OSError("Windows only")
+
+    def thread_start_address(tid: int) -> int | None:
+        raise OSError("Windows only")
+
+    def process_modules(pid: int) -> list[tuple[int, int, str]] | None:
         raise OSError("Windows only")
 
     def image_running(image: str) -> bool:

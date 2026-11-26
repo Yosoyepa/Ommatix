@@ -99,6 +99,17 @@ class FakeHost(soak.Host):
     def gpu(self, pid):
         return FakeGpu()
 
+    # The thread snapshot: forty threads that never change, all started in one fake module (the
+    # real calls must never run against a fake pid).
+    def thread_ids(self, pid):
+        return list(range(5000, 5040))
+
+    def modules(self, pid):
+        return [(0x7FFA10000000, 0x180000, "ntdll.dll")]
+
+    def thread_start(self, tid):
+        return 0x7FFA10001000
+
     def start_testapp(self, args):
         return self.app
 
@@ -1007,6 +1018,441 @@ class ProbeCounting(unittest.TestCase):
     def test_the_cache_note_is_read_as_numbers(self):
         self.assertEqual(soak.cache_note([NOTE]), {"prototypes": 32, "for_context": 32})
         self.assertIsNone(soak.cache_note(["ommatix: something else"]))
+
+
+# ---- the stages of the slow observations (box 7, S0 section 19.6) --------------------------
+
+FAST_US = {"capture_us": 5_000, "plan_us": 200, "detect_us": 8_000, "recognize_us": 4_000,
+           "accessibility_us": 3_000, "fuse_us": 500, "track_us": 100, "commit_us": 50,
+           "total_us": 20_850, "response_build_us": 1_000}
+#: A stall inside the accessibility read: the stage dominates, and the response build (which the
+#: total does not include) is larger still, so that it must not be named the dominant one.
+STALL_US = {**FAST_US, "accessibility_us": 9_000_000, "total_us": 9_020_000,
+            "response_build_us": 9_500_000}
+
+
+class StagedEngine(FakeEngine):
+    """Observations whose `_meta` carries the engine's stage timings. ``slow`` maps the n-th
+    observation (from 1) to its round trip in ms and its timings in us."""
+
+    def __init__(self, slow=None, timings=True, complete=True, extra_timing=None, **kwargs):
+        super().__init__(**kwargs)
+        self.slow, self.timings, self.complete = slow or {}, timings, complete
+        self.extra_timing = extra_timing or {}
+
+    def call(self, name, arguments, timeout=0):
+        page, is_error, meta, rtt = super().call(name, arguments, timeout)
+        if name != "observe_screen" or is_error:
+            return page, is_error, meta, rtt
+        n = self.calls.count("observe_screen")
+        rtt, timings = self.slow.get(n, (rtt, FAST_US))
+        meta = {k: v for k, v in meta.items() if k != common.TIMINGS_KEY}
+        if self.timings:
+            meta[common.TIMINGS_KEY] = {**timings, **self.extra_timing}
+        if self.complete is not None:
+            meta[common.ACCESSIBILITY_KEY] = {"complete": self.complete}
+        return page, is_error, meta, rtt
+
+
+class SlowObservations(Case):
+    def test_an_observation_that_stalled_in_one_stage_is_listed_with_its_dominant_stage(self):
+        engine = StagedEngine(slow={10: (10_000.0, STALL_US)})
+        report, code = self.run_soak(FakeHost(engine=engine))
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        slow = report["slow_observations"]
+        self.assertEqual(len(slow), 1)
+        entry = slow[0]
+        self.assertEqual(entry["dominant_stage"], "accessibility")
+        self.assertEqual((entry["rtt_ms"], entry["total_ms"]), (10_000.0, 9020.0))
+        self.assertEqual(entry["stages_ms"]["accessibility"], 9000.0)
+        self.assertEqual(entry["stages_ms"]["response_build"], 9500.0)
+        self.assertNotIn("total", entry["stages_ms"])
+        self.assertEqual(entry["t_s"], report["samples"][9]["t_s"])
+        self.assertEqual((entry["threads"], entry["handles"]), (40, 500))
+        self.assertTrue(entry["accessibility_complete"])
+        self.assertEqual(entry["plan_work"], "not_reported")
+
+    def test_fast_observations_are_not_listed_and_the_threshold_is_in_the_report(self):
+        report, _ = self.run_soak(FakeHost(engine=StagedEngine()))
+        self.assertEqual(report["slow_observations"], [])
+        self.assertEqual(report["slow_threshold_ms"], soak.SLOW_MS_DEFAULT)
+        self.assertEqual(soak.SLOW_MS_DEFAULT, 500.0)
+
+    def test_the_threshold_is_inclusive_and_the_flag_moves_it(self):
+        engine = StagedEngine(slow={3: (500.0, FAST_US), 4: (499.999, FAST_US)})
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        self.assertEqual([e["rtt_ms"] for e in report["slow_observations"]], [500.0])
+        engine = StagedEngine(slow={3: (500.0, FAST_US)})
+        report, _ = self.run_soak(FakeHost(engine=engine), slow_ms=25.0)
+        self.assertEqual(report["slow_threshold_ms"], 25.0)
+        self.assertEqual(len(report["slow_observations"]), 24)  # every round trip is 30 ms or more
+
+    def test_every_observed_sample_keeps_its_stages_without_the_total(self):
+        report, _ = self.run_soak(FakeHost(engine=StagedEngine()))
+        for sample in report["samples"]:
+            self.assertEqual(set(sample["stages_ms"]),
+                             set(common.TIMING_STAGES) - {"total"})
+            self.assertEqual(sample["total_ms"], 20.85)
+            self.assertIs(sample["accessibility_complete"], True)
+        self.assertEqual(report["samples"][0]["stages_ms"]["recognize"], 4.0)
+
+    def test_a_response_without_stage_timings_has_none_and_is_never_invented(self):
+        engine = StagedEngine(timings=False, complete=None, slow={2: (900.0, FAST_US)})
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        sample = report["samples"][0]
+        self.assertEqual(sample["stages_ms"], {})
+        self.assertIsNone(sample["total_ms"])
+        self.assertIsNone(sample["accessibility_complete"])
+        entry = report["slow_observations"][0]
+        self.assertEqual((entry["stages_ms"], entry["dominant_stage"], entry["total_ms"]),
+                         ({}, None, None))
+        self.assertIsNone(entry["accessibility_complete"])
+
+    def test_incomplete_accessibility_evidence_is_kept_as_false(self):
+        report, _ = self.run_soak(FakeHost(engine=StagedEngine(complete=False)))
+        self.assertIs(report["samples"][0]["accessibility_complete"], False)
+
+    def test_a_null_response_build_is_omitted_and_an_unknown_key_is_dropped(self):
+        engine = StagedEngine(extra_timing={"response_build_us": None, "foo_us": 99_000_000})
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        stages = report["samples"][0]["stages_ms"]
+        self.assertNotIn("response_build", stages)
+        self.assertNotIn("foo", stages)
+        self.assertNotIn("foo_us", json.dumps(report))
+        self.assertEqual(report["latency_ms"]["stages"]["response_build"], {"n": 0})
+
+    def test_the_stage_summary_has_one_entry_per_closed_stage_over_the_observed_samples(self):
+        engine = StagedEngine(slow={1: (30.0, {**FAST_US, "detect_us": 28_000}),
+                                    2: (30.0, {**FAST_US, "detect_us": 18_000})})
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        stages = report["latency_ms"]["stages"]
+        self.assertEqual(list(stages), list(common.TIMING_STAGES))
+        detect = stages["detect"]
+        self.assertEqual((detect["n"], detect["median"], detect["max"]), (24, 8.0, 28.0))
+        self.assertEqual(detect["p95"], 18.0)  # nearest rank: 23rd of 24 sorted values
+        self.assertEqual(stages["accessibility"]["max"], 3.0)
+        self.assertEqual(stages["total"]["n"], 24)
+        # The existing figures are still there, unchanged.
+        self.assertEqual(report["latency_ms"]["engine_total"]["n"], 24)
+        self.assertEqual(report["latency_ms"]["rtt"]["n"], 24)
+
+    def test_an_unobserved_sample_has_no_stages_and_is_never_listed(self):
+        host = FakeHost(front=lambda t: 999 if 20 <= t < 30 else APP,
+                        engine=StagedEngine(slow={1: (10_000.0, STALL_US)}))
+        report, _ = self.run_soak(host)
+        unobserved = [s for s in report["samples"] if not s["observed"]]
+        self.assertEqual(len(unobserved), 2)
+        for sample in unobserved:
+            self.assertNotIn("stages_ms", sample)
+        self.assertEqual(len(report["slow_observations"]), 1)
+
+    def test_a_partial_report_still_goes_out_while_the_soak_runs(self):
+        engine = StagedEngine(slow={5: (10_000.0, STALL_US)})
+        self.run_soak(FakeHost(engine=engine), minutes=10.0)
+        self.assertEqual(self.written[0], "running")
+
+    def test_only_closed_names_numbers_and_booleans_are_written(self):
+        engine = StagedEngine(slow={4: (2_000.0, STALL_US)},
+                              extra_timing={"label_us": 5, "window_title_us": 7})
+        report, _ = self.run_soak(FakeHost(engine=engine))
+        entry = report["slow_observations"][0]
+        self.assertEqual(set(entry), {
+            "t_s", "rtt_ms", "total_ms", "plan_work", "stages_ms", "dominant_stage",
+            "accessibility_complete", "threads", "handles"})
+        self.assertLessEqual(set(entry["stages_ms"]), set(common.TIMING_STAGES))
+        for value in entry["stages_ms"].values():
+            self.assertIsInstance(value, float)
+        self.assertIn(entry["dominant_stage"], common.TIMING_STAGES)
+        self.assertIsInstance(entry["accessibility_complete"], bool)
+        text = json.dumps(report)
+        for leaked in ("label_us", "window_title_us", "label_", "window_title"):
+            self.assertNotIn(leaked, text)
+
+    def test_the_criteria_are_the_same_whether_or_not_the_responses_carry_stage_timings(self):
+        slow = {7: (10_000.0, STALL_US)}
+        runs = []
+        for timings in (True, False):
+            host = FakeHost(engine=StagedEngine(slow=slow, timings=timings, complete=timings))
+            report, code = self.run_soak(host, minutes=75.0, interval=30.0,
+                                         max_handle_growth_per_hour=0.0, max_pending_regions=510)
+            runs.append((report, code))
+        (with_stages, code_a), (without, code_b) = runs
+        self.assertEqual(code_a, code_b)
+        self.assertEqual(with_stages["criteria"], without["criteria"])
+        for key in ("resources", "handle_steps", "pending_regions", "delivered_actions_max",
+                    "counts", "ended", "warmup_s"):
+            self.assertEqual(with_stages[key], without[key], key)
+        self.assertEqual(with_stages["latency_ms"]["rtt"], without["latency_ms"]["rtt"])
+        self.assertTrue(with_stages["criteria"]["handle_count"]["met"])  # not vacuous
+        self.assertEqual(len(with_stages["slow_observations"]), 1)
+        self.assertEqual(len(without["slow_observations"]), 1)  # listed by rtt alone
+
+
+class DominantStage(unittest.TestCase):
+    def test_the_largest_stage_wins_without_the_total_and_the_response_build(self):
+        stages = {"capture": 5.0, "detect": 9.0, "accessibility": 6.0, "response_build": 99.0}
+        self.assertEqual(soak.dominant_stage(stages), "detect")
+        self.assertEqual(soak.dominant_stage({**stages, "total": 500.0}), "detect")
+
+    def test_a_tie_goes_to_the_earlier_stage_in_the_closed_order(self):
+        self.assertEqual(soak.dominant_stage({"fuse": 4.0, "detect": 4.0, "commit": 4.0}),
+                         "detect")
+        self.assertEqual(soak.dominant_stage({"track": 0.0, "plan": 0.0}), "plan")
+
+    def test_no_stage_is_none(self):
+        self.assertIsNone(soak.dominant_stage({}))
+        self.assertIsNone(soak.dominant_stage({"total": 5.0, "response_build": 3.0}))
+
+
+# ---- which thread appeared (box 7, C2, S0 section 19.6) -------------------------------------
+
+NTDLL_BASE, UIA_BASE = 0x7FFA10000000, 0x7FFA20000000
+MODULE_EXE = (0x7FF600000000, 0x200000, "ommatix.exe")
+MODULE_NTDLL = (NTDLL_BASE, 0x180000, "ntdll.dll")
+MODULE_UIA = (UIA_BASE, 0x300000, "UIAutomationCore.dll")
+MODULE_DML = (0x7FFA30000000, 0x100000, "DirectML.dll")
+BASE_IDS = list(range(5000, 5040))
+
+
+class ThreadedHost(FakeHost):
+    """A host with a thread snapshot. ``ids(t)`` is the engine's thread ids (or None: unreadable),
+    ``modules(t)`` its module list (or None), ``starts`` maps a thread id to its Win32 start
+    address (others start in ntdll). Every read is counted."""
+
+    def __init__(self, ids=lambda t: BASE_IDS, modules=lambda t: [MODULE_EXE, MODULE_NTDLL],
+                 starts=None, **kwargs):
+        super().__init__(**kwargs)
+        self.ids, self.module_list, self.starts = ids, modules, starts or {}
+        self.id_reads = self.module_reads = self.start_reads = 0
+
+    def thread_ids(self, pid):
+        assert pid == ENGINE
+        self.id_reads += 1
+        return self.ids(self.t)
+
+    def modules(self, pid):
+        assert pid == ENGINE
+        self.module_reads += 1
+        return self.module_list(self.t)
+
+    def thread_start(self, tid):
+        self.start_reads += 1
+        return self.starts.get(tid, NTDLL_BASE + 0x1000)
+
+
+def gains(extra, at=30):
+    """The base threads, and from second ``at`` the ids of ``extra`` too."""
+    return lambda t: BASE_IDS + (list(extra) if t >= at else [])
+
+
+class ThreadAttribution(Case):
+    def test_a_new_thread_is_named_by_the_module_its_start_address_falls_in(self):
+        host = ThreadedHost(
+            ids=gains([9001]), starts={9001: UIA_BASE + 0x40},
+            modules=lambda t: [MODULE_EXE, MODULE_NTDLL] + ([MODULE_UIA] if t >= 30 else []))
+        report, code = self.run_soak(host)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertEqual(report["thread_changes"], [{
+            "t_s": 30.0, "threads_before": 40, "threads_after": 41,
+            "added": [{"start_module": "UIAutomationCore.dll"}], "removed": 0}])
+
+    def test_the_first_list_is_counted_by_start_module_sorted_by_name(self):
+        starts = {5001: UIA_BASE + 4, 5002: UIA_BASE + 8, 5003: 0x7FF600000010}
+        host = ThreadedHost(starts=starts,
+                            modules=lambda t: [MODULE_EXE, MODULE_NTDLL, MODULE_UIA])
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["thread_start_modules_initial"],
+                         {"UIAutomationCore.dll": 2, "ntdll.dll": 37, "ommatix.exe": 1})
+        self.assertEqual(list(report["thread_start_modules_initial"]),
+                         ["UIAutomationCore.dll", "ntdll.dll", "ommatix.exe"])
+        self.assertEqual(report["thread_changes"], [])
+
+    def test_a_stable_thread_set_is_read_every_sample_and_the_modules_once(self):
+        host = ThreadedHost()
+        report, _ = self.run_soak(host)
+        self.assertEqual(host.id_reads, 24)
+        self.assertEqual(host.module_reads, 1)  # cached after the first list
+        self.assertEqual(host.start_reads, 40)  # the first list only
+        self.assertEqual(report["thread_changes"], [])
+        self.assertNotIn("thread_reads_failed", report["counts"])
+
+    def test_the_module_list_is_read_again_once_when_an_address_is_not_found(self):
+        host = ThreadedHost(
+            ids=gains([9001, 9002]), starts={9001: UIA_BASE + 1, 9002: UIA_BASE + 2},
+            modules=lambda t: [MODULE_EXE, MODULE_NTDLL] + ([MODULE_UIA] if t >= 30 else []))
+        report, _ = self.run_soak(host)
+        self.assertEqual(host.module_reads, 2)  # the first list, and one re-read for two threads
+        self.assertEqual(report["thread_changes"][0]["added"],
+                         [{"start_module": "UIAutomationCore.dll"}] * 2)
+
+    def test_an_address_in_no_module_is_unknown_after_one_re_read_per_change(self):
+        host = ThreadedHost(ids=gains([9001, 9002]), starts={9001: 0x1000, 9002: 0x2000})
+        report, _ = self.run_soak(host)
+        self.assertEqual(host.module_reads, 2)
+        self.assertEqual(report["thread_changes"][0]["added"],
+                         [{"start_module": "unknown"}] * 2)
+
+    def test_the_cached_modules_are_reused_by_later_changes_that_they_resolve(self):
+        host = ThreadedHost(ids=lambda t: BASE_IDS + [9001] * (t >= 30) + [9002] * (t >= 60))
+        report, _ = self.run_soak(host)
+        self.assertEqual([c["t_s"] for c in report["thread_changes"]], [30.0, 60.0])
+        self.assertEqual(host.module_reads, 1)
+
+    def test_the_added_threads_are_listed_by_module_name_and_a_removed_one_is_a_number(self):
+        starts = {9001: UIA_BASE + 1, 9002: NTDLL_BASE + 5, 9003: 0x7FFA30000020}
+        host = ThreadedHost(
+            ids=lambda t: BASE_IDS[1:] + ([9003, 9001, 9002] if t >= 30 else []),
+            starts=starts, modules=lambda t: [MODULE_EXE, MODULE_NTDLL, MODULE_UIA, MODULE_DML])
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["thread_changes"], [{
+            "t_s": 30.0, "threads_before": 39, "threads_after": 42,
+            "added": [{"start_module": "DirectML.dll"}, {"start_module": "UIAutomationCore.dll"},
+                      {"start_module": "ntdll.dll"}], "removed": 0}])
+        host = ThreadedHost(ids=lambda t: BASE_IDS if t < 30 else BASE_IDS[2:])
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["thread_changes"], [{
+            "t_s": 30.0, "threads_before": 40, "threads_after": 38, "added": [], "removed": 2}])
+
+    def test_the_report_names_no_thread_id_and_no_address_and_no_path(self):
+        starts = {9001: UIA_BASE + 0x40}
+        host = ThreadedHost(
+            ids=gains([9001]), starts=starts,
+            modules=lambda t: [MODULE_EXE, MODULE_NTDLL, (UIA_BASE, 0x300000,
+                                                           "C:\\Windows\\UIAutomationCore.dll")])
+        report, _ = self.run_soak(host)
+        text = json.dumps({k: report[k] for k in ("thread_changes", "thread_start_modules_initial",
+                                                  "counts")})
+        for leaked in ("9001", "5000", str(UIA_BASE), hex(UIA_BASE), "C:\\\\", "Windows\\\\"):
+            self.assertNotIn(leaked, text)
+        self.assertEqual(set(report["thread_changes"][0]),
+                         {"t_s", "threads_before", "threads_after", "added", "removed"})
+        self.assertEqual(report["thread_changes"][0]["added"],
+                         [{"start_module": "UIAutomationCore.dll"}])
+
+    def test_a_start_address_that_cannot_be_read_is_an_unknown_module(self):
+        host = ThreadedHost(ids=gains([9001]))
+        host.thread_start = lambda tid: None if tid == 9001 else NTDLL_BASE + 8
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["thread_changes"][0]["added"], [{"start_module": "unknown"}])
+
+    def test_an_unreadable_module_list_is_an_unreadable_entry_and_is_counted(self):
+        host = ThreadedHost(ids=gains([9001]), modules=lambda t: None)
+        report, code = self.run_soak(host)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertEqual(report["thread_changes"], [{
+            "t_s": 30.0, "threads_before": 40, "threads_after": 41,
+            "added": "unreadable", "removed": 0}])
+        self.assertEqual(report["counts"]["thread_reads_failed"], 2)  # the first list, the change
+
+    def test_a_module_list_that_cannot_be_read_again_keeps_the_old_one(self):
+        host = ThreadedHost(ids=gains([9001, 9002]), starts={9001: UIA_BASE + 1},
+                            modules=lambda t: [MODULE_EXE, MODULE_NTDLL] if t < 30 else None)
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["thread_changes"][0]["added"],
+                         [{"start_module": "ntdll.dll"}, {"start_module": "unknown"}])
+
+    def test_an_unreadable_first_module_list_leaves_the_initial_counts_empty_and_goes_on(self):
+        host = ThreadedHost(modules=lambda t: None)
+        report, code = self.run_soak(host)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertIsNone(report["thread_start_modules_initial"])
+        self.assertEqual(report["thread_changes"], [])
+
+    def test_unreadable_thread_lists_never_break_the_run_and_are_counted(self):
+        host = ThreadedHost(ids=lambda t: None)
+        report, code = self.run_soak(host)
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertEqual(report["counts"]["thread_reads_failed"], 24)
+        self.assertEqual(report["thread_changes"], [])
+        self.assertIsNone(report["thread_start_modules_initial"])
+        self.assertEqual(report["counts"]["observed"], 24)
+
+    def test_a_host_that_raises_is_an_unreadable_read_not_an_exception(self):
+        class Raising(ThreadedHost):
+            def thread_ids(self, pid):
+                raise OSError(5, "access denied")
+
+            def modules(self, pid):
+                raise OSError(5, "access denied")
+
+        report, code = self.run_soak(Raising())
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertEqual(report["counts"]["thread_reads_failed"], 24)
+
+        class RaisingModules(ThreadedHost):
+            def modules(self, pid):
+                raise OSError(5, "access denied")
+
+            def thread_start(self, tid):
+                raise OSError(5, "access denied")
+
+        report, code = self.run_soak(RaisingModules(ids=gains([9001])))
+        self.assertEqual((code, report["ended"]), (0, "completed"))
+        self.assertEqual(report["thread_changes"][0]["added"], "unreadable")
+
+    def test_a_missed_read_is_compared_with_the_last_list_that_was_read(self):
+        host = ThreadedHost(
+            ids=lambda t: None if 30 <= t < 50 else BASE_IDS + ([9001] if t >= 40 else []),
+            starts={9001: UIA_BASE + 1}, modules=lambda t: [MODULE_EXE, MODULE_NTDLL, MODULE_UIA])
+        report, _ = self.run_soak(host)
+        self.assertEqual(report["counts"]["thread_reads_failed"], 4)  # 30, 35, 40 and 45 s
+        self.assertEqual(report["thread_changes"], [{
+            "t_s": 50.0, "threads_before": 40, "threads_after": 41,
+            "added": [{"start_module": "UIAutomationCore.dll"}], "removed": 0}])
+
+    def test_a_thread_that_comes_and_goes_between_samples_is_not_seen(self):
+        host = ThreadedHost(ids=lambda t: BASE_IDS + ([9001] if t == 30 else []))
+        report, _ = self.run_soak(host)
+        self.assertEqual([c["added"] != [] for c in report["thread_changes"]], [True, False])
+
+    def test_unobserved_samples_are_read_too(self):
+        host = ThreadedHost(front=lambda t: 999 if 20 <= t < 30 else APP, ids=gains([9001], 25))
+        report, _ = self.run_soak(host)
+        self.assertEqual([c["t_s"] for c in report["thread_changes"]], [25.0])
+
+    def test_the_criteria_and_every_other_figure_are_the_same_with_or_without_thread_data(self):
+        class Stepped:
+            """Counters as ThreadsAndHandles: a handle and a thread appear at minute 30."""
+
+            def counters(self, pid):
+                return ThreadsAndHandles.counters(self, pid)
+
+        class WithThreads(Stepped, ThreadedHost):
+            pass
+
+        runs = []
+        for ids in (gains([9001], at=30 * 60), lambda t: None):
+            host = WithThreads(ids=ids, starts={9001: UIA_BASE + 1},
+                               modules=lambda t: [MODULE_EXE, MODULE_NTDLL, MODULE_UIA])
+            runs.append(self.run_soak(host, minutes=75.0, interval=30.0,
+                                      max_handle_growth_per_hour=0.0, max_pending_regions=510))
+        (with_threads, code_a), (without, code_b) = runs
+        self.assertEqual(code_a, code_b)
+        self.assertEqual(with_threads["criteria"], without["criteria"])
+        for key in ("resources", "handle_steps", "pending_regions", "delivered_actions_max",
+                    "ended", "warmup_s", "latency_ms", "slow_observations", "samples"):
+            self.assertEqual(with_threads[key], without[key], key)
+        self.assertEqual(with_threads["handle_steps"][0]["t_s"], 1800.0)  # not vacuous
+        self.assertEqual(with_threads["thread_changes"][0]["added"],
+                         [{"start_module": "UIAutomationCore.dll"}])
+        self.assertEqual(without["thread_changes"], [])
+        self.assertEqual(without["counts"]["thread_reads_failed"], 150)
+        counts = {k: v for k, v in with_threads["counts"].items()}
+        self.assertEqual(counts, {k: v for k, v in without["counts"].items()
+                                  if k != "thread_reads_failed"})
+
+
+class SlowThresholdFlag(unittest.TestCase):
+    def test_the_default_is_half_a_second(self):
+        args = soak.parse_args(["--config", "c.toml", "--out", "o.json"])
+        self.assertEqual(args.slow_ms, 500.0)
+        args = soak.parse_args(["--config", "c.toml", "--out", "o.json", "--slow-ms", "250.5"])
+        self.assertEqual(args.slow_ms, 250.5)
+
+    def test_zero_a_negative_and_not_a_number_are_refused_like_the_other_numeric_flags(self):
+        for bad in ("0", "-1", "-0.5", "nan"):
+            with self.assertRaises(SystemExit, msg=bad):
+                soak.parse_args(["--config", "c.toml", "--out", "o.json", "--slow-ms", bad])
 
 
 if __name__ == "__main__":

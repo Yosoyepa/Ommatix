@@ -52,6 +52,24 @@ Its ``criteria`` judge, each with the value measured against it:
 The handle slope is reported in ``resources`` without criterion unless its flag is given. The
 tool states no verdict on RNF-06 as a whole; the reading is the owner's.
 
+Every observed sample also keeps the engine's own stage timings from ``_meta`` (``stages_ms``: the
+closed names of ``perf_common.TIMING_STAGES``, in milliseconds, without the total, which is
+``total_ms``) and whether its accessibility evidence was complete. The report adds, without
+touching any criterion, ``latency_ms.stages`` (a summary per stage) and ``slow_observations``:
+every observation whose round trip is at least ``--slow-ms`` (default 500, ``slow_threshold_ms``)
+with its stages, the dominant one (the largest, leaving out the total and the response build), the
+plan kind and the thread and handle counts, so that a stop inside the engine can be attributed
+(S0 §19.6). Only closed names, numbers and booleans are written.
+
+At every sample it also reads the engine's thread ids (one more Toolhelp32 snapshot) and, when they
+differ from the last list read, appends to ``thread_changes`` the time, the thread count before and
+after, how many threads vanished and, for each thread that appeared, ``start_module``: the base
+name of the engine's module that holds its Win32 start address (``ntdll.dll`` for a thread-pool
+worker, ``UIAutomationCore.dll``, ``onnxruntime.dll``...), so that the +1 step of the handle count
+that came with one more thread (S0 §19.4, C2) can be attributed. ``thread_start_modules_initial``
+counts the engine's threads by start module once. Read only, no criterion; no thread id, address or
+path is written (ADR-0012), and a read that fails is counted in ``counts["thread_reads_failed"]``.
+
 What it will not do, by construction:
 
 * it never brings a window to the front. The test application opens maximised and in front; if
@@ -227,6 +245,52 @@ def latency_windows(points: list[tuple[float, float]], window_s: float) -> list[
     return rows
 
 
+#: The default of ``--slow-ms``: an observation whose round trip is at least this is listed with
+#: its stages (S0 §19.6: R1's two stops of 10.07 s and 7.45 s could not be attributed).
+SLOW_MS_DEFAULT = 500.0
+#: Stages that are not a cause of their own: the total contains the others, and the response
+#: build starts after the publication that the total ends at.
+NOT_DOMINANT = ("total", "response_build")
+
+
+def dominant_stage(stages_ms: dict) -> str | None:
+    """The stage with the largest time among the closed names, leaving out the total and the
+    response build (``NOT_DOMINANT``); a tie goes to the earlier stage of ``TIMING_STAGES``;
+    None when no such stage was reported."""
+    best, best_ms = None, None
+    for stage in common.TIMING_STAGES:
+        if stage in NOT_DOMINANT or stage not in stages_ms:
+            continue
+        if best_ms is None or stages_ms[stage] > best_ms:
+            best, best_ms = stage, stages_ms[stage]
+    return best
+
+
+def stage_summaries(observed: list[dict]) -> dict:
+    """A ``common.summary`` per closed stage over the observed samples, in ``TIMING_STAGES``
+    order; ``{"n": 0}`` for a stage no sample reported. The total is each sample's ``total_ms``."""
+    summaries = {}
+    for stage in common.TIMING_STAGES:
+        values = [s.get("total_ms") if stage == "total" else s.get("stages_ms", {}).get(stage)
+                  for s in observed]
+        summaries[stage] = common.summary([v for v in values if v is not None])
+    return summaries
+
+
+def slow_observations(observed: list[dict], threshold_ms: float) -> list[dict]:
+    """Every observed sample whose round trip is at least ``threshold_ms``, with the engine's
+    stages of that observation, the dominant one, the completeness of its accessibility evidence
+    and the process's threads and handles at that sample. Closed names, numbers and booleans
+    only (ADR-0012): no label, no coordinate, no screen content."""
+    return [{"t_s": s["t_s"], "rtt_ms": s["rtt_ms"], "total_ms": s.get("total_ms"),
+             "plan_work": s.get("plan_work", "not_reported"),
+             "stages_ms": dict(s.get("stages_ms", {})),
+             "dominant_stage": dominant_stage(s.get("stages_ms", {})),
+             "accessibility_complete": s.get("accessibility_complete"),
+             "threads": s.get("threads"), "handles": s.get("handles")}
+            for s in observed if s["rtt_ms"] >= threshold_ms]
+
+
 def cache_note(lines: list[str]) -> dict | None:
     """The engine's start-up note about the icon cache, as numbers: the prototypes it loaded and
     how many belong to the configured context. None when it wrote no such note. Only the counts
@@ -400,6 +464,91 @@ def criteria(report_resources: dict, pending: dict, handle: dict, args) -> dict:
     return result
 
 
+class ThreadWatch:
+    """Which thread appeared (box 7, C2, S0 §19.6). At every sample it reads the engine's thread
+    ids and, when they differ from the last list read, appends to ``changes`` how many threads
+    there were before and after, the start module of each thread that appeared and how many
+    vanished. A start module is the base name of the module that holds the thread's Win32 start
+    address, from the engine's module list, cached and read again once per change when an address
+    is not found. Read only, and it judges nothing; no thread id, address or path is kept in
+    ``changes`` or ``initial`` (ids mean nothing across runs; ADR-0012). A read that fails is
+    counted in ``counts["thread_reads_failed"]`` (or is an ``"unreadable"`` entry); it never
+    raises into the soak."""
+
+    def __init__(self, host: Host, pid: int, counts: dict):
+        self.host, self.pid, self.counts = host, pid, counts
+        self.previous: list[int] | None = None
+        self.modules: list[tuple[int, int, str]] | None = None
+        self.changes: list[dict] = []
+        self.initial: dict | None = None
+
+    def failed(self) -> None:
+        self.counts["thread_reads_failed"] = self.counts.get("thread_reads_failed", 0) + 1
+
+    def read_modules(self) -> bool:
+        """Reads the module list again; whether it could be read (the old one is kept if not)."""
+        try:
+            modules = self.host.modules(self.pid)
+        except Exception:  # noqa: BLE001 - a diagnostic never stops the soak
+            modules = None
+        if modules is None:
+            return False
+        self.modules = modules
+        return True
+
+    def start_modules(self, thread_ids: list[int]) -> list[str] | None:
+        """The start module of each thread, in the order given, or None when the module list
+        cannot be read. A thread whose start address cannot be read, or lies in no module, is
+        ``"unknown"``. The list is read again at most once, when an address is not found."""
+        if self.modules is None and not self.read_modules():
+            return None
+        refreshed = False
+        names = []
+        for tid in thread_ids:
+            try:
+                address = self.host.thread_start(tid)
+            except Exception:  # noqa: BLE001 - the thread may have exited
+                address = None
+            name = common.module_of(address, self.modules)
+            if name == common.UNKNOWN_MODULE and address and not refreshed:
+                refreshed = True
+                if self.read_modules():
+                    name = common.module_of(address, self.modules)
+            names.append(name)
+        return names
+
+    def observe(self, t_s: float) -> None:
+        """The thread list of this sample against the last one read."""
+        try:
+            current = self.host.thread_ids(self.pid)
+        except Exception:  # noqa: BLE001 - a diagnostic never stops the soak
+            current = None
+        if current is None:
+            self.failed()
+            return
+        current = sorted(current)
+        if self.previous is None:
+            self.previous = current
+            names = self.start_modules(current)
+            if names is None:
+                self.failed()
+            else:
+                self.initial = {name: names.count(name) for name in sorted(set(names))}
+            return
+        if current == self.previous:
+            return
+        moved = common.thread_changes(self.previous, current)
+        names = self.start_modules(moved["added"]) if moved["added"] else []
+        self.changes.append({
+            "t_s": t_s, "threads_before": len(self.previous), "threads_after": len(current),
+            "added": "unreadable" if names is None else [
+                {"start_module": name} for name in sorted(names)],
+            "removed": len(moved["removed"])})
+        if names is None:
+            self.failed()
+        self.previous = current
+
+
 # ---- the real world -----------------------------------------------------------------------
 
 class Host:
@@ -422,6 +571,18 @@ class Host:
 
     def gpu(self, pid: int):
         return common.GpuMemory(pid)
+
+    def thread_ids(self, pid: int) -> list[int] | None:
+        """The sorted ids of the process's threads, or None (one more Toolhelp32 snapshot)."""
+        return common.thread_ids(pid, common.Win32ThreadIds())
+
+    def modules(self, pid: int) -> list[tuple[int, int, str]] | None:
+        """``(base, size, base name)`` of the modules loaded in the process, or None."""
+        return common.process_modules(pid)
+
+    def thread_start(self, tid: int) -> int | None:
+        """The Win32 start address of a thread, or None."""
+        return common.thread_start_address(tid)
 
     def start_testapp(self, args) -> subprocess.Popen:
         argv = [str(args.testapp), "--animate", str(args.animate_ms),
@@ -505,7 +666,13 @@ class Soak:
             report["engine_pid"] = engine.pid
             gpu = self.host.gpu(engine.pid)
             report["gpu_counter"] = {"available": gpu.reason is None, "reason": gpu.reason}
-            report["ended"] = self.loop(app, engine, gpu, samples, counts, probes)
+            watch = ThreadWatch(self.host, engine.pid, counts)
+            report["thread_changes"] = watch.changes
+            report["thread_start_modules_initial"] = None
+            try:
+                report["ended"] = self.loop(app, engine, gpu, samples, counts, probes, watch)
+            finally:
+                report["thread_start_modules_initial"] = watch.initial
         except KeyboardInterrupt:
             report["ended"] = "interrupted"
         except (common.McpTimeout, OSError, RuntimeError) as error:
@@ -569,7 +736,7 @@ class Soak:
         probes.append(merged)
 
     def loop(self, app, engine, gpu, samples: list[dict], counts: dict,
-             probes: list[dict] | None = None) -> str:
+             probes: list[dict] | None = None, watch: ThreadWatch | None = None) -> str:
         a = self.args
         start = self.host.now()
         end = start + a.minutes * 60
@@ -596,6 +763,8 @@ class Soak:
             if counters is None:
                 return "engine_exited"
             sample.update(counters)
+            if watch is not None:
+                watch.observe(sample["t_s"])
             sample["gpu_dedicated"] = gpu.read()
             in_front = self.host.foreground_pid() == app.pid
             if not in_front:
@@ -638,6 +807,11 @@ class Soak:
             metrics, _, _, _ = engine.call("get_engine_metrics", {}, timeout=a.call_timeout)
             sample.update(
                 observed=True, rtt_ms=round(rtt, 3), total_ms=stages.get("total"),
+                # The engine's own stages (closed names, numbers), so that a slow observation
+                # can be attributed afterwards; the total is `total_ms`.
+                stages_ms={k: v for k, v in common.timing_stages_ms(meta).items()
+                           if k != "total"},
+                accessibility_complete=common.accessibility_complete(meta),
                 plan_work=common.plan_work(meta) or "not_reported",
                 degraded=bool(page.get("degraded")), epoch=page.get("geometry_epoch"),
                 observations=metrics.get("observations"),
@@ -694,6 +868,10 @@ class Soak:
                     [(s["t_s"], s["total_ms"]) for s in observed if s.get("total_ms")],
                     window_s)},
         }
+        threshold = getattr(a, "slow_ms", SLOW_MS_DEFAULT)
+        report["latency_ms"]["stages"] = stage_summaries(observed)
+        report["slow_threshold_ms"] = threshold
+        report["slow_observations"] = slow_observations(observed, threshold)
         rule = handle_rule(samples, handle_warmup, report["ended"] == "completed")
         report["criteria"] = criteria(resources, pending, rule, a)
         every = getattr(a, "icon_probe_every", 0)
@@ -755,6 +933,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "95%% of the observations full refreshes by the engine's plan record "
                          "(needs --icon-probe-every and a [cache] block; the configuration "
                          "accepts nothing)")
+    ap.add_argument("--slow-ms", type=float, default=SLOW_MS_DEFAULT, metavar="MS",
+                    help="every observation whose round trip is at least this many ms is listed "
+                         "in the report's slow_observations with the engine's stage timings, so "
+                         "that a stop can be attributed; it judges nothing (default 500, must be "
+                         "positive)")
     ap.add_argument("--max-pending-regions", type=int, default=None,
                     help="the owner's structural bound for the queue (pending_regions): the tile "
                          "count of the frame, ceil(W/64) * ceil(H/64), 510 for 1920x1080 "
@@ -767,6 +950,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = ap.parse_args(argv)
     if args.minutes <= 0 or args.interval <= 0:
         ap.error("--minutes and --interval must be positive")
+    if not args.slow_ms > 0:  # also refuses NaN
+        ap.error("--slow-ms must be positive")
     if args.icon_probe_every < 0:
         ap.error("--icon-probe-every must not be negative")
     return args
