@@ -760,9 +760,9 @@ fn sec_04_the_pipe_is_opened_only_through_the_identification_level_client() {
 }
 
 /// The broker's named pipe (ADR-0043, proposed) is not in the default build: the feature
-/// `broker-pipe` is off by default, its two crates are optional and Windows only, the pipe crate
-/// is pinned with its default features off, no other crate turns the feature on, and the
-/// `windows` job of CI builds, lints and tests it.
+/// `broker-pipe` is off by default, its crates (the adapter's two, the executable's one) are
+/// optional and Windows only, pinned exactly (the pipe crate with its default features off), no
+/// other crate turns the feature on, and the `windows` job of CI builds, lints and tests it.
 #[test]
 fn it_33_the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_only() {
     let manifest: toml::Value = toml::from_str(&read("src/adapters/mcp/Cargo.toml")).unwrap();
@@ -795,8 +795,20 @@ fn it_33_the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_on
     assert_eq!(app_features["default"], toml::Value::Array(Vec::new()));
     assert_eq!(
         app_features["broker-pipe"],
-        toml::Value::Array(vec!["ommatix-adapter-mcp/broker-pipe".into()])
+        toml::Value::Array(vec![
+            "ommatix-adapter-mcp/broker-pipe".into(),
+            "dep:winapi-util".into()
+        ])
     );
+    // Its one crate of its own (D57: the kind of an opened handle, so that the operator's grants
+    // and ticket files are read only from a disk file): optional, Windows only, pinned, and in
+    // no plain dependency table.
+    assert!(!dependencies("src/app/Cargo.toml").contains("winapi-util"));
+    assert_eq!(
+        app["target"]["cfg(windows)"]["dependencies"]["winapi-util"]["optional"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(pinned["winapi-util"].as_str(), Some("=0.1.11"));
     assert!(
         app_features
             .iter()

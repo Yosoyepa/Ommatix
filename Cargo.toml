@@ -64,6 +64,11 @@ interprocess = { version = "=2.4.9", default-features = false }
 # without `input`); the adapter's clippy.toml forbids every input, focus and pattern call.
 uiautomation = "=0.25.1"
 unicode-normalization = "0.1"
+# Pinned exactly: the kind of an opened handle (`GetFileType`) behind the `broker-pipe` feature
+# of the executable, so that the operator's grants and ticket files are read only from a disk
+# file (ADR-0043, proposed; decision D57); the version already in the lockfile. The unsafe call
+# is in the crate, as with `interprocess`; this workspace's code stays without `unsafe`.
+winapi-util = "=0.1.11"
 # Pinned exactly: the string type `interprocess` takes for a security descriptor and does not
 # re-export (ADR-0043, decision 5); the version already in the lockfile.
 widestring = "=1.2.1"

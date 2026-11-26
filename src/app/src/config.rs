@@ -553,6 +553,160 @@ impl CacheSection {
     }
 }
 
+/// Why `attach` could not use its configuration ([`Config::load_closed`]): a closed list of
+/// causes that carries nothing of the file's text, so that it can be printed on stderr. A
+/// position is line and column numbers (1-based; the column in characters), and a key is one
+/// of this file's own names ([`KNOWN_KEYS`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigProblem {
+    /// The file could not be opened or read.
+    Unreadable(std::io::ErrorKind),
+    /// The path opened, but not as a regular file on a disk, or its kind could not be read.
+    NotARegularFile,
+    /// The file is larger than the configuration's bound.
+    TooLarge,
+    /// The file is not UTF-8 text.
+    NotUtf8,
+    /// Not valid TOML of this configuration's form: a syntax error, an unknown section or key,
+    /// or a value of the wrong type; where, when the parser says.
+    NotValid { at: Option<(usize, usize)> },
+    /// Values that fail their rule, by key.
+    Invalid(Vec<&'static str>),
+}
+
+impl std::fmt::Display for ConfigProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable(kind) => write!(f, "unreadable: it cannot be read ({kind:?})"),
+            Self::NotARegularFile => f.write_str(
+                "unreadable: it is not a regular file on a disk (a directory, a device or a \
+                 named pipe is refused before anything is read)",
+            ),
+            Self::TooLarge => write!(f, "unreadable: it is larger than {MAX_CONFIG_BYTES} bytes"),
+            Self::NotUtf8 => f.write_str("not valid TOML: it is not UTF-8 text"),
+            Self::NotValid {
+                at: Some((line, column)),
+            } => write!(
+                f,
+                "not valid TOML for this configuration (a syntax error, an unknown key or a \
+                 value of the wrong type) at line {line}, column {column}"
+            ),
+            Self::NotValid { at: None } => f.write_str(
+                "not valid TOML for this configuration (a syntax error, an unknown key or a \
+                 value of the wrong type)",
+            ),
+            Self::Invalid(keys) => write!(
+                f,
+                "invalid values: {} fail their rule (`ommatix serve --config` with the same \
+                 file states each rule)",
+                keys.join(", ")
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConfigProblem {}
+
+/// Every key of the configuration, as its problems name it. A problem is reported to `attach`
+/// by the key it starts with, never by its text, which may quote a value of the file.
+pub const KNOWN_KEYS: &[&str] = &[
+    "[engine] action_freshness",
+    "[engine] action_freshness_margin_px",
+    "[engine] mode",
+    "[engine] platform",
+    "[engine] snapshot_policy",
+    "[engine] tile_size",
+    "[engine] halo_px",
+    "[engine] max_regions",
+    "[engine] full_refresh_area_ratio",
+    "[engine] adaptive_min_regions",
+    "[engine] max_snapshot_age_ms",
+    "[engine] verify_timeout_ms",
+    "[engine] verify_poll_ms",
+    "[engine] concurrent_stages",
+    "[engine] experimental_full_frame",
+    "[engine] candidate_search",
+    "[mcp] profile",
+    "[mcp] transport",
+    "[mcp] legacy_enabled",
+    "[mcp] max_message_bytes",
+    "[mcp] pipe_name",
+    "[safety] actuation_enabled",
+    "[safety] allowed_applications",
+    "[safety] allow_destructive",
+    "[safety] allow_screenshots_to_client",
+    "[safety] include_values",
+    "[safety] stop_file",
+    "[safety] allowed_window_classes",
+    "[safety] window_pin_file",
+    "[safety] purge_file",
+    "[safety] grants_file",
+    "[models] detector_manifest",
+    "[models] detector_manifest_sha256",
+    "[models] onnxruntime_path",
+    "[models] onnxruntime_sha256",
+    "[models] detector_execution_provider",
+    "[models] directml_path",
+    "[models] directml_sha256",
+    "[models] detector_threads",
+    "[models] ocr",
+    "[models] ocr_language",
+    "[models] accessibility",
+    "[models] detector_path",
+    "[models] detector_sha256",
+    "[models] ocr_path",
+    "[models] ocr_sha256",
+    "[cache] max_entries",
+    "[cache] persist",
+    "[cache] prototypes",
+    "[cache] prototypes_sha256",
+    "[cache] context",
+    "[cache] gradient_tau",
+    "[cache] max_distance",
+    "[cache] min_margin",
+];
+
+/// The key a problem starts with (the longest of [`KNOWN_KEYS`] followed by something that is
+/// not part of a key), else its section, else a generic word: never any other text of the
+/// problem.
+fn problem_key(problem: &str) -> &'static str {
+    KNOWN_KEYS
+        .iter()
+        .filter(|key| {
+            problem.strip_prefix(**key).is_some_and(|rest| {
+                !rest
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        })
+        .max_by_key(|key| key.len())
+        .or_else(|| {
+            SECTIONS.iter().find(|section| {
+                problem
+                    .strip_prefix(**section)
+                    .is_some_and(|rest| rest.starts_with(' '))
+            })
+        })
+        .copied()
+        .unwrap_or("a value")
+}
+
+/// The configuration's sections, for a problem that names a section and none of its keys.
+const SECTIONS: &[&str] = &["[engine]", "[mcp]", "[safety]", "[models]", "[cache]"];
+
+/// The 1-based line and column (in characters) of byte `offset` of `text`.
+fn line_and_column(text: &str, offset: usize) -> (usize, usize) {
+    let offset = (0..=offset.min(text.len()))
+        .rev()
+        .find(|&i| text.is_char_boundary(i))
+        .unwrap_or(0);
+    let before = &text[..offset];
+    let line = before.matches('\n').count() + 1;
+    let start = before.rfind('\n').map_or(0, |i| i + 1);
+    (line, before[start..].chars().count() + 1)
+}
+
 /// The whole file. `Config::default()` is the dossier template.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -590,6 +744,51 @@ impl Config {
         };
         let text = read().with_context(|| format!("cannot read {}", path.display()))?;
         let mut config = Self::parse(&text).with_context(|| format!("in {}", path.display()))?;
+        config.base_dir = path.parent().map(Path::to_path_buf);
+        Ok(config)
+    }
+
+    /// [`Config::load`] for `attach`, whose diagnostics must carry nothing of the file's text:
+    /// the path is opened as the operator's regular file
+    /// ([`ommatix::operator_file::open_regular`]), read up to the same bound, parsed and
+    /// validated, and a failure is a [`ConfigProblem`], a closed cause with at most line and
+    /// column numbers or the names of the keys that fail their rule. `serve` keeps
+    /// [`Config::load`]'s diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigProblem`].
+    #[cfg_attr(
+        not(feature = "broker-pipe"),
+        allow(dead_code, reason = "used by attach, which needs the feature")
+    )]
+    pub fn load_closed(path: &Path) -> std::result::Result<Self, ConfigProblem> {
+        use std::io::Read as _;
+
+        use ommatix::operator_file::{OpenError, open_regular};
+
+        let file = open_regular(path).map_err(|e| match e {
+            OpenError::NotFound => ConfigProblem::Unreadable(std::io::ErrorKind::NotFound),
+            OpenError::Unopenable(kind) => ConfigProblem::Unreadable(kind),
+            OpenError::NotARegularFile => ConfigProblem::NotARegularFile,
+        })?;
+        let mut bytes = Vec::new();
+        file.take(MAX_CONFIG_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| ConfigProblem::Unreadable(e.kind()))?;
+        if bytes.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(ConfigProblem::TooLarge);
+        }
+        let text = String::from_utf8(bytes).map_err(|_| ConfigProblem::NotUtf8)?;
+        let mut config: Self = toml::from_str(&text).map_err(|e| ConfigProblem::NotValid {
+            at: e.span().map(|span| line_and_column(&text, span.start)),
+        })?;
+        let problems = config.problems();
+        if !problems.is_empty() {
+            let mut keys: Vec<&'static str> = problems.iter().map(|p| problem_key(p)).collect();
+            keys.dedup();
+            return Err(ConfigProblem::Invalid(keys));
+        }
         config.base_dir = path.parent().map(Path::to_path_buf);
         Ok(config)
     }
@@ -1723,5 +1922,146 @@ allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
         ] {
             assert!(Config::parse(&format!("[engine]\n{invalid}")).is_err());
         }
+    }
+
+    /// UT-77: `attach` reads its configuration without quoting it. A file whose bad line
+    /// carries a marker is reported by its cause, a position or the failing key, and the
+    /// marker appears nowhere; the same file's `serve` diagnostics are `Config::load`'s.
+    #[test]
+    fn ut_77_attach_reads_its_configuration_without_quoting_any_of_it() {
+        const MARKER: &str = "Qz7MarkerOfTheFile";
+        let dir =
+            std::env::temp_dir().join(format!("ommatix-config-closed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, text: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, text).unwrap();
+            path
+        };
+        let pipe = "[mcp]\ntransport = \"pipe\"\npipe_name = \"ommatix-unit\"\n";
+
+        // A syntax error on line 4, at the marker.
+        let syntax = write("syntax.toml", &format!("{pipe}{MARKER} = = 1\n"));
+        let problem = Config::load_closed(&syntax).unwrap_err();
+        assert!(
+            matches!(problem, ConfigProblem::NotValid { at: Some((4, _)) }),
+            "{problem:?}"
+        );
+        // An unknown key named by the marker, and a value of the wrong type.
+        let unknown = write("unknown.toml", &format!("{pipe}[engine]\n{MARKER} = 1\n"));
+        assert!(matches!(
+            Config::load_closed(&unknown).unwrap_err(),
+            ConfigProblem::NotValid { at: Some((5, 1)) }
+        ));
+        let typed = write(
+            "typed.toml",
+            &format!("{pipe}[engine]\ntile_size = \"{MARKER}\"\n"),
+        );
+        assert!(matches!(
+            Config::load_closed(&typed).unwrap_err(),
+            ConfigProblem::NotValid { at: Some((5, _)) }
+        ));
+        // A rule that `serve` states with the value: an application quoted in its message.
+        let rule = write(
+            "rule.toml",
+            &format!(
+                "{pipe}[engine]\ntile_size = 4\n[safety.allowed_window_classes]\n\"{MARKER}\" = []\n"
+            ),
+        );
+        let serve = format!("{:#}", Config::load(Some(&rule)).unwrap_err());
+        assert!(
+            serve.contains(MARKER),
+            "serve's rule quotes the value: {serve}"
+        );
+        let problem = Config::load_closed(&rule).unwrap_err();
+        assert_eq!(
+            problem,
+            ConfigProblem::Invalid(vec![
+                "[engine] tile_size",
+                "[safety] allowed_window_classes"
+            ])
+        );
+        // Not UTF-8, and over the bound.
+        let mut bytes = pipe.as_bytes().to_vec();
+        bytes.extend_from_slice(b"\xff\xfe");
+        let binary = dir.join("binary.toml");
+        std::fs::write(&binary, &bytes).unwrap();
+        assert_eq!(
+            Config::load_closed(&binary).unwrap_err(),
+            ConfigProblem::NotUtf8
+        );
+        let large = write("large.toml", &format!("{pipe}# {}\n", MARKER.repeat(5000)));
+        assert_eq!(
+            Config::load_closed(&large).unwrap_err(),
+            ConfigProblem::TooLarge
+        );
+        assert!(matches!(
+            Config::load_closed(&dir.join("absent.toml")).unwrap_err(),
+            ConfigProblem::Unreadable(std::io::ErrorKind::NotFound)
+        ));
+        #[cfg(windows)]
+        assert_eq!(
+            Config::load_closed(Path::new("NUL")).unwrap_err(),
+            ConfigProblem::NotARegularFile
+        );
+
+        for path in [&syntax, &unknown, &typed, &rule, &binary, &large] {
+            let shown = Config::load_closed(path).unwrap_err().to_string();
+            assert!(!shown.contains(MARKER) && !shown.contains('\n'), "{shown}");
+        }
+        // A valid file loads as `Config::load` loads it.
+        let valid = write("valid.toml", pipe);
+        assert_eq!(
+            Config::load_closed(&valid).unwrap(),
+            Config::load(Some(&valid)).unwrap()
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Every problem `Config::problems` can state starts with a key of [`KNOWN_KEYS`], so that
+    /// `attach` names it rather than the generic word.
+    #[test]
+    fn ut_77_every_problem_starts_with_a_known_key() {
+        let mut config = Config::default();
+        config.engine.platform = "x".into();
+        config.engine.snapshot_policy = "x".into();
+        config.engine.tile_size = 1;
+        config.engine.halo_px = 5000;
+        config.engine.max_regions = 0;
+        config.engine.full_refresh_area_ratio = 0.0;
+        config.engine.adaptive_min_regions = 5000;
+        config.engine.max_snapshot_age_ms = 0;
+        config.engine.verify_timeout_ms = 1_000_000;
+        config.engine.verify_poll_ms = 0;
+        config.mcp.profile = "x".into();
+        config.mcp.transport = "x".into();
+        config.mcp.max_message_bytes = 1;
+        config.mcp.pipe_name = "x".into();
+        config.safety.allowed_applications = vec![String::new()];
+        config.safety.stop_file = " ".into();
+        config.safety.window_pin_file = " ".into();
+        config.safety.purge_file = " ".into();
+        config.safety.grants_file = "x".into();
+        config.safety.allow_destructive = true;
+        config
+            .safety
+            .allowed_window_classes
+            .insert("X".into(), vec!["Progman".into()]);
+        config.models.detector_path = "x".into();
+        config.models.ocr_path = "x".into();
+        config.models.detector_threads = 10_000;
+        config.models.ocr_language = "?".into();
+        config.cache.max_entries = 0;
+        config.cache.persist = true;
+        config.cache.prototypes_sha256 = "x".into();
+        config.cache.gradient_tau = Some(0);
+        let problems = config.problems();
+        assert!(problems.len() > 20, "{problems:#?}");
+        for problem in &problems {
+            assert_ne!(problem_key(problem), "a value", "{problem}");
+        }
+        assert_eq!(problem_key("[engine] tile_sizes must be"), "[engine]");
+        assert_eq!(problem_key("anything else"), "a value");
     }
 }

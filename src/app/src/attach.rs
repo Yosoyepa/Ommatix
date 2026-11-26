@@ -19,11 +19,25 @@
 //! so that whichever thread drops it last marks it flushed first ([`Unlingering`]), and the
 //! process exits as soon as the relay has settled, without waiting for the direction still
 //! blocked on a read.
+//!
+//! **Nothing goes through Rust's global stdout buffer.** The relay writes the engine's bytes to
+//! a duplicate of the standard output's handle, an ordinary file without a buffer
+//! (`win::raw_stdout`), and nothing else on the `attach` path writes to `std::io::stdout()`. So
+//! no byte can be pending in that buffer at exit, and the runtime's cleanup in
+//! `std::process::exit` (pinned 1.99.0: `io::cleanup` takes the stdout lock with `try_lock`
+//! and, if it gets it, replaces the line writer, whose drop writes what it held) finds it empty
+//! and writes nothing. `main` does not flush stdout either. The exit's bound: at once after the
+//! host's input ends; at most `DRAIN_WAIT` (5 s) after the engine's side ends; in both cases
+//! on the condition that the one stderr line can be written (stderr is unbuffered, and a host
+//! that never drains a full stderr pipe holds that write). What the host had not read when it
+//! stopped reading, and what the relay still held, is lost: `attach` does not wait for a host
+//! to drain its output.
 
 use std::io;
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use ommatix::operator_file::{OpenError, open_regular};
 use ommatix_adapter_mcp::{TICKET_MAX_LEN, TICKET_MIN_LEN};
 
 use crate::cli::AttachArgs;
@@ -150,6 +164,9 @@ impl Drop for Ticket {
 pub enum TicketError {
     /// The file could not be opened or read.
     Unreadable(io::ErrorKind),
+    /// The path opened, but not as a regular file on a disk (a directory, a device or a named
+    /// pipe), or its kind could not be read: refused before anything is read.
+    NotARegularFile,
     /// The file is longer than a ticket.
     TooLarge,
     /// The file is not exactly one ticket.
@@ -160,6 +177,10 @@ impl std::fmt::Display for TicketError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unreadable(kind) => write!(f, "the ticket file cannot be read ({kind:?})"),
+            Self::NotARegularFile => write!(
+                f,
+                "the ticket file is not a regular file on a disk (a directory, a device or a                  named pipe is refused before anything is read)"
+            ),
             Self::TooLarge => write!(
                 f,
                 "the ticket file is longer than a ticket ({TICKET_MAX_LEN} bytes)"
@@ -185,8 +206,11 @@ pub fn is_ticket(bytes: &[u8]) -> bool {
             .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// Reads the ticket file: one open, at most one byte more than the longest ticket, nothing
-/// written; refused unless its whole content is one ticket.
+/// Reads the ticket file: one open, the handle's kind checked before any read (a regular file on
+/// a disk: [`open_regular`]), at most one byte more than the longest ticket, nothing written;
+/// refused unless its whole content is one ticket. The path is the operator's, trusted for
+/// integrity; the open is an ordinary one. A stated limit: the open, the queries and the read can
+/// each block for as long as the operator's filesystem does.
 ///
 /// # Errors
 ///
@@ -194,7 +218,11 @@ pub fn is_ticket(bytes: &[u8]) -> bool {
 pub fn read_ticket(path: &Path) -> Result<Ticket, TicketError> {
     use std::io::Read;
 
-    let file = std::fs::File::open(path).map_err(|e| TicketError::Unreadable(e.kind()))?;
+    let file = open_regular(path).map_err(|e| match e {
+        OpenError::NotFound => TicketError::Unreadable(io::ErrorKind::NotFound),
+        OpenError::Unopenable(kind) => TicketError::Unreadable(kind),
+        OpenError::NotARegularFile => TicketError::NotARegularFile,
+    })?;
     let mut bytes = Ticket(Vec::with_capacity(TICKET_MAX_LEN + 1));
     file.take(TICKET_MAX_LEN as u64 + 1)
         .read_to_end(&mut bytes.0)
@@ -211,11 +239,20 @@ pub fn read_ticket(path: &Path) -> Result<Ticket, TicketError> {
 /// The checks of `attach` that need nothing opened: the configuration says `pipe`, the name
 /// derives, and the ticket file holds a ticket.
 ///
+/// The configuration is read with [`Config::load_closed`]: a file that cannot be used is
+/// reported by the path the operator gave and a closed cause (unreadable; not valid TOML, with
+/// line and column numbers only; the keys that fail their rule), never by a line or value of the
+/// file. The path is the operator's, trusted for integrity, like the ticket's.
+///
 /// # Errors
 ///
 /// Why `attach` refuses to start (exit code 1).
 pub fn prepare(args: &AttachArgs) -> Result<(String, Option<Ticket>)> {
-    let config = Config::load(args.config.as_deref())?;
+    let config = match args.config.as_deref() {
+        Some(path) => Config::load_closed(path)
+            .map_err(|problem| anyhow::anyhow!("--config {}: {problem}", path.display()))?,
+        None => Config::default(),
+    };
     if !config.pipe() {
         bail!(
             "attach needs [mcp] transport = \"pipe\" in the configuration, the one `serve` \
@@ -254,6 +291,11 @@ fn relay_to(name: &str, ticket: Option<Ticket>) -> Result<Outcome> {
     };
 
     let name = PipeName::new(name).map_err(|e| anyhow::anyhow!("[mcp] pipe_name: {e}"))?;
+    // Before the pipe is opened: without an output there is nothing to relay to.
+    let output = match win::raw_stdout() {
+        Ok(output) => output,
+        Err(error) => return Ok(Outcome::Failed(Failure::Output(error.kind()))),
+    };
     let stream = match connect(&name, CONNECT_ATTEMPTS, CONNECT_PAUSE) {
         Ok(stream) => stream,
         Err(ConnectError::NoEngine) => return Ok(Outcome::NoEngine),
@@ -261,7 +303,7 @@ fn relay_to(name: &str, ticket: Option<Ticket>) -> Result<Outcome> {
         Err(ConnectError::Os { code, .. }) => return Ok(Outcome::Failed(Failure::Connect(code))),
     };
     let pipe = Arc::new(win::Unlingering(stream));
-    let (output, watch) = watch::Watched::new(io::stdout());
+    let (output, watch) = watch::Watched::new(output);
     let line: &[u8] = match &ticket {
         Some(ticket) => ticket.bytes(),
         None => &[],
@@ -315,6 +357,21 @@ mod win {
         fn drop(&mut self) {
             self.0.assume_flushed();
         }
+    }
+
+    /// The process's standard output as a file of its own: a duplicate of its handle, written
+    /// with no buffer of Rust's in between (see the module's documentation). This is the one
+    /// place of the `attach` path that touches `std::io::stdout()`, and only for its handle.
+    ///
+    /// # Errors
+    ///
+    /// When the process has no standard output, or its handle cannot be duplicated.
+    pub fn raw_stdout() -> io::Result<std::fs::File> {
+        use std::os::windows::io::AsHandle;
+
+        let stdout = io::stdout();
+        let handle = stdout.as_handle().try_clone_to_owned()?;
+        Ok(std::fs::File::from(handle))
     }
 }
 
@@ -600,6 +657,12 @@ mod tests {
             read_ticket(&dir.0.join("absent")),
             Err(TicketError::Unreadable(io::ErrorKind::NotFound))
         ));
+        // A device that opens is not a file: refused before any read.
+        #[cfg(windows)]
+        assert_eq!(
+            read_ticket(Path::new("NUL")).unwrap_err(),
+            TicketError::NotARegularFile
+        );
     }
 
     #[test]
@@ -663,5 +726,52 @@ mod tests {
             assert!(!message.is_empty() && !message.contains('\n'), "{message}");
             assert!(!message.contains("  "), "{message:?}");
         }
+    }
+
+    /// B1 (the exit's cleanup): nothing on the `attach` path writes through Rust's global
+    /// stdout buffer, so no byte, and no partial line, can be pending in it when
+    /// `std::process::exit` runs its cleanup, whether or not the relay's thread is blocked. The
+    /// only use of `std::io::stdout()` in this module is to duplicate its handle; the relay
+    /// writes to that duplicate (the `output` it is given); `run_attach` in `main.rs` touches
+    /// stdout nowhere, and neither file prints to stdout.
+    #[test]
+    fn ut_79_nothing_on_the_attach_path_writes_through_rusts_stdout_buffer() {
+        let stdout_call = ["io::std", "out"].concat();
+        let prints = [["print", "!("].concat(), ["println", "!("].concat()];
+        let code_lines = |text: &str| -> Vec<String> {
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.starts_with("//"))
+                .map(str::to_owned)
+                .collect()
+        };
+        let uses = |lines: &[String]| -> Vec<String> {
+            lines
+                .iter()
+                .filter(|line| {
+                    line.contains(&stdout_call)
+                        || prints.iter().any(|p| {
+                            line.match_indices(p.as_str())
+                                .any(|(at, _)| !line[..at].ends_with('e'))
+                        })
+                })
+                .cloned()
+                .collect()
+        };
+        let module = code_lines(include_str!("attach.rs"));
+        assert_eq!(
+            uses(&module),
+            vec![["let stdout = io::std", "out();"].concat()]
+        );
+        assert!(
+            module
+                .iter()
+                .any(|line| line == "let handle = stdout.as_handle().try_clone_to_owned()?;")
+        );
+        let main = include_str!("main.rs");
+        let from = main.find("fn run_attach(").expect("run_attach");
+        let run_attach = &main[from..from + main[from..].find("\n}\n").expect("its end")];
+        assert!(run_attach.contains("std::process::exit(ended.code())"));
+        assert_eq!(uses(&code_lines(run_attach)), Vec::<String>::new());
     }
 }

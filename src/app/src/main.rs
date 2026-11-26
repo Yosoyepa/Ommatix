@@ -28,7 +28,7 @@ use crate::config::Config;
 
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Serve(args) => serve(&args),
+        Command::Serve(args) => exit_if_the_pipe_was_refused(serve(&args)),
         Command::Demo(args) => run_demo(&args),
         Command::FreshnessProbe(args) => freshness_probe::run(&args),
         #[cfg(feature = "broker-pipe")]
@@ -38,16 +38,37 @@ fn main() -> Result<()> {
 
 /// `attach`: one stderr line that says which side ended, then the exit code that tells it
 /// (`attach::Outcome::code`). A refusal to start is an error, exit code 1.
+///
+/// Nothing here touches stdout: the relay wrote the engine's bytes to its own duplicate of the
+/// handle, past Rust's buffer, so the runtime's cleanup in `exit` has nothing to write, and no
+/// flush waits on a host that stopped reading (see the `attach` module). The one stderr line is
+/// the only write after the relay's end; the exit's bound assumes it can be written.
 #[cfg(feature = "broker-pipe")]
 fn run_attach(args: &cli::AttachArgs) -> Result<()> {
-    use std::io::Write as _;
-
     let ended = attach::run(args)?;
     eprintln!("ommatix: attach: {}", ended.message());
-    let _ = std::io::stdout().flush();
-    // Exit now: the relay's other direction may still wait on a read, and nothing of this
-    // process needs to outlive its relay.
+    // Exit now: the relay's other direction may still wait on a read or on a write to a host
+    // that does not read, and nothing of this process needs to outlive its relay.
     std::process::exit(ended.code())
+}
+
+/// `serve`'s exit code 7 ([`pipe_end::BIND_REFUSED`]): the system refused the first instance of
+/// the pipe's name with access denied. It is told after `serve` returned, so that everything it
+/// built is dropped first; any other error stays exit code 1.
+#[cfg(all(windows, feature = "broker-pipe"))]
+fn exit_if_the_pipe_was_refused(served: Result<()>) -> Result<()> {
+    if let Err(error) = &served
+        && let Some(refused) = error.downcast_ref::<pipe_end::BindRefused>()
+    {
+        eprintln!("ommatix: {refused}");
+        std::process::exit(pipe_end::BIND_REFUSED);
+    }
+    served
+}
+
+#[cfg(not(all(windows, feature = "broker-pipe")))]
+fn exit_if_the_pipe_was_refused(served: Result<()>) -> Result<()> {
+    served
 }
 
 fn report_notes(notes: &[String]) {
@@ -102,10 +123,11 @@ fn serve(args: &RunArgs) -> Result<()> {
 /// `serve` with `[mcp] transport = "pipe"`: the broker of ADR-0039 behind the pipe of ADR-0043
 /// (proposed), and nothing on stdio. It serves until the process ends (Ctrl+C) or the pipe's
 /// listener stops accepting; then it shuts the listener down, says why and where it was left,
-/// and exits with 3, 4 or 5 ([`pipe_end`]).
+/// and exits with 3, 4 or 5 ([`pipe_end`]). When the system refuses the first instance of the
+/// name with access denied, it returns [`pipe_end::BindRefused`] (exit code 7).
 #[cfg(all(windows, feature = "broker-pipe"))]
 fn serve_pipe(args: &RunArgs, config: &Config) -> Result<()> {
-    use ommatix_adapter_mcp::pipe::{PipeName, PipeServer};
+    use ommatix_adapter_mcp::pipe::{PipeError, PipeName, PipeServer};
     use ommatix_application::JOURNAL_CLIENTS;
 
     if args.legacy {
@@ -118,8 +140,16 @@ fn serve_pipe(args: &RunArgs, config: &Config) -> Result<()> {
         PipeName::new(&config.pipe_name()?).map_err(|e| anyhow::anyhow!("[mcp] pipe_name: {e}"))?;
     let wired = wiring::build_broker(args, config)?;
     let policy = config.local_policy();
-    let mut server = PipeServer::bind(wired.broker, name.clone())
-        .map_err(|e| anyhow::anyhow!("cannot serve on the pipe {}: {e}", name.path()))?;
+    let mut server = match PipeServer::bind(wired.broker, name.clone()) {
+        Ok(server) => server,
+        Err(PipeError::NameTaken) => {
+            return Err(pipe_end::BindRefused {
+                path: name.path().to_owned(),
+            }
+            .into());
+        }
+        Err(error) => anyhow::bail!("cannot serve on the pipe {}: {error}", name.path()),
+    };
     eprintln!(
         "ommatix: serving MCP {MODERN_PROTOCOL_VERSION} on the pipe {} to at most \
          {JOURNAL_CLIENTS} clients through `ommatix attach` (ADR-0043, proposed) | session {} | \

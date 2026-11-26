@@ -285,6 +285,7 @@ mod pipe {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use ommatix_adapter_mcp::pipe::RELAY_CHUNK;
     use sha2::{Digest, Sha256};
 
     use super::*;
@@ -784,17 +785,29 @@ mod pipe {
         assert_eq!(again.status.code(), Some(3));
     }
 
-    /// IT-28: a second `serve` on the same pipe name is refused, and the first keeps serving.
+    /// IT-28: a second `serve` on the same pipe name is refused with exit code 7 and a line that
+    /// names the refusal (access denied on the first instance) and its usual cause, and the first
+    /// keeps serving.
     #[test]
     fn it_28_a_second_serve_on_the_same_name_is_refused() {
         let sandbox = Sandbox::new("second-serve");
         let config = configure(&sandbox, "second-serve", None);
         let _engine = Engine::start(&sandbox, &config);
         let second = sandbox.run(&["serve", "--config", config.to_str().unwrap()], "");
-        assert!(!second.status.success());
+        assert_eq!(second.status.code(), Some(7), "{second:?}");
         assert!(second.stdout.is_empty(), "{:?}", second.stdout);
         let stderr = String::from_utf8_lossy(&second.stderr);
-        assert!(stderr.contains("name is taken"), "{stderr}");
+        assert_eq!(
+            stderr.trim_end(),
+            format!(
+                "ommatix: cannot serve on the pipe \\\\.\\pipe\\ommatix-test-{}-second-serve: \
+                 the system refused to create the first instance of this name with access denied \
+                 (os error 5); the usual cause is that another process already holds the name \
+                 (another `ommatix serve` with the same name, or another program), but access \
+                 denied alone does not prove it; exit code 7",
+                std::process::id()
+            )
+        );
         let mut agent = Attached::start(&sandbox, &config, None);
         assert!(!agent.sees_values());
         let (code, _, _) = agent.finish();
@@ -847,5 +860,284 @@ mod pipe {
             stderr.contains("the engine ended the connection"),
             "{stderr}"
         );
+    }
+
+    /// A child process that the test kills when it ends, whatever happened: the watchdog of a
+    /// bounded wait only fails the test, and this cleans up.
+    struct Killed(Child);
+
+    impl Drop for Killed {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// The capacity of the pipe the standard library creates for a child's piped stdout (pinned
+    /// 1.99.0, `child_pipe.rs`: `PIPE_BUFFER_CAPACITY`, 64 KiB).
+    const STD_PIPE_CAPACITY: usize = 64 * 1024;
+
+    /// Whether a stdout pipe that still holds `held` bytes after the exit was full: it had less
+    /// room left than one write of the relay ([`RELAY_CHUNK`]). A write that does not fit waits
+    /// whole, none of it readable, so a full pipe holds between its capacity less one write and
+    /// its capacity.
+    fn full(held: usize) -> bool {
+        held > STD_PIPE_CAPACITY - RELAY_CHUNK && held <= STD_PIPE_CAPACITY
+    }
+
+    /// The bound the tests give `attach`'s exit once its end is due.
+    const BOUND: Duration = Duration::from_secs(10);
+
+    /// An `attach` whose host sends `requests` `tools/list` requests (more than 7 kB of reply
+    /// each), never reads its stdout (the read end is kept open, unread) and waits three seconds
+    /// for the replies to fill the pipes on their way.
+    struct StalledHost {
+        engine: Engine,
+        child: Killed,
+        stdin: Option<ChildStdin>,
+        stdout: std::process::ChildStdout,
+        stderr: Option<Collected>,
+        requests: usize,
+    }
+
+    impl StalledHost {
+        fn start(sandbox: &Sandbox, tag: &str, requests: u64) -> Self {
+            let config = configure(sandbox, tag, None);
+            let engine = Engine::start(sandbox, &config);
+            let mut child = Killed(
+                sandbox
+                    .command(&["attach", "--config", config.to_str().unwrap()])
+                    .spawn()
+                    .expect("the binary starts"),
+            );
+            let mut stdin = child.0.stdin.take().unwrap();
+            let stdout = child.0.stdout.take().unwrap();
+            let stderr = collect(child.0.stderr.take().unwrap());
+            // About 150 bytes each: the whole batch fits the input pipe, so this write returns.
+            let batch: String = (1..=requests)
+                .map(|id| message(id, "tools/list", json!({})))
+                .collect();
+            assert!(batch.len() < STD_PIPE_CAPACITY / 2, "{}", batch.len());
+            stdin.write_all(batch.as_bytes()).unwrap();
+            stdin.flush().unwrap();
+            thread::sleep(Duration::from_secs(3));
+            Self {
+                engine,
+                child,
+                stdin: Some(stdin),
+                stdout,
+                stderr: Some(stderr),
+                requests: usize::try_from(requests).unwrap(),
+            }
+        }
+
+        /// Waits at most `bound` for the exit: its status and how long it took, or `None`.
+        fn exit_within(&mut self, bound: Duration) -> Option<(ExitStatus, Duration)> {
+            let from = Instant::now();
+            loop {
+                if let Some(status) = self.child.0.try_wait().unwrap() {
+                    return Some((status, from.elapsed()));
+                }
+                if from.elapsed() >= bound {
+                    return None;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        /// [`Self::after_exit`], or, when the process did not exit (`timed_out`), a failure that
+        /// says so with what stderr held; the watchdog only fails the test, and [`Killed`] ends
+        /// the process.
+        fn after_exit_or_fail(&mut self, timed_out: bool) -> (String, usize, usize) {
+            assert!(
+                !timed_out,
+                "attach did not exit within the bound; stderr so far: {}",
+                self.stderr
+                    .as_ref()
+                    .map(Collected::text)
+                    .unwrap_or_default()
+            );
+            self.after_exit()
+        }
+
+        /// After the exit: the whole of stderr, and what the stdout pipe still held (the host
+        /// reads it only now), with its count of whole replies.
+        fn after_exit(&mut self) -> (String, usize, usize) {
+            let stderr = self.stderr.take().unwrap().to_end();
+            let mut held = Vec::new();
+            self.stdout.read_to_end(&mut held).unwrap();
+            let whole = held.iter().filter(|&&b| b == b'\n').count();
+            (stderr, held.len(), whole)
+        }
+    }
+
+    /// IT-31: `attach`'s exit is bounded on the host's side. A host that sends a few requests,
+    /// stops reading `attach`'s stdout with more output on its way than the pipe holds, and then
+    /// closes `attach`'s input gets the normal exit (code 0) within the bound: nothing waits for
+    /// the host to drain. The few requests fit the engine's side (8 replies fill the 64 KiB pipe,
+    /// the next waits in the relay and the engine; the unanswered requests, a few hundred bytes,
+    /// wait in the engine's input), which is the condition of that bound. The pipe is shown to
+    /// have been full (after the exit it still holds more than its capacity less one write of the
+    /// relay: [`full`]) with output still pending (fewer whole replies than requests), which the
+    /// host never reads.
+    #[test]
+    fn it_31_attach_exits_at_the_end_of_its_input_even_with_its_output_full_and_unread() {
+        let sandbox = Sandbox::new("full-output");
+        let mut host = StalledHost::start(&sandbox, "full-output", 12);
+        drop(host.stdin.take());
+        let ended = host.exit_within(BOUND);
+        let (stderr, held, whole) = host.after_exit_or_fail(ended.is_none());
+        let (status, took) = ended.unwrap();
+        assert_eq!(status.code(), Some(0), "{stderr}");
+        assert_eq!(
+            stderr.trim_end(),
+            "ommatix: attach: the agent's host closed the input; detached"
+        );
+        assert!(
+            full(held),
+            "the output pipe was full when the input ended: it held {held} bytes"
+        );
+        assert!(
+            whole < host.requests,
+            "output was still pending: {whole} whole replies of {}",
+            host.requests
+        );
+        eprintln!(
+            "exit {took:?} after the end of the input; the pipe held {held} bytes, {whole} whole \
+             replies of {}",
+            host.requests
+        );
+    }
+
+    /// IT-31: the other side of that condition. A host that has more requests queued than the
+    /// engine's side takes, and stops reading, holds `attach` after the end of its input: its
+    /// input direction is still writing to an engine that is itself held writing replies, so the
+    /// end of the input is not seen and `attach` does not exit within the bound while the
+    /// engine lives. Once the engine's side ends, `attach` drains for at most 5 s and exits
+    /// with 5; what the host never read is lost.
+    #[test]
+    fn it_31_with_more_requests_queued_than_the_engine_takes_attach_waits_for_the_engine() {
+        let sandbox = Sandbox::new("held-input");
+        let mut host = StalledHost::start(&sandbox, "held-input", 120);
+        drop(host.stdin.take());
+        assert!(
+            host.exit_within(BOUND).is_none(),
+            "attach saw the end of its input although its input direction was held"
+        );
+        host.engine.stop();
+        let ended = host.exit_within(BOUND + Duration::from_secs(5));
+        let (stderr, held, whole) = host.after_exit_or_fail(ended.is_none());
+        let (status, took) = ended.unwrap();
+        assert_eq!(status.code(), Some(5), "{stderr}");
+        assert_eq!(
+            stderr.trim_end(),
+            "ommatix: attach: the engine ended the connection"
+        );
+        assert!(full(held), "{held}");
+        assert!(whole < host.requests, "{whole}");
+        eprintln!(
+            "exit {took:?} after the engine ended; the pipe held {held} bytes, {whole} whole \
+             replies of {}",
+            host.requests
+        );
+    }
+
+    /// IT-34: a configuration that `attach` cannot use is refused (exit code 1) by its path and
+    /// the kind of the problem, never by its text: a marker on the bad line appears nowhere, for
+    /// a parse error (with its line number) and for a value that fails its rule (by its key).
+    #[test]
+    fn it_34_attach_names_a_bad_configuration_without_quoting_it() {
+        const MARKER: &str = "Qz7MarkerOfTheFile";
+        let sandbox = Sandbox::new("bad-config");
+        let pipe = format!(
+            "[mcp]\ntransport = \"pipe\"\npipe_name = \"ommatix-test-{}-bad-config\"\n",
+            std::process::id()
+        );
+        for (name, text, says) in [
+            (
+                "syntax.toml",
+                format!("{pipe}{MARKER} = = 1\n"),
+                "not valid TOML for this configuration (a syntax error, an unknown key or a \
+                 value of the wrong type) at line 4, column",
+            ),
+            (
+                "rule.toml",
+                format!("{pipe}[safety.allowed_window_classes]\n\"{MARKER}\" = []\n"),
+                "invalid values: [safety] allowed_window_classes fail their rule",
+            ),
+        ] {
+            let path = sandbox.0.join(name);
+            std::fs::write(&path, &text).unwrap();
+            let refused = sandbox.run(
+                &["attach", "--config", path.to_str().unwrap()],
+                &tool(1, "get_engine_metrics", &json!({})),
+            );
+            assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+            assert!(refused.stdout.is_empty(), "{:?}", refused.stdout);
+            let stderr = String::from_utf8_lossy(&refused.stderr);
+            assert!(
+                stderr.contains(&format!("--config {}: ", path.display())),
+                "{stderr}"
+            );
+            assert!(stderr.contains(says), "{stderr}");
+            assert!(!stderr.contains(MARKER), "{stderr}");
+        }
+        assert!(std::fs::read_dir(sandbox.cwd()).unwrap().next().is_none());
+        assert!(std::fs::read_dir(sandbox.tmp()).unwrap().next().is_none());
+    }
+
+    /// IT-34: the operator's ticket and grants files are read only from regular files. A path
+    /// that opens as a named pipe (a running engine's own) or as a device (`NUL`) is refused
+    /// before anything is read: `attach` exits 1 and sends nothing, `serve` says the grants file
+    /// is invalid and no client has a grant. The engine whose pipe was named keeps serving.
+    #[test]
+    fn it_34_ticket_and_grants_files_that_are_not_regular_files_are_refused_unread() {
+        let sandbox = Sandbox::new("not-a-file");
+        let config = configure(&sandbox, "not-a-file", None);
+        let _engine = Engine::start(&sandbox, &config);
+        let pipe = format!(r"\\.\pipe\ommatix-test-{}-not-a-file", std::process::id());
+        for ticket in [pipe.as_str(), "NUL"] {
+            let refused = sandbox.run(
+                &[
+                    "attach",
+                    "--config",
+                    config.to_str().unwrap(),
+                    "--ticket-file",
+                    ticket,
+                ],
+                &tool(1, "get_engine_metrics", &json!({})),
+            );
+            assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+            assert!(refused.stdout.is_empty(), "{:?}", refused.stdout);
+            let stderr = String::from_utf8_lossy(&refused.stderr);
+            assert!(
+                stderr.contains("--ticket-file: the ticket file is not a regular file on a disk"),
+                "{stderr}"
+            );
+        }
+        // A second engine whose grants file is the first engine's pipe.
+        let other = Sandbox::new("not-a-file-grants");
+        let other_config = other.0.join("ommatix.toml");
+        std::fs::write(
+            &other_config,
+            format!(
+                "[mcp]\ntransport = \"pipe\"\npipe_name = \"ommatix-test-{}-not-a-file-2\"\n\
+                 [safety]\ninclude_values = true\ngrants_file = '{pipe}'\n",
+                std::process::id()
+            ),
+        )
+        .unwrap();
+        let second = Engine::start(&other, &other_config);
+        let said = second.said("is invalid now");
+        assert!(
+            said.contains(&format!(
+                "grants file {pipe} is invalid now (it is not a regular file on a disk"
+            )),
+            "{said}"
+        );
+        let mut agent = Attached::start(&sandbox, &config, None);
+        assert!(!agent.sees_values());
+        let (code, _, _) = agent.finish();
+        assert_eq!(code, 0);
     }
 }

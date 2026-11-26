@@ -38,7 +38,7 @@ uia = ["ommatix-adapter-accessibility/uia"]
 ## Enable the broker over a local named pipe (`[mcp] transport = "pipe"`) and the `attach`
 ## subcommand (ADR-0043 and ADR-0040, proposed). Windows only; off by default, and the
 ## configuration switch is off by default too.
-broker-pipe = ["ommatix-adapter-mcp/broker-pipe"]
+broker-pipe = ["ommatix-adapter-mcp/broker-pipe", "dep:winapi-util"]
 
 [dependencies]
 ommatix-adapter-accessibility = { workspace = true }
@@ -55,6 +55,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 toml = { workspace = true }
+
+# With `broker-pipe` only: the kind of an opened handle, so that the grants and ticket files are
+# read only from a disk file (`ommatix::operator_file`).
+[target.'cfg(windows)'.dependencies]
+winapi-util = { workspace = true, optional = true }
 
 [dev-dependencies]
 sha2 = { workspace = true }

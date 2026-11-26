@@ -25,7 +25,9 @@
 //! mistyped key included), has a malformed hash, two grants with the same hash, more than
 //! [`MAX_GRANTS`] grants, or an entry whose names or pin could not be what the operator meant.
 //! It never writes, creates or removes a file, and it never sees a ticket: the broker hands it
-//! the ticket's SHA-256.
+//! the ticket's SHA-256. A path that opens as anything but a regular file on a disk (a
+//! directory, a device, a named pipe) is refused before anything is read, and the whole file is
+//! then invalid too.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -34,6 +36,8 @@ use std::path::{Path, PathBuf};
 
 use ommatix_application::{Grant, GrantStore, WindowPin};
 use serde::Deserialize;
+
+use crate::operator_file::{self, OpenError};
 
 /// The largest grants file read, in bytes: the configuration file's own bound.
 pub const MAX_GRANTS_FILE_BYTES: u64 = 64 * 1024;
@@ -51,6 +55,10 @@ const MAX_NAME_CHARS: usize = 256;
 pub enum GrantsProblem {
     /// No file at the path.
     Missing,
+    /// The path opened, but not as a regular file on a disk (a directory, a device or a named
+    /// pipe), or its kind could not be read: refused before anything is read
+    /// ([`crate::operator_file`]).
+    NotARegularFile,
     /// The file could not be opened or read, or is not UTF-8.
     Unreadable,
     /// The file is larger than [`MAX_GRANTS_FILE_BYTES`].
@@ -73,6 +81,9 @@ impl fmt::Display for GrantsProblem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Missing => "it does not exist",
+            Self::NotARegularFile => {
+                "it is not a regular file on a disk (a directory, a device or a named pipe is                  refused before anything is read)"
+            }
             Self::Unreadable => "it cannot be read as UTF-8 text",
             Self::TooLarge => "it is larger than 65536 bytes",
             Self::NotTheForm => {
@@ -185,19 +196,23 @@ pub fn parse(text: &str) -> Result<BTreeMap<[u8; 32], Grant>, GrantsProblem> {
     Ok(grants)
 }
 
-/// Reads and parses the grants file at `path` now: one open, at most
-/// [`MAX_GRANTS_FILE_BYTES`] plus one byte read, nothing written.
+/// Reads and parses the grants file at `path` now: one open, the handle's kind checked before
+/// any read ([`operator_file::open_regular`]), at most [`MAX_GRANTS_FILE_BYTES`] plus one byte
+/// read, nothing written.
+///
+/// It is synchronous: the broker calls it on every question under its own lock, so that a grant
+/// applies atomically with the call (ADR-0040, decision 5). A stated limit: the open, the kind and
+/// metadata queries and the read can each block for as long as the operator's filesystem does,
+/// and while they block every client waits; the file must be on a local fixed disk.
 ///
 /// # Errors
 ///
 /// Why the whole file is invalid.
 pub fn read(path: &Path) -> Result<BTreeMap<[u8; 32], Grant>, GrantsProblem> {
-    let file = std::fs::File::open(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            GrantsProblem::Missing
-        } else {
-            GrantsProblem::Unreadable
-        }
+    let file = operator_file::open_regular(path).map_err(|e| match e {
+        OpenError::NotFound => GrantsProblem::Missing,
+        OpenError::Unopenable(_) => GrantsProblem::Unreadable,
+        OpenError::NotARegularFile => GrantsProblem::NotARegularFile,
     })?;
     let mut bytes = Vec::new();
     file.take(MAX_GRANTS_FILE_BYTES + 1)
@@ -448,6 +463,16 @@ mod tests {
             Err(GrantsProblem::Unreadable | GrantsProblem::Missing)
         ));
         assert_eq!(store.grant(&hash(1)), None);
+    }
+
+    /// A device that opens is not a grants file: refused before any read (without the check it
+    /// would read as empty, a valid file without grants).
+    #[cfg(windows)]
+    #[test]
+    fn ut_76_a_device_that_opens_is_refused_before_any_read() {
+        let store = GrantsFile::new("NUL");
+        assert_eq!(store.count(), Err(GrantsProblem::NotARegularFile));
+        assert_eq!(store.grant(&[1; 32]), None);
     }
 
     #[test]

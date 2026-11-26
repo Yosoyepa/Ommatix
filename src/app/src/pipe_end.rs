@@ -14,14 +14,18 @@
 //!   listener's stop check before the stop and still runs), or no worker was left and only the
 //!   reaper's end was awaited (`only_reaper_left`); the end of the process ends them;
 //! - **5**, the accept thread still alive: no wake-up reached the listener's own instance
-//!   (another process of the same user may hold instances of the name); the end of the process
+//!   (another process that can open the name may hold instances of it); the end of the process
 //!   ends it.
 //!
 //! When workers of the listener had panicked, the second line counts them
 //! (`PipeStats::worker_panics`); the listener keeps their panic payloads, and the end of the
 //! process frees them.
 //!
-//! A refusal to start stays exit code 1. The process ends right after the lines, without dropping
+//! A refusal to start is exit code 1, except one: **7** ([`BIND_REFUSED`]), when the system
+//! refused to create the first instance of the pipe's name with access denied. The usual cause
+//! is a name another process already holds (another `serve` with the same name, or another
+//! program), but access denied alone does not prove it, and the message says so. The process
+//! ends right after the lines, without dropping
 //! the listener: `std::process::exit` runs no destructor, so the listener's limit for a server
 //! dropped before it is complete (the broker's final teardown on a detached thread) does not
 //! arise here, and the end of the process is that teardown.
@@ -35,6 +39,35 @@ pub const WATCH_EVERY: Duration = Duration::from_secs(1);
 
 /// The deadline `serve` gives the listener's shutdown, once it stopped accepting.
 pub const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
+
+/// `serve`'s exit code when the system refused the first instance of the pipe's name with
+/// access denied ([`BindRefused`]). Distinct from 1 (any other refusal to start, every other
+/// bind failure included) and from 3, 4 and 5 (the listener's shutdown).
+pub const BIND_REFUSED: i32 = 7;
+
+/// `serve` could not create the first instance of the pipe's name: the system answered access
+/// denied (the adapter's `PipeError::NameTaken`, which is that error and nothing more). It is
+/// printed as one line and ends the process with [`BIND_REFUSED`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BindRefused {
+    /// The pipe's path, as the configuration gave its name.
+    pub path: String,
+}
+
+impl std::fmt::Display for BindRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cannot serve on the pipe {}: the system refused to create the first instance of \
+             this name with access denied (os error 5); the usual cause is that another process \
+             already holds the name (another `ommatix serve` with the same name, or another \
+             program), but access denied alone does not prove it; exit code {BIND_REFUSED}",
+            self.path
+        )
+    }
+}
+
+impl std::error::Error for BindRefused {}
 
 /// What `serve` needs of the listener: [`PipeServer`], or a double in tests.
 pub trait Listening {
@@ -122,9 +155,9 @@ impl Ended {
             ),
             ShutdownState::AcceptAlive => "shutdown incomplete: no wake-up reached the \
                                            listener's own instance, so its accept thread still \
-                                           waits on the pipe (another process of this user may \
-                                           hold instances of its name); the end of this process \
-                                           ends it"
+                                           waits on the pipe (another process that can open \
+                                           the name may hold instances of it); the end of this \
+                                           process ends it"
                 .to_owned(),
         };
         let panics = match self.report.stats.worker_panics {
@@ -321,5 +354,31 @@ mod tests {
             );
             assert_eq!(quiet.lines()[0], panicked.lines()[0]);
         }
+    }
+
+    /// The refused first instance has a code of its own, distinct from success, from a refusal
+    /// to start (1), a usage error (2) and the shutdown states (3, 4, 5); its line names the
+    /// path and the error, and calls a taken name the usual cause, not a certainty.
+    #[test]
+    fn ut_80_a_refused_first_instance_has_its_own_exit_code_and_an_accurate_line() {
+        assert!(![0, 1, 2, 3, 4, 5].contains(&BIND_REFUSED));
+        assert_eq!(BIND_REFUSED, 7);
+        let line = BindRefused {
+            path: r"\.\pipe\ommatix-x".to_owned(),
+        }
+        .to_string();
+        assert!(
+            line.starts_with(r"cannot serve on the pipe \.\pipe\ommatix-x: "),
+            "{line}"
+        );
+        for says in [
+            "refused to create the first instance of this name with access denied (os error 5)",
+            "the usual cause is that another process already holds the name",
+            "access denied alone does not prove it",
+            "; exit code 7",
+        ] {
+            assert!(line.contains(says), "{line}");
+        }
+        assert!(!line.contains('\n') && !line.contains("  "), "{line:?}");
     }
 }
