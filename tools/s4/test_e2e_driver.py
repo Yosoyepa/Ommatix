@@ -5,6 +5,7 @@ input is sent: the desktop is a fake. Run with:
 python -m unittest discover -s tools/s4 -p "test_*.py"
 """
 
+import ctypes
 import importlib.util
 import json
 import shutil
@@ -2326,9 +2327,11 @@ class FakeDpi:
 
     AWARENESS = {"unaware": 0, "system": 1, "per_monitor": 2}
 
-    def __init__(self, process="unaware", thread="unaware", honour=True, raises=None):
+    def __init__(self, process="unaware", thread="unaware", honour=True, raises=None,
+                 levels=("process", "thread"), extra=None):
         self.levels = {"process": process, "thread": thread}
         self.honour, self.raises, self.calls = honour, raises, []
+        self.read_levels, self.extra = levels, extra or {}
 
     def request_per_monitor_v2(self):
         self.calls.append("request")
@@ -2338,8 +2341,9 @@ class FakeDpi:
             self.levels = {"process": "v2", "thread": "v2"}
 
     def contexts(self):
+        """Only the levels in `read_levels` are returned, plus `extra` (a level not known)."""
         self.calls.append("read")
-        return {level: (None if word is None else word) for level, word in self.levels.items()}
+        return {**{level: self.levels[level] for level in self.read_levels}, **self.extra}
 
     def is_per_monitor_v2(self, context):
         return context == "v2"
@@ -2379,6 +2383,62 @@ class OneCoordinateSpaceTest(QuietTest):
                 self.assertIn("refusing to run", problem)
                 self.assertFalse(driver.ONE_SPACE["established"], (process, thread))
 
+    def test_both_levels_must_be_read_back_by_name(self):
+        # A read-back that leaves out a level (or names one the declaration does not know) is a
+        # refusal even when every level it did return is per-monitor v2.
+        for levels, extra in ((("process",), {}), (("thread",), {}), ((), {}),
+                              (("process", "thread"), {"window": "v2"})):
+            with mock.patch.dict(driver.ONE_SPACE, {"established": False}):
+                api = FakeDpi(levels=levels, extra=extra)
+                problem = driver.declare_one_coordinate_space(api)
+                self.assertIsNotNone(problem, (levels, extra))
+                self.assertIn("refusing to run", problem)
+                self.assertFalse(driver.ONE_SPACE["established"], (levels, extra))
+
+    def test_win32dpi_reads_back_the_process_and_the_thread(self):
+        """Win32Dpi over a fake user32/kernel32 (no real DPI call): the request asks for
+        per-monitor v2 for the process, and contexts() reads both levels, each from its call."""
+        v2 = ctypes.c_void_p(driver.DPI_PER_MONITOR_AWARE_V2).value
+        calls = []
+
+        def value(arg):
+            return arg.value if isinstance(arg, ctypes.c_void_p) else arg
+
+        def set_process(ctx):
+            calls.append(("set", value(ctx)))
+            return 1
+
+        def for_process(handle):
+            calls.append(("process", handle))
+            return 0x1111
+
+        def for_thread():
+            calls.append(("thread",))
+            return 0x2222
+
+        user32 = SimpleNamespace(
+            SetProcessDpiAwarenessContext=set_process,
+            GetDpiAwarenessContextForProcess=for_process,
+            GetThreadDpiAwarenessContext=for_thread,
+            AreDpiAwarenessContextsEqual=lambda a, b: (value(a) in (0x1111, 0x2222)
+                                                       and value(b) == v2),
+            GetAwarenessFromDpiAwarenessContext=lambda ctx: 2)
+        kernel32 = SimpleNamespace(GetCurrentProcess=lambda: -1)
+        api = object.__new__(driver.Win32Dpi)
+        api.user32, api.kernel32 = user32, kernel32
+        api.request_per_monitor_v2()
+        self.assertEqual(calls, [("set", v2)])
+        self.assertEqual(api.contexts(), {"process": 0x1111, "thread": 0x2222})
+        self.assertEqual(calls[1:], [("process", -1), ("thread",)])
+        self.assertTrue(api.is_per_monitor_v2(0x2222))
+        self.assertFalse(api.is_per_monitor_v2(0x3333))
+        with mock.patch.dict(driver.ONE_SPACE, {"established": False}):
+            self.assertIsNone(driver.declare_one_coordinate_space(api))
+        # A thread that is not per-monitor v2 refuses, through the same object.
+        user32.GetThreadDpiAwarenessContext = lambda: 0x3333
+        with mock.patch.dict(driver.ONE_SPACE, {"established": False}):
+            self.assertIn("thread per_monitor", driver.declare_one_coordinate_space(api))
+
     def test_a_declaration_that_raises_refuses_to_run(self):
         problem = driver.declare_one_coordinate_space(FakeDpi(raises=OSError("no user32")))
         self.assertIn("refusing to run", problem)
@@ -2407,8 +2467,11 @@ class OneCoordinateSpaceTest(QuietTest):
                 mock.patch.object(driver, "freshness_config", config_step), \
                 mock.patch.object(driver.s3, "Server", engine), \
                 mock.patch.object(driver, "use_utf8_stdout"), \
+                mock.patch.object(driver, "log") as log, \
                 mock.patch("sys.argv", argv):
             code = module.main()
+        self.logged = [call.kwargs.get("reason") for call in log.call_args_list
+                       if call.args == ("abort",)]
         return code, order
 
     def test_the_driver_declares_before_anything_else_and_stops_when_it_cannot(self):
@@ -2416,8 +2479,10 @@ class OneCoordinateSpaceTest(QuietTest):
                 "--app", "notepad", "--ledger", str(self.tmp / "l"),
                 "--results", str(self.tmp / "r.jsonl")]
         self.assertEqual(self.run_main(driver, argv, None), (2, ["declare", "config"]))
-        self.assertEqual(self.run_main(driver, argv, "refusing to run"), (2, ["declare"]),
+        self.assertEqual(self.run_main(driver, argv, "dpi: refusing to run"), (2, ["declare"]),
                          "a failed declaration stops before the configuration and the engine")
+        self.assertEqual(self.logged, ["dpi: refusing to run"],
+                         "the refusal's reason is logged, not a silent exit 2")
 
 
 class OneSpaceReplayTest(QuietTest):

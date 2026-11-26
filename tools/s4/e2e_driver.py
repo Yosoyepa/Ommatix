@@ -753,6 +753,7 @@ $e = [System.Windows.Automation.AutomationElement]::FromPoint($p)
 # (ADR-0022) are unchanged.
 DPI_PER_MONITOR_AWARE_V2 = -4  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 DPI_AWARENESS_WORDS = {0: "unaware", 1: "system", 2: "per_monitor"}
+DPI_LEVELS = ("process", "thread")  # both must be read back, and both must be v2
 ONE_SPACE = {"established": False}
 
 
@@ -807,7 +808,11 @@ def declare_one_coordinate_space(api=None) -> str | None:
                 found[level] = DPI_AWARENESS_WORDS.get(api.awareness(context), "unknown")
     except (OSError, AttributeError, TypeError, ValueError) as error:
         return f"cannot declare DPI awareness ({type(error).__name__}); refusing to run"
-    if set(found.values()) != {"per_monitor_v2"}:
+    # Both levels, by name, each per-monitor v2: a level that was not read is a refusal, and
+    # so is a level the declaration does not know.
+    for level in DPI_LEVELS:
+        found.setdefault(level, "not_read")
+    if set(found) != set(DPI_LEVELS) or any(word != "per_monitor_v2" for word in found.values()):
         levels = ", ".join(f"{level} {word}" for level, word in sorted(found.items()))
         return ("the process is not per-monitor-v2 DPI aware (" + levels + "): its Win32 "
                 "points would not be in UI Automation's space; refusing to run")
