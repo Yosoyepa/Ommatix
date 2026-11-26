@@ -63,6 +63,8 @@ continuity abstain with a new ID and a recorded reason. ADR-0027, accepted the s
 | [0036](0036-llm-only-agent-experiment-on-the-test-applications.md) | Run an LLM-only agent experiment (AG-02) on the two test applications | Accepted (2026-10-17); exploratory, no checkbox |
 | [0037](0037-ag02-other-providers-through-a-confinable-agent.md) | Run AG-02 with other providers' models through an agent we can confine | Accepted (2026-10-18); exploratory, no checkbox |
 | [0038](0038-ag03-vision-baseline-and-ag02-repetitions.md) | Prepare AG-03 (a vision-agent baseline) and repetitions of AG-02 | Accepted (2026-10-19); nothing run, no checkbox |
+| [0046](0046-perception-scoped-to-the-target-window-group.md) | Scope the observation to the target's window group, behind a switch that stays off | Proposed (2026-11-26); not implemented; 0039 to 0045 are proposals on branches not yet merged |
+| [0047](0047-action-freshness-scoped-to-the-target-element.md) | Scope the freshness check of a live action to the target element, with a last-look identity query, behind a switch that stays off | Proposed (2026-11-26); not implemented |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They
