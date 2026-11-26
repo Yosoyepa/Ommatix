@@ -107,8 +107,8 @@ fn files(dir: &str, extensions: &[&str], skip: &[&str]) -> Vec<(String, PathBuf)
     out
 }
 
-/// The Rust sources of the product, up to their unit-test module: no tests, no examples,
-/// no benchmark, and nothing of the acceptance crate.
+/// The Rust sources of the product, each as [`production_text`] reads it: no tests, no
+/// examples, no benchmark, and nothing of the acceptance crate.
 fn production_sources() -> Vec<(String, String)> {
     files(
         "src",
@@ -118,10 +118,21 @@ fn production_sources() -> Vec<(String, String)> {
     .into_iter()
     .map(|(relative, path)| {
         let text = std::fs::read_to_string(path).unwrap();
-        let end = text.find("#[cfg(test)]").unwrap_or(text.len());
-        (relative, text[..end].to_owned())
+        let production = production_text(&relative, &text);
+        (relative, production)
     })
     .collect()
+}
+
+/// The production part of a source: its text up to its unit-test module, except for a file of
+/// [`SEC_04_EXCEPTIONS`], which is read whole, so that a test-module marker cannot hide part of
+/// it from the check (the check refuses such a marker there).
+fn production_text(path: &str, text: &str) -> String {
+    if SEC_04_EXCEPTIONS.iter().any(|(file, _)| *file == path) {
+        return text.to_owned();
+    }
+    let end = text.find("#[cfg(test)]").unwrap_or(text.len());
+    text[..end].to_owned()
 }
 
 /// Lines of `text` that are code (not a `//` comment) and contain `needle`.
@@ -140,36 +151,662 @@ fn code_lines_with<'a>(text: &'a str, needle: &str) -> Vec<&'a str> {
 /// places that print numbers, counts and its own sentences, never screen content).
 #[test]
 fn sec_04_no_production_code_opens_a_socket_writes_a_file_or_starts_a_process() {
-    let forbidden = [
-        "std::net",
-        "TcpStream",
-        "TcpListener",
-        "UdpSocket",
-        "tokio::net",
-        "reqwest",
-        "hyper::",
-        "File::create",
-        "fs::write",
-        "OpenOptions",
-        "create_dir",
-        "fs::copy",
-        "fs::rename",
-        "fs::remove",
-        ".save(",
-        "Command::new",
-        "dbg!",
-    ];
     let sources = production_sources();
     assert!(sources.len() > 50, "{} sources scanned", sources.len());
+    let found = sec_04_findings(&sources);
+    assert!(found.is_empty(), "{found:#?}");
+}
+
+/// What SEC-04's source check refuses, anywhere in the product's code.
+const SEC_04_FORBIDDEN: [&str; 17] = [
+    "std::net",
+    "TcpStream",
+    "TcpListener",
+    "UdpSocket",
+    "tokio::net",
+    "reqwest",
+    "hyper::",
+    "File::create",
+    "fs::write",
+    "OpenOptions",
+    "create_dir",
+    "fs::copy",
+    "fs::rename",
+    "fs::remove",
+    ".save(",
+    "Command::new",
+    "dbg!",
+];
+
+/// The client file of the broker's named pipe.
+const PIPE_CLIENT: &str = "src/adapters/mcp/src/pipe/client.rs";
+
+/// The one exception to SEC-04's source check (ADR-0043, decision 12; proposed): the client end
+/// of the broker's named pipe opens its handle with `std::fs::OpenOptions`, because that is the
+/// only safe way to ask for an identification-level quality of service. It is the pair of one
+/// file and one forbidden substring, and nothing wider: every other file keeps failing on
+/// `OpenOptions`, and this file keeps failing on every other forbidden substring.
+///
+/// **The digest pin is the guarantee** ([`PIPE_CLIENT_SHA256`], D40): the exception covers
+/// exactly the bytes a reviewer read. The lexical rules of [`sec_04_pipe_client_text_findings`]
+/// are a second, best-effort tripwire that records what the reviewed file may contain; they are
+/// not claimed to be independent of formatting, nor to tie each setter to the open when the file
+/// and the pin change together. A change to the file, the pin or the rules shows in the diff of
+/// this test file and of the client file, and that review is the control. Removing the transport
+/// removes this entry.
+const SEC_04_EXCEPTIONS: [(&str, &str); 1] = [(PIPE_CLIENT, "OpenOptions")];
+
+/// The SHA-256 of [`PIPE_CLIENT`] as reviewed, its line ends read as `\n`: the guarantee of the
+/// exception. It holds only while the file's digest is this one: any change to the client shows
+/// as a change to this line in the same commit, for a reviewer to read both (D39, D40).
+const PIPE_CLIENT_SHA256: &str = "feac80cf40f0e83753bb1ab7dccf00e983fe0e3b7b9677390a6fbb84f9c820df";
+
+/// SEC-04's source check over `sources` (path, production text): each code line that holds a
+/// forbidden substring, except where [`SEC_04_EXCEPTIONS`] allows it and its bounds hold.
+fn sec_04_findings(sources: &[(String, String)]) -> Vec<String> {
+    sec_04_findings_with(sources, &SEC_04_EXCEPTIONS)
+}
+
+/// [`sec_04_findings`] with the list of exceptions given, so that a test can widen it: a list
+/// other than the one pair of [`SEC_04_EXCEPTIONS`] is itself a finding.
+fn sec_04_findings_with(sources: &[(String, String)], exceptions: &[(&str, &str)]) -> Vec<String> {
+    let mut found = Vec::new();
+    if exceptions != [(PIPE_CLIENT, "OpenOptions")] {
+        found.push(format!(
+            "SEC-04 has one exception, ({PIPE_CLIENT}, OpenOptions), and no other: {exceptions:?}"
+        ));
+    }
+    for (path, text) in sources {
+        for needle in SEC_04_FORBIDDEN {
+            if exceptions.contains(&(path.as_str(), needle)) {
+                found.extend(
+                    sec_04_pipe_client_findings(text)
+                        .into_iter()
+                        .map(|f| format!("{path}: {f}")),
+                );
+            } else {
+                for line in code_lines_with(text, needle) {
+                    found.push(format!("{path}: {line}"));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The hexadecimal SHA-256 of `text` with its line ends read as `\n`.
+fn sha256_lf(text: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut hex = String::with_capacity(64);
+    for b in Sha256::digest(text.replace("\r\n", "\n").as_bytes()) {
+        hex.push(char::from(HEX[usize::from(b >> 4)]));
+        hex.push(char::from(HEX[usize::from(b & 0x0f)]));
+    }
+    hex
+}
+
+/// The exception's bounds inside the pipe's client file: its digest is the pinned one, and its
+/// text keeps the rules of [`sec_04_pipe_client_text_findings`].
+fn sec_04_pipe_client_findings(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let digest = sha256_lf(text);
+    if digest != PIPE_CLIENT_SHA256 {
+        found.push(format!(
+            "the pipe client's SHA-256 is {digest}, not the pinned {PIPE_CLIENT_SHA256}: a \
+             change to the client is reviewed, and pinned, in the same commit"
+        ));
+    }
+    found.extend(sec_04_pipe_client_text_findings(text));
+    found
+}
+
+/// The macros the client file may invoke: none.
+const PIPE_CLIENT_MACROS: [&str; 0] = [];
+
+/// Words the client file may not hold anywhere, comments included, as whole identifiers: the
+/// options that create, truncate, extend or delete a file (`attributes` could carry
+/// `FILE_FLAG_DELETE_ON_CLOSE`), `unsafe`, any `cfg` (a test module or a platform switch could
+/// hide code), and what could pull other code in (`extern`, `mod`, `include*`, `macro_rules`,
+/// `asm`).
+const PIPE_CLIENT_NEVER: [&str; 15] = [
+    "create",
+    "create_new",
+    "truncate",
+    "append",
+    "creation_disposition",
+    "attributes",
+    "unsafe",
+    "cfg",
+    "extern",
+    "mod",
+    "include",
+    "include_str",
+    "include_bytes",
+    "macro_rules",
+    "asm",
+];
+
+/// The client file's text with its `//` comments taken out. Only sound because the file has no
+/// string or character literal that could hold `//`: the rules refuse every `"`.
+fn without_line_comments(text: &str) -> String {
+    text.lines()
+        .map(|line| line.find("//").map_or(line, |at| &line[..at]))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Every macro invocation of `code`: an identifier, then `!`, then an opening bracket, with any
+/// whitespace in between.
+fn macro_invocations(code: &str) -> Vec<String> {
+    let chars: Vec<char> = code.chars().collect();
+    let mut found = Vec::new();
+    for (at, &c) in chars.iter().enumerate() {
+        if c != '!' {
+            continue;
+        }
+        let next = chars[at + 1..].iter().find(|c| !c.is_whitespace());
+        if !matches!(next, Some('(' | '[' | '{')) {
+            continue;
+        }
+        let mut end = at;
+        while end > 0 && chars[end - 1].is_whitespace() {
+            end -= 1;
+        }
+        let mut start = end;
+        while start > 0 && (chars[start - 1].is_alphanumeric() || chars[start - 1] == '_') {
+            start -= 1;
+        }
+        if start < end {
+            found.push(chars[start..end].iter().collect());
+        }
+    }
+    found
+}
+
+/// The lexical rules the reviewed client file keeps (ADR-0043, decision 12): a best-effort
+/// tripwire beside the pin, which is the guarantee (see [`SEC_04_EXCEPTIONS`]). Most of them read
+/// the code without its `//` comments and its whitespace, so a space or a line break inside a
+/// method chain or between an attribute's tokens changes nothing for them:
+///
+/// - no `"` and no block comment (in the raw text); no attribute (`#[` or `#!`, in the code
+///   without whitespace); no macro but [`PIPE_CLIENT_MACROS`]; none of [`PIPE_CLIENT_NEVER`] as a
+///   word anywhere;
+/// - `OpenOptions` stands exactly three times: on its two `use` lines, exactly as written here
+///   (so neither renames it), and in one `OpenOptions::new()`;
+/// - one `.open(`, of `name.path()`;
+/// - one `.custom_flags(`, of `FILE_FLAG_OVERLAPPED`, and one `.security_qos_flags(`, of
+///   `SECURITY_IDENTIFICATION`, each constant defined once with its value and named nowhere
+///   else.
+fn sec_04_pipe_client_text_findings(text: &str) -> Vec<String> {
+    let text = text.replace("\r\n", "\n");
+    let mut found = Vec::new();
+    for never in ["\"", "/*"] {
+        if text.contains(never) {
+            found.push(format!("`{never}` in the pipe client"));
+        }
+    }
+    for word in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+        if PIPE_CLIENT_NEVER.contains(&word) {
+            found.push(format!("`{word}` in the pipe client"));
+        }
+    }
+    let code = without_line_comments(&text);
+    for invoked in macro_invocations(&code) {
+        if !PIPE_CLIENT_MACROS.contains(&invoked.as_str()) {
+            found.push(format!("the macro `{invoked}!` in the pipe client"));
+        }
+    }
+    let flat: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    for never in ["#[", "#!"] {
+        if flat.contains(never) {
+            found.push(format!("an attribute (`{never}`) in the pipe client"));
+        }
+    }
+    let exactly = |piece: &str, times: usize, found: &mut Vec<String>| {
+        let n = flat.matches(piece).count();
+        if n != times {
+            found.push(format!(
+                "`{piece}` stands {n} times in the pipe client, not {times}"
+            ));
+        }
+    };
+    exactly("OpenOptions", 3, &mut found);
+    exactly("usestd::fs::OpenOptions;", 1, &mut found);
+    exactly("usestd::os::windows::fs::OpenOptionsExt;", 1, &mut found);
+    exactly("OpenOptions::new()", 1, &mut found);
+    exactly(".open(", 1, &mut found);
+    exactly(".open(name.path())", 1, &mut found);
+    exactly(".custom_flags(", 1, &mut found);
+    exactly(".custom_flags(FILE_FLAG_OVERLAPPED)", 1, &mut found);
+    exactly(".security_qos_flags(", 1, &mut found);
+    exactly(
+        ".security_qos_flags(SECURITY_IDENTIFICATION)",
+        1,
+        &mut found,
+    );
+    exactly("FILE_FLAG_OVERLAPPED", 2, &mut found);
+    exactly("constFILE_FLAG_OVERLAPPED:u32=0x4000_0000;", 1, &mut found);
+    exactly("SECURITY_IDENTIFICATION", 2, &mut found);
+    exactly(
+        "constSECURITY_IDENTIFICATION:u32=0x0001_0000;",
+        1,
+        &mut found,
+    );
+    found
+}
+
+/// The pipe client's text as the source check reads it.
+fn pipe_client() -> (String, String) {
+    let text = read(PIPE_CLIENT);
+    (PIPE_CLIENT.to_owned(), production_text(PIPE_CLIENT, &text))
+}
+
+/// The exception admits the client file as it is: its digest is the pinned one, its text keeps
+/// the rules, and it is among the sources scanned, whole.
+#[test]
+fn the_source_check_admits_the_pipe_client_as_it_is() {
+    let (path, text) = pipe_client();
+    assert_eq!(sha256_lf(&text), PIPE_CLIENT_SHA256, "the pin is current");
+    assert_eq!(
+        sec_04_pipe_client_text_findings(&text),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        sec_04_findings(&[(path, text.clone())]),
+        Vec::<String>::new()
+    );
+    assert!(
+        production_sources()
+            .iter()
+            .any(|(p, t)| p == PIPE_CLIENT && *t == text),
+        "the client file is scanned, whole"
+    );
+}
+
+/// Every way of widening the exception inside the client file is refused by the rules, whatever
+/// its formatting, and by the pin; and a change the rules allow is still refused by the pin.
+#[test]
+#[allow(clippy::too_many_lines)] // one list of cases, each one line or two
+fn the_source_check_refuses_the_pipe_client_with_anything_more() {
+    let (path, text) = pipe_client();
+    let flag = ".custom_flags(FILE_FLAG_OVERLAPPED)";
+    let qos = ".security_qos_flags(SECURITY_IDENTIFICATION)";
+    let open = "let file = OpenOptions::new()";
+    let opened = ".open(name.path())?;";
+    assert!(
+        text.contains(flag) && text.contains(qos) && text.contains(open) && text.contains(opened)
+    );
+    let after = |at: &str, added: &str| text.replacen(at, &format!("{at}\n        {added}"), 1);
+    let cases = [
+        ("create", after(flag, ".create(true)")),
+        ("create_new", after(flag, ".create_new(true)")),
+        ("truncate", after(flag, ".truncate(true)")),
+        ("append", after(flag, ".append(true)")),
+        ("disposition", after(flag, ".creation_disposition(2)")),
+        ("attributes", after(flag, ".attributes(0x0400_0000)")),
+        ("create split by a space", after(flag, ". create (true)")),
+        ("create split by a line break", after(flag, ".\n        create(true)")),
+        (
+            "attributes split by a line break",
+            after(flag, ".attributes\n        (0x0400_0000)"),
+        ),
+        (
+            "another flag",
+            text.replacen(flag, ".custom_flags(FILE_FLAG_OVERLAPPED | 0x0400_0000)", 1),
+        ),
+        (
+            "another flag split by line breaks",
+            text.replacen(
+                flag,
+                ".custom_flags(\n            FILE_FLAG_OVERLAPPED\n            | 0x0400_0000,\n        )",
+                1,
+            ),
+        ),
+        ("a second flag call", after(flag, flag)),
+        (
+            "a second flag call split by a space",
+            after(flag, ". custom_flags (FILE_FLAG_OVERLAPPED)"),
+        ),
+        (
+            "the flag's value changed",
+            text.replacen("0x4000_0000;", "0x4400_0000;", 1),
+        ),
+        ("no quality of service", text.replacen(qos, "", 1)),
+        (
+            "impersonation level",
+            text.replacen("0x0001_0000;", "0x0002_0000;", 1),
+        ),
+        (
+            "a second call",
+            format!("{text}\nfn more() -> io::Result<()> {{ OpenOptions::new().open(name) }}\n"),
+        ),
+        (
+            "a second call spelled with spaces",
+            format!("{text}\nfn more() {{ let _ = OpenOptions :: new (); }}\n"),
+        ),
+        (
+            "the constructor in a string, the real open spelled otherwise",
+            text.replacen(
+                open,
+                "let _shown = \"OpenOptions::new()\";\n    let file = <OpenOptions>::new()",
+                1,
+            ),
+        ),
+        (
+            "the constructor in a block comment, the real open spelled otherwise",
+            text.replacen(
+                open,
+                "/* OpenOptions::new() */\n    let file = <OpenOptions>::new()",
+                1,
+            ),
+        ),
+        (
+            "the constructor in a line comment, the real open spelled otherwise",
+            text.replacen(
+                open,
+                "// OpenOptions::new()\n    let file = <OpenOptions>::new()",
+                1,
+            ),
+        ),
+        (
+            "another path opened",
+            text.replacen(opened, ".open(r\"C:\\x\")?;", 1),
+        ),
+        (
+            "a renaming use",
+            text.replacen(
+                "use std::fs::OpenOptions;",
+                "use std::fs::OpenOptions as Opener;",
+                1,
+            ),
+        ),
+        (
+            "a third use",
+            text.replacen(
+                "use std::fs::OpenOptions;",
+                "use std::fs::OpenOptions;\nuse tokio::fs::OpenOptions as Other;",
+                1,
+            ),
+        ),
+        (
+            "OpenOptions on another line",
+            format!("{text}\ntype Opener = OpenOptions;\n"),
+        ),
+        (
+            "a unit-test module hiding the rest",
+            text.replacen(open, &format!("#[cfg(test)]\n    {open}"), 1),
+        ),
+        (
+            "a test marker spelled with spaces",
+            format!("{text}\n#[cfg( test )]\nmod tests {{}}\n"),
+        ),
+        ("an unsafe block", after(opened, "unsafe { }")),
+        (
+            "a macro",
+            format!("{text}\nfn more() {{ let _ = concat !(1); }}\n"),
+        ),
+        (
+            "another forbidden substring",
+            format!("{text}\nfn more() {{ let _ = std::fs::write(\"x\", b\"\"); }}\n"),
+        ),
+        (
+            "a file created",
+            format!("{text}\nfn more() {{ let _ = std::fs::File::create(\"x\"); }}\n"),
+        ),
+    ];
+    for (case, changed) in cases {
+        assert_ne!(changed, text, "{case}: the change applies");
+        assert!(
+            !sec_04_pipe_client_text_findings(&changed).is_empty(),
+            "{case} passed the rules"
+        );
+        assert!(
+            !sec_04_findings(&[(path.clone(), changed)]).is_empty(),
+            "{case} passed the check"
+        );
+    }
+    // A change the rules allow, one byte of a comment, is still refused: by the pin.
+    let one_byte = text.replacen("one function", "One function", 1);
+    assert_ne!(one_byte, text);
+    assert_eq!(
+        sec_04_pipe_client_text_findings(&one_byte),
+        Vec::<String>::new()
+    );
+    let found = sec_04_findings(&[(path.clone(), one_byte)]);
+    assert!(
+        found.len() == 1 && found[0].contains("SHA-256"),
+        "{found:?}"
+    );
+    // Line ends are not a change: the pin reads `\r\n` as `\n`.
+    let crlf = text.replace('\n', "\r\n");
+    assert_eq!(sec_04_findings(&[(path, crlf)]), Vec::<String>::new());
+}
+
+/// The lexical rules on their own, without the digest (D40 G5): each mutant of the client file
+/// is refused by the rule it breaks, whatever the pin says. The attribute introducers are split
+/// by legal whitespace, so only the rule that reads the code without whitespace sees them.
+#[test]
+fn the_lexical_rules_refuse_mutants_of_the_client_on_their_own() {
+    let (_, text) = pipe_client();
+    assert_eq!(
+        sec_04_pipe_client_text_findings(&text),
+        Vec::<String>::new()
+    );
+    let open = "pub(super) fn open(";
+    assert!(text.contains(open));
+    let before = |added: &str| text.replacen(open, &format!("{added}\n{open}"), 1);
+    let cases = [
+        ("an attribute", before("#[inline]"), "attribute"),
+        (
+            "an attribute split by a space",
+            before("# [inline]"),
+            "attribute",
+        ),
+        (
+            "an attribute split by a line break",
+            before("#\n[inline]"),
+            "attribute",
+        ),
+        (
+            "an inner attribute split by spaces",
+            text.replacen("use std::io;", "# ! [allow(unused)]\nuse std::io;", 1),
+            "attribute",
+        ),
+        ("a string", before("const NAME: &str = \"x\";"), "`\"`"),
+        ("a block comment", before("/* x */"), "`/*`"),
+        (
+            "a macro split by spaces",
+            before("const N: usize = line ! ();"),
+            "macro",
+        ),
+        (
+            "a forbidden word in a comment",
+            before("// it may append"),
+            "`append`",
+        ),
+        (
+            "a second open spelled with spaces",
+            format!(
+                "{text}\nfn more(n: &PipeName) {{ let _ = OpenOptions :: new () . open (n.path()); }}\n"
+            ),
+            "stands",
+        ),
+    ];
+    for (case, changed, rule) in cases {
+        assert_ne!(changed, text, "{case}: the change applies");
+        let found = sec_04_pipe_client_text_findings(&changed);
+        assert!(
+            found.iter().any(|f| f.contains(rule)),
+            "{case}: not refused by its rule ({rule}): {found:?}"
+        );
+    }
+}
+
+/// A test-module marker in the client file does not hide what follows it from the check: the
+/// file is collected whole, and the marker is itself refused.
+#[test]
+fn a_test_module_marker_in_the_pipe_client_hides_nothing() {
+    let (_, text) = pipe_client();
+    let hidden = format!(
+        "{text}\n#[cfg(test)]\nmod hidden {{\n    fn f() {{ let _ = std::fs::File::create(\"x\"); }}\n}}\n"
+    );
+    let collected = production_text(PIPE_CLIENT, &hidden);
+    assert_eq!(collected, hidden, "collected whole");
+    let found = sec_04_findings(&[(PIPE_CLIENT.to_owned(), collected)]);
+    assert!(
+        found.iter().any(|f| f.contains("File::create")),
+        "the hidden code is seen: {found:?}"
+    );
+    assert!(found.iter().any(|f| f.contains("`cfg`")), "{found:?}");
+    // Every other file is still read up to its unit-test module, as before.
+    assert_eq!(
+        production_text("src/app/src/main.rs", "fn a() {}\n#[cfg(test)]\nmod t {}\n"),
+        "fn a() {}\n"
+    );
+}
+
+/// `OpenOptions` anywhere else is refused, the client's own text included under another path;
+/// every other forbidden substring is still refused everywhere; and a second entry in the list
+/// of exceptions is refused, whatever file it names.
+#[test]
+fn the_source_check_refuses_open_options_in_any_other_file() {
+    let (_, text) = pipe_client();
+    let plain = "use std::fs::OpenOptions;\nfn f() { let _ = OpenOptions::new(); }\n";
+    for path in [
+        "src/adapters/mcp/src/pipe/server.rs",
+        "src/adapters/mcp/src/pipe/client2.rs",
+        "src/adapters/mcp/src/pipe/mod.rs",
+        "src/app/src/attach.rs",
+        "src/adapters/mcp/src/pipe/client.rs.bak",
+        "src/adapters/mcp/src/pipe/sub/client.rs",
+    ] {
+        for body in [&text, plain] {
+            assert!(
+                !sec_04_findings(&[(path.to_owned(), body.to_owned())]).is_empty(),
+                "{path}"
+            );
+        }
+        // The list widened to this file: the widening itself is refused.
+        let widened = [(PIPE_CLIENT, "OpenOptions"), (path, "OpenOptions")];
+        let found = sec_04_findings_with(&[(path.to_owned(), plain.to_owned())], &widened);
+        assert!(
+            found.iter().any(|f| f.contains("one exception")),
+            "{path}: {found:?}"
+        );
+    }
+    let swapped = [("src/adapters/mcp/src/pipe/server.rs", "OpenOptions")];
+    assert_ne!(sec_04_findings_with(&[], &swapped), Vec::<String>::new());
+    let other_needle = [(PIPE_CLIENT, "Command::new")];
+    assert_ne!(
+        sec_04_findings_with(&[], &other_needle),
+        Vec::<String>::new()
+    );
+    for needle in SEC_04_FORBIDDEN {
+        let line = format!("fn f() {{ let _ = \"{needle}\"; }}\n");
+        for path in ["src/app/src/main.rs", PIPE_CLIENT] {
+            let body = if path == PIPE_CLIENT {
+                format!("{text}\n{line}")
+            } else {
+                line.clone()
+            };
+            assert!(
+                !sec_04_findings(&[(path.to_owned(), body)]).is_empty(),
+                "{needle} in {path}"
+            );
+        }
+    }
+}
+
+/// ADR-0043, decision 12, for every open of the pipe: no production source of the product names
+/// the pipe crate's own ways of connecting, which set no quality of service, so the
+/// identification-level client is the only way in; and the server's wake-up at shutdown goes
+/// through that client.
+#[test]
+fn the_pipe_is_opened_only_through_the_identification_level_client() {
+    const CONNECTING: [&str; 6] = [
+        "connect_by_path",
+        "ConnectWaitMode",
+        "local_socket",
+        "ConnectOptions",
+        "WaitNamedPipe",
+        "block_for_server",
+    ];
+    let sources = production_sources();
     let mut found = Vec::new();
     for (path, text) in &sources {
-        for needle in forbidden {
+        for needle in CONNECTING {
             for line in code_lines_with(text, needle) {
                 found.push(format!("{path}: {line}"));
             }
         }
     }
     assert!(found.is_empty(), "{found:#?}");
+    let server = sources
+        .iter()
+        .find(|(p, _)| p == "src/adapters/mcp/src/pipe/server.rs")
+        .map(|(_, t)| t.as_str())
+        .expect("the pipe server is scanned");
+    assert_eq!(
+        code_lines_with(server, "super::connect(").len(),
+        1,
+        "the wake-up goes through the production client"
+    );
+    let module = read("src/adapters/mcp/src/pipe/mod.rs");
+    assert_eq!(
+        code_lines_with(&module, "client::open(").len(),
+        1,
+        "the production client opens through the pinned file, once"
+    );
+}
+
+/// The broker's named pipe (ADR-0043, proposed) is not in the default build: the feature
+/// `broker-pipe` is off by default, its two crates are optional and Windows only, the pipe crate
+/// is pinned with its default features off, no other crate turns the feature on, and the
+/// `windows` job of CI builds, lints and tests it.
+#[test]
+fn the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_only() {
+    let manifest: toml::Value = toml::from_str(&read("src/adapters/mcp/Cargo.toml")).unwrap();
+    let features = manifest["features"].as_table().expect("features");
+    assert_eq!(features["default"], toml::Value::Array(Vec::new()));
+    assert_eq!(
+        features["broker-pipe"],
+        toml::Value::Array(vec!["dep:interprocess".into(), "dep:widestring".into()])
+    );
+    let plain = dependencies("src/adapters/mcp/Cargo.toml");
+    assert!(!plain.contains("interprocess") && !plain.contains("widestring"));
+    let windows = manifest["target"]["cfg(windows)"]["dependencies"]
+        .as_table()
+        .expect("Windows dependencies");
+    for name in ["interprocess", "widestring"] {
+        assert_eq!(windows[name]["optional"].as_bool(), Some(true), "{name}");
+    }
+    let workspace: toml::Value = toml::from_str(&read("Cargo.toml")).unwrap();
+    let pinned = &workspace["workspace"]["dependencies"];
+    assert_eq!(pinned["interprocess"]["version"].as_str(), Some("=2.4.9"));
+    assert_eq!(
+        pinned["interprocess"]["default-features"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(pinned["widestring"].as_str(), Some("=1.2.1"));
+    for other in [
+        "src/app/Cargo.toml",
+        "src/acceptance/Cargo.toml",
+        "src/adapters/accessibility/Cargo.toml",
+        "src/adapters/capture/Cargo.toml",
+        "src/adapters/input/Cargo.toml",
+        "src/adapters/sim/Cargo.toml",
+        "src/adapters/vision/Cargo.toml",
+    ] {
+        assert!(!read(other).contains("broker-pipe"), "{other}");
+    }
+    let ci = read(".github/workflows/ci.yml");
+    for step in [
+        "cargo build -p ommatix-adapter-mcp --features broker-pipe",
+        "cargo clippy -p ommatix-adapter-mcp --features broker-pipe --all-targets -- -D warnings",
+        "cargo test -p ommatix-adapter-mcp --features broker-pipe",
+    ] {
+        assert!(ci.contains(step), "{step}");
+    }
 }
 
 #[test]

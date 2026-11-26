@@ -131,6 +131,12 @@ jobs:
           --features ommatix-adapter-capture/dxgi,ommatix-adapter-input/sendinput
           --features ommatix-adapter-vision/directml,ommatix-adapter-vision/winrt-ocr
           --features ommatix-adapter-accessibility/uia
+      # The broker's named pipe (ADR-0043, proposed; off by default): real pipes between
+      # threads of the test process, under names unique to the run. The test of the SMB
+      # loopback path reports itself skipped where the runner's services cannot carry it.
+      - run: cargo build -p ommatix-adapter-mcp --features broker-pipe
+      - run: cargo clippy -p ommatix-adapter-mcp --features broker-pipe --all-targets -- -D warnings
+      - run: cargo test -p ommatix-adapter-mcp --features broker-pipe
 
   cross-check:
     name: capture + native input compile for ${{ matrix.target }}
