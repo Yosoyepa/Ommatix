@@ -225,17 +225,17 @@ Para un cliente MCP, compile con `cargo build --locked`, ponga el binario en `PA
 
 ## Estado del proyecto
 
-A **19 de octubre de 2026**, evidencia comprobada contra el commit **`875495f`**.
+A **15 de noviembre de 2026**, evidencia comprobada contra el commit **`1951633`**.
 El [dossier](docs/thesis/README.md) es la especificación; la tabla describe el alcance actual.
 
 | Área | Estado actual |
 |---|---|
-| S0 · viabilidad | Detector candidato y OCR medidos; faltan validar un detector de producto e instalar en una máquina limpia. |
+| S0 · viabilidad | Detector candidato y OCR medidos; falta validar un detector de producto. Una instalación en una máquina limpia (VM, 20 de octubre de 2026) no pasó limpia: el digest del detector exportado no se reproduce allí, y la decisión del responsable está abierta. |
 | S1 · núcleo geométrico | Implementados el diff por tiles, plan de regiones, fusión espacial y snapshots transaccionales. |
 | S2 · identidad y contrato | Implementados el registro temporal, caché de íconos curados y las tres herramientas MCP. |
 | S3 · integración Windows | DXGI, SendInput, ONNX, OCR de Windows y UI Automation opcionales; evidencia supervisada en el perfil acordado. IT-01–04 siguen parciales. |
 | S4 · aceptación | Protocolo reducido: cinco flujos, cada uno 10/10 sin falsos éxitos. El corpus y la evaluación más amplios siguen diferidos. |
-| Definition of Done | **6/10 casillas marcadas: 1, 4, 5, 6, 8, 9.** La 2 y 3 tienen aceptaciones por alcance, no cumplimiento; a la 7 le faltan memoria viva de caché de íconos activa y variación entre corridas; la 10 conserva integración parcial e instalación limpia. |
+| Definition of Done | **6/10 casillas marcadas: 1, 4, 5, 6, 8, 9.** La 2 y 3 tienen aceptaciones por alcance, no cumplimiento; en la 7, con la caché de íconos activa en el soak preregistrado, R1 cumplió todos los criterios salvo el de manejadores, C2, y R2 y R3 no se han corrido; la 10 conserva integración parcial e instalación limpia. |
 
 Fuente: [capítulo 06 §6.7](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md#67-definition-of-done-del-producto).
 Primera plataforma real: Windows 11 x64, un monitor, DPI 100 % y un tema para el MVP reducido.
