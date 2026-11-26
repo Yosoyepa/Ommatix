@@ -1,10 +1,23 @@
-# The engine as implemented / El motor implementado
+# The engine at S2b / El motor en S2b
 
-*What `ommatix-application`'s `Engine` does today (S2b) for each MCP tool, and which port it
-calls at each step. A failed observation publishes nothing; an action reports only what is
+[Diagrams](README.md) · [Architecture](../architecture/overview.md) · [Arquitectura](../architecture/overview.es.md)
+
+> [!NOTE]
+> A historical view: the engine as it was at S2b. Later work is not drawn here: the age bound of the
+> snapshot (ADR-0025), the last look before delivery, the operator's scope on windows (ADR-0020) and the
+> accessibility evidence (ADR-0017). The present order is in the
+> [architecture overview](../architecture/overview.md#one-action).
+>
+> Vista histórica: el motor tal como estaba en S2b. No dibuja lo posterior: la vigencia del snapshot
+> (ADR-0025), el último vistazo antes de entregar, el alcance del operador por ventanas (ADR-0020) y la
+> evidencia de accesibilidad (ADR-0017). El orden presente está en la
+> [visión general](../architecture/overview.es.md#una-acción).
+
+*What `ommatix-application`'s `Engine` did at S2b for each MCP tool, and which port it
+called at each step. A failed observation publishes nothing; an action reports only what is
 known.*
-*Lo que hace hoy (S2b) el `Engine` de `ommatix-application` con cada herramienta MCP y qué
-puerto llama en cada paso. Una observación fallida no publica nada; una acción informa sólo
+*Lo que hacía en S2b el `Engine` de `ommatix-application` con cada herramienta MCP y qué
+puerto llamaba en cada paso. Una observación fallida no publica nada; una acción informa sólo
 lo que se sabe.*
 
 Design views: [components](components.md), [action sequence](action-sequence.md),

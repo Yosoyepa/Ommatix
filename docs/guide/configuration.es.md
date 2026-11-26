@@ -1,8 +1,12 @@
 # Configuración
 
-[English](configuration.md) · [Primeros pasos](getting-started.es.md)
+[README](../../README.es.md) → [Primeros pasos](getting-started.es.md) → **Configuración** → [Entrada real](live-input.es.md) · [Desarrollo](development.es.md) · [Toda la documentación](../README.md) · [English](configuration.md)
 
-## Features de compilación, todas apagadas por defecto:
+<a id="features-de-compilación-todas-apagadas-por-defecto"></a>
+
+## Features de compilación
+
+Todas apagadas por defecto.
 
 | Feature | Añade | Plataforma |
 |---|---|---|
@@ -29,8 +33,6 @@
 | `--legacy` | sirve además el perfil MCP legacy 2025-11-25 (como `[mcp] legacy_enabled = true`) | apagado |
 | `--observations N` (sólo `demo`) | 1–20 | 3 |
 
-
-
 ## Archivo de configuración
 
 El archivo de configuración tiene la forma de
@@ -39,16 +41,31 @@ El archivo de configuración tiene la forma de
 aplican los valores de la plantilla, que niegan la actuación y ocultan los valores. Ninguna
 opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de forma estricta:
 
-- **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
-  rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
-  `full_refresh_area_ratio` en (0, 1], `adaptive_min_regions` 0–1024 (por defecto `2`; un plan con esa cantidad de regiones o más se procesa como refresco completo, razón `adaptive_cost`, [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md); `0` apaga la regla), `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` booleano (por defecto `true`), `candidate_search` `scan` (por defecto, la referencia) o `rstar` (R*-tree experimental, [ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md); los mismos resultados), `max_message_bytes`
-  4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`,
-  `window_pin_file` o `purge_file` en blanco, una entrada de `allowed_window_classes` que nunca podría
-  aplicarse o que nombra el escritorio, la barra de tareas o `applicationframehost.exe`); y valores que este binario no puede cumplir: un `platform` distinto de
-  `windows`, un `snapshot_policy`
-  distinto de `strict`, un `profile` distinto de `2026-07-28` (el perfil legacy se habilita
-  con `legacy_enabled`), un `transport` distinto de `stdio`, `allow_destructive = true`,
-  `allow_screenshots_to_client = true`, `[models] detector_path`, `detector_sha256`,
+- **Se rechaza** (el servidor no arranca): secciones o claves desconocidas, valores fuera de
+  rango y valores que este binario no puede cumplir.
+
+  | Clave | Se acepta |
+  |---|---|
+  | `tile_size` | 8–1024 |
+  | `halo_px` | ≤ 1024 |
+  | `max_regions` | 1–1024 |
+  | `full_refresh_area_ratio` | en (0, 1] |
+  | `adaptive_min_regions` | 0–1024 (por defecto `2`; un plan con esa cantidad de regiones o más se procesa como refresco completo, razón `adaptive_cost`, [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md); `0` apaga la regla) |
+  | `max_snapshot_age_ms` | ≥ 1 |
+  | `verify_timeout_ms` | 0–5000 |
+  | `verify_poll_ms` | 1–1000 |
+  | `concurrent_stages` | booleano (por defecto `true`) |
+  | `candidate_search` | `scan` (por defecto, la referencia) o `rstar` (R*-tree experimental, [ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md); los mismos resultados) |
+  | `max_message_bytes` | 4096–65536 |
+  | `max_entries` | ≥ 1 |
+  | `allowed_applications` | sin entradas vacías |
+  | `stop_file`, `window_pin_file`, `purge_file` | no en blanco |
+  | `allowed_window_classes` | sin entradas que nunca podrían aplicarse o que nombran el escritorio, la barra de tareas o `applicationframehost.exe` |
+
+  Valores que este binario no puede cumplir: un `platform` distinto de `windows`, un
+  `snapshot_policy` distinto de `strict`, un `profile` distinto de `2026-07-28` (el perfil legacy
+  se habilita con `legacy_enabled`), un `transport` distinto de `stdio`, `allow_destructive =
+  true`, `allow_screenshots_to_client = true`, `[models] detector_path`, `detector_sha256`,
   `ocr_path` u `ocr_sha256` (los pesos se declaran en el manifiesto del modelo), un detector
   configurado a medias o con hashes mal formados (abajo) y `[cache] persist = true`.
 - **Vigencia** (ADR-0025): `max_snapshot_age_ms` (por defecto `10000`) acota la edad, en el
@@ -92,8 +109,6 @@ ausente o un idioma de OCR no instalado detienen el motor antes de abrir ninguna
 se recurre a otro modelo ni a otro idioma. Con `--source sim` las claves se ignoran, con una
 nota en stderr. No hay un detector aceptado para el producto; el spike seleccionó un candidato para integración y medición (S0,
 [ADR-0009](../adr/0009-models-and-licences-decided-in-the-spike.md)).
-
-
 
 ## Accesibilidad y opciones experimentales
 

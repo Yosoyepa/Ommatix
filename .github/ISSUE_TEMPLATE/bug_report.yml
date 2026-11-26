@@ -4,14 +4,16 @@ labels: [bug]
 body:
   - type: markdown
     attributes:
-      value: >-
-        Report vulnerabilities through the private security form, not here.
-        Use synthetic data; never attach a real-screen screenshot or a credential.
+      value: |
+        **Security:** report vulnerabilities through [private vulnerability reporting](https://github.com/Yosoyepa/Ommatix/security/advisories/new), not here.
+
+        **Privacy:** use synthetic data; never attach a real-screen screenshot or a credential.
   - type: input
     id: commit
     attributes:
       label: Commit or version
       description: Paste the commit hash; include a version only if one exists.
+      placeholder: git rev-parse --short HEAD
     validations:
       required: true
   - type: input
@@ -26,6 +28,7 @@ body:
     attributes:
       label: Build features and source/input adapters
       description: For example, default features, source sim, input dry-run; omit personal paths.
+      placeholder: default features · --source sim · --input dry-run
     validations:
       required: true
   - type: textarea

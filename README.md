@@ -1,3 +1,5 @@
+<div align="center">
+
 # Ommatix
 
 **Spatial Indexing and Incremental Perception for GUI Agents**
@@ -5,19 +7,23 @@
 [![CI workflow](https://github.com/Yosoyepa/Ommatix/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Yosoyepa/Ommatix/actions/workflows/ci.yml)
 [![Code: MIT OR Apache-2.0](docs/assets/readme/badge-code.svg)](#licence)
 [![Docs: CC BY 4.0](docs/assets/readme/badge-docs.svg)](LICENSE-DOCS)
-[![Rust 1.99.0](docs/assets/readme/badge-rust.svg)](rust-toolchain.toml)
+[![Rust 1.99.0](docs/assets/readme/badge-rust.svg)](rust-toolchain.toml)<br>
 [![MCP over stdio](docs/assets/readme/badge-mcp.svg)](docs/thesis/07_CONTRATOS_MCP_Y_ERRORES.md)
 [![Research prototype](docs/assets/readme/badge-status.svg)](#project-status)
 [![Windows 11 x64 first](docs/assets/readme/badge-platform.svg)](docs/adr/0008-one-real-platform-first.md)
 
-🇪🇸 [Leer en español](README.es.md)
+**English** · [Español](README.es.md)
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-mobile-dark.svg">
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/hero-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.svg">
-  <img src="docs/assets/readme/hero-light.svg" alt="A stable interface to a changing desktop: local changes become an element ID and revision." width="1200">
-</picture>
+</div>
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-mobile-dark.svg">
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/hero-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.svg">
+    <img src="docs/assets/readme/hero-light.svg" alt="A stable interface to a changing desktop: changed tiles stay local; the agent gets element IDs and revisions, never coordinates." width="1200">
+  </picture>
+</p>
 
 Ommatix is a thesis research prototype that lets an LLM agent address desktop elements by
 **session IDs and revisions instead of coordinates**. Its local Rust engine analyses changed
@@ -26,11 +32,16 @@ is fail-closed: actions default to a dry run; live input needs the operator’s 
 current observation. [Design and trust boundaries →](docs/architecture/overview.md)
 
 <p align="center">
-  <a href="docs/assets/readme/protocol-demo.mp4"><img src="docs/assets/readme/protocol-demo.gif" alt="Animated protocol illustration: only the changed tiles of a synthetic window are re-analysed; the controls get IDs and revisions (e7, revision 3); the agent calls observe_screen and execute_action; a dry-run action on snapshot s16, older than the 10-second age bound, is refused with STALE_SNAPSHOT and no input; a new observation publishes s17 and the dry-run action on it returns simulated, input_delivered false, verified false." width="800"></a>
+  <picture>
+    <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/protocol-demo-mobile-dark.svg">
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/protocol-demo-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/protocol-demo-dark.svg">
+    <img src="docs/assets/readme/protocol-demo-light.svg" alt="Animated protocol illustration: only the changed tiles of a simulated window are re-analysed; the controls get IDs and revisions (e7, revision 3); the agent calls observe_screen and execute_action; a dry-run action on snapshot s16, older than 10 seconds, is refused with STALE_SNAPSHOT and no input; a new observation publishes s17 and its dry run returns simulated, input_delivered false." width="1200">
+  </picture>
 </p>
 
 <p align="center"><sub>An illustration on a simulated desktop, generated from the <a href="docs/thesis/contratos/ejemplos">contract examples</a>; not a screen recording.
-<a href="docs/assets/readme/protocol-demo.mp4">Watch the 44-second video</a> (MP4, silent, captioned) ·
+<a href="docs/assets/readme/protocol-demo.gif">GIF</a> ·
 <a href="tools/readme-media/README.md">how it is made</a></sub></p>
 
 ## Why Ommatix
@@ -49,12 +60,14 @@ while keeping perception separate from the agent’s reasoning.
 
 ## How it works
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/pipeline-mobile-dark.svg">
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/pipeline-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/pipeline-dark.svg">
-  <img src="docs/assets/readme/pipeline-light.svg" alt="Numbered pipeline from capture and region planning through perception, fusion, identity and atomic snapshot to the agent, action gate, actuator and effect verifier." width="1200">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/pipeline-mobile-dark.svg">
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/pipeline-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/pipeline-dark.svg">
+    <img src="docs/assets/readme/pipeline-light.svg" alt="Numbered pipeline from capture and region planning through perception, fusion, identity and atomic snapshot to the agent, action gate, actuator and effect verifier." width="1200">
+  </picture>
+</p>
 
 Each observation publishes the base frame, identity registry and snapshot together. A failed
 stage publishes nothing, keeps the pending regions and blocks actions while degraded.
@@ -146,12 +159,14 @@ Structured response from [simulated_output.json](docs/thesis/contratos/ejemplos/
 > `allowed_applications`, and the agent’s `dry_run: false`. The operator controls the stop
 > file and any window pin. [Read the operator guide before enabling input.](docs/guide/live-input.md)
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-mobile-dark.svg">
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/gate-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-dark.svg">
-  <img src="docs/assets/readme/gate-light.svg" alt="Dry run returns simulated; live input requires policy, foreground attestation, freshness and a final check before delivery and verification." width="1200">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-mobile-dark.svg">
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/gate-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-dark.svg">
+    <img src="docs/assets/readme/gate-light.svg" alt="A valid, new request passes a reference check; a dry run then returns simulated; live input must also pass policy, foreground, freshness and a last look. A failed check is rejected and nothing is delivered. Delivery reports input_delivered; a verified effect, effect_observed; an unconfirmed one, indeterminate." width="1200">
+  </picture>
+</p>
 
 `simulated` claims no delivery; `input_delivered` claims no effect; `indeterminate` never
 triggers an automatic retry. With UI Automation, typing waits for keyboard focus on the
@@ -168,16 +183,18 @@ target element between its focusing click and its keys.
 
 ## Results at a glance
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/results-mobile-dark.svg">
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/results-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/results-dark.svg">
-  <img src="docs/assets/readme/results-light.svg" alt="Preliminary AG-02 scores out of 11: Haiku 10 dry-run and 6 live, DeepSeek 11 and 7, MiMo 10 and 7. Correct abstentions count; phase 1 exempts the decoy verdict." width="1200">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/results-mobile-dark.svg">
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/results-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/results-dark.svg">
+    <img src="docs/assets/readme/results-light.svg" alt="Preliminary AG-02 scores out of 11: Haiku 10 dry-run and 6 live, DeepSeek 11 and 7, MiMo 10 and 7. Correct abstentions count; phase 1 exempts the decoy verdict." width="1200">
+  </picture>
+</p>
 
-*Source: [chapter 09 §9.11.1–3](docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911-ag-02-un-agente-sólo-llm-con-ommatix-por-mcp),
+Source: [chapter 09 §9.11.1–3](docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911-ag-02-un-agente-sólo-llm-con-ommatix-por-mcp),
 18–19 October 2026. Phase 1 scores choices in dry run; phase 2 combines the agent verdict
-with an OS-side oracle. Correct abstentions count in both phases.*
+with an OS-side oracle. Correct abstentions count in both phases.
 
 Phase 2 recorded **0 false successes and 0 protocol-defined safety events** for each model.
 Phase 1 also reports zero under its implemented scoring, which exempts the decoy goal’s

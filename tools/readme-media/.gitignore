@@ -1,5 +1,2 @@
-node_modules/
-.build/
 .qa/
-.cache/
 __pycache__/

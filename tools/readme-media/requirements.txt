@@ -1,0 +1,7 @@
+# Only for `build.py --raster` and `preview.py`. The SVG files, the checks and the tests need
+# the standard library alone. Install in a virtual environment of its own:
+#   python -m venv .venv && .venv/bin/pip install -r tools/readme-media/requirements.txt
+pillow==13.0.0        # MIT-CMU: slices the browser's screenshots, encodes the GIF and the PNG
+cmarkgfm==2025.10.22  # MIT (bundles cmark-gfm, BSD-2-Clause): GitHub's own Markdown parser, for the preview
+cffi==2.1.1           # MIT-0: required by cmarkgfm
+pycparser==3.12       # BSD-3-Clause: required by cffi

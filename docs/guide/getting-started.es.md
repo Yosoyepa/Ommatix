@@ -1,6 +1,6 @@
 # Primeros pasos
 
-[English](getting-started.md) · [Documentación](../README.md)
+[README](../../README.es.md) → **Primeros pasos** → [Configuración](configuration.es.md) → [Entrada real](live-input.es.md) · [Desarrollo](development.es.md) · [Toda la documentación](../README.md) · [English](getting-started.md)
 
 Requiere Rust 1.99.0 (la versión fijada en `rust-toolchain.toml`) y Python 3.11 o posterior para las
 comprobaciones de la tesis.
@@ -37,5 +37,5 @@ y [la instalación](../thesis/S4_INSTALACION_Y_REVERSION.md).
 
 La demo y el servidor predeterminados usan el escritorio simulado. Para configurar fuentes
 y modelos, lea [configuración](configuration.es.md); para entrada real, lea primero
-[el control del operador](live-input.es.md). La instalación en una máquina limpia sigue
-pendiente: [sesión A](../thesis/S4_SESIONES_PENDIENTES.md).
+[el control del operador](live-input.es.md). Una instalación en una máquina limpia
+(VM, 20 de octubre de 2026) no pasó limpia: [sesión A](../thesis/S4_SESIONES_PENDIENTES.md).

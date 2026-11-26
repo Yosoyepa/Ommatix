@@ -1,3 +1,6 @@
+<!-- Copy this file to NNNN-title.md, fill every section and add its row to the index in README.md.
+     The body is English; the Spanish summary at the end is mandatory (ADR-0013). Delete this comment. -->
+
 # NNNN. Title in imperative form
 
 - **Status:** Proposed | Accepted | Superseded by [NNNN](NNNN-title.md)

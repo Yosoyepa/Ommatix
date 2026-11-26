@@ -1,122 +1,207 @@
 {
-  "schema": 1,
+  "schema": 2,
+  "generator": "tools/readme-media/build.py",
   "inputs": {
     "contract": "docs/thesis/contratos/ejemplos",
     "results": "docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911",
-    "source_commit": "bf90d327014ab664a36ca225f05bf53cc13144bf"
+    "gate": "AGENTS.md#5 rule 6, src/application/src/engine/act.rs",
+    "toolchain": "rust-toolchain.toml",
+    "verified_against": "030a3e42e37c36b7243116bff97b94c5e2450c75"
   },
-  "runtime": {
-    "node": "22.23.1",
-    "chrome": "129.0.6668.58",
-    "hyperframes": "0.8.178",
-    "demo": {
-      "fps": 30,
-      "duration": 44,
-      "width": 1280,
-      "height": 720
-    },
-    "ffmpeg": "2024-04-10-git-0e4dfa4709"
+  "demo": {
+    "duration_s": 24.0,
+    "poster_s": 23.0,
+    "beats": [
+      "Observe",
+      "Identify",
+      "Read",
+      "Refuse",
+      "Act"
+    ],
+    "gif": {
+      "theme": "light",
+      "layout": "desktop",
+      "fps": 10,
+      "colours": 128
+    }
+  },
+  "raster": {
+    "browser": "msedge 158.0.4370.33",
+    "pillow": "13.0.0",
+    "gif_frames": 240,
+    "gif_size": [
+      840,
+      454
+    ]
   },
   "assets": {
     "badge-code.svg": {
-      "bytes": 461,
-      "sha256": "ddbae2369bf13bc5f71b872d6340115c1d7cdf77c882341d810f65b0b2f43393"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 864,
+      "sha256": "1e82f45a9ab3ef5e2c0386f6983bc11042ba52344b52be435434885798e7c5ad"
     },
     "badge-docs.svg": {
-      "bytes": 437,
-      "sha256": "c8fe62e4002f2a3615acbc187e145f562e7f7eea57d345d4b571a882ce48f1ef"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 835,
+      "sha256": "749c392524e27f545a9a5d9ab25fb713a15d84b47d9ecafe90fb61e74e4da567"
     },
     "badge-mcp.svg": {
-      "bytes": 422,
-      "sha256": "2b7ec3fcf3484d40dfd2d1235b49dac0c708d61ecfbb4c63d1c5692ee558e4d6"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 819,
+      "sha256": "971ac3fa7b4ed949c164f0d1a0dc0fd561fa0af61e758eb417a576e280083579"
     },
     "badge-platform.svg": {
-      "bytes": 434,
-      "sha256": "aa07270c6de05a37dd3d6b3407556d2166d2d48465dc3c2ed311b1da155bbd59"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 884,
+      "sha256": "8390d3137ac5e62b1b82f44d3f107500ed250e0d2e2457b3648bdeef0bc4a021"
     },
     "badge-rust.svg": {
-      "bytes": 422,
-      "sha256": "e22928a8a30eaa0b08ae793e5f6499b8d2f12c77613a388189d088d1b445bec4"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 823,
+      "sha256": "182ec8952d6e944234b0c4bb2d8e802e780b27070067f3dedb2465d7109a9540"
     },
     "badge-status.svg": {
-      "bytes": 446,
-      "sha256": "2da70bbdbb5fcfd5f290077d0b0075c52b343d42f5ec6bf7611182d3d0767d48"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 872,
+      "sha256": "ef3d35d7923bc1f53648b2d8e091d8f182580ce89800cabbc92d668ab25c5f74"
     },
     "gate-dark.svg": {
-      "bytes": 2368,
-      "sha256": "c0cc0d8eda8a6024c86a376ce806f8793a603cd7bba4244341513900e5c41e2d"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 8400,
+      "sha256": "967a359cc08be7163cdad0dfad227c7b273b7de75c77d33b7d09018294ea4204"
     },
     "gate-light.svg": {
-      "bytes": 2353,
-      "sha256": "7a18a34eca020f5d476c9c7136d9b41076ee695e43e2caf1b11927ae7bb0a69f"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 8400,
+      "sha256": "937f7c22feec525aa24c7e4ce46d3622914ecaede07d21cd8a73bc458b4ba7a8"
     },
     "gate-mobile-dark.svg": {
-      "bytes": 2026,
-      "sha256": "d1b4dc4814e76235bf10f5740103e1f8276de2c2b37a9b91b6b4919c2369ba0c"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 7085,
+      "sha256": "aef960a9dfca93d3b1327b9ef300e95765e26088196c95b9f50018b4d7c480fe"
     },
     "gate-mobile-light.svg": {
-      "bytes": 2011,
-      "sha256": "7ddecef73ab45252cc4f00521926d9360389ceeeb9b6ade8ff336db65b261523"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 7085,
+      "sha256": "c75f8749460d148349a20610cf7c098e66a8eee4797a2c9ee42a3b17765cdf0a"
     },
     "hero-dark.svg": {
-      "bytes": 2815,
-      "sha256": "399669c831cb553909342004fc3460346763da14484b5e99b18f00cfeb09ba3e"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 5716,
+      "sha256": "97ea1cb89cebc4ca2d5545dc21ff7a8b94a1044e0a803ace67a9d4d9ec7a2c75"
     },
     "hero-light.svg": {
-      "bytes": 2758,
-      "sha256": "c3f3d3b22b78003ac227a500c7962741a1ad5510da750f5e40f604bc9cfca08e"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 5716,
+      "sha256": "bd3b5b1b10f00920509aba4c834f342ee5199494e45c64a194283375333ef2bd"
     },
     "hero-mobile-dark.svg": {
-      "bytes": 1121,
-      "sha256": "daa263abd9903d484c4697b1294b5fbb9dfbeb541ed9a513aa81c2b985643e11"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 5817,
+      "sha256": "30977411057131994cd7127fc48ad5fdcc202d0544b710cb331870ba3ed0c6bc"
     },
     "hero-mobile-light.svg": {
-      "bytes": 1118,
-      "sha256": "4d9b4f2faf57b4707c25aa726e71272b863ed5249d362a266c34afdb71f543a6"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 5817,
+      "sha256": "0eed008d7ac497beee49427a50d9da38a88c2f1ec461c82e1fb7b27aca30eb21"
     },
     "pipeline-dark.svg": {
-      "bytes": 5291,
-      "sha256": "c7d9e87b2a901c8727a0c63b1c82c3e9f9035b0a81ac0358330241d935eb5d32"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 10445,
+      "sha256": "033378238e9d669b4bf223568284667d3a28b6164dbd1c6950b65e958436a851"
     },
     "pipeline-light.svg": {
-      "bytes": 5258,
-      "sha256": "84c3fca09328a6d83ff1423a982d6193b326c5fd3e585c043549ce4acf804dc7"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 10445,
+      "sha256": "fde12b617dc60b018e6517c63b619c130243f5ad49e1fba204928ebb0e628379"
     },
     "pipeline-mobile-dark.svg": {
-      "bytes": 5279,
-      "sha256": "67661956fc44692cffd4d138db052aa98f67979aa708410624bae3a6bd4c2dff"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 8663,
+      "sha256": "38bed0fc71c4e68b415b68840593213f47d35fe1438d110efcbff1f843e3ec10"
     },
     "pipeline-mobile-light.svg": {
-      "bytes": 5246,
-      "sha256": "5f30d36cbdf5c6c6399b2462853d1d06cbba3f6f8296816fe0a3fd18d9e5d9a6"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 8663,
+      "sha256": "6ea27ef3cb9545f19b6a739b8e013a28ec989b94c7be539e2619ab1148790b50"
+    },
+    "protocol-demo-dark.svg": {
+      "kind": "animated-svg",
+      "reproducible": "bytes",
+      "bytes": 30049,
+      "sha256": "89cc5f8a6f551f77ec4bf967ccf36180bfce6ae1630bb226c2d8ba6aaf8d9c64"
+    },
+    "protocol-demo-light.svg": {
+      "kind": "animated-svg",
+      "reproducible": "bytes",
+      "bytes": 30049,
+      "sha256": "3a444b1013bf846bc1417c8d06067625c43df9bed34218a8fe30a12bb16d9945"
+    },
+    "protocol-demo-mobile-dark.svg": {
+      "kind": "animated-svg",
+      "reproducible": "bytes",
+      "bytes": 29645,
+      "sha256": "3e6672e5ef08a2e198b92ecfd85f60e86e676e7f9708a2d2eb05031c293d566d"
+    },
+    "protocol-demo-mobile-light.svg": {
+      "kind": "animated-svg",
+      "reproducible": "bytes",
+      "bytes": 29645,
+      "sha256": "0126c8b5464c44caaac370c80d9a99bb438a12e6e0d05b38f6a029f348be1548"
     },
     "protocol-demo.gif": {
-      "bytes": 4451340,
-      "sha256": "b33cd887e0d1fa011b604904318bdbe57a0f92d66fb51bfa42e984fcfdde591e"
-    },
-    "protocol-demo.mp4": {
-      "bytes": 2486256,
-      "sha256": "a3b0b922eea42592a12c57b3cedc49005c89f7b6521216417be5feab1d79db2e"
+      "kind": "gif",
+      "reproducible": "renderer",
+      "bytes": 427616,
+      "sha256": "a6cd7000d14b16dbd9d65417f73dbecff8098f8a3bb28b66b90ff58cf2164a45"
     },
     "results-dark.svg": {
-      "bytes": 3179,
-      "sha256": "62a40d1351e2ee277bebecc33e9818a4f1ded6c9d2b619480311e1680c97309e"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 7877,
+      "sha256": "40f01527fb601571949d9e96830dc33bbb7bb16a822dd4a0b6c8e0b159d24713"
     },
     "results-light.svg": {
-      "bytes": 3161,
-      "sha256": "b4c085a895f683c27a76eecff7e6fe2061f932b7f3bff79e6abd042d66a56043"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 7877,
+      "sha256": "97138bc554076e59885854527d3d40a6336c36e09d6e1b7015ca3f99ead6e467"
     },
     "results-mobile-dark.svg": {
-      "bytes": 3158,
-      "sha256": "df573726b2502b86e0332bf0d4b50949f8327911271875a8238f01ea3a4aaa7d"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 8190,
+      "sha256": "16e3da9fe05218bffd0a87164a5682bc314f74f0e9c512f252b3b5c2f56f1c6d"
     },
     "results-mobile-light.svg": {
-      "bytes": 3140,
-      "sha256": "17aec56eec30949981dbdef05f94b80a463fc4aa11aafb2366fc071d85b1ed4a"
+      "kind": "svg",
+      "reproducible": "bytes",
+      "bytes": 8190,
+      "sha256": "9eee06b769296685aad267f60a233bbeb6c1ea3b68777c1215ed8de8f8075deb"
     },
     "social-preview.png": {
-      "bytes": 62170,
-      "sha256": "995ef19e7d54fe1d951ab9b4655a6b037262ae22554183b2a7f5030bb2ca2912"
+      "kind": "png",
+      "reproducible": "renderer",
+      "bytes": 68237,
+      "sha256": "a3249dec24cc7058274f4fa60b161dc94fc14e7b30a23bd5d853e599da15dbd0"
     }
   }
 }

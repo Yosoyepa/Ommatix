@@ -1,10 +1,12 @@
 # Diagrams
 
+[All documentation](../README.md) · [Architecture](../architecture/overview.md) · [Arquitectura](../architecture/overview.es.md)
+
 All diagrams are [Mermaid](https://mermaid.js.org) inside Markdown, so GitHub renders them and
 diffs stay reviewable. Labels are in English and captions are bilingual. The first four are
 the thesis views of [`docs/thesis/diagramas/`](../thesis/diagramas/README.md), whose Spanish
-sources stay canonical; the hexagon shows how ADR-0014 lays those components out in crates,
-and the engine view shows the code as of S2b.
+sources stay canonical. The last two are historical: the hexagon shows how ADR-0014 laid those
+components out in crates at S2b, and the engine view shows the code at S2b.
 
 | Diagram | Shows |
 |---|---|
@@ -12,5 +14,5 @@ and the engine view shows the code as of S2b.
 | [components.md](components.md) | The engine's components, from capture to effect verification |
 | [action-sequence.md](action-sequence.md) | `observe_screen` followed by `execute_action`, with its three outcomes |
 | [snapshot-state.md](snapshot-state.md) | Lifecycle of the published snapshot, including the degraded state |
-| [hexagon.md](hexagon.md) | Crates, ports and allowed dependencies |
-| [engine.md](engine.md) | What the implemented `Engine` does for `observe_screen` and `execute_action`, port by port |
+| [hexagon.md](hexagon.md) | Crates, ports and allowed dependencies at S2b (historical) |
+| [engine.md](engine.md) | What the `Engine` did at S2b for `observe_screen` and `execute_action`, port by port (historical) |

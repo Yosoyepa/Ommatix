@@ -1,3 +1,5 @@
+<!-- Read AGENTS.md and .github/CONTRIBUTING.md first. Tick a box only when it is true: a check you ran, a rule you verified. Write "n/a" beside one that does not apply. -->
+
 ## Summary / Resumen
 
 <!-- What changes and why. Qué cambia y por qué. -->
@@ -6,6 +8,7 @@
 
 - [ ] domain
 - [ ] application
+- [ ] adapter-accessibility
 - [ ] adapter-capture
 - [ ] adapter-vision
 - [ ] adapter-input
@@ -16,14 +19,25 @@
 - [ ] thesis dossier (`docs/thesis/`)
 - [ ] docs only
 
-## Checklist
+## Checklist / Lista de comprobación
+
+**Checks / Comprobaciones**
 
 - [ ] `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace` pass
 - [ ] Thesis checks pass (`python referencia_ejecutable/run_tests.py`, `python validar_paquete.py` in `docs/thesis/`)
+
+**Specification / Especificación**
+
 - [ ] Follows the thesis dossier; a change to a requirement, algorithm, contract or scenario updates it and its CHANGELOG
 - [ ] Tests that implement planned tests carry their IDs (UT-xx, CT-xx…)
-- [ ] Dependency rule respected (AGENTS.md §3)
 - [ ] New user-visible behaviour has a Gherkin scenario traced to its requirement
-- [ ] Paired docs updated in both languages (`*.md` + `*.es.md`)
+
+**Design / Diseño**
+
+- [ ] Dependency rule respected (AGENTS.md §3)
 - [ ] ADR added or updated if an architectural decision changed
 - [ ] Hot path touched? Per-stage timings before/after included
+
+**Documentation / Documentación**
+
+- [ ] Paired docs updated in both languages (`*.md` + `*.es.md`)

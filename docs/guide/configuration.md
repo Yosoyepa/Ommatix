@@ -1,8 +1,12 @@
 # Configuration
 
-[Español](configuration.es.md) · [Getting started](getting-started.md)
+[README](../../README.md) → [Getting started](getting-started.md) → **Configuration** → [Live input](live-input.md) · [Development](development.md) · [All documentation](../README.md) · [Español](configuration.es.md)
 
-## Build features, all off by default:
+<a id="build-features-all-off-by-default"></a>
+
+## Build features
+
+All off by default.
 
 | Feature | Adds | Platform |
 |---|---|---|
@@ -29,8 +33,6 @@
 | `--legacy` | also serve the legacy MCP profile 2025-11-25 (like `[mcp] legacy_enabled = true`) | off |
 | `--observations N` (`demo` only) | 1–20 | 3 |
 
-
-
 ## Configuration file
 
 The configuration file has the shape of
@@ -39,18 +41,33 @@ The configuration file has the shape of
 template's values apply, which deny actuation and redact values. No CLI flag loosens
 `[safety]`. The file is checked strictly:
 
-- **Refused** (the server does not start): unknown sections or keys; out-of-range values
-  (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024, `full_refresh_area_ratio`
-  in (0, 1], `adaptive_min_regions` 0–1024 (default `2`; a plan with that many regions or more is processed as a full refresh, reason `adaptive_cost`, [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md); `0` switches the rule off), `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` a boolean (default `true`), `candidate_search` `scan` (default, the reference) or `rstar` (experimental R*-tree, [ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md); the same results), `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
-  blank `allowed_applications` entries, a blank `stop_file`, `window_pin_file` or `purge_file`, an
-  `allowed_window_classes` entry that could never apply or that names the desktop, the taskbar or
-  `applicationframehost.exe`); and values this build cannot
-  honour: a `platform` other than `windows`, a `snapshot_policy` other than `strict`, a `profile` other than
-  `2026-07-28` (the legacy profile is enabled with `legacy_enabled`), a `transport` other than
-  `stdio`, `allow_destructive = true`, `allow_screenshots_to_client = true`,
-  `[models] detector_path`, `detector_sha256`, `ocr_path` or `ocr_sha256` (weights are
-  declared in the model manifest), a half-configured or malformed detector pin (below),
-  and `[cache] persist = true`.
+- **Refused** (the server does not start): unknown sections or keys, out-of-range values and
+  values this build cannot honour.
+
+  | Key | Accepted |
+  |---|---|
+  | `tile_size` | 8–1024 |
+  | `halo_px` | ≤ 1024 |
+  | `max_regions` | 1–1024 |
+  | `full_refresh_area_ratio` | in (0, 1] |
+  | `adaptive_min_regions` | 0–1024 (default `2`; a plan with that many regions or more is processed as a full refresh, reason `adaptive_cost`, [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md); `0` switches the rule off) |
+  | `max_snapshot_age_ms` | ≥ 1 |
+  | `verify_timeout_ms` | 0–5000 |
+  | `verify_poll_ms` | 1–1000 |
+  | `concurrent_stages` | a boolean (default `true`) |
+  | `candidate_search` | `scan` (default, the reference) or `rstar` (experimental R*-tree, [ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md); the same results) |
+  | `max_message_bytes` | 4096–65536 |
+  | `max_entries` | ≥ 1 |
+  | `allowed_applications` | no blank entry |
+  | `stop_file`, `window_pin_file`, `purge_file` | not blank |
+  | `allowed_window_classes` | no entry that could never apply or that names the desktop, the taskbar or `applicationframehost.exe` |
+
+  Values this build cannot honour: a `platform` other than `windows`, a `snapshot_policy` other
+  than `strict`, a `profile` other than `2026-07-28` (the legacy profile is enabled with
+  `legacy_enabled`), a `transport` other than `stdio`, `allow_destructive = true`,
+  `allow_screenshots_to_client = true`, `[models] detector_path`, `detector_sha256`, `ocr_path`
+  or `ocr_sha256` (weights are declared in the model manifest), a half-configured or malformed
+  detector pin (below), and `[cache] persist = true`.
 - **Enforced** (ADR-0025): `max_snapshot_age_ms` (default `10000`) bounds how old, on the
   engine's clock, the capture of the published snapshot and the accessibility read that
   confirms a target may be when an action is authorised. Past that age the action is refused
@@ -90,8 +107,6 @@ against their SHA-256 before anything is loaded, and a mismatch, a missing build
 an uninstalled OCR language stops the engine before any capture opens: nothing falls back to
 another model or language. With `--source sim` the keys are ignored, with a note on stderr.
 No detector is accepted for the product; the spike selected a candidate for integration and measurement (S0, [ADR-0009](../adr/0009-models-and-licences-decided-in-the-spike.md)).
-
-
 
 ## Accessibility and experimental options
 
