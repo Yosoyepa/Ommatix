@@ -713,38 +713,115 @@ fn a_second_listener_on_the_same_name_fails_and_a_new_one_binds_once_the_first_i
 
 // ---- 3. the descriptor ----
 
-/// Reads the pipe's descriptor back the way the experiment did: PowerShell's `Get-Acl` on the
-/// pipe's path (it opens the pipe, so it is retried while the instance is busy). Returns the
-/// access part, the owner part and the current user's SID.
+/// What the test's own PowerShell reads about the pipe and about the token it runs with (the
+/// test process's token: the child inherits it, and the pipe was created under it).
 ///
-/// The script's pause of 100 ms only spaces its retries while the instance is busy; it decides
-/// nothing: the test asserts the descriptor it finally reads, and fails if none is read.
-fn descriptor_of(name: &PipeName) -> (String, String, String) {
-    let script = format!(
-        "$p = '{}'; for ($i = 0; $i -lt 150; $i++) {{ try {{ $a = Get-Acl -LiteralPath $p \
-         -ErrorAction Stop; '{{0}}|{{1}}|{{2}}' -f $a.GetSecurityDescriptorSddlForm('Access'), \
-         $a.GetSecurityDescriptorSddlForm('Owner'), \
-         [Security.Principal.WindowsIdentity]::GetCurrent().User.Value; exit 0 }} catch {{ \
-         Start-Sleep -Milliseconds 100 }} }}; exit 1",
-        name.path()
-    );
+/// The descriptor is read through a connected client handle of .NET
+/// (`System.IO.Pipes.NamedPipeClientStream` and `GetAccessControl()`), as the experiment read
+/// the default pipe's: no path provider is involved. A client connection consumes the one
+/// listening instance, so the read is retried while the instance is busy; the 100 ms of each
+/// `Connect` only spaces the retries and decides nothing: the test asserts the descriptor it
+/// finally reads, and fails, saying why, if none is read. `Get-Acl` is then tried as well, only
+/// to report what it does on this machine (the first CI run on an elevated runner never read
+/// the pipe with it, and said nothing about why).
+///
+/// Every line is `key=value`; the keys are those of [`DESCRIPTOR_KEYS`].
+const DESCRIPTOR_SCRIPT: &str = r"
+$leaf = '{LEAF}'; $p = '{PATH}'; $dir = $p.Substring(0, $p.Length - $leaf.Length)
+function Show-Error($e) {
+  while ($null -ne $e.InnerException) { $e = $e.InnerException }
+  ($e.GetType().FullName + ' (0x' + $e.HResult.ToString('X8') + '): ' + $e.Message) -replace '\s+', ' '
+}
+'ps_edition=' + $PSVersionTable.PSEdition
+'ps_version=' + $PSVersionTable.PSVersion
+'os=' + [Environment]::OSVersion.VersionString
+$id = [Security.Principal.WindowsIdentity]::GetCurrent()
+'user_sid=' + $id.User.Value
+'token_default_owner_sid=' + $id.Owner.Value
+'administrators_enabled=' + ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+try { 'integrity_sid=' + [regex]::Match(((whoami /groups) -join ' '), 'S-1-16-\d+').Value } catch { 'integrity_sid=error: ' + (Show-Error $_.Exception) }
+try { 'pipe_listed=' + (@([IO.Directory]::GetFiles($dir)) -contains $p) } catch { 'pipe_listed=error: ' + (Show-Error $_.Exception) }
+$read = $false; $last = 'none'; $tries = 0
+for ($i = 0; $i -lt 150 -and -not $read; $i++) {
+  $tries = $i + 1
+  $c = New-Object System.IO.Pipes.NamedPipeClientStream('.', $leaf, [System.IO.Pipes.PipeDirection]::InOut)
+  try {
+    $c.Connect(100)
+    $s = $c.GetAccessControl()
+    'sddl=' + $s.GetSecurityDescriptorSddlForm('All')
+    'access=' + $s.GetSecurityDescriptorSddlForm('Access')
+    'owner=' + $s.GetSecurityDescriptorSddlForm('Owner')
+    'owner_sid=' + $s.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    $read = $true
+  } catch { $last = Show-Error $_.Exception } finally { $c.Dispose() }
+}
+'dotnet_tries=' + $tries
+'dotnet_last_error=' + $(if ($read) { 'none' } else { $last })
+$acl = 'not read'; $last = 'none'; $tries = 0
+for ($i = 0; $i -lt 20; $i++) {
+  $tries = $i + 1
+  try { $a = Get-Acl -LiteralPath $p -ErrorAction Stop; $acl = $a.GetSecurityDescriptorSddlForm('Access') + ' ' + $a.GetSecurityDescriptorSddlForm('Owner'); break }
+  catch { $last = Show-Error $_.Exception; Start-Sleep -Milliseconds 100 }
+}
+'get_acl=' + $acl + ' after ' + $tries + ' tries; last error: ' + $last
+if ($read) { exit 0 } else { exit 1 }
+";
+
+/// The keys [`DESCRIPTOR_SCRIPT`] prints, in its order.
+const DESCRIPTOR_KEYS: [&str; 15] = [
+    "ps_edition",
+    "ps_version",
+    "os",
+    "user_sid",
+    "token_default_owner_sid",
+    "administrators_enabled",
+    "integrity_sid",
+    "pipe_listed",
+    "sddl",
+    "access",
+    "owner",
+    "owner_sid",
+    "dotnet_tries",
+    "dotnet_last_error",
+    "get_acl",
+];
+
+/// Reads the pipe's descriptor and the token's facts with [`DESCRIPTOR_SCRIPT`], writes every
+/// line to the test's standard error (straight to the handle, so that it is in the log of a
+/// passing run too; never to a file), and fails, with everything the script printed, if the
+/// descriptor was not read.
+fn descriptor_of(name: &PipeName) -> BTreeMap<String, String> {
+    let script = DESCRIPTOR_SCRIPT
+        .replace("{LEAF}", name.name())
+        .replace("{PATH}", name.path());
     let output = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .expect("PowerShell runs");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let mut log = io::stderr().lock();
+    for line in stdout.lines().filter(|l| !l.trim().is_empty()) {
+        let _ = writeln!(log, "pipe-descriptor: {}", line.trim());
+    }
+    if !stderr.trim().is_empty() {
+        let _ = writeln!(log, "pipe-descriptor: powershell stderr: {}", stderr.trim());
+    }
+    drop(log);
+    let facts: BTreeMap<String, String> = stdout
+        .lines()
+        .filter_map(|l| l.trim().split_once('='))
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
     assert!(
         output.status.success(),
-        "Get-Acl never read the pipe: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "the pipe's descriptor was never read (exit {:?}).\nstdout:\n{stdout}\nstderr:\n{stderr}",
+        output.status.code()
     );
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    let parts: Vec<&str> = text.split('|').collect();
-    assert_eq!(parts.len(), 3, "{text}");
-    (
-        parts[0].to_owned(),
-        parts[1].to_owned(),
-        parts[2].to_owned(),
-    )
+    for key in DESCRIPTOR_KEYS {
+        assert!(facts.contains_key(key), "no `{key}` in:\n{stdout}");
+    }
+    facts
 }
 
 #[test]
@@ -752,17 +829,17 @@ fn the_pipe_s_descriptor_grants_its_owner_only_and_the_owner_is_this_user() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "acl");
-    let (access, owner, user) = descriptor_of(server.name());
+    let facts = descriptor_of(server.name());
     assert_eq!(
-        access, "D:P(A;;FA;;;OW)",
-        "one protected entry, for the owner"
+        facts["access"], "D:P(A;;FA;;;OW)",
+        "one protected entry, for the owner; {facts:?}"
     );
     assert_eq!(
-        owner,
-        format!("O:{user}"),
-        "an engine that is not elevated owns it"
+        facts["owner"],
+        format!("O:{}", facts["user_sid"]),
+        "an engine that is not elevated owns it; {facts:?}"
     );
-    assert_eq!(clients(&broker), 0, "Get-Acl was never admitted");
+    assert_eq!(clients(&broker), 0, "the readers were never admitted");
     assert!(server.shutdown(PATIENCE).complete());
 }
 
