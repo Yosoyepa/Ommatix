@@ -135,8 +135,10 @@ Status of the amendment: **Proposed**. It is not accepted until the project owne
 pull request that carries it. No decision above is rewritten; it refines how point 2 selects
 "the regions whose evidence has expired".
 
-The lab's measurement with the ONNX detector on CPU (an observation of 3 to 8 s) refused 3 of 24
-clicks for the age of the accessibility evidence. The rule worked as written: an observation
+An exploratory session run by an agent on a laptop (the lab of the project's protocol, with the
+ONNX detector on CPU, an observation of 3 to 8 s) refused 3 of 24 clicks for the age of the
+accessibility evidence. That session is engineering evidence for this change, not evidence of the
+dossier: it is not a supervised run, and no definition-of-done box rests on it. The rule worked as written: an observation
 judged the evidence at the instant it started, kept evidence that was still young then, and
 published it seconds later older than `max_snapshot_age_ms`. The bound was sized for an
 observation that takes milliseconds.
@@ -157,8 +159,21 @@ observation that takes milliseconds.
    moves the instant at which reuse is judged, so the set read is never smaller than before:
    with a fast observation it differs only for evidence within `h` of its expiry.
 4. **Cost.** More accessibility reads, only for evidence that would have expired before the
-   observation ended. No safeguard is relaxed; the refusal an agent saw for age becomes a read
-   made by the observation that would have published expired evidence.
+   observation ended. No observation makes a second provider call: the regions of that evidence
+   join the one call the observation already makes for its plan and its gaps, so the extra is
+   the elements of those regions, bounded by the accessibility budget of ADR-0017, never an
+   extra call. The evidence added is the one whose age at the start is in the band
+   `(max_snapshot_age_ms - h, max_snapshot_age_ms]`, which today is kept. Once re-read it has a
+   new `read_at`, so on a static screen a given region is read again about every
+   `max_snapshot_age_ms - h` instead of every `max_snapshot_age_ms`, and when `h` is at least
+   `max_snapshot_age_ms` every observation reads all the evidence it holds. With a fast
+   observation (`h` of tens of milliseconds) the band is that narrow. No safeguard is relaxed;
+   the refusal an agent saw for age becomes a read made by the observation that would have
+   published expired evidence.
+5. **Overflow.** `t0 + h` is computed with checked arithmetic. If it does not fit in the clock's
+   range the horizon is beyond every bound, so the evidence is read again (the horizon is at
+   the limit), the same as `h >= max_snapshot_age_ms`; it is never saturated into a shorter
+   horizon.
 
 Required validation: UT-88 in `src/application/src/engine/tests/snapshot_age.rs`.
 

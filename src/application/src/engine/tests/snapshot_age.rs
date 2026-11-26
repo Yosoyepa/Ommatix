@@ -506,3 +506,29 @@ fn ut_88_a_zero_estimate_selects_what_the_old_rule_selected_and_any_estimate_nev
         }
     }
 }
+
+/// UT-88: `now + h` is checked arithmetic. A horizon that does not fit in the clock's range is at
+/// the limit and reads everything again; saturating it into `Duration::MAX` would judge evidence
+/// read at that very instant as still within the bound.
+#[test]
+fn ut_88_a_horizon_that_overflows_the_clock_reads_everything_again() {
+    use super::super::expires_within;
+    let ms = Duration::from_millis;
+    let (max, small) = (ms(10_000), ms(1));
+    // Evidence read at the last representable instant, judged at that instant: no overflow, and
+    // an estimate of zero is the old rule: not expired.
+    assert!(!expires_within(
+        Duration::MAX,
+        Duration::MAX,
+        Duration::ZERO,
+        max
+    ));
+    // One millisecond more overflows `now + h`: the horizon is at the limit.
+    assert!(expires_within(Duration::MAX, Duration::MAX, small, max));
+    let nearly_max = Duration::MAX
+        .checked_sub(small)
+        .expect("the maximum duration is longer than a millisecond");
+    assert!(expires_within(nearly_max, Duration::MAX, ms(2), max));
+    // An addition that fits is judged as before: 1 ms after a read made 9 s earlier.
+    assert!(!expires_within(ms(9_000), Duration::ZERO, small, max));
+}
