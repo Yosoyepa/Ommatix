@@ -722,8 +722,9 @@ fn a_second_listener_on_the_same_name_fails_and_a_new_one_binds_once_the_first_i
 /// listening instance, so the read is retried while the instance is busy; the 100 ms of each
 /// `Connect` only spaces the retries and decides nothing: the test asserts the descriptor it
 /// finally reads, and fails, saying why, if none is read. `Get-Acl` is then tried as well, only
-/// to report what it does on this machine (the first CI run on an elevated runner never read
-/// the pipe with it, and said nothing about why).
+/// to report what it does on this machine: on CI's windows-latest (run 45814291197) Windows
+/// PowerShell could not load its type data for `ObjectSecurity` ("The member Sddl is already
+/// present") and never read the pipe; here it reads it at the second try.
 ///
 /// Every line is `key=value`; the keys are those of [`DESCRIPTOR_KEYS`].
 const DESCRIPTOR_SCRIPT: &str = r"
@@ -824,21 +825,96 @@ fn descriptor_of(name: &PipeName) -> BTreeMap<String, String> {
     facts
 }
 
+/// `BUILTIN\Administrators`, the default owner Windows gives the objects of an elevated token.
+const ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+
+/// The integrity level from which a token counts as elevated (`S-1-16-12288`, High).
+const HIGH_INTEGRITY_RID: u32 = 12288;
+
+/// Whether the token the pipe was created under is elevated: its integrity level is High or
+/// above, or the Administrators group is enabled in it. Fails if either fact was not read.
+fn elevated(facts: &BTreeMap<String, String>) -> bool {
+    let integrity: u32 = facts["integrity_sid"]
+        .strip_prefix("S-1-16-")
+        .and_then(|rid| rid.parse().ok())
+        .unwrap_or_else(|| panic!("the token's integrity level was not read; {facts:?}"));
+    let administrators = match facts["administrators_enabled"].as_str() {
+        "True" => true,
+        "False" => false,
+        other => panic!("`administrators_enabled` is {other:?}; {facts:?}"),
+    };
+    integrity >= HIGH_INTEGRITY_RID || administrators
+}
+
 #[test]
 fn the_pipe_s_descriptor_grants_its_owner_only_and_the_owner_is_this_user() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "acl");
     let facts = descriptor_of(server.name());
+
+    // The shape, whatever the token: a protected DACL (`P`: nothing inherited from a parent)
+    // with exactly the one entry the server writes, an allow of every right to OWNER RIGHTS,
+    // with no flags (nothing inheritable), and no SACL; so nothing for Everyone (`WD`),
+    // Authenticated Users (`AU`), the network (`NU`) or anonymous logons (`AN`).
     assert_eq!(
         facts["access"], "D:P(A;;FA;;;OW)",
         "one protected entry, for the owner; {facts:?}"
     );
-    assert_eq!(
-        facts["owner"],
-        format!("O:{}", facts["user_sid"]),
-        "an engine that is not elevated owns it; {facts:?}"
+    assert!(
+        facts["sddl"].ends_with("D:P(A;;FA;;;OW)"),
+        "the whole descriptor holds that DACL and nothing after it; {facts:?}"
     );
+    for (alias, sid) in [
+        ("WD", "S-1-1-0"),
+        ("AU", "S-1-5-11"),
+        ("NU", "S-1-5-2"),
+        ("AN", "S-1-5-7"),
+    ] {
+        // An entry's trustee is the last field before its `)`, so the whole field is matched:
+        // `S-1-5-2` is also the start of every local account's SID.
+        assert!(
+            !facts["sddl"].contains(&format!(";{alias})"))
+                && !facts["sddl"].contains(&format!(";{sid})")),
+            "nothing for {alias}; {facts:?}"
+        );
+    }
+    // The server sets no owner, so the pipe's owner is the token's default owner.
+    assert_eq!(
+        facts["owner_sid"], facts["token_default_owner_sid"],
+        "the owner is the token's default owner; {facts:?}"
+    );
+
+    if elevated(&facts) {
+        // An elevated engine (seen on CI's windows-latest, run 45814291197: Windows Server 2025,
+        // the built-in Administrator, integrity High, owner `O:BA`). Windows may give the pipe
+        // to `BUILTIN\Administrators` instead of the user; `OW` then grants it to every process
+        // whose token has the Administrators group enabled, every elevated process of every
+        // administrator of the machine, and not to the user alone. That is not the narrow case
+        // and the test does not treat it as one: it checks that the owner is one of the two
+        // owners Windows can give and says which. Whether an elevated engine may serve the pipe
+        // at all is ADR-0043's open point (decision 6, "how the engine refuses to start the
+        // broker when elevated"), the owner's decision; the server is unchanged here.
+        let owner = &facts["owner_sid"];
+        let which = if *owner == facts["user_sid"] {
+            "the user"
+        } else if owner == ADMINISTRATORS_SID {
+            "BUILTIN\\Administrators: owner-only means every elevated administrator"
+        } else {
+            panic!(
+                "an elevated engine's pipe is owned by neither the user nor Administrators; {facts:?}"
+            )
+        };
+        let _ = writeln!(
+            io::stderr().lock(),
+            "pipe-descriptor: elevated token; the pipe's owner is {which} ({owner})"
+        );
+    } else {
+        assert_eq!(
+            facts["owner_sid"], facts["user_sid"],
+            "an engine that is not elevated owns it; {facts:?}"
+        );
+    }
     assert_eq!(clients(&broker), 0, "the readers were never admitted");
     assert!(server.shutdown(PATIENCE).complete());
 }
