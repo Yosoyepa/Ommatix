@@ -42,7 +42,7 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
 - **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
   rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
   `full_refresh_area_ratio` en (0, 1], `adaptive_min_regions` 0–1024 (por defecto `2`; un plan con esa cantidad de regiones o más se procesa como refresco completo, razón `adaptive_cost`, [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md); `0` apaga la regla), `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` booleano (por defecto `true`), `candidate_search` `scan` (por defecto, la referencia) o `rstar` (R*-tree experimental, [ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md); los mismos resultados), `max_message_bytes`
-  4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`,
+  4096–65536, `max_entries` ≥ 1, `type_key_pause_ms` 0–50, `type_boundary_pause_ms` 0–250, entradas vacías en `allowed_applications`, un `stop_file`,
   `window_pin_file` o `purge_file` en blanco, una entrada de `allowed_window_classes` que nunca podría
   aplicarse o que nombra el escritorio, la barra de tareas o `applicationframehost.exe`); y valores que este binario no puede cumplir: un `platform` distinto de
   `windows`, un `snapshot_policy`
@@ -57,6 +57,65 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
   `STALE_SNAPSHOT` (observar de nuevo, sin reanclar): en la puerta, también en simulación, y
   antes de cada entrada real, incluidas las teclas de un `type` en dos fases. Una publicación
   nueva no renueva una lectura de accesibilidad antigua.
+- **Opcional, apagado por defecto** (`[safety] type_key_pause_ms`, `type_boundary_pause_ms`): con
+  ambos en `0` el actuador `SendInput` en vivo entrega al sistema el texto entero de un `type` en
+  una sola llamada. Con cualquiera mayor que cero envía una llamada por carácter (un par
+  sustituto va junto), espera la primera pausa tras cada carácter al que sigue otro y también la
+  segunda tras un espacio o un signo de puntuación al que sigue más texto, y antes de cada
+  carácter después del primero vuelve a comprobar la parada del operador, la ventana en primer
+  plano, la aplicación en primer plano con el foco de teclado y las teclas modificadoras
+  pulsadas. Una comprobación que falla termina el texto ahí y la acción queda `indeterminate`
+  (entrada entregada, snapshot gastado), sin reintento. Un `type` con pausas cuya suma pase de
+  30 s se **rechaza** antes de enviar nada, como `LIMIT_EXCEEDED` con `next_step:
+  reduce_request` (enviar menos texto por llamada), también en simulación, y no se gasta el
+  snapshot. Estas claves cambian cómo llegan las teclas a la aplicación, no si pueden llegar;
+  ninguna opción de la línea de órdenes ni el agente puede fijarlas. El efecto sólo se midió
+  en una sesión exploratoria ejecutada por un agente, en un portátil, con una compilación de una
+  aplicación (véase el perfil medido más abajo); no está medido en ninguna otra aplicación ni por
+  las sesiones supervisadas del dossier: déjelas en `0` salvo que lo esté midiendo.
+  **Lo que cuesta un `type` espaciado.** El motor atiende una petición a la vez, así que queda
+  retenido, y cualquier otra llamada de la sesión espera, durante toda la entrega. Sólo las
+  pausas suman como mucho 30 s (la cota de arriba: 2048 caracteres, el `type` más largo, a 14 ms
+  cada uno son 28,7 s; 600 caracteres a 50 ms son 30 s). A eso se suman los envíos y las
+  comprobaciones de cada carácter (no medidos; decenas a cientos de microsegundos cada uno,
+  como mucho un segundo para 2048 caracteres) y el exceso del temporizador: cada pausa es una
+  sola espera (la pausa de límite de palabra se suma a la de tecla, no se espera aparte), y una
+  espera puede durar hasta un tic del temporizador más de lo pedido, unos 15,6 ms donde el
+  temporizador del sistema es grueso. El peor caso, 2048 caracteres, es por tanto de unos 30 s
+  + 1 s + 2047 × 15,6 ms ≈ 63 s; una frase de 29 caracteres con 10 ms y 50 ms tarda 0,53 s más
+  0,44 s como mucho. La parada del operador se lee antes de cada carácter, así que surte efecto
+  en una pausa (300 ms como mucho) más el exceso. Entre una comprobación y el `SendInput` que la
+  sigue hay una ventana de decenas a cientos de microsegundos (las propias comprobaciones y la
+  reserva de los eventos; no medida). No puede ser cero: Windows no tiene una llamada que lea
+  la ventana de primer plano y envíe entrada de forma atómica, así que el primer plano puede
+  cambiar entre cualquier comprobación y el envío siguiente, como antes de la primera tecla
+  (capítulo 08 §8.3).
+  **Un perfil medido: un portátil, una aplicación, no una validación.** En una medición
+  exploratoria ejecutada por un agente, en un portátil, con una compilación de una aplicación
+  (el Bloc de notas 11.2609, cuyo cuadro de texto es WinUI), un `type` enviado de golpe (ambas
+  claves en `0`) se corrompía después de un límite de palabra. `type_boundary_pause_ms = 100`
+  solo estuvo limpio con textos de unos 30 caracteres o menos (12 de 12 corridas).
+  `type_key_pause_ms = 20` con `type_boundary_pause_ms = 100` estuvo limpio con todos los textos
+  probados, incluido uno de 200 caracteres (12 de 12 y 3 de 3 corridas), a unos 41–43 ms por
+  carácter frente a unos 4. Pausas de 1–10 ms entre caracteres o de 5–20 ms tras un límite no
+  lo curaron. La aplicación de pruebas del proyecto no necesitó ninguna. Estos números no son
+  una validación del dossier y no dicen nada de otra aplicación o compilación; los valores por
+  defecto siguen en `0` y el operador elige los valores para las aplicaciones de un despliegue.
+  **Cuando una comprobación detiene un `type` espaciado**, la acción queda `indeterminate`
+  (se enviaron algunas teclas) y su mensaje nombra la comprobación (la parada del operador; la
+  ventana de primer plano; el foco de teclado o la aplicación en primer plano; una tecla
+  modificadora o un botón del ratón pulsados) y dice cuántos caracteres del texto se enviaron
+  de cuántos: un recuento, nunca el texto.
+  **Lo que un `type` espaciado no vuelve a comprobar entre caracteres.** La ventana de primer
+  plano se compara por identificador con la que el motor autorizó justo antes de las teclas; la
+  misma ventana cumple la lista de aplicaciones, el alcance por clase de ventana y la ventana
+  registrada como las cumplía entonces, así que quedan implícitas, tal como estaban al empezar
+  el texto. No se repiten: el foco de UI Automation en el elemento objetivo (sólo se comprueban
+  la aplicación en primer plano y la ventana con el foco de teclado, así que no se detecta que
+  el foco pase a otro control de la misma ventana); el archivo de la ventana registrada (se lee
+  una vez: cambiarlo durante un texto no detiene ese texto, use la parada); la ventana bajo el
+  punto objetivo; y la edad del snapshot (`max_snapshot_age_ms` se comprueba antes de la primera
+  tecla y un `type` espaciado de hasta 30 s puede superarla).
 - **Se acepta sin efecto** (una nota en stderr al arrancar): `actuation_enabled = true` con un
   adaptador de entrada que no es real.
 

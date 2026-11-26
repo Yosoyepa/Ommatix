@@ -8,7 +8,7 @@
 //! |---|---|---|---|
 //! | [`DryRunInput`] | always | no | default; records what it is handed, submits nothing |
 //! | `NativeInput` | `native` | yes | real mouse/keyboard via `enigo`: move to the point, then click, type or scroll; it cannot attest the foreground application, so the engine never lets it act live |
-//! | `SendInputActuator` | `sendinput` (Windows) | yes | Win32 `SendInput` in one batch per action, after checking the foreground process, its integrity level and the modifier keys |
+//! | `SendInputActuator` | `sendinput` (Windows) | yes | Win32 `SendInput` in one batch per action, after checking the foreground process, its integrity level and the modifier keys; the keys of a `type` may be paced, one call per character, off by default (`TypePacing`) |
 //!
 //! `SendInputActuator` is the only code of this crate that uses `unsafe`, confined to its
 //! `#[cfg(windows)]` module (ADR-0016).
@@ -24,5 +24,9 @@ mod sendinput;
 pub use dry_run::{ActionLog, DryRunInput, RecordedAction};
 #[cfg(feature = "native")]
 pub use native::NativeInput;
+#[cfg(feature = "sendinput")]
+pub use sendinput::{
+    MAX_PACED_TYPE, MAX_TYPE_BOUNDARY_PAUSE_MS, MAX_TYPE_KEY_PAUSE_MS, TypePacing,
+};
 #[cfg(all(windows, feature = "sendinput"))]
 pub use sendinput::{SendInputActuator, WindowReader};

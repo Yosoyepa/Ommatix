@@ -31,8 +31,8 @@ pub use engine::{
 pub use error::{PortError, error_chain};
 pub use ports::{
     AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame,
-    Clock, DeliveryReceipt, FrameCapturer, LocalPolicy, NativeIdentity, NoAccessibility,
-    OsActuator, PolicyStore, TextRecognizer, TopLevelWindow, VisionDetector, WindowOpacity,
-    WindowPin,
+    Clock, DeliveryReceipt, FrameCapturer, KeysStopCheck, KeysStopped, LocalPolicy, NativeIdentity,
+    NoAccessibility, OsActuator, PolicyStore, TextRecognizer, TopLevelWindow, VisionDetector,
+    WindowOpacity, WindowPin,
 };
 pub use window_scope::{window_scope_applies, window_scope_problem};

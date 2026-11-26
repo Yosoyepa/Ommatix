@@ -41,7 +41,7 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
 
 - **Refused** (the server does not start): unknown sections or keys; out-of-range values
   (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024, `full_refresh_area_ratio`
-  in (0, 1], `adaptive_min_regions` 0–1024 (default `2`; a plan with that many regions or more is processed as a full refresh, reason `adaptive_cost`, [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md); `0` switches the rule off), `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` a boolean (default `true`), `candidate_search` `scan` (default, the reference) or `rstar` (experimental R*-tree, [ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md); the same results), `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
+  in (0, 1], `adaptive_min_regions` 0–1024 (default `2`; a plan with that many regions or more is processed as a full refresh, reason `adaptive_cost`, [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md); `0` switches the rule off), `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` a boolean (default `true`), `candidate_search` `scan` (default, the reference) or `rstar` (experimental R*-tree, [ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md); the same results), `max_message_bytes` 4096–65536, `max_entries` ≥ 1, `type_key_pause_ms` 0–50, `type_boundary_pause_ms` 0–250,
   blank `allowed_applications` entries, a blank `stop_file`, `window_pin_file` or `purge_file`, an
   `allowed_window_classes` entry that could never apply or that names the desktop, the taskbar or
   `applicationframehost.exe`); and values this build cannot
@@ -57,6 +57,61 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
   with `STALE_SNAPSHOT` (observe again, never re-target): at the gate, simulated actions
   included, and again before every real input, including the keys of a two-phase `type`.
   A new publication does not renew an old accessibility read.
+- **Optional, off by default** (`[safety] type_key_pause_ms`, `type_boundary_pause_ms`): with both
+  at `0` the live `SendInput` actuator hands the whole text of a `type` to the system in one call.
+  With either above zero it sends one call per character (a surrogate pair stays together), waits
+  the first pause after every character that another follows and the second as well after white
+  space or punctuation that more text follows, and before every character after the first checks
+  again the operator's stop, the foreground window, the foreground application with keyboard
+  focus and held modifier keys. A failed check ends the text there and the action is
+  `indeterminate` (input delivered, snapshot spent), never retried. A paced `type` whose pauses
+  add up to more than 30 s is **rejected** before anything is sent, as `LIMIT_EXCEEDED` with
+  `next_step: reduce_request` (send less text per call), also as a dry run, and the snapshot is
+  not spent. These keys change how the keys reach the application, not whether they may; no
+  CLI flag or agent can set them. The effect was measured only in an agent-run exploratory
+  session on one laptop, on one build of one application (see the measured profile below); it is
+  not measured on any other application, nor by the dossier's supervised sessions, so leave them
+  at `0` unless you are measuring it.
+  **What a paced `type` costs.** The engine serves one request at a time, so it is held, and
+  every other call of the session waits, for the whole delivery. The pauses alone are at most
+  30 s (the bound above: 2048 characters, the longest `type`, at 14 ms each is 28.7 s; 600
+  characters at 50 ms is 30 s). To that add the sends and checks of each character (not
+  measured; tens to hundreds of microseconds each, about a second at most for 2048
+  characters) and the timer's overshoot: each pause is one sleep (the boundary pause is added
+  to the key pause, not slept separately), and a sleep may last up to one timer tick longer than
+  asked, about 15.6 ms where the system timer is coarse. So the worst case, 2048 characters, is
+  about 30 s + 1 s + 2047 × 15.6 ms ≈ 63 s; a sentence of 29 characters at 10 ms and 50 ms
+  takes 0.53 s plus at most 0.44 s. The operator's stop is read before every character, so it
+  takes effect within one pause (at most 300 ms) plus the overshoot. Between a check and the
+  `SendInput` that follows it there is a window of tens to hundreds of microseconds (the
+  checks themselves and the allocation of the events; not measured). It cannot be zero:
+  Windows has no call that reads the foreground window and sends input atomically, so the
+  foreground can change between any check and the send after it, as before the first key
+  (chapter 08 §8.3).
+  **A measured profile: one laptop, one application, not a validation.** In an agent-run
+  exploratory measurement on one laptop, with one build of one application (Notepad 11.2609,
+  whose text box is WinUI), a `type` sent as one burst (both keys at `0`) was corrupted after a
+  word boundary. `type_boundary_pause_ms = 100` alone was clean for texts of about 30 characters
+  or fewer (12 of 12 runs). `type_key_pause_ms = 20` with `type_boundary_pause_ms = 100` was
+  clean for every text tried, 200 characters included (12 of 12 and 3 of 3 runs), at about
+  41–43 ms per character against about 4. Pauses of 1–10 ms between characters, or of 5–20 ms
+  after a boundary, did not cure it. The project's own test application needed none. These
+  numbers are not a validation of the dossier and say nothing about any other application or
+  build; the defaults stay `0`, and the operator chooses the values for the applications of a
+  deployment.
+  **When a check stops a paced `type`**, the action is `indeterminate` (some keys were sent) and
+  its message names the check (the operator's stop; the foreground window; keyboard focus or
+  the foreground application; a held modifier key or mouse button) and says how many characters
+  of the text were sent of how many: a count, never the text.
+  **What a paced `type` does not check again between characters.** The foreground window is
+  compared by handle with the window the engine cleared just before the keys; the same window
+  satisfies the application allowlist, the window-class scope and the window pin as it did then,
+  so those are implied, as they stood when the text began. Not repeated: UI Automation focus on
+  the target element (only the foreground application and the window that has keyboard focus
+  are checked, so focus moving to another control of the same window is not caught); the window
+  pin file (it is read once: re-pointing it during a text does not stop that text, use the
+  stop); the window under the target point; and the snapshot's age (`max_snapshot_age_ms` is
+  checked before the first key, and a paced `type` of up to 30 s can outlast it).
 - **Accepted with no effect** (a note on stderr at startup): `actuation_enabled = true` with
   an input adapter that is not live.
 
