@@ -20,6 +20,9 @@
 //! (ADR-0018, SDD §2.9): the focusing click, then a poll on the injected clock until UI
 //! Automation reports keyboard focus on the target element, then the keys. No focus in
 //! time means no key at all: the click was delivered, so the action is `indeterminate`.
+//! After `type` the engine knows that the keys were handed to the system and whether the
+//! screen changed, not how many characters arrived or which: a visual change after `type` is
+//! reported `input_delivered`, never `effect_observed` (ADR-0044).
 //!
 //! The operator's stop (chapter 08 §8.2, SEC-02) is read from the policy store at the
 //! gate and again after the freshness capture, immediately before delivery: an action
@@ -170,6 +173,35 @@ enum Stage {
     Delivery,
     Focus,
     Verification,
+}
+
+/// Whether the action is `type`, which a visual change does not verify (ADR-0044).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Typed {
+    Yes,
+    No,
+}
+
+impl Typed {
+    fn of(kind: &ActionKind) -> Self {
+        if matches!(kind, ActionKind::Type { .. }) {
+            Self::Yes
+        } else {
+            Self::No
+        }
+    }
+
+    /// The status of an action after which the screen changed within the verification
+    /// window. For a click or a scroll the change is its verification. After `type` it says
+    /// only that the keys were handed to the system and that something on the screen changed:
+    /// not how many characters arrived, or which (ADR-0044). So `type` is reported delivered,
+    /// never verified, and the change it saw stays in `observed_effect`.
+    const fn status_of_a_visual_change(self) -> ActionStatus {
+        match self {
+            Self::Yes => ActionStatus::InputDelivered,
+            Self::No => ActionStatus::EffectObserved,
+        }
+    }
 }
 
 /// What the gate and the actuator established about one action.
@@ -502,15 +534,21 @@ impl Engine {
                 "the OS did not accept every input event; do not retry",
             );
         }
-        self.report_effect(Some(before), expected)
+        let typed = Typed::of(&action.kind);
+        self.report_effect(Some(before), expected, typed)
     }
 
     /// What is known once the actuator reported every event delivered: an unverified
     /// effect keeps `input_delivered` true (chapter 07 §7.5). `before` is the frame the
     /// visual change is measured against, `None` when it could not be captured.
-    fn report_effect(&mut self, before: Option<&BgraFrame>, expected: ExpectedEffect) -> Outcome {
+    fn report_effect(
+        &mut self,
+        before: Option<&BgraFrame>,
+        expected: ExpectedEffect,
+        typed: Typed,
+    ) -> Outcome {
         let since = self.ports.clock.now();
-        let outcome = self.report_effect_untimed(before, expected);
+        let outcome = self.report_effect_untimed(before, expected, typed);
         self.spend(since, Stage::Verification);
         outcome
     }
@@ -519,12 +557,13 @@ impl Engine {
         &mut self,
         before: Option<&BgraFrame>,
         expected: ExpectedEffect,
+        typed: Typed,
     ) -> Outcome {
         match expected {
             ExpectedEffect::None => Outcome::delivered(ActionStatus::InputDelivered, None),
             ExpectedEffect::VisualChange => match before {
                 Some(before) if self.screen_changed_since(before) => Outcome::delivered(
-                    ActionStatus::EffectObserved,
+                    typed.status_of_a_visual_change(),
                     Some(ObservedEffect::VisualChange),
                 ),
                 Some(_) => Outcome::uncertain(
@@ -560,8 +599,9 @@ impl Engine {
     /// foreground application still hold. Whatever stops the keys leaves the action
     /// `indeterminate` with the delivered click reported: never retried, never rolled back.
     /// The visual change is measured against a frame captured after the click and before
-    /// the keys, so the click's own redraw is not the effect of typing. The field's value
-    /// is never read.
+    /// the keys, so the click's own redraw is not the effect of typing; even then it does not
+    /// verify the text, so it ends `input_delivered` (ADR-0044). The field's value is never
+    /// read.
     fn deliver_typing(
         &mut self,
         action: &ValidatedAction,
@@ -633,7 +673,7 @@ impl Engine {
                 "the click was delivered but the OS did not accept every key; do not retry",
             );
         }
-        self.report_effect(reference.as_ref(), expected)
+        self.report_effect(reference.as_ref(), expected, Typed::Yes)
     }
 
     /// Whether the accessibility provider reports keyboard focus on `target` within the
