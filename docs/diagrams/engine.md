@@ -1,5 +1,7 @@
 # The engine as implemented / El motor implementado
 
+[Diagrams](README.md) · [Architecture](../architecture/overview.md) · [Arquitectura](../architecture/overview.es.md)
+
 *What `ommatix-application`'s `Engine` does today (S2b) for each MCP tool, and which port it
 calls at each step. A failed observation publishes nothing; an action reports only what is
 known.*

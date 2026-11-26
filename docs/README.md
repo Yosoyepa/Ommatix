@@ -1,5 +1,7 @@
 # Ommatix documentation / Documentación
 
+**Start here / Empiece aquí:** [README](../README.md) ([es](../README.es.md)) → [Getting started](guide/getting-started.md) ([es](guide/getting-started.es.md)) → [Configuration](guide/configuration.md) ([es](guide/configuration.es.md)) → [Live input](guide/live-input.md) ([es](guide/live-input.es.md))
+
 | Section / Sección | English | Español |
 |---|---|---|
 | Thesis dossier / Dossier de la tesis | — | [thesis/](thesis/README.md) |

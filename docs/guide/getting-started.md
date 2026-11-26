@@ -1,6 +1,6 @@
 # Getting started
 
-[Español](getting-started.es.md) · [Documentation](../README.md)
+[README](../../README.md) → **Getting started** → [Configuration](configuration.md) → [Live input](live-input.md) · [Development](development.md) · [All documentation](../README.md) · [Español](getting-started.es.md)
 
 Requires Rust 1.99.0 (the release pinned in `rust-toolchain.toml`) and Python 3.11 or later for the
 thesis checks.
@@ -32,4 +32,4 @@ The example assumes the binary is on `PATH`; otherwise replace `command` with it
 
 ## Before using a real screen
 
-The default demo and server use the simulated desktop. For sources and models, read [configuration](configuration.md); for live input, first read [operator control](live-input.md). Installation on a clean machine remains pending: [session A](../thesis/S4_SESIONES_PENDIENTES.md).
+The default demo and server use the simulated desktop. For sources and models, read [configuration](configuration.md); for live input, first read [operator control](live-input.md). A clean-machine installation (VM, 20 October 2026) did not pass clean: [session A](../thesis/S4_SESIONES_PENDIENTES.md).

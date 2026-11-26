@@ -1,6 +1,6 @@
 # Live input and operator control
 
-[Español](live-input.es.md) · [Configuration](configuration.md)
+[README](../../README.md) → [Getting started](getting-started.md) → [Configuration](configuration.md) → **Live input** · [Development](development.md) · [All documentation](../README.md) · [Español](live-input.es.md)
 
 > [!CAUTION]
 > Live input is off by default. These controls belong to the operator; screen text and the agent never grant permissions.
@@ -15,22 +15,28 @@ sets `dry_run: false`; and no CLI flag loosens `[safety]`. Live input needs **al
 3. `dry_run: false` from the agent, on a target of the current snapshot.
 
 The CLI refuses a live input adapter before any adapter opens when 1 or 2 does not hold.
-For each action the engine then checks the foreground application the actuator attests
+
+**For each action** the engine then checks the foreground application the actuator attests
 against `allowed_applications`, captures the screen again and refuses (`STALE_SNAPSHOT`) if
 it no longer matches the snapshot, reads the operator's stop and attests the foreground
 application once more (refusing with `POLICY_DENIED` if the stop is engaged or the
-application changed), and only then delivers. The `SendInput` actuator also refuses a
+application changed), and only then delivers.
+
+**The `SendInput` actuator** also refuses a
 foreground process with a higher integrity level (UIPI would drop the input silently), a
 target point outside that process's windows and held modifier keys or mouse buttons; for
 `type`, after the click that focuses the field it checks that keyboard focus is on the
 window at the target point (or a window containing it) of the same foreground process, and
-otherwise sends no key. With `[models] accessibility = "uia"` the engine itself delivers
+otherwise sends no key.
+
+**With `[models] accessibility = "uia"`** the engine itself delivers
 `type` in two phases ([ADR-0018](../adr/0018-two-phase-type-with-element-level-focus-confirmation.md)):
 it sends the click, polls on its clock until UI Automation reports keyboard focus on the
 target element, and only then sends the keys; no confirmation in the verification window
 means no key. Such a refusal is reported `indeterminate`, never retried: for
-`type` the click may already have been delivered. `--input native`
-(or `[engine] mode = "native"`) is still accepted with `--source screen` and
+`type` the click may already have been delivered.
+
+**`--input native`** (or `[engine] mode = "native"`) is still accepted with `--source screen` and
 `actuation_enabled = true`, but `enigo` cannot attest
 the foreground application, so its live actions are always `POLICY_DENIED`.
 
@@ -63,8 +69,6 @@ window under the action's point (class and handle, as the actuator attests them,
 title) at the gate and again right before delivery; whatever cannot be attested is refused
 with `POLICY_DENIED`. `applicationframehost.exe` is never allowed, and `serve` warns when
 `explorer.exe` is allowed with neither.
-
-
 
 ## Delivery and effect
 

@@ -1,5 +1,7 @@
 # Hexagonal architecture / Arquitectura hexagonal
 
+[Diagrams](README.md) · [Architecture](../architecture/overview.md) · [Arquitectura](../architecture/overview.es.md)
+
 *Crate layout from ADR-0014, as of S2b. Arrows point in the direction of the code
 dependency; nothing points out of the domain.*
 *Disposición en crates según ADR-0014, a partir de S2b. Las flechas indican la dirección de

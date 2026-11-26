@@ -1,5 +1,7 @@
 # Snapshot lifecycle / Ciclo de vida del snapshot
 
+[Diagrams](README.md) · [Architecture](../architecture/overview.md) · [Arquitectura](../architecture/overview.es.md)
+
 *Nothing is published until a commit completes. When inference fails, the engine is
 degraded: the previous snapshot is informational only, pending dirty regions are kept and
 actuation is blocked.*

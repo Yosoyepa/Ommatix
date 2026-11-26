@@ -1,6 +1,6 @@
 # Entrada real y control del operador
 
-[English](live-input.md) · [Configuración](configuration.es.md)
+[README](../../README.es.md) → [Primeros pasos](getting-started.es.md) → [Configuración](configuration.es.md) → **Entrada real** · [Desarrollo](development.es.md) · [Toda la documentación](../README.md) · [English](live-input.md)
 
 > [!CAUTION]
 > La entrada real está apagada por defecto. Estas opciones son del operador; el texto de
@@ -18,22 +18,29 @@ La entrada real exige **todo** lo siguiente:
 3. `dry_run: false` del agente, sobre un objetivo del snapshot vigente.
 
 La línea de órdenes rechaza un adaptador de entrada real antes de abrir ningún adaptador si
-no se cumplen 1 o 2. En cada acción, el motor comprueba después la aplicación en primer plano
+no se cumplen 1 o 2.
+
+**En cada acción**, el motor comprueba después la aplicación en primer plano
 que atestigua el actuador contra `allowed_applications`, vuelve a capturar la pantalla y
 rechaza (`STALE_SNAPSHOT`) si ya no coincide con el snapshot, lee la parada del operador y
 vuelve a atestiguar la aplicación en primer plano (rechaza con `POLICY_DENIED` si la parada
-está activa o la aplicación cambió), y sólo entonces entrega. El actuador `SendInput`
+está activa o la aplicación cambió), y sólo entonces entrega.
+
+**El actuador `SendInput`**
 rechaza además un proceso en primer plano con un nivel de integridad mayor (UIPI
 descartaría la entrada en silencio), un punto fuera de las ventanas de ese proceso y teclas
 modificadoras o botones del ratón pulsados; en `type`, tras el clic que enfoca el campo,
 comprueba que el foco de teclado está en la ventana bajo el punto objetivo (o en una que la
-contiene) del mismo proceso en primer plano y, si no, no envía ninguna tecla. Con
-`[models] accessibility = "uia"` el motor entrega `type` en dos fases
+contiene) del mismo proceso en primer plano y, si no, no envía ninguna tecla.
+
+**Con `[models] accessibility = "uia"`** el motor entrega `type` en dos fases
 ([ADR-0018](../adr/0018-two-phase-type-with-element-level-focus-confirmation.md)): envía
 el clic, consulta con su reloj hasta que UI Automation informa el foco de teclado en el
 elemento objetivo y sólo entonces envía las teclas; sin confirmación dentro del plazo de
 verificación no hay teclas. Ese rechazo se informa como `indeterminate` y nunca se
-reintenta: en `type` el clic puede haberse entregado ya. `--input native` (o `[engine] mode = "native"`) se
+reintenta: en `type` el clic puede haberse entregado ya.
+
+**`--input native`** (o `[engine] mode = "native"`) se
 sigue aceptando con `--source screen` y `actuation_enabled = true`, pero `enigo` no puede
 atestiguar la aplicación en primer plano, así que sus acciones reales son siempre
 `POLICY_DENIED`.
@@ -69,8 +76,6 @@ atestigua el actuador, nunca un título) en la puerta y otra vez justo antes de 
 que no se pueda atestiguar se rechaza con `POLICY_DENIED`. `applicationframehost.exe` nunca se
 permite, y `serve` avisa si `explorer.exe` está permitido sin ninguna de las dos.
 
-
-
 ## Entrega y efecto
 
 `simulated` no afirma entrega; `input_delivered` no afirma efecto; `indeterminate` nunca
@@ -78,4 +83,4 @@ inicia un reintento automático. La verificación actual comprueba `visual_chang
 `verify_timeout_ms`, con sondeos cada `verify_poll_ms`; los demás efectos no comprobables
 conservan la incertidumbre. Toda entrega agota el snapshot; una acción nueva necesita una
 nueva observación. Fuentes: [ADR-0007](../adr/0007-fail-closed-actuation-and-honest-simulation.md),
-[arquitectura](../architecture/overview.es.md) y [contrato](../thesis/07_CONTRATOS_MCP_Y_ERRORES.md).
+[arquitectura](../architecture/overview.es.md#una-acción) y [contrato](../thesis/07_CONTRATOS_MCP_Y_ERRORES.md).

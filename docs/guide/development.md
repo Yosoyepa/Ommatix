@@ -1,6 +1,6 @@
 # Development and repository layout
 
-[Español](development.es.md) · [Documentation](../README.md)
+[README](../../README.md) → [Getting started](getting-started.md) → [Configuration](configuration.md) → [Live input](live-input.md) · **Development** · [All documentation](../README.md) · [Español](development.es.md)
 
 ## Layout
 
@@ -35,9 +35,13 @@ tools/                     measurement and acceptance tools outside the workspac
 │                          the hidden `--animate` flags of the RNF-05 measurements) and the
 │                          editor (`s4/testeditor`) and client (`s4/e2e_dossier.py`) of the
 │                          dossier's E2E-02 and E2E-03
+├── agent/                 the agent experiments AG-01, AG-02 and AG-03 (chapter 09 §9.10–9.12), with
+│                          their offline tests
+├── readme-media/          the README's images: generator, checks and preview
 └── perf/                  `measure_latency.py`: per-stage latency against the test application;
                            `soak.py` (PERF-03: resources and 2 h soak) and `dpi_probe.py` (IT-07: DPI
-                           100/125/150 %), read only, no input; IT-07 ran on 15 October 2026, REL-01 not yet
+                           100/125/150 %), read only, no input; IT-07 ran on 15 October 2026; REL-01 session A
+                           (20 October 2026) did not pass clean
 ```
 
 How the dossier's SDD components ([chapter 02 §2.3](../thesis/02_SDD_ARQUITECTURA_MVP.md))

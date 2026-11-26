@@ -1,5 +1,7 @@
 # System context / Contexto del sistema
 
+[Diagrams](README.md) · [Architecture](../architecture/overview.md) · [Arquitectura](../architecture/overview.es.md)
+
 *The agent works with element IDs and revisions; only the engine touches pixels and input,
 and a local policy outside the agent's control decides what is allowed.*
 *El agente trabaja con IDs y revisiones de elementos; sólo el motor toca píxeles y entrada,

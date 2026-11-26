@@ -1,5 +1,7 @@
 # Observe and act / Observar y actuar
 
+[Diagrams](README.md) · [Architecture](../architecture/overview.md) · [Arquitectura](../architecture/overview.es.md)
+
 *An action names a snapshot, a target and its expected revision. A stale reference is
 rejected, a dry run is reported as simulated, and an authorised action reports delivery and
 verification separately.*

@@ -1,5 +1,7 @@
 # Diagrams
 
+[All documentation](../README.md) · [Architecture](../architecture/overview.md) · [Arquitectura](../architecture/overview.es.md)
+
 All diagrams are [Mermaid](https://mermaid.js.org) inside Markdown, so GitHub renders them and
 diffs stay reviewable. Labels are in English and captions are bilingual. The first four are
 the thesis views of [`docs/thesis/diagramas/`](../thesis/diagramas/README.md), whose Spanish

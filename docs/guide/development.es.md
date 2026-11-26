@@ -1,6 +1,6 @@
 # Desarrollo y estructura
 
-[English](development.md) · [Documentación](../README.md)
+[README](../../README.es.md) → [Primeros pasos](getting-started.es.md) → [Configuración](configuration.es.md) → [Entrada real](live-input.es.md) · **Desarrollo** · [Toda la documentación](../README.md) · [English](development.md)
 
 ## Estructura
 
@@ -35,9 +35,13 @@ tools/                     herramientas de medición y aceptación fuera del wor
 │                          las banderas ocultas `--animate` de las mediciones de RNF-05) y el
 │                          editor (`s4/testeditor`) y el cliente (`s4/e2e_dossier.py`) del
 │                          E2E-02 y E2E-03 del dossier
+├── agent/                 los experimentos de agente AG-01, AG-02 y AG-03 (capítulo 09 §9.10–9.12),
+│                          con sus pruebas sin conexión
+├── readme-media/          las imágenes del README: generador, comprobaciones y vista previa
 └── perf/                  `measure_latency.py`: latencia por etapa contra la aplicación de prueba;
                            `soak.py` (PERF-03: recursos y soak de 2 h) y `dpi_probe.py` (IT-07: DPI
-                           100/125/150 %), de sólo lectura, sin entrada; IT-07 se ejecutó el 15 de octubre de 2026, REL-01 aún no
+                           100/125/150 %), de sólo lectura, sin entrada; IT-07 se ejecutó el 15 de octubre de 2026; la
+                           sesión A de REL-01 (20 de octubre de 2026) no pasó limpia
 ```
 
 Cómo se reparten los componentes del SDD del dossier

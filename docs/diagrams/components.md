@@ -1,5 +1,7 @@
 # Components / Componentes
 
+[Diagrams](README.md) · [Architecture](../architecture/overview.md) · [Arquitectura](../architecture/overview.es.md)
+
 *Observation runs from capture to an immutable snapshot; actions pass the policy gate, reach
 the OS actuator and are checked by the effect verifier, which feeds a new observation.*
 *La observación va de la captura a un snapshot inmutable; las acciones pasan la compuerta de
