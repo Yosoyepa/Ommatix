@@ -59,6 +59,17 @@ window_pin_file = ""
 # operador cree este archivo, el motor borra su estado y su caché en su siguiente petición, una
 # vez por cada archivo nuevo. El motor nunca borra el archivo. Vacío: sin archivo de purga.
 purge_file = ""
+# Ritmo de las teclas de un `type` (opcional, apagado por defecto; sólo el responsable lo
+# fija). Con ambos en 0 el actuador entrega todo el texto en una sola llamada de SendInput.
+# Con cualquiera mayor que 0 envía una llamada por carácter, espera type_key_pause_ms
+# (0 a 50) tras cada carácter al que sigue otro y, además, type_boundary_pause_ms (0 a 250)
+# tras un espacio o signo de puntuación al que sigue más texto; antes de cada carácter
+# después del primero vuelve a comprobar la parada, la ventana en primer plano, el foco de
+# teclado y las teclas modificadoras. Si una comprobación falla, el texto termina ahí
+# (indeterminate, sin reintento). Un `type` cuyas pausas sumen más de 30 s se rechaza antes de
+# enviar nada. No cambia si una entrada está permitida, sólo cómo se entrega.
+type_key_pause_ms = 0
+type_boundary_pause_ms = 0
 
 [models]
 # El runtime futuro debe fallar de forma segura mientras no se configure S0.

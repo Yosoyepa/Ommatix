@@ -41,7 +41,7 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
 
 - **Refused** (the server does not start): unknown sections or keys; out-of-range values
   (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024, `full_refresh_area_ratio`
-  in (0, 1], `adaptive_min_regions` 0–1024 (default `2`; a plan with that many regions or more is processed as a full refresh, reason `adaptive_cost`, [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md); `0` switches the rule off), `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` a boolean (default `true`), `candidate_search` `scan` (default, the reference) or `rstar` (experimental R*-tree, [ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md); the same results), `max_message_bytes` 4096–65536, `max_entries` ≥ 1,
+  in (0, 1], `adaptive_min_regions` 0–1024 (default `2`; a plan with that many regions or more is processed as a full refresh, reason `adaptive_cost`, [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md); `0` switches the rule off), `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` a boolean (default `true`), `candidate_search` `scan` (default, the reference) or `rstar` (experimental R*-tree, [ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md); the same results), `max_message_bytes` 4096–65536, `max_entries` ≥ 1, `type_key_pause_ms` 0–50, `type_boundary_pause_ms` 0–250,
   blank `allowed_applications` entries, a blank `stop_file`, `window_pin_file` or `purge_file`, an
   `allowed_window_classes` entry that could never apply or that names the desktop, the taskbar or
   `applicationframehost.exe`); and values this build cannot
@@ -57,6 +57,17 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
   with `STALE_SNAPSHOT` (observe again, never re-target): at the gate, simulated actions
   included, and again before every real input, including the keys of a two-phase `type`.
   A new publication does not renew an old accessibility read.
+- **Optional, off by default** (`[safety] type_key_pause_ms`, `type_boundary_pause_ms`): with both
+  at `0` the live `SendInput` actuator hands the whole text of a `type` to the system in one call.
+  With either above zero it sends one call per character (a surrogate pair stays together), waits
+  the first pause after every character that another follows and the second as well after white
+  space or punctuation that more text follows, and before every character after the first checks
+  again the operator's stop, the foreground window, the foreground application with keyboard
+  focus and held modifier keys. A failed check ends the text there and the action is
+  `indeterminate`, never retried. A paced `type` whose pauses add up to more than 30 s is refused
+  before anything is sent. These keys change how the keys reach the application, not whether
+  they may; no CLI flag or agent can set them. The effect on a real application is not measured
+  yet, so leave them at `0` unless you are measuring it.
 - **Accepted with no effect** (a note on stderr at startup): `actuation_enabled = true` with
   an input adapter that is not live.
 

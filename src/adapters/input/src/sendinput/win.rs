@@ -2,11 +2,13 @@
 //! `unsafe` (ADR-0016). Every unsafe block calls one `windows` binding (or reads what it
 //! just returned) and states why that is sound; raw pointers never leave this module.
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use ommatix_application::contract::{ActionKind, ValidatedAction};
-use ommatix_application::{DeliveryReceipt, OsActuator, PortError, TopLevelWindow, WindowOpacity};
+use ommatix_application::{
+    Clock, DeliveryReceipt, OsActuator, PortError, TopLevelWindow, WindowOpacity,
+};
 use ommatix_domain::DisplayMapping;
 use windows::Win32::Foundation::{
     CloseHandle, GetLastError, HANDLE, HWND, POINT, RECT, SetLastError, WIN32_ERROR,
@@ -41,10 +43,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, PWSTR};
 
 use super::{
-    ADAPTER, Event, FocusFacts, HOSTED_CONTENT_CLASS, MUST_BE_UP, Sibling, TopLevel, VirtualScreen,
-    batch, exe_name_utf16, extended_style_of, first_held, focus_problem, frame_bounds,
-    integrity_allows, is_frame_host, keys_problem, normalise, point_application, shown_application,
-    sibling, split_keys, walk_windows, window_opacity_of,
+    ADAPTER, Event, FocusFacts, HOSTED_CONTENT_CLASS, KeyRun, MUST_BE_UP, MidText, Sibling,
+    TopLevel, TypePacing, VirtualScreen, batch, exe_name_utf16, extended_style_of, first_held,
+    focus_problem, frame_bounds, integrity_allows, is_frame_host, keys_problem, mid_text_problem,
+    normalise, point_application, send_text_keys, shown_application, sibling, split_keys,
+    walk_windows, window_opacity_of,
 };
 use crate::aim::frame_pixel;
 
@@ -247,6 +250,16 @@ fn foreground_application_window() -> Option<(u32, HWND)> {
 /// `ApplicationFrameHost.exe`.
 fn foreground_process() -> Option<u32> {
     foreground_application_window().map(|(pid, _)| pid)
+}
+
+/// The handle of the top-level window in the foreground; `None` when there is none.
+fn foreground_window_handle() -> Option<u64> {
+    // SAFETY: no arguments; returns a window handle value (null when none is active).
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.is_invalid() {
+        return None;
+    }
+    top_level_handle(root_window(foreground))
 }
 
 /// The window at virtual-desktop pixel `(x, y)` (the deepest visible child there).
@@ -620,7 +633,9 @@ fn to_input(event: Event) -> INPUT {
 ///
 /// A click or a scroll is one `SendInput` call; `type` is two, the click and the keys. The
 /// receipt's `submitted` is the batch length and `inserted` what `SendInput` returned (it
-/// stops at the first event it cannot insert). Nothing is retried.
+/// stops at the first event it cannot insert). Nothing is retried. The keys of a `type` may
+/// instead be paced, one call per character (off by default; see
+/// [`SendInputActuator::with_type_pacing`]).
 ///
 /// With accessibility evidence the engine owns the pause between the two calls instead
 /// (ADR-0018): `deliver_focus_click` sends the pointer events and `deliver_keys` the keys,
@@ -636,6 +651,16 @@ pub struct SendInputActuator {
     attested: Mutex<Option<u32>>,
     /// The focusing click of a `type` whose keys are still to come.
     pending: Mutex<Option<PendingKeys>>,
+    /// How the keys of a `type` are paced; `None` is one call with every key event.
+    paced: Option<Paced>,
+}
+
+/// The pacing of a `type` with what it needs besides the pauses: the engine's clock, which
+/// waits them, and the operator's stop, which the actuator cannot read itself.
+struct Paced {
+    pacing: TypePacing,
+    clock: Arc<dyn Clock>,
+    stopped: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
 /// Where an action is aimed.
@@ -681,7 +706,95 @@ impl SendInputActuator {
             own_integrity: own,
             attested: Mutex::new(None),
             pending: Mutex::new(None),
+            paced: None,
         })
+    }
+
+    /// Paces the keys of a `type` (off by default): one call per character, the pauses of
+    /// `pacing` waited on the engine's `clock`, and, before each character after the first,
+    /// every check that can change while time passes: `stopped` (the operator's stop), the
+    /// foreground window the engine cleared, the foreground application and keyboard focus,
+    /// and held modifiers. A failing check ends the delivery there; the engine reports it
+    /// `indeterminate` and nothing is retried. With both pauses at zero this changes nothing.
+    pub fn with_type_pacing(
+        mut self,
+        pacing: TypePacing,
+        clock: Arc<dyn Clock>,
+        stopped: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Result<Self, PortError> {
+        let pacing = TypePacing::new(pacing.key_pause, pacing.boundary_pause)?;
+        self.paced = (!pacing.is_off()).then(|| Paced {
+            pacing,
+            clock,
+            stopped: Box::new(stopped),
+        });
+        Ok(self)
+    }
+
+    /// Refuses, before anything is sent, a `type` whose paced delivery would hold the engine
+    /// longer than [`super::MAX_PACED_TYPE`].
+    fn check_pacing(&self, kind: &ActionKind) -> Result<(), PortError> {
+        match (&self.paced, kind) {
+            (Some(paced), ActionKind::Type { text }) => paced.pacing.check_text(text),
+            _ => Ok(()),
+        }
+    }
+
+    /// Sends the key events of a `type`: in one call, or paced (see [`Self::with_type_pacing`]).
+    /// `focus_check` is the application and focus check of the path (`keys_problem` for the
+    /// engine's two phases, `focus_problem` for the one-shot path). Returns what was
+    /// submitted and what the OS inserted.
+    fn send_keys(
+        &self,
+        kind: &ActionKind,
+        keys: &[Event],
+        foreground: u32,
+        desktop: (i32, i32),
+        focus_check: fn(FocusFacts) -> Option<&'static str>,
+    ) -> Result<(u32, u32), PortError> {
+        let (Some(paced), ActionKind::Type { text }) = (&self.paced, kind) else {
+            let submitted = u32::try_from(keys.len()).unwrap_or(u32::MAX);
+            return Ok((submitted, send(keys.to_vec())));
+        };
+        // The top-level window the engine's last look cleared, read at once.
+        let cleared = foreground_window_handle();
+        if cleared.is_none() {
+            return Err(refuse("cannot read the foreground window; no key was sent"));
+        }
+        let guard = || {
+            mid_text_problem(
+                MidText {
+                    stopped: (paced.stopped)(),
+                    window_now: foreground_window_handle(),
+                    window_cleared: cleared,
+                    focus: focus_facts(foreground, desktop),
+                    held: held_key(),
+                },
+                focus_check,
+            )
+        };
+        let run = send_text_keys(
+            text,
+            keys,
+            paced.pacing,
+            |events| send(events.to_vec()),
+            |pause| paced.clock.sleep(pause),
+            guard,
+        );
+        match run {
+            KeyRun::Sent {
+                submitted,
+                inserted,
+            } => Ok((submitted, inserted)),
+            KeyRun::Stopped {
+                sent_chars,
+                of_chars,
+                why,
+            } => Err(refuse(format!(
+                "{why}; {sent_chars} of {of_chars} characters were sent, the rest were not; do \
+                 not retry"
+            ))),
+        }
     }
 
     /// The virtual-desktop pixel of the action point and its normalised absolute
@@ -812,6 +925,7 @@ impl OsActuator for SendInputActuator {
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
+        self.check_pacing(action.kind())?;
         let Aim { desktop, at } = self.aim(action)?;
         let foreground = self.preflight(desktop)?;
         let events = batch(action.kind(), at);
@@ -821,7 +935,9 @@ impl OsActuator for SendInputActuator {
         let mut inserted = send(pointer);
         if inserted == pointer_len && !keys.is_empty() {
             Self::await_focus(foreground, desktop)?;
-            inserted = inserted.saturating_add(send(keys));
+            let (_, keys_inserted) =
+                self.send_keys(action.kind(), &keys, foreground, desktop, focus_problem)?;
+            inserted = inserted.saturating_add(keys_inserted);
         }
         Ok(DeliveryReceipt {
             submitted,
@@ -840,6 +956,7 @@ impl OsActuator for SendInputActuator {
         if !matches!(action.kind(), ActionKind::Type { .. }) {
             return Err(refuse("only type is delivered in phases; nothing was sent"));
         }
+        self.check_pacing(action.kind())?;
         *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = None;
         let Aim { desktop, at } = self.aim(action)?;
         let foreground = self.preflight(desktop)?;
@@ -878,8 +995,13 @@ impl OsActuator for SendInputActuator {
             )));
         }
         let (_, keys) = split_keys(batch(action.kind(), (0, 0)));
-        let submitted = u32::try_from(keys.len()).unwrap_or(u32::MAX);
-        let inserted = send(keys);
+        let (submitted, inserted) = self.send_keys(
+            action.kind(),
+            &keys,
+            pending.foreground,
+            pending.desktop,
+            keys_problem,
+        )?;
         Ok(DeliveryReceipt {
             submitted,
             inserted,

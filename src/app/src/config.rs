@@ -34,6 +34,13 @@ use serde::Deserialize;
 const MAX_VERIFY_TIMEOUT_MS: u64 = 5_000;
 /// Longest wait between two verification captures accepted, in milliseconds.
 const MAX_VERIFY_POLL_MS: u64 = 1_000;
+/// Longest pause between two characters of a paced `type`, in milliseconds. The input adapter
+/// states the same bound (`ommatix_adapter_input::MAX_TYPE_KEY_PAUSE_MS`), and a test of the
+/// `sendinput` build keeps the two equal.
+const MAX_TYPE_KEY_PAUSE_MS: u64 = 50;
+/// Longest extra pause after a word boundary, in milliseconds (the adapter's
+/// `MAX_TYPE_BOUNDARY_PAUSE_MS`).
+const MAX_TYPE_BOUNDARY_PAUSE_MS: u64 = 250;
 
 /// Largest configuration file read, in bytes.
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
@@ -202,6 +209,16 @@ pub struct SafetySection {
     /// and never deletes the file. Relative to the configuration file. Empty (the default): no
     /// purge file.
     pub purge_file: String,
+    /// The pause after every character of a live `type` that another follows, in
+    /// milliseconds (0 to 50). `0`, with `type_boundary_pause_ms` at `0` as well (the default),
+    /// sends the whole text in one `SendInput` call, as before the option existed. Not a
+    /// permission: it changes how the keys are handed to the application, never whether.
+    pub type_key_pause_ms: u64,
+    /// An extra pause after a word boundary (white space or punctuation) that is followed by
+    /// more text, in milliseconds (0 to 250). Either pause above zero sends the characters one
+    /// call each, checking the operator's stop, the foreground window, keyboard focus and held
+    /// keys before every character after the first.
+    pub type_boundary_pause_ms: u64,
 }
 
 /// The OCR engine (`[models] ocr`).
@@ -643,6 +660,7 @@ impl Config {
              sends no screenshots",
         );
 
+        out.extend(type_pacing_problems(s));
         out.extend(window_class_problems(s));
         out.extend(self.models.problems());
         out.extend(self.cache.problems());
@@ -660,7 +678,25 @@ impl Config {
                     .to_owned(),
             );
         }
+        let (key, boundary) = self.type_pauses();
+        if !key.is_zero() || !boundary.is_zero() {
+            notes.push(format!(
+                "[safety] type_key_pause_ms = {} and type_boundary_pause_ms = {}: a live `type` \
+                 sends its characters one call each with these pauses; the default is one call",
+                key.as_millis(),
+                boundary.as_millis()
+            ));
+        }
         notes
+    }
+
+    /// The pauses of a paced `type`: after every character that another follows, and extra
+    /// after a word boundary. Both zero (the default) is one call with the whole text.
+    pub fn type_pauses(&self) -> (Duration, Duration) {
+        (
+            Duration::from_millis(self.safety.type_key_pause_ms),
+            Duration::from_millis(self.safety.type_boundary_pause_ms),
+        )
     }
 
     /// A path from this file: a relative one resolves against the file's directory (the
@@ -767,6 +803,23 @@ impl Config {
             stopped: false,
         }
     }
+}
+
+/// The problems of the pauses that pace a live `type`: each above the bound the input adapter
+/// also enforces.
+fn type_pacing_problems(s: &SafetySection) -> Vec<String> {
+    let mut out = Vec::new();
+    if s.type_key_pause_ms > MAX_TYPE_KEY_PAUSE_MS {
+        out.push(format!(
+            "[safety] type_key_pause_ms must be between 0 and {MAX_TYPE_KEY_PAUSE_MS}"
+        ));
+    }
+    if s.type_boundary_pause_ms > MAX_TYPE_BOUNDARY_PAUSE_MS {
+        out.push(format!(
+            "[safety] type_boundary_pause_ms must be between 0 and {MAX_TYPE_BOUNDARY_PAUSE_MS}"
+        ));
+    }
+    out
 }
 
 /// The process that draws the frames of hosted (UWP) applications: its windows stand for
@@ -906,6 +959,16 @@ mod tests {
             ("[safety]\nallow_destructive = true\n", "allow_destructive"),
             ("[safety]\nstop_file = \"  \"\n", "stop_file"),
             ("[safety]\npurge_file = \"  \"\n", "purge_file"),
+            ("[safety]\ntype_key_pause_ms = 51\n", "type_key_pause_ms"),
+            ("[safety]\ntype_key_pause_ms = -1\n", "type_key_pause_ms"),
+            (
+                "[safety]\ntype_boundary_pause_ms = 251\n",
+                "type_boundary_pause_ms",
+            ),
+            (
+                "[safety]\ntype_boundary_pause_ms = -1\n",
+                "type_boundary_pause_ms",
+            ),
             (
                 "[safety]\nallow_screenshots_to_client = true\n",
                 "screenshots",
@@ -1072,6 +1135,52 @@ adaptive_min_regions = 5000
                 .iter()
                 .any(|n| n.contains("experimental_full_frame = true")
                     && n.contains("not a production mode"))
+        );
+    }
+
+    #[test]
+    fn typing_is_not_paced_by_default_and_the_pauses_are_bounded() {
+        // The template and the defaults agree (see `defaults_equal_the_dossier_template`);
+        // both pauses at zero is one call with the whole text.
+        let template = Config::parse(TEMPLATE).unwrap();
+        for config in [Config::default(), template] {
+            assert_eq!(config.safety.type_key_pause_ms, 0);
+            assert_eq!(config.safety.type_boundary_pause_ms, 0);
+            assert_eq!(config.type_pauses(), (Duration::ZERO, Duration::ZERO));
+            assert!(config.notes().iter().all(|n| !n.contains("type_key_pause")));
+        }
+        // The bounds themselves are accepted and announced on stderr; pacing is no policy.
+        let paced =
+            Config::parse("[safety]\ntype_key_pause_ms = 50\ntype_boundary_pause_ms = 250\n")
+                .unwrap();
+        assert_eq!(
+            paced.type_pauses(),
+            (Duration::from_millis(50), Duration::from_millis(250))
+        );
+        assert!(
+            paced
+                .notes()
+                .iter()
+                .any(|n| n.contains("type_key_pause_ms = 50")
+                    && n.contains("type_boundary_pause_ms = 250"))
+        );
+        assert_eq!(paced.local_policy(), LocalPolicy::default());
+        let only_boundary = Config::parse("[safety]\ntype_boundary_pause_ms = 1\n").unwrap();
+        assert_eq!(only_boundary.notes().len(), 1);
+    }
+
+    /// The configuration refuses what the actuator would refuse, so a validated file never
+    /// fails when the actuator is built.
+    #[cfg(feature = "sendinput")]
+    #[test]
+    fn the_pause_bounds_are_the_input_adapters() {
+        assert_eq!(
+            MAX_TYPE_KEY_PAUSE_MS,
+            ommatix_adapter_input::MAX_TYPE_KEY_PAUSE_MS
+        );
+        assert_eq!(
+            MAX_TYPE_BOUNDARY_PAUSE_MS,
+            ommatix_adapter_input::MAX_TYPE_BOUNDARY_PAUSE_MS
         );
     }
 

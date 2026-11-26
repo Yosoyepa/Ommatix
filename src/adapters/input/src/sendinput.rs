@@ -14,8 +14,10 @@
     allow(dead_code, reason = "only the Windows module calls these helpers")
 )]
 
-use ommatix_application::WindowOpacity;
+use std::time::Duration;
+
 use ommatix_application::contract::{ActionKind, ScrollDirection};
+use ommatix_application::{PortError, WindowOpacity};
 
 #[cfg(windows)]
 #[allow(
@@ -239,6 +241,230 @@ pub(crate) fn split_keys(mut events: Vec<Event>) -> (Vec<Event>, Vec<Event>) {
     (events, keys)
 }
 
+/// Longest pause between two characters of a paced `type`, in milliseconds. Below one
+/// millisecond Windows' timers give no meaning to a pause; above 50 ms a 29-character sentence
+/// already takes 1.5 s, slower than any typist the application under test was built for
+/// (50 ms is 20 characters a second, 240 words a minute is 20 as well).
+pub const MAX_TYPE_KEY_PAUSE_MS: u64 = 50;
+
+/// Longest extra pause after a word boundary, in milliseconds: one key-repeat delay (250 ms),
+/// the longest the lab can want to wait for a text box to finish what a space or a comma
+/// starts. [`MAX_PACED_TYPE`] still bounds the whole delivery.
+pub const MAX_TYPE_BOUNDARY_PAUSE_MS: u64 = 250;
+
+/// Longest time one paced `type` may hold the engine. The engine is single threaded, so the
+/// delivery blocks every other call of the session; the operator's stop is read between two
+/// characters, so the hold is interruptible within one pause, but a delivery that takes
+/// minutes is not a typing aid. 30 s is the 2048 characters of the longest `type` at 14 ms
+/// each, and a text of 600 characters at the largest key pause.
+pub const MAX_PACED_TYPE: Duration = Duration::from_secs(30);
+
+/// How the key events of a `type` are paced. Both pauses at zero (the default) are today's
+/// behaviour: every key event in one `SendInput` call, no pause, no check between keys.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TypePacing {
+    /// The pause after every character that is followed by another.
+    pub key_pause: Duration,
+    /// An extra pause after a word boundary that is followed by more text.
+    pub boundary_pause: Duration,
+}
+
+impl TypePacing {
+    /// Pacing with the given pauses, refusing a pause above its bound.
+    pub fn new(key_pause: Duration, boundary_pause: Duration) -> Result<Self, PortError> {
+        if key_pause > Duration::from_millis(MAX_TYPE_KEY_PAUSE_MS) {
+            return Err(PortError::new(
+                ADAPTER,
+                format!("the pause between keys is at most {MAX_TYPE_KEY_PAUSE_MS} ms"),
+            ));
+        }
+        if boundary_pause > Duration::from_millis(MAX_TYPE_BOUNDARY_PAUSE_MS) {
+            return Err(PortError::new(
+                ADAPTER,
+                format!(
+                    "the pause after a word boundary is at most {MAX_TYPE_BOUNDARY_PAUSE_MS} ms"
+                ),
+            ));
+        }
+        Ok(Self {
+            key_pause,
+            boundary_pause,
+        })
+    }
+
+    /// Whether both pauses are zero: the keys then go in one call, as before pacing existed.
+    pub fn is_off(self) -> bool {
+        self.key_pause.is_zero() && self.boundary_pause.is_zero()
+    }
+
+    /// The time the pauses of a paced delivery of `text` add up to (the sends themselves
+    /// are not counted). Saturates.
+    pub fn duration_of(self, text: &str) -> Duration {
+        let mut gaps = 0u32;
+        let mut boundaries = 0u32;
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if chars.peek().is_some() {
+                gaps = gaps.saturating_add(1);
+                if is_word_boundary(c) {
+                    boundaries = boundaries.saturating_add(1);
+                }
+            }
+        }
+        self.key_pause
+            .saturating_mul(gaps)
+            .saturating_add(self.boundary_pause.saturating_mul(boundaries))
+    }
+
+    /// Refuses a `type` whose paced delivery would hold the engine longer than
+    /// [`MAX_PACED_TYPE`]. Called before anything is sent. Never refuses with pacing off.
+    pub fn check_text(self, text: &str) -> Result<(), PortError> {
+        if !self.is_off() && self.duration_of(text) > MAX_PACED_TYPE {
+            return Err(PortError::new(
+                ADAPTER,
+                format!(
+                    "a paced type may take at most {} s with the configured pauses; nothing was \
+                     sent",
+                    MAX_PACED_TYPE.as_secs()
+                ),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Whether the pause after a word boundary follows `c`: white space, ASCII punctuation, the
+/// Spanish opening marks and guillemets, and the general punctuation block (dashes, quotes,
+/// ellipsis). A letter, a digit or a symbol is not a boundary.
+pub(crate) fn is_word_boundary(c: char) -> bool {
+    c.is_whitespace()
+        || c.is_ascii_punctuation()
+        || matches!(
+            c,
+            '¡' | '¿' | '«' | '»' | '\u{2010}'..='\u{2027}' | '\u{2030}'..='\u{205E}'
+        )
+}
+
+/// What a delivery of the keys of one `type` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KeyRun {
+    /// Every send was made, or the OS stopped accepting at some character (then `inserted`
+    /// is below `submitted` and no further key was sent).
+    Sent { submitted: u32, inserted: u32 },
+    /// A check failed between two characters: nothing more was sent.
+    Stopped {
+        sent_chars: usize,
+        of_chars: usize,
+        why: String,
+    },
+}
+
+/// Sends the key events `keys` of `text`. With pacing off it is today's single call with every
+/// event and nothing else (no sleep, no check). With pacing on, each character's events (its
+/// down and up, both halves of a surrogate pair) go in a call of their own, in order; after a
+/// character that another follows, `sleep` waits the key pause and, after a word boundary, the
+/// boundary pause as well; and `guard` runs before every character after the first (the first
+/// was checked by the caller right before). A `guard` answer stops the delivery, and so does
+/// the OS taking fewer events than a character's. Nothing is retried.
+pub(crate) fn send_text_keys(
+    text: &str,
+    keys: &[Event],
+    pacing: TypePacing,
+    mut send: impl FnMut(&[Event]) -> u32,
+    mut sleep: impl FnMut(Duration),
+    mut guard: impl FnMut() -> Option<String>,
+) -> KeyRun {
+    let submitted = u32::try_from(keys.len()).unwrap_or(u32::MAX);
+    if pacing.is_off() {
+        return KeyRun::Sent {
+            submitted,
+            inserted: send(keys),
+        };
+    }
+    let of_chars = text.chars().count();
+    let mut inserted = 0u32;
+    let mut offset = 0usize;
+    let mut chars = text.chars().peekable();
+    let mut sent_chars = 0usize;
+    while let Some(c) = chars.next() {
+        if sent_chars > 0
+            && let Some(why) = guard()
+        {
+            return KeyRun::Stopped {
+                sent_chars,
+                of_chars,
+                why,
+            };
+        }
+        // A character's events: a press and a release per UTF-16 unit.
+        let end = offset + c.len_utf16() * 2;
+        let Some(group) = keys.get(offset..end) else {
+            return KeyRun::Stopped {
+                sent_chars,
+                of_chars,
+                why: "the key events do not match the text".to_owned(),
+            };
+        };
+        let accepted = send(group);
+        inserted = inserted.saturating_add(accepted);
+        if usize::try_from(accepted) != Ok(group.len()) {
+            return KeyRun::Sent {
+                submitted,
+                inserted,
+            };
+        }
+        offset = end;
+        sent_chars += 1;
+        if chars.peek().is_some() {
+            if !pacing.key_pause.is_zero() {
+                sleep(pacing.key_pause);
+            }
+            if is_word_boundary(c) && !pacing.boundary_pause.is_zero() {
+                sleep(pacing.boundary_pause);
+            }
+        }
+    }
+    KeyRun::Sent {
+        submitted,
+        inserted,
+    }
+}
+
+/// What the adapter reads between two characters of a paced `type`, as plain facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MidText {
+    /// The operator's stop is engaged.
+    pub stopped: bool,
+    /// The top-level foreground window now, and the one the engine's last look cleared.
+    pub window_now: Option<u64>,
+    pub window_cleared: Option<u64>,
+    /// The foreground process and keyboard focus now.
+    pub focus: FocusFacts,
+    /// The first modifier or mouse button held down.
+    pub held: Option<&'static str>,
+}
+
+/// Why the next character of a paced `type` must not be sent, or `None`. The operator's stop
+/// first; then the window the engine cleared (its scope on windows holds for that window, so
+/// the same window still satisfies it); then the application and keyboard focus (`focus_check`
+/// is [`keys_problem`] or [`focus_problem`], as for the first character); then held keys.
+pub(crate) fn mid_text_problem(
+    facts: MidText,
+    focus_check: fn(FocusFacts) -> Option<&'static str>,
+) -> Option<String> {
+    if facts.stopped {
+        return Some("the operator stopped live input".to_owned());
+    }
+    match (facts.window_cleared, facts.window_now) {
+        (Some(cleared), Some(now)) if cleared == now => {}
+        _ => return Some("the foreground window changed".to_owned()),
+    }
+    if let Some(problem) = focus_check(facts.focus) {
+        return Some(problem.to_owned());
+    }
+    facts.held.map(|key| format!("{key} is held down"))
+}
+
 /// What the adapter reads about keyboard focus after the click that focuses a `type`
 /// target, in process ids and window relations (no window text, no handles).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -381,6 +607,8 @@ pub(crate) fn first_held(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
     use super::*;
 
     /// The reference desktop: primary 1920x1080 at (0, 0), secondary 1920x1080 at
@@ -622,6 +850,414 @@ mod tests {
             let problem = keys_problem(changed).unwrap_or_default();
             assert!(problem.contains(expected), "{changed:?}: {problem}");
         }
+    }
+
+    // ---- paced typing (decision D49) ----
+
+    /// One thing a delivery did, in order.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Step {
+        Send(Vec<Event>),
+        Sleep(Duration),
+        Guard,
+    }
+
+    const MS: fn(u64) -> Duration = Duration::from_millis;
+
+    /// Runs `send_text_keys` over the keys of `text` with a fake `SendInput` that accepts what
+    /// `accept` says, a clock that records pauses and never sleeps, and a guard that answers
+    /// `problem(call)` on its `call`-th ask (1-based).
+    fn run(
+        text: &str,
+        pacing: TypePacing,
+        accept: impl Fn(usize, &[Event]) -> u32,
+        problem: impl Fn(usize) -> Option<String>,
+    ) -> (KeyRun, Vec<Step>) {
+        let keys = split_keys(batch(&ActionKind::Type { text: text.into() }, (0, 0))).1;
+        let log = RefCell::new(Vec::new());
+        let sends = RefCell::new(0usize);
+        let asks = RefCell::new(0usize);
+        let result = send_text_keys(
+            text,
+            &keys,
+            pacing,
+            |events| {
+                *sends.borrow_mut() += 1;
+                log.borrow_mut().push(Step::Send(events.to_vec()));
+                accept(*sends.borrow(), events)
+            },
+            |pause| log.borrow_mut().push(Step::Sleep(pause)),
+            || {
+                *asks.borrow_mut() += 1;
+                log.borrow_mut().push(Step::Guard);
+                problem(*asks.borrow())
+            },
+        );
+        (result, log.into_inner())
+    }
+
+    fn all(_: usize, events: &[Event]) -> u32 {
+        u32::try_from(events.len()).unwrap()
+    }
+
+    fn never(_: usize) -> Option<String> {
+        None
+    }
+
+    fn pair(unit: u16) -> [Event; 2] {
+        [
+            Event::Unicode { unit, up: false },
+            Event::Unicode { unit, up: true },
+        ]
+    }
+
+    fn pacing(key_ms: u64, boundary_ms: u64) -> TypePacing {
+        TypePacing::new(MS(key_ms), MS(boundary_ms)).unwrap()
+    }
+
+    #[test]
+    fn zero_pauses_send_every_key_in_one_call_as_before_pacing_existed() {
+        // The events of `aé😀`, written out as they were sent before pacing existed: a press
+        // and a release per UTF-16 unit, in one call.
+        let golden: Vec<Event> = [0x61, 0xE9, 0xD83D, 0xDE00]
+            .into_iter()
+            .flat_map(pair)
+            .collect();
+        assert_eq!(golden.len(), 8);
+        let keys = split_keys(batch(
+            &ActionKind::Type {
+                text: "aé😀".into(),
+            },
+            (0, 0),
+        ))
+        .1;
+        assert_eq!(keys, golden);
+        for off in [TypePacing::default(), pacing(0, 0)] {
+            assert!(off.is_off());
+            let (result, steps) = run("aé😀", off, all, never);
+            assert_eq!(
+                steps,
+                vec![Step::Send(golden.clone())],
+                "one call, no pause"
+            );
+            assert_eq!(
+                result,
+                KeyRun::Sent {
+                    submitted: 8,
+                    inserted: 8
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_pause_gives_one_call_per_character_with_a_check_before_each_but_the_first() {
+        let (result, steps) = run("abc", pacing(5, 0), all, never);
+        let (a, b, c) = (
+            pair(0x61).to_vec(),
+            pair(0x62).to_vec(),
+            pair(0x63).to_vec(),
+        );
+        assert_eq!(
+            steps,
+            vec![
+                Step::Send(a),
+                Step::Sleep(MS(5)),
+                Step::Guard,
+                Step::Send(b),
+                Step::Sleep(MS(5)),
+                Step::Guard,
+                Step::Send(c),
+            ],
+            "no pause or check after the last character"
+        );
+        assert_eq!(
+            result,
+            KeyRun::Sent {
+                submitted: 6,
+                inserted: 6
+            }
+        );
+    }
+
+    #[test]
+    fn the_boundary_pause_follows_a_boundary_only_when_more_text_follows() {
+        let (_, steps) = run("a b ", pacing(2, 7), all, never);
+        let sleeps: Vec<Duration> = steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Sleep(d) => Some(*d),
+                _ => None,
+            })
+            .collect();
+        // After `a`: the key pause. After the space: the key pause and the boundary pause.
+        // After `b`: the key pause. After the trailing space (nothing follows): nothing.
+        assert_eq!(sleeps, vec![MS(2), MS(2), MS(7), MS(2)]);
+        // Only a boundary pause: the characters that are not boundaries wait for nothing.
+        let (_, steps) = run("ab,c", pacing(0, 9), all, never);
+        let sleeps: Vec<&Step> = steps
+            .iter()
+            .filter(|s| matches!(s, Step::Sleep(_)))
+            .collect();
+        assert_eq!(sleeps, vec![&Step::Sleep(MS(9))]);
+        // A final comma has nothing after it either.
+        let (_, steps) = run("ab,", pacing(0, 9), all, never);
+        assert!(!steps.iter().any(|s| matches!(s, Step::Sleep(_))));
+    }
+
+    #[test]
+    fn what_counts_as_a_word_boundary() {
+        for boundary in [
+            ' ', '\t', '\n', ',', '.', ';', ':', '!', '?', '¿', '¡', '—', '…', '«',
+        ] {
+            assert!(is_word_boundary(boundary), "{boundary:?}");
+        }
+        for letter in ['a', 'Z', 'é', 'ñ', '1', '_', '😀', '€', '+'] {
+            // `_` and `+` are ASCII punctuation: they are boundaries; the rest are not.
+            assert_eq!(
+                is_word_boundary(letter),
+                letter.is_ascii_punctuation(),
+                "{letter:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_surrogate_pair_stays_in_one_call() {
+        let (_, steps) = run("x😀y", pacing(1, 0), all, never);
+        let sends: Vec<usize> = steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Send(events) => Some(events.len()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sends, vec![2, 4, 2], "the emoji's two units go together");
+        assert!(steps.contains(&Step::Send([pair(0xD83D), pair(0xDE00)].concat())));
+    }
+
+    #[test]
+    fn the_stop_raised_after_the_third_character_ends_the_delivery_there() {
+        let stop = |call: usize| (call == 3).then(|| "the operator stopped live input".to_owned());
+        let (result, steps) = run("abcdef", pacing(1, 0), all, stop);
+        assert_eq!(
+            result,
+            KeyRun::Stopped {
+                sent_chars: 3,
+                of_chars: 6,
+                why: "the operator stopped live input".to_owned()
+            }
+        );
+        let sent: usize = steps.iter().filter(|s| matches!(s, Step::Send(_))).count();
+        assert_eq!(sent, 3, "nothing after the check that failed");
+        assert_eq!(steps.last(), Some(&Step::Guard));
+    }
+
+    #[test]
+    fn a_change_of_foreground_window_or_focus_between_characters_stops_the_delivery() {
+        const APP: u32 = 41;
+        let focus = FocusFacts {
+            attested: APP,
+            foreground: Some(APP),
+            focus_owner: Some(APP),
+            focus_holds_target: true,
+        };
+        let facts = |call: usize| MidText {
+            stopped: false,
+            window_cleared: Some(100),
+            // The foreground window changes on the third look.
+            window_now: Some(if call < 3 { 100 } else { 200 }),
+            focus,
+            held: None,
+        };
+        let (result, steps) = run("abcdef", pacing(1, 0), all, |call| {
+            mid_text_problem(facts(call), keys_problem)
+        });
+        assert_eq!(
+            result,
+            KeyRun::Stopped {
+                sent_chars: 3,
+                of_chars: 6,
+                why: "the foreground window changed".to_owned()
+            }
+        );
+        assert_eq!(
+            steps.iter().filter(|s| matches!(s, Step::Send(_))).count(),
+            3
+        );
+
+        // Focus moving to another application ends it likewise.
+        let (result, _) = run("abcdef", pacing(1, 0), all, |call| {
+            let mut facts = facts(1);
+            if call == 2 {
+                facts.focus.focus_owner = Some(7);
+            }
+            mid_text_problem(facts, keys_problem)
+        });
+        assert!(matches!(
+            result,
+            KeyRun::Stopped { sent_chars: 2, ref why, .. } if why.contains("another application")
+        ));
+    }
+
+    #[test]
+    fn each_thing_that_can_change_between_characters_is_checked() {
+        const APP: u32 = 41;
+        let ok = MidText {
+            stopped: false,
+            window_now: Some(100),
+            window_cleared: Some(100),
+            focus: FocusFacts {
+                attested: APP,
+                foreground: Some(APP),
+                focus_owner: Some(APP),
+                // UI Automation confirmed the element for the two-phase path.
+                focus_holds_target: false,
+            },
+            held: None,
+        };
+        assert_eq!(mid_text_problem(ok, keys_problem), None);
+        // The one-shot path also asks that the focused window holds the target.
+        assert!(
+            mid_text_problem(ok, focus_problem)
+                .is_some_and(|p| p.contains("not on the target field"))
+        );
+        let cases = [
+            (
+                MidText {
+                    stopped: true,
+                    ..ok
+                },
+                "stopped live input",
+            ),
+            (
+                MidText {
+                    window_now: Some(5),
+                    ..ok
+                },
+                "foreground window changed",
+            ),
+            (
+                MidText {
+                    window_now: None,
+                    ..ok
+                },
+                "foreground window changed",
+            ),
+            (
+                MidText {
+                    window_cleared: None,
+                    ..ok
+                },
+                "foreground window changed",
+            ),
+            (
+                MidText {
+                    focus: FocusFacts {
+                        foreground: Some(7),
+                        ..ok.focus
+                    },
+                    ..ok
+                },
+                "foreground application changed",
+            ),
+            (
+                MidText {
+                    held: Some("Ctrl"),
+                    ..ok
+                },
+                "Ctrl is held down",
+            ),
+        ];
+        for (facts, expected) in cases {
+            let problem = mid_text_problem(facts, keys_problem).unwrap_or_default();
+            assert!(problem.contains(expected), "{facts:?}: {problem}");
+        }
+        // The operator's stop is named first.
+        let both = MidText {
+            stopped: true,
+            held: Some("Ctrl"),
+            window_now: Some(5),
+            ..ok
+        };
+        assert!(
+            mid_text_problem(both, keys_problem).is_some_and(|p| p.contains("stopped live input"))
+        );
+    }
+
+    #[test]
+    fn an_os_that_stops_accepting_ends_the_delivery_without_a_retry() {
+        // The second character's call inserts one of its two events.
+        let short = |call: usize, events: &[Event]| {
+            let all = u32::try_from(events.len()).unwrap();
+            if call == 2 { 1 } else { all }
+        };
+        let (result, steps) = run("abcd", pacing(1, 0), short, never);
+        assert_eq!(
+            result,
+            KeyRun::Sent {
+                submitted: 8,
+                inserted: 3
+            },
+            "the receipt shows the shortfall, the engine reports it"
+        );
+        assert_eq!(
+            steps.iter().filter(|s| matches!(s, Step::Send(_))).count(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_paced_type_that_would_hold_the_engine_too_long_is_refused_before_it_starts() {
+        let text = |n: usize| "a".repeat(n);
+        // The longest type, at the pause that fits in the bound, and one more millisecond.
+        assert!(pacing(14, 0).check_text(&text(2048)).is_ok());
+        let refused = pacing(15, 0)
+            .check_text(&text(2048))
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("at most 30 s"), "{refused}");
+        assert!(refused.contains("nothing was sent"), "{refused}");
+        // 600 characters at the largest key pause fit, 602 do not.
+        assert!(pacing(50, 0).check_text(&text(600)).is_ok());
+        assert!(pacing(50, 0).check_text(&text(602)).is_err());
+        // Boundary pauses count, and a trailing boundary does not.
+        let spaced = "a ".repeat(100);
+        assert_eq!(
+            pacing(10, 100).duration_of(&spaced),
+            MS(10 * 199 + 100 * 99)
+        );
+        assert!(pacing(0, 250).check_text(&"a ".repeat(100)).is_ok());
+        assert!(pacing(0, 250).check_text(&"a ".repeat(150)).is_err());
+        // With pacing off nothing is refused, whatever the length.
+        assert!(TypePacing::default().check_text(&text(2048)).is_ok());
+    }
+
+    #[test]
+    fn the_time_the_bound_counts_is_the_time_a_delivery_waits() {
+        for text in ["Hola, mundo. ¿Qué tal?", "a b  c", "x", ""] {
+            let p = pacing(3, 11);
+            let (_, steps) = run(text, p, all, never);
+            let waited: Duration = steps
+                .iter()
+                .filter_map(|s| match s {
+                    Step::Sleep(d) => Some(*d),
+                    _ => None,
+                })
+                .sum();
+            assert_eq!(waited, p.duration_of(text), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_pause_above_its_bound_is_refused() {
+        assert!(TypePacing::new(MS(MAX_TYPE_KEY_PAUSE_MS), MS(MAX_TYPE_BOUNDARY_PAUSE_MS)).is_ok());
+        let key = TypePacing::new(MS(MAX_TYPE_KEY_PAUSE_MS + 1), MS(0)).unwrap_err();
+        assert!(key.to_string().contains("between keys"), "{key}");
+        let boundary = TypePacing::new(MS(0), MS(MAX_TYPE_BOUNDARY_PAUSE_MS + 1)).unwrap_err();
+        assert!(boundary.to_string().contains("word boundary"), "{boundary}");
+        assert!(TypePacing::default().is_off());
+        assert!(!pacing(0, 1).is_off() && !pacing(1, 0).is_off());
     }
 
     #[test]

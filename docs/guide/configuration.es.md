@@ -42,7 +42,7 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
 - **Se rechaza** (el servidor no arranca): secciones o claves desconocidas; valores fuera de
   rango (`tile_size` 8–1024, `halo_px` ≤ 1024, `max_regions` 1–1024,
   `full_refresh_area_ratio` en (0, 1], `adaptive_min_regions` 0–1024 (por defecto `2`; un plan con esa cantidad de regiones o más se procesa como refresco completo, razón `adaptive_cost`, [ADR-0030](../adr/0030-adaptive-full-or-regional-plan.md); `0` apaga la regla), `max_snapshot_age_ms` ≥ 1, `verify_timeout_ms` 0–5000, `verify_poll_ms` 1–1000, `concurrent_stages` booleano (por defecto `true`), `candidate_search` `scan` (por defecto, la referencia) o `rstar` (R*-tree experimental, [ADR-0027](../adr/0027-candidate-enumeration-with-an-rstar-index.md); los mismos resultados), `max_message_bytes`
-  4096–65536, `max_entries` ≥ 1, entradas vacías en `allowed_applications`, un `stop_file`,
+  4096–65536, `max_entries` ≥ 1, `type_key_pause_ms` 0–50, `type_boundary_pause_ms` 0–250, entradas vacías en `allowed_applications`, un `stop_file`,
   `window_pin_file` o `purge_file` en blanco, una entrada de `allowed_window_classes` que nunca podría
   aplicarse o que nombra el escritorio, la barra de tareas o `applicationframehost.exe`); y valores que este binario no puede cumplir: un `platform` distinto de
   `windows`, un `snapshot_policy`
@@ -57,6 +57,18 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
   `STALE_SNAPSHOT` (observar de nuevo, sin reanclar): en la puerta, también en simulación, y
   antes de cada entrada real, incluidas las teclas de un `type` en dos fases. Una publicación
   nueva no renueva una lectura de accesibilidad antigua.
+- **Opcional, apagado por defecto** (`[safety] type_key_pause_ms`, `type_boundary_pause_ms`): con
+  ambos en `0` el actuador `SendInput` en vivo entrega al sistema el texto entero de un `type` en
+  una sola llamada. Con cualquiera mayor que cero envía una llamada por carácter (un par
+  sustituto va junto), espera la primera pausa tras cada carácter al que sigue otro y también la
+  segunda tras un espacio o un signo de puntuación al que sigue más texto, y antes de cada
+  carácter después del primero vuelve a comprobar la parada del operador, la ventana en primer
+  plano, la aplicación en primer plano con el foco de teclado y las teclas modificadoras
+  pulsadas. Una comprobación que falla termina el texto ahí y la acción queda `indeterminate`,
+  sin reintento. Un `type` con pausas cuya suma pase de 30 s se rechaza antes de enviar nada.
+  Estas claves cambian cómo llegan las teclas a la aplicación, no si pueden llegar; ninguna
+  opción de la línea de órdenes ni el agente puede fijarlas. El efecto en una aplicación real
+  aún no está medido: déjelas en `0` salvo que lo esté midiendo.
 - **Se acepta sin efecto** (una nota en stderr al arrancar): `actuation_enabled = true` con un
   adaptador de entrada que no es real.
 

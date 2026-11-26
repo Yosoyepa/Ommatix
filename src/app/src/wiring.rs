@@ -221,6 +221,8 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
     check_accessibility(args.source, config)?;
     let icons = config.icon_resolver()?;
     let clock: Arc<dyn Clock> = Arc::new(SystemClock::new());
+    // One policy for the engine and for the live actuator's stop check between two keys.
+    let policy = Arc::new(operator_policy(config));
 
     let mut sim = None;
     let access = config.models.accessibility;
@@ -261,7 +263,7 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
         SourceKind::Dxgi => {
             let (detector, recognizer) = perception(config)?;
             let (capturer, accessibility, actuator) =
-                dxgi_ports(&clock, input, args.output, access)?;
+                dxgi_ports(&clock, input, args.output, access, config, &policy)?;
             (capturer, detector, recognizer, accessibility, actuator)
         }
     };
@@ -296,7 +298,7 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
             recognizer,
             accessibility,
             actuator,
-            policy: Arc::new(operator_policy(config)),
+            policy,
             clock,
         },
     );
@@ -594,6 +596,8 @@ fn dxgi_ports(
     input: InputKind,
     output: u32,
     access: AccessibilityKind,
+    config: &Config,
+    policy: &Arc<ConfigPolicy>,
 ) -> Result<LivePorts> {
     use ommatix_adapter_capture::{DxgiCapturer, DxgiOptions};
 
@@ -605,7 +609,7 @@ fn dxgi_ports(
         .with_context(|| format!("cannot capture output {output} through DXGI"))?;
     let actuator = match input {
         InputKind::DryRun => dry_run(),
-        InputKind::Sendinput => send_input(&dxgi)?,
+        InputKind::Sendinput => send_input(&dxgi, config, clock, policy)?,
         InputKind::Native => bail!("native input requires --source screen"),
     };
     let accessibility = accessibility(access, dxgi.mapping_source())?;
@@ -613,7 +617,14 @@ fn dxgi_ports(
 }
 
 #[cfg(not(all(windows, feature = "dxgi")))]
-fn dxgi_ports(_: &Arc<dyn Clock>, _: InputKind, _: u32, _: AccessibilityKind) -> Result<LivePorts> {
+fn dxgi_ports(
+    _: &Arc<dyn Clock>,
+    _: InputKind,
+    _: u32,
+    _: AccessibilityKind,
+    _: &Config,
+    _: &Arc<ConfigPolicy>,
+) -> Result<LivePorts> {
     bail!("this build has no DXGI capture; rebuild on Windows with `--features dxgi`")
 }
 
@@ -671,16 +682,42 @@ fn uia(_: impl MappingSource) -> Result<Box<dyn AccessibilityProvider>> {
 }
 
 /// `SendInput` aimed through the DXGI capturer's live mapping, which fails closed while
-/// the capture is lost or out of profile.
+/// the capture is lost or out of profile. `[safety] type_key_pause_ms` and
+/// `type_boundary_pause_ms` (both zero by default: one call with the whole text) pace the keys
+/// of a `type`; the actuator then waits on the engine's clock and reads the operator's stop,
+/// through the same policy the engine reads, before every character after the first.
 #[cfg(all(windows, feature = "sendinput"))]
-fn send_input(dxgi: &ommatix_adapter_capture::DxgiCapturer) -> Result<Box<dyn OsActuator>> {
-    Ok(Box::new(
-        ommatix_adapter_input::SendInputActuator::with_mapping_source(dxgi.mapping_source())?,
-    ))
+fn send_input(
+    dxgi: &ommatix_adapter_capture::DxgiCapturer,
+    config: &Config,
+    clock: &Arc<dyn Clock>,
+    policy: &Arc<ConfigPolicy>,
+) -> Result<Box<dyn OsActuator>> {
+    use ommatix_adapter_input::{SendInputActuator, TypePacing};
+    use ommatix_application::PolicyStore;
+
+    let (key_pause, boundary_pause) = config.type_pauses();
+    let stop_policy = Arc::clone(policy);
+    let actuator = SendInputActuator::with_mapping_source(dxgi.mapping_source())?
+        .with_type_pacing(
+            TypePacing {
+                key_pause,
+                boundary_pause,
+            },
+            Arc::clone(clock),
+            move || stop_policy.current().stopped,
+        )
+        .context("[safety] type_key_pause_ms or type_boundary_pause_ms is out of range")?;
+    Ok(Box::new(actuator))
 }
 
 #[cfg(all(windows, feature = "dxgi", not(feature = "sendinput")))]
-fn send_input(_: &ommatix_adapter_capture::DxgiCapturer) -> Result<Box<dyn OsActuator>> {
+fn send_input(
+    _: &ommatix_adapter_capture::DxgiCapturer,
+    _: &Config,
+    _: &Arc<dyn Clock>,
+    _: &Arc<ConfigPolicy>,
+) -> Result<Box<dyn OsActuator>> {
     bail!("this build has no SendInput; rebuild on Windows with `--features sendinput`")
 }
 
