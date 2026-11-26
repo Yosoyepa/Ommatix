@@ -87,6 +87,11 @@
 //! listener holds a [`Reservation`] for it ([`Broker::reserve`]), taken before the first read:
 //! peers that connect and send nothing cannot hold more places, or threads, than the bound.
 //!
+//! The places among the clients (connected clients and reservations together) are counted apart
+//! from the lock that serves calls, by atomic operations that never wait: a listener reserving a
+//! place for a connection it just accepted never waits on a tool call another client is making
+//! (ADR-0043, decision 7; D39).
+//!
 //! The spent set is bounded by [`MAX_SPENT_TICKETS`] hashes (32 bytes each), so a peer that
 //! presents ticket after ticket cannot exhaust memory. When it is full the broker fails closed:
 //! it admits nobody new by ticket, with the same refusal as a spent ticket, until the engine
@@ -100,6 +105,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::num::NonZeroUsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -216,6 +222,12 @@ pub struct Broker {
 
 struct Shared {
     state: Mutex<State>,
+    /// The places taken among the clients: one for each connected client and each
+    /// [`Reservation`], never above `max_clients`. Counted outside `state`'s lock, by atomic
+    /// operations only, so taking or giving back a place never waits on a call being served.
+    places: AtomicUsize,
+    /// The bound on clients given to [`Broker::new`].
+    max_clients: usize,
     config: McpConfig,
     tools: Arc<[Tool]>,
     /// The operator's grants by ticket hash, asked on every call of a client admitted by
@@ -278,11 +290,19 @@ struct State {
     /// The hashes of the tickets spent so far, at most [`MAX_SPENT_TICKETS`]. Kept for the
     /// life of the broker: a purge deletes perception state, not this.
     spent: BTreeSet<[u8; 32]>,
-    /// The bound on clients given to [`Broker::new`].
-    max_clients: usize,
-    /// Places held by [`Reservation`]s: connections accepted whose handshake is not settled.
-    /// Connected clients plus reservations never exceed `max_clients`.
-    reserved: usize,
+}
+
+/// One place among a broker's clients, counted in [`Shared::places`] while it lives: held by a
+/// [`Reservation`] and then by the client admitted in it, or by a client admitted without one.
+/// Dropping it gives the place back.
+struct Seat {
+    shared: Arc<Shared>,
+}
+
+impl Drop for Seat {
+    fn drop(&mut self) {
+        self.shared.places.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// A place among a broker's clients, held for a connection whose handshake has not been read yet
@@ -297,15 +317,12 @@ struct State {
 /// place over, and leaving frees it as for any client; a refused handshake frees it at once.
 /// Dropping an unused reservation frees its place.
 pub struct Reservation {
-    shared: Arc<Shared>,
-    held: bool,
+    seat: Seat,
 }
 
 impl std::fmt::Debug for Reservation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Reservation")
-            .field("held", &self.held)
-            .finish_non_exhaustive()
+        f.debug_struct("Reservation").finish_non_exhaustive()
     }
 }
 
@@ -352,24 +369,7 @@ impl Reservation {
 
     fn broker(&self) -> Broker {
         Broker {
-            shared: Arc::clone(&self.shared),
-        }
-    }
-
-    /// Gives the place back inside the lock the caller holds, so that nothing else takes it in
-    /// between.
-    fn settle(mut self, state: &mut State) {
-        if std::mem::replace(&mut self.held, false) {
-            state.reserved = state.reserved.saturating_sub(1);
-        }
-    }
-}
-
-impl Drop for Reservation {
-    fn drop(&mut self) {
-        if std::mem::replace(&mut self.held, false) {
-            let mut state = self.shared.lock_to_delete();
-            state.reserved = state.reserved.saturating_sub(1);
+            shared: Arc::clone(&self.seat.shared),
         }
     }
 }
@@ -438,12 +438,12 @@ impl Broker {
             operator,
             clients: BTreeMap::new(),
             spent: BTreeSet::new(),
-            max_clients,
-            reserved: 0,
         };
         Ok(Self {
             shared: Arc::new(Shared {
                 state: Mutex::new(state),
+                places: AtomicUsize::new(0),
+                max_clients,
                 config,
                 tools: tools::descriptors().into(),
                 grant_store,
@@ -455,6 +455,12 @@ impl Broker {
         self.shared.config
     }
 
+    /// The bound on clients given to [`Broker::new`]: connected clients and [`Reservation`]s
+    /// together never exceed it.
+    pub fn max_clients(&self) -> usize {
+        self.shared.max_clients
+    }
+
     /// Admits a client with its grant (ADR-0039, decision 3; ADR-0040, decision 7). `None` is
     /// a client without a valid grant: it observes without values and delivers nothing. The
     /// client's identifier comes from the lease table; the agent never chooses it.
@@ -464,18 +470,18 @@ impl Broker {
     /// [`BrokerError::Lease`] with [`LeaseRefusal::TooManyClients`] at the bound (connected
     /// clients and [`Reservation`]s together), [`BrokerError::Unavailable`] after a failed call.
     pub fn connect(&self, grant: Option<Grant>) -> Result<BrokerConnection, BrokerError> {
-        let client = {
+        let (client, seat) = {
             let mut state = self.shared.lock()?;
             let now = state.clock.now();
             state.enter();
-            state.room()?;
+            let seat = self.shared.take_seat()?;
             let outcome = state.leases.connect(now);
             state.apply(&outcome.change);
             let client = outcome.result.map_err(BrokerError::Lease)?;
             state.clients.insert(client, Authority::Handed(grant));
-            client
+            (client, seat)
         };
-        Ok(self.connection_for(client))
+        Ok(self.connection_for(client, seat))
     }
 
     /// Admits a client from the first line of its connection, before any MCP message (ADR-0040
@@ -503,17 +509,19 @@ impl Broker {
     /// connection or gives it a thread, and closes the connection unread when it is refused; see
     /// [`Reservation`].
     ///
+    /// It never waits: the places are counted apart from the lock that serves calls, so a
+    /// listener's accepting never waits on a tool call of any client (D39).
+    ///
     /// # Errors
     ///
     /// [`BrokerError::Lease`] with [`LeaseRefusal::TooManyClients`] when connected clients and
     /// reservations already fill the bound; [`BrokerError::Unavailable`] after a failed call.
     pub fn reserve(&self) -> Result<Reservation, BrokerError> {
-        let mut state = self.shared.lock()?;
-        state.room()?;
-        state.reserved += 1;
+        if self.shared.state.is_poisoned() {
+            return Err(BrokerError::Unavailable);
+        }
         Ok(Reservation {
-            shared: Arc::clone(&self.shared),
-            held: true,
+            seat: self.shared.take_seat()?,
         })
     }
 
@@ -539,13 +547,10 @@ impl Broker {
         wipe(handshake);
         // A refusal here drops the reservation, which frees its place.
         let presented = presented.ok_or(BrokerError::Refused)?;
-        let client = {
+        let (client, seat) = {
             let mut state = self.shared.lock()?;
-            // The place is given back under this lock: the admitted client takes it over below,
-            // or it stays free when the handshake is refused.
-            if let Some(reservation) = reservation {
-                reservation.settle(&mut state);
-            }
+            // A refusal from here on drops the reservation, which frees its place; an admitted
+            // client takes the place over.
             if let Presented::Ticket(hash) = &presented
                 && (state.spent.contains(hash) || state.spent.len() >= MAX_SPENT_TICKETS)
             {
@@ -553,7 +558,10 @@ impl Broker {
             }
             let now = state.clock.now();
             state.enter();
-            state.room()?;
+            let seat = match reservation {
+                Some(reservation) => reservation.seat,
+                None => self.shared.take_seat()?,
+            };
             let outcome = state.leases.connect(now);
             state.apply(&outcome.change);
             let client = outcome.result.map_err(BrokerError::Lease)?;
@@ -565,9 +573,9 @@ impl Broker {
                 }
             };
             state.clients.insert(client, authority);
-            client
+            (client, seat)
         };
-        Ok(self.connection_for(client))
+        Ok(self.connection_for(client, seat))
     }
 
     /// Reads the handshake line from `reader` with the bounded reader of every other line,
@@ -676,8 +684,8 @@ impl Broker {
         admitted
     }
 
-    /// The connection of a client just admitted.
-    fn connection_for(&self, client: ClientId) -> BrokerConnection {
+    /// The connection of a client just admitted, holding its place.
+    fn connection_for(&self, client: ClientId, seat: Seat) -> BrokerConnection {
         let member = Member {
             shared: Arc::clone(&self.shared),
             client,
@@ -690,6 +698,7 @@ impl Broker {
             ),
             member,
             open: true,
+            seat: Some(seat),
         }
     }
 
@@ -707,6 +716,30 @@ impl Broker {
 }
 
 impl Shared {
+    /// Takes one place among the clients, without waiting: refused when connected clients and
+    /// reservations already fill the bound.
+    fn take_seat(self: &Arc<Self>) -> Result<Seat, BrokerError> {
+        let mut taken = self.places.load(Ordering::SeqCst);
+        loop {
+            if taken >= self.max_clients {
+                return Err(BrokerError::Lease(LeaseRefusal::TooManyClients));
+            }
+            match self.places.compare_exchange_weak(
+                taken,
+                taken + 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => {
+                    return Ok(Seat {
+                        shared: Arc::clone(self),
+                    });
+                }
+                Err(now) => taken = now,
+            }
+        }
+    }
+
     /// The lock for anything that may observe or deliver: refused after a failed call.
     fn lock(&self) -> Result<MutexGuard<'_, State>, BrokerError> {
         self.state.lock().map_err(|_| BrokerError::Unavailable)
@@ -743,16 +776,6 @@ impl State {
             clients: self.clients.keys().copied().collect(),
             grant_installed: self.granted.current() != self.operator.current(),
             engine: self.engine.retained_state_sizes(),
-        }
-    }
-
-    /// Whether one more client or reservation fits within the bound: connected clients and
-    /// reservations together never exceed it.
-    fn room(&self) -> Result<(), BrokerError> {
-        if self.clients.len().saturating_add(self.reserved) >= self.max_clients {
-            Err(BrokerError::Lease(LeaseRefusal::TooManyClients))
-        } else {
-            Ok(())
         }
     }
 
@@ -892,6 +915,8 @@ pub struct BrokerConnection {
     connection: Connection,
     member: Member,
     open: bool,
+    /// The client's place among the clients, given back when it leaves.
+    seat: Option<Seat>,
 }
 
 impl BrokerConnection {
@@ -984,15 +1009,19 @@ impl BrokerConnection {
             return;
         }
         let client = self.member.client;
-        let mut state = self.member.shared.lock_to_delete();
-        let now = state.clock.now();
-        let outcome = state.leases.disconnect(client, now);
-        state.apply(&outcome.change);
-        state.engine.forget_client(client);
-        state.clients.remove(&client);
-        if state.clients.is_empty() {
-            state.engine.purge();
+        {
+            let mut state = self.member.shared.lock_to_delete();
+            let now = state.clock.now();
+            let outcome = state.leases.disconnect(client, now);
+            state.apply(&outcome.change);
+            state.engine.forget_client(client);
+            state.clients.remove(&client);
+            if state.clients.is_empty() {
+                state.engine.purge();
+            }
         }
+        // The place is given back once the client is gone from the state.
+        self.seat = None;
     }
 }
 

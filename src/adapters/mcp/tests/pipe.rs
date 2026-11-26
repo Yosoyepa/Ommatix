@@ -12,7 +12,7 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::num::NonZeroU8;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Barrier, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,7 +20,8 @@ use common::{error_code, modern_meta};
 use interprocess::os::windows::named_pipe::{PipeListener, PipeListenerOptions, pipe_mode};
 use ommatix_adapter_mcp::pipe::{
     CONNECT_ATTEMPTS, CONNECT_PAUSE, ConnectError, FULL_LINE, MAX_REFUSING, PipeError, PipeName,
-    PipeServer, PipeStats, PipeStream, RelayEnd, RelayError, connect, relay,
+    PipeServer, PipeStats, PipeStream, RelayEnd, RelayError, ShutdownState, connect, connect_with,
+    relay,
 };
 use ommatix_adapter_mcp::{
     Admission, Broker, DEFAULT_MAX_MESSAGE_BYTES, LEASE_META_KEY, McpConfig,
@@ -29,8 +30,8 @@ use ommatix_adapter_sim::fixture::FixtureActuator;
 use ommatix_adapter_sim::{FixtureDesktop, FixtureScene, confirmed};
 use ommatix_application::contract::ValidatedAction;
 use ommatix_application::{
-    DeliveryReceipt, EngineConfig, Grant, GrantStore, LocalPolicy, ManualClock, NoAccessibility,
-    OsActuator, PortError, Ports, TopLevelWindow, WindowOpacity,
+    CapturedFrame, DeliveryReceipt, EngineConfig, FrameCapturer, Grant, GrantStore, LocalPolicy,
+    ManualClock, NoAccessibility, OsActuator, PortError, Ports, TopLevelWindow, WindowOpacity,
 };
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::Role;
@@ -150,10 +151,89 @@ fn ticket(n: u64) -> String {
     format!("Pp7-Tkt_{n:035}")
 }
 
+/// A gate on the simulated desktop's capturer: every capture is counted as it begins, and waits
+/// while the gate is closed. A tool call that captures holds the broker's lock meanwhile.
+#[derive(Default)]
+struct Gate {
+    /// Whether the gate is closed, and how many captures began.
+    state: Mutex<(bool, usize)>,
+    changed: Condvar,
+}
+
+impl Gate {
+    fn state(&self) -> MutexGuard<'_, (bool, usize)> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn set_closed(&self, closed: bool) {
+        self.state().0 = closed;
+        self.changed.notify_all();
+    }
+
+    fn captures(&self) -> usize {
+        self.state().1
+    }
+
+    /// Waits until at least `n` captures began; fails the test after [`PATIENCE`].
+    fn wait_captures(&self, n: usize) -> usize {
+        let deadline = Instant::now() + PATIENCE;
+        let mut state = self.state();
+        while state.1 < n {
+            let left = deadline
+                .checked_duration_since(Instant::now())
+                .unwrap_or_else(|| panic!("{} captures, waiting for {n}", state.1));
+            state = self
+                .changed
+                .wait_timeout(state, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        state.1
+    }
+
+    fn enter(&self) {
+        let mut state = self.state();
+        state.1 += 1;
+        self.changed.notify_all();
+        while state.0 {
+            state = self
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+}
+
+/// Opens its gate when dropped, so that a failing test never leaves a call waiting on it.
+struct Opens(Arc<Gate>);
+
+impl Drop for Opens {
+    fn drop(&mut self) {
+        self.0.set_closed(false);
+    }
+}
+
+struct Gated {
+    inner: Box<dyn FrameCapturer>,
+    gate: Arc<Gate>,
+}
+
+impl FrameCapturer for Gated {
+    fn name(&self) -> &'static str {
+        self.inner.name()
+    }
+
+    fn capture(&mut self) -> Result<CapturedFrame, PortError> {
+        self.gate.enter();
+        self.inner.capture()
+    }
+}
+
 struct World {
     desktop: FixtureDesktop,
     clock: Arc<ManualClock>,
     grants: Arc<Grants>,
+    gate: Arc<Gate>,
 }
 
 impl World {
@@ -165,12 +245,16 @@ impl World {
             desktop: FixtureDesktop::new(scene(), clock.clone()),
             clock,
             grants,
+            gate: Arc::default(),
         }
     }
 
     fn broker_with(&self, config: McpConfig, max_clients: usize) -> Broker {
         let ports = Ports {
-            capturer: Box::new(self.desktop.capturer()),
+            capturer: Box::new(Gated {
+                inner: Box::new(self.desktop.capturer()),
+                gate: Arc::clone(&self.gate),
+            }),
             detector: Box::new(self.desktop.detector()),
             recognizer: Box::new(self.desktop.recognizer()),
             accessibility: Box::new(NoAccessibility),
@@ -473,6 +557,9 @@ fn it_28_a_second_listener_on_the_same_name_fails_and_a_new_one_binds_once_the_f
 /// Reads the pipe's descriptor back the way the experiment did: PowerShell's `Get-Acl` on the
 /// pipe's path (it opens the pipe, so it is retried while the instance is busy). Returns the
 /// access part, the owner part and the current user's SID.
+///
+/// The script's pause of 100 ms only spaces its retries while the instance is busy; it decides
+/// nothing: the test asserts the descriptor it finally reads, and fails if none is read.
 fn descriptor_of(name: &PipeName) -> (String, String, String) {
     let script = format!(
         "$p = '{}'; for ($i = 0; $i -lt 150; $i++) {{ try {{ $a = Get-Acl -LiteralPath $p \
@@ -937,29 +1024,28 @@ fn it_32_an_absent_pipe_is_no_engine_and_a_busy_one_is_retried_a_bounded_number_
     );
     assert!(waited < Duration::from_secs(5), "bounded: {waited:?}");
 
-    // A busy pipe that frees an instance while the client retries: it connects.
-    let (starting, is_starting) = mpsc::channel();
+    // A busy pipe that frees an instance while the client retries: it connects. The pipe stays
+    // busy until the client has told of a try that found it busy, so the retry is what connects
+    // it; no pause of the test decides that.
+    let (busy_try, is_busy) = mpsc::channel();
     let retrying = {
         let name = name.clone();
         thread::spawn(move || {
-            starting.send(Instant::now()).unwrap();
-            let stream = connect(&name, 400, Duration::from_millis(10));
-            (stream.map(close), Instant::now())
+            connect_with(&name, 400, Duration::from_millis(10), |tries| {
+                let _ = busy_try.send(tries);
+            })
+            .map(close)
         })
     };
-    let started = is_starting.recv().unwrap();
-    // The busy window the retry must outlast, then the release.
-    thread::sleep(Duration::from_millis(200));
-    let released = Instant::now();
+    let first_busy = is_busy
+        .recv_timeout(PATIENCE)
+        .expect("the client tells of a busy try");
+    assert_eq!(first_busy, 1, "the first try found it busy");
     close(first);
     close(accepted);
+    // Accepting the second connection makes the listener create a free instance.
     let second_served = listener.accept().unwrap();
-    let (connected, finished) = retrying.join().unwrap();
-    assert_eq!(connected, Ok(()));
-    assert!(
-        started < released && finished > released,
-        "it connected only after the release"
-    );
+    assert_eq!(retrying.join().unwrap(), Ok(()), "connected by a retry");
     close(second);
     close(second_served);
 }
@@ -1282,12 +1368,17 @@ fn it_30_shutdown_stops_accepting_at_once_and_connections_end_when_their_clients
     let started = Instant::now();
     let report = server.shutdown(Duration::from_millis(300));
     assert!(started.elapsed() < Duration::from_secs(5), "prompt");
-    assert!(report.accept_stopped, "accepting stopped");
+    assert!(report.accept_stopped(), "accepting stopped");
     assert_eq!(
-        report.stats.connections, 3,
+        report.state,
+        ShutdownState::Remaining {
+            connections: 3,
+            refusing: 0
+        },
         "the count is right while they stay"
     );
     assert!(!report.complete());
+    assert!(!server.accepting());
     // Nobody new is served, and the name is still held by the connected instances.
     assert!(connect(&name, 1, CONNECT_PAUSE).is_err());
     assert_eq!(
@@ -1308,4 +1399,230 @@ fn it_30_shutdown_stops_accepting_at_once_and_connections_end_when_their_clients
     drop(server);
     let mut again = PipeServer::bind(broker.clone(), name).expect("binds once all are gone");
     assert!(again.shutdown(PATIENCE).complete());
+}
+
+// ---- 13. the review of the pipe (D39): bounds and shutdown held to what they say ----
+
+/// R-T2-2: a connection's place is held until its thread has ended, so connect-and-leave churn
+/// never runs more connection threads than the bound on clients, as the threads count
+/// themselves.
+#[test]
+fn churn_never_runs_more_connection_threads_than_the_bound_on_clients() {
+    const BOUND: usize = 2;
+    const CHURNERS: usize = 8;
+    const CYCLES: usize = 500;
+    let world = World::new();
+    let broker = world.bounded(BOUND);
+    let mut server = bind(&broker, "churn");
+    let name = server.name().clone();
+    let churners: Vec<_> = (0..CHURNERS)
+        .map(|_| {
+            let name = name.clone();
+            thread::spawn(move || {
+                let mut connected = 0_usize;
+                for _ in 0..CYCLES {
+                    if let Ok(stream) = connect(&name, CONNECT_ATTEMPTS, CONNECT_PAUSE) {
+                        // An empty handshake, then the client leaves at once.
+                        let _ = (&stream).write_all(b"\n");
+                        close(stream);
+                        connected += 1;
+                    }
+                }
+                connected
+            })
+        })
+        .collect();
+    let connected: usize = churners.into_iter().map(|t| t.join().unwrap()).sum();
+    let stats = wait(&server, "every thread ends", |s| {
+        s.connections == 0 && s.refusing == 0 && s.threads == 0
+    });
+    eprintln!("churn: {connected} connections made; {stats:?}");
+    assert!(
+        stats.peak_threads <= BOUND,
+        "{} connection threads at once for a bound of {BOUND}",
+        stats.peak_threads
+    );
+    assert_eq!(stats.peak_threads, BOUND, "the run reached the bound");
+    assert!(
+        connected >= CHURNERS * CYCLES / 2 && stats.accepted >= 500,
+        "the run says too little: {connected} connected, {stats:?}"
+    );
+    assert!(
+        stats.told_full + stats.closed_full > 0,
+        "the run went past the bound: {stats:?}"
+    );
+    assert_eq!(clients(&broker), 0);
+    assert!(server.shutdown(PATIENCE).complete());
+}
+
+/// R-T2-3: while one client's tool call holds the broker's lock (its capture waits at a gate the
+/// test holds closed), the listener still accepts clients up to the bound and refuses the one
+/// beyond it, and none of that waits for the call to finish.
+#[test]
+fn accepting_never_waits_on_a_call_that_holds_the_broker() {
+    let world = World::new();
+    let broker = world.bounded(3);
+    let mut server = bind(&broker, "long-call");
+    let name = server.name().clone();
+    let mut caller = Peer::attach(&name, &ticket(1));
+    assert!(caller.list()["result"].is_object());
+    let before = world.gate.captures();
+    world.gate.set_closed(true);
+    let opens = Opens(Arc::clone(&world.gate));
+    caller.next_id += 1;
+    caller.send(
+        format!(
+            "{}\n",
+            tool_line(caller.next_id, "observe_screen", &json!({}))
+        )
+        .as_bytes(),
+    );
+    world.gate.wait_captures(before + 1);
+    // The call is inside the broker's lock, waiting at the gate. Two more clients are accepted
+    // meanwhile: one attaches (its admission itself will wait for the lock), one sends nothing.
+    let mut attaching = Peer::attach(&name, "");
+    let silent = Peer::connect(&name);
+    let stats = wait(&server, "accepted while a call holds the broker", |s| {
+        s.accepted == 3
+    });
+    assert_eq!(stats.connections, 3);
+    // The one beyond the bound is refused, still while the call waits.
+    let mut over = Peer::connect(&name);
+    assert_eq!(over.line().as_deref(), Some(FULL_LINE));
+    assert_eq!(over.line(), None);
+    assert_eq!(
+        world.gate.captures(),
+        before + 1,
+        "the call has not finished"
+    );
+    drop(opens);
+    let reply: Value = serde_json::from_str(&caller.line().expect("the call's reply")).unwrap();
+    assert!(reply["result"]["structuredContent"].is_object(), "{reply}");
+    assert!(
+        attaching.list()["result"].is_object(),
+        "admitted once the call is done"
+    );
+    drop((caller, attaching, silent, over));
+    wait(&server, "all leave", |s| {
+        s.connections == 0 && s.refusing == 0
+    });
+    assert!(server.shutdown(PATIENCE).complete());
+}
+
+/// Starts a PowerShell process that adds `instances` instances to the pipe `name` and keeps them
+/// waiting for clients, as any process of the same user may (the owner has every right on the
+/// pipe). Returns it once they exist; it ends when its input is closed.
+fn competitor(name: &PipeName, instances: usize) -> std::process::Child {
+    use std::process::{Command, Stdio};
+    let script = format!(
+        "$ErrorActionPreference = 'Stop'; $all = New-Object System.Collections.ArrayList; \
+         for ($i = 0; $i -lt {instances}; $i++) {{ \
+         $p = New-Object System.IO.Pipes.NamedPipeServerStream('{}', \
+         [System.IO.Pipes.PipeDirection]::InOut, -1, \
+         [System.IO.Pipes.PipeTransmissionMode]::Byte, \
+         [System.IO.Pipes.PipeOptions]::Asynchronous); \
+         [void]$p.BeginWaitForConnection($null, $null); [void]$all.Add($p) }}; \
+         [Console]::Out.WriteLine('ready'); [Console]::Out.Flush(); \
+         [void][Console]::In.ReadLine(); foreach ($p in $all) {{ $p.Dispose() }}",
+        name.name()
+    );
+    let mut child = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("PowerShell runs");
+    let mut line = String::new();
+    BufReader::new(child.stdout.as_mut().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    if line.trim() != "ready" {
+        let mut error = String::new();
+        let _ = child.stderr.as_mut().unwrap().read_to_string(&mut error);
+        panic!("the competing instances were not created: {line:?} {error}");
+    }
+    child
+}
+
+/// R-T2-5: when every wake-up connection reaches another process's instance of the name,
+/// shutdown says that its accept thread is still alive, keeps it, says so again when asked again,
+/// and completes once the other instances are gone.
+#[test]
+fn shutdown_tells_when_its_accept_thread_could_not_be_woken_and_completes_once_it_can() {
+    let world = World::new();
+    let broker = world.broker();
+    let mut server = bind(&broker, "compete");
+    let name = server.name().clone();
+    let mut other = competitor(&name, 64);
+    // A client reaches the oldest instance that waits: this listener's first. Serving it makes
+    // the listener create its next waiting instance, the newest of the name, behind the other
+    // process's 64.
+    let mut peer = Peer::attach(&name, "");
+    wait(&server, "the client reached this listener", |s| {
+        s.accepted == 1
+    });
+    assert!(peer.list()["result"].is_object());
+    drop(peer);
+    wait(&server, "the client left", |s| s.connections == 0);
+
+    let report = server.shutdown(PATIENCE);
+    assert_eq!(report.state, ShutdownState::AcceptAlive, "{report:?}");
+    assert!(!report.accept_stopped() && !report.complete());
+    assert!(!server.accepting());
+    // Asked again while the other instances still take every wake-up: the same truth.
+    let again = server.shutdown(PATIENCE);
+    assert_eq!(again.state, ShutdownState::AcceptAlive, "{again:?}");
+    assert_eq!(
+        PipeServer::bind(broker.clone(), name.clone()).err(),
+        Some(PipeError::NameTaken)
+    );
+    // The other process goes; the next shutdown wakes the accept thread and completes.
+    drop(other.stdin.take());
+    assert!(other.wait().unwrap().success());
+    let report = server.shutdown(PATIENCE);
+    assert!(report.complete(), "{report:?}");
+    assert_eq!(report.failure, None);
+    drop(server);
+    let mut rebound = PipeServer::bind(broker.clone(), name).expect("the name is free");
+    assert!(rebound.shutdown(PATIENCE).complete());
+}
+
+/// R-T2-6: requests the connection received before the stop and has not handed to the broker
+/// yet are never served after it.
+#[test]
+fn requests_already_received_are_not_served_after_shutdown() {
+    let world = World::new();
+    let broker = world.broker();
+    let mut server = bind(&broker, "buffered");
+    let name = server.name().clone();
+    let mut peer = Peer::attach(&name, &ticket(1));
+    let before = world.gate.captures();
+    assert!(peer.call("observe_screen", &json!({}))["result"].is_object());
+    let per_call = world.gate.captures() - before;
+    assert!(per_call >= 1, "an observation captures");
+    // Three requests in one write: the connection receives them together.
+    let start = world.gate.captures();
+    let mut batch = String::new();
+    for id in 100..103 {
+        batch.push_str(&tool_line(id, "observe_screen", &json!({})));
+        batch.push('\n');
+    }
+    peer.send(batch.as_bytes());
+    // The first is being served once its captures began. Its reply then waits for the client to
+    // read it (a flush on a pipe waits for its reader), and the client does not read yet.
+    world.gate.wait_captures(start + per_call);
+    let report = server.shutdown(Duration::ZERO);
+    assert!(report.accept_stopped(), "{report:?}");
+    let first: Value = serde_json::from_str(&peer.line().expect("the first reply")).unwrap();
+    assert_eq!(first["id"], 100);
+    assert_eq!(peer.line(), None, "nothing more is served");
+    assert_eq!(
+        world.gate.captures(),
+        start + per_call,
+        "the two later requests never reached the engine"
+    );
+    drop(peer);
+    assert!(server.shutdown(PATIENCE).complete());
+    assert_eq!(clients(&broker), 0);
 }
