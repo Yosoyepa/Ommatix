@@ -342,7 +342,7 @@ fn ut_54_the_default_window_is_ten_seconds() {
     assert_observe_again(&after, "snapshot is older");
 }
 
-// UT-87: the horizon of the re-read (ADR-0025, amendment). An observation re-reads the
+// UT-88: the horizon of the re-read (ADR-0025, amendment). An observation re-reads the
 // evidence that will have expired when it ends: at its start plus the duration of the last
 // committed observation. The window of these tests is 100 ms and the accessibility read of
 // `slow_save` takes 30 ms, so the estimate after the first observation is 30 ms.
@@ -363,12 +363,12 @@ fn read_save(r: &Rig) -> bool {
         .is_some_and(|regions| regions.iter().any(|region| region.overlaps(&save_box())))
 }
 
-/// UT-87: evidence that is young when the observation starts, and over the limit when it
+/// UT-88: evidence that is young when the observation starts, and over the limit when it
 /// ends, is read again by that observation, so the action at its end is not refused for age.
 /// Read at 0 ms, observed again at 80 ms (age 80, within 100 ms) by an observation of 30 ms: at
 /// the horizon, 110 ms, the old evidence would be 110 ms old.
 #[test]
-fn ut_87_evidence_that_expires_before_the_observation_ends_is_read_again() {
+fn ut_88_evidence_that_expires_before_the_observation_ends_is_read_again() {
     let mut r = rig_aged(slow_save(30), WINDOW_MS);
     r.observe();
     r.clock.advance(Duration::from_millis(50)); // 30 ms of the read, then 50: now 80 ms.
@@ -388,10 +388,10 @@ fn ut_87_evidence_that_expires_before_the_observation_ends_is_read_again() {
     assert_eq!(result.status, ActionStatus::Simulated, "{result:?}");
 }
 
-/// UT-87: evidence that is still within the limit at the horizon is not read again: no extra
+/// UT-88: evidence that is still within the limit at the horizon is not read again: no extra
 /// read. Read at 0 ms, observed again at 50 ms by an observation of 30 ms: 80 ms at the horizon.
 #[test]
-fn ut_87_evidence_that_stays_within_the_limit_at_the_horizon_is_not_read_again() {
+fn ut_88_evidence_that_stays_within_the_limit_at_the_horizon_is_not_read_again() {
     let mut r = rig_aged(slow_save(30), WINDOW_MS);
     r.observe();
     r.clock.advance(Duration::from_millis(20)); // now 50 ms.
@@ -404,11 +404,11 @@ fn ut_87_evidence_that_stays_within_the_limit_at_the_horizon_is_not_read_again()
     );
 }
 
-/// UT-87: the horizon only decides what is read. A publication that reads nothing keeps the
+/// UT-88: the horizon only decides what is read. A publication that reads nothing keeps the
 /// evidence's own age, and the gate still compares it with the bound at the action's own
 /// instant, with no horizon: the evidence read at 0 ms is refused at 101 ms.
 #[test]
-fn ut_87_the_horizon_never_renews_evidence_that_was_not_read() {
+fn ut_88_the_horizon_never_renews_evidence_that_was_not_read() {
     let mut r = rig_aged(slow_save(30), WINDOW_MS);
     r.observe();
     r.clock.advance(Duration::from_millis(20)); // now 50 ms.
@@ -420,11 +420,11 @@ fn ut_87_the_horizon_never_renews_evidence_that_was_not_read() {
     assert_observe_again(&result, "accessibility evidence");
 }
 
-/// UT-87: the gate takes no part in the horizon. After an observation of 30 ms the bound is
+/// UT-88: the gate takes no part in the horizon. After an observation of 30 ms the bound is
 /// still inclusive at the action's own instant: both instants, the capture and the read, are
 /// 100 ms old at 100 ms and over the bound at 101 ms.
 #[test]
-fn ut_87_the_gate_compares_at_the_actions_own_instant_whatever_the_estimate() {
+fn ut_88_the_gate_compares_at_the_actions_own_instant_whatever_the_estimate() {
     let mut r = rig_aged(slow_save(30), WINDOW_MS);
     let page = r.observe();
     r.clock.advance(Duration::from_millis(70)); // now 100 ms.
@@ -439,10 +439,10 @@ fn ut_87_the_gate_compares_at_the_actions_own_instant_whatever_the_estimate() {
     assert_observe_again(&after, "snapshot is older");
 }
 
-/// UT-87: an estimate of the whole window or more re-reads all the evidence, even evidence
+/// UT-88: an estimate of the whole window or more re-reads all the evidence, even evidence
 /// that is only 100 ms old, which is still within the bound by itself; that is the full read.
 #[test]
-fn ut_87_an_estimate_of_the_window_or_more_reads_everything_again() {
+fn ut_88_an_estimate_of_the_window_or_more_reads_everything_again() {
     for read_ms in [WINDOW_MS, WINDOW_MS + 50] {
         let mut r = rig_aged(slow_save(read_ms), WINDOW_MS);
         r.observe(); // read at 0 ms, the observation lasted `read_ms`.
@@ -453,11 +453,11 @@ fn ut_87_an_estimate_of_the_window_or_more_reads_everything_again() {
     }
 }
 
-/// UT-87: an estimate of zero is the rule of ADR-0025 as it was. After observations that take
+/// UT-88: an estimate of zero is the rule of ADR-0025 as it was. After observations that take
 /// no time on the clock, evidence is read again exactly when it is older than the window at the
 /// observation's start: not at 99 or 100 ms, yes at 101 ms.
 #[test]
-fn ut_87_a_zero_estimate_judges_the_evidence_at_the_start_of_the_observation() {
+fn ut_88_a_zero_estimate_judges_the_evidence_at_the_start_of_the_observation() {
     for (elapsed_ms, again) in [(99, false), (100, false), (101, true)] {
         let mut r = rig_aged(accessible_save(), WINDOW_MS);
         r.observe();
@@ -469,11 +469,11 @@ fn ut_87_a_zero_estimate_judges_the_evidence_at_the_start_of_the_observation() {
     }
 }
 
-/// UT-87: with a zero estimate, the set read is the one of `aged_out` at the start; with any
+/// UT-88: with a zero estimate, the set read is the one of `aged_out` at the start; with any
 /// estimate it is never smaller. Generated over a grid of windows, ages and estimates, with
 /// the old selection as the oracle.
 #[test]
-fn ut_87_a_zero_estimate_selects_what_the_old_rule_selected_and_any_estimate_never_less() {
+fn ut_88_a_zero_estimate_selects_what_the_old_rule_selected_and_any_estimate_never_less() {
     use super::super::{aged_out, expires_within};
     let ms = Duration::from_millis;
     for max in [1_u64, 2, 5, 100, 10_000] {

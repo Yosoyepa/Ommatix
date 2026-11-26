@@ -160,7 +160,7 @@ observation that takes milliseconds.
    observation ended. No safeguard is relaxed; the refusal an agent saw for age becomes a read
    made by the observation that would have published expired evidence.
 
-Required validation: UT-87 in `src/application/src/engine/tests/snapshot_age.rs`.
+Required validation: UT-88 in `src/application/src/engine/tests/snapshot_age.rs`.
 
 ## Resumen (ES)
 
