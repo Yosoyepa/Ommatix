@@ -97,7 +97,7 @@ la acción siguiente necesita una nueva observación.
 
 | Herramienta | Propósito |
 |---|---|
-| `observe_screen` | Una página de elementos con `target_id`, `revision`, rol, etiqueta y accionabilidad; consulta y paginación ligada al snapshot. |
+| `observe_screen` | Una página de elementos con `target_id`, `revision`, rol, etiqueta y accionabilidad; consulta y paginación ligada al snapshot. También acepta un `lease` opcional (`acquire` o `release`), que no hace nada en este servidor de un solo agente (ver [Estado del proyecto](#estado-del-proyecto)). |
 | `execute_action` | `click`, `type` o `scroll` sobre un elemento en una revisión esperada; dry run por defecto. |
 | `get_engine_metrics` | Modo, recuentos de observaciones y acciones, regiones pendientes y estado de carga de modelos. |
 
@@ -235,6 +235,7 @@ El [dossier](docs/thesis/README.md) es la especificación; la tabla describe el 
 | S2 · identidad y contrato | Implementados el registro temporal, caché de íconos curados y las tres herramientas MCP. |
 | S3 · integración Windows | DXGI, SendInput, ONNX, OCR de Windows y UI Automation opcionales; evidencia supervisada en el perfil acordado. IT-01–04 siguen parciales. |
 | S4 · aceptación | Protocolo reducido: cinco flujos, cada uno 10/10 sin falsos éxitos. El corpus y la evaluación más amplios siguen diferidos. |
+| Varios agentes (propuesto) | En el adaptador MCP existe un intermediario que permite a varios agentes compartir un motor con un arrendamiento de entrada y una concesión por cliente, detrás de las propuestas [ADR-0039](docs/adr/0039-several-agents-through-one-engine-with-an-input-lease.md) y [ADR-0040](docs/adr/0040-task-scoped-grants-narrower-than-the-local-policy.md), probado sólo sobre flujos en memoria. El ejecutable no puede alcanzarlo (no hay transporte): sirve a un solo agente por stdio. |
 | Definition of Done | **6/10 casillas marcadas: 1, 4, 5, 6, 8, 9.** La 2 y 3 tienen aceptaciones por alcance, no cumplimiento; a la 7 le faltan memoria viva de caché de íconos activa y variación entre corridas; la 10 conserva integración parcial e instalación limpia. |
 
 Fuente: [capítulo 06 §6.7](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md#67-definition-of-done-del-producto).

@@ -82,6 +82,10 @@ Ejecutar flujos reales verificables en 3 aplicaciones permitidas. Trazabilidad: 
 
 **Alcance del MVP (15 de octubre de 2026).** Para este MVP, la evidencia de RF-18 es el protocolo reducido de S4: E2E-01, E2E-02, E2E-03, S4R-02 y S4R-03, cada uno con diez de diez corridas puntuadas y cero falsos éxitos. En `main`, E2E-01 (cuarta ronda, con la parcialidad que registra la matriz: una tarea, un DPI y un tema), E2E-02 (serie de la décima ronda), S4R-02 (décima ronda) y S4R-03 (séptima ronda, continuación) cumplen ese criterio. E2E-03 tiene tres de diez (undécima ronda, continuación 2) y su serie sigue. RF-18 no se marca hasta que E2E-03 llegue a diez de diez. S4R-02 y S4R-03 no sustituyen a E2E-02 ni a E2E-03, que son flujos distintos y siguen en el protocolo. Lo que el protocolo reducido sustituye, para este MVP, son las 450 corridas de EV-02 (capítulo 06 §6.7).
 
+### RF-19. Varios agentes sobre un motor
+
+Propuesto con ADR-0039 (propuesta) y ADR-0040 (propuesta); el responsable lo confirma o lo integra en otros requisitos al aceptarlas. Varios clientes MCP comparten el único motor de un escritorio a través del intermediario del adaptador MCP. Un solo arrendamiento cubre el ciclo de observar y actuar: se pide con el argumento opcional `lease` de `observe_screen` (`acquire` o `release`) y `io.ommatix/lease` en `_meta` informa al cliente de su situación y de si la página es la ya publicada, con su edad (capítulo 07). Sin el arrendamiento no hay entrega en vivo (`POLICY_DENIED`); cada cliente actúa bajo su propia concesión, que sólo estrecha la política local, y tiene su propio diario. Un cliente solo que no envía `lease` recibe las mismas respuestas que el servidor stdio. No incluye ningún transporte: el ejecutable sigue sirviendo stdio a un solo cliente. Trazabilidad: CT-11..CT-13, IT-09..IT-21. Hito: S4.
+
 ## 3.3 Requisitos no funcionales
 
 ### RNF-01. Corrección del core

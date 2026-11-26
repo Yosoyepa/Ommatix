@@ -103,7 +103,7 @@ The MCP server exposes three tools, with the dossier's JSON schemas:
 
 | Tool | Does |
 |---|---|
-| `observe_screen` | Observes the screen and returns a page of the new snapshot: `session_id`, `snapshot_id`, `geometry_epoch`, elements with `target_id`, `revision`, role, label and actionability, never coordinates; `query`, `limit` and a `cursor` bound to the snapshot |
+| `observe_screen` | Observes the screen and returns a page of the new snapshot: `session_id`, `snapshot_id`, `geometry_epoch`, elements with `target_id`, `revision`, role, label and actionability, never coordinates; `query`, `limit` and a `cursor` bound to the snapshot; an optional `lease` (`acquire` or `release`) is accepted and does nothing on this single-agent server |
 | `execute_action` | `click`, `type` or `scroll` on a `target_id` at an expected revision; dry run by default; returns `simulated`, `rejected`, `input_delivered`, `effect_observed` or `indeterminate` |
 | `get_engine_metrics` | Mode, observations, rejected and delivered actions, pending regions, whether models are loaded |
 
@@ -112,5 +112,11 @@ Domain errors come back as tool results with `isError: true`, a `code`, `retryab
 `io.ommatix/timings` and whether the accessibility evidence is complete under
 `io.ommatix/accessibility` (`observe_screen`), the stage timings of the action under
 `io.ommatix/action_timings` (`execute_action`).
+
+The executable serves one agent over stdio. A broker that lets several agents share one engine
+under an input lease and per-client grants exists in the MCP adapter, behind the proposed
+[ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md) and
+[ADR-0040](../adr/0040-task-scoped-grants-narrower-than-the-local-policy.md); the executable
+cannot reach it yet (no transport is built), so nothing here configures it.
 
 See [operator control](live-input.md) for stop, purge and window scope.

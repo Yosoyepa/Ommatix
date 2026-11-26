@@ -13,3 +13,4 @@ R11,Medio,Cliente MCP no compatible,Perfiles explícitos y tests con cliente con
 R12,Medio,Complejidad excesiva del MVP,"Una plataforma, monolito, gates S0–S4",DOC-01,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
 R13,Alto,Carrera residual del SO,"Revalidación inmediata, dominio de bajo riesgo",SEC-05,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
 R14,Medio,Caché/memoria sin límites,"TTL/LRU, colas acotadas y soak",PERF-03,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
+R15,Alto,Dos agentes actúan sobre un mismo escritorio a través de un motor,"Un arrendamiento sobre el ciclo de observar y actuar, comprobado y aplicado bajo un solo cerrojo; el paso del arrendamiento gasta el snapshot; concesión por cliente que sólo estrecha la política local; diario por cliente; el intermediario no está en el ejecutable hasta aceptar ADR-0039",IT-09..IT-21 / CT-11..CT-13,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA

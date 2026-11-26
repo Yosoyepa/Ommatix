@@ -21,6 +21,13 @@
     "include_values": {
       "type": "boolean",
       "default": false
+    },
+    "lease": {
+      "type": "string",
+      "enum": [
+        "acquire",
+        "release"
+      ]
     }
   },
   "required": [],

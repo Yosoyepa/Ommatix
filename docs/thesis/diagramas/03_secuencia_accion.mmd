@@ -7,7 +7,9 @@ sequenceDiagram
   A->>M: observe_screen
   M->>S: construir y publicar snapshot
   S-->>A: session + snapshot + IDs + revisions
+  Note over A,M: Con el intermediario (ADR-0039, propuesta), mientras un cliente tiene el arrendamiento sólo él publica y otro cliente recibe la página ya publicada; si nadie lo tiene, publica cualquiera
   A->>M: execute_action con precondiciones
+  Note over M,S: Con el intermediario, una petición real nueva sin el arrendamiento se rechaza con POLICY_DENIED antes de validar
   M->>S: validar contexto y política
   alt referencia inválida
     S-->>A: rejected / observe_again

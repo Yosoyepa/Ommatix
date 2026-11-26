@@ -95,7 +95,7 @@ the next action needs another observation.
 
 | Tool | Purpose |
 |---|---|
-| `observe_screen` | A page of elements with `target_id`, `revision`, role, label and actionability; query and snapshot-bound pagination. |
+| `observe_screen` | A page of elements with `target_id`, `revision`, role, label and actionability; query and snapshot-bound pagination. It also accepts an optional `lease` (`acquire` or `release`), which does nothing on this single-agent server (see [Project status](#project-status)). |
 | `execute_action` | `click`, `type` or `scroll` on an element at an expected revision; dry run by default. |
 | `get_engine_metrics` | Mode, observation and action counts, pending regions, and model-loading state. |
 
@@ -233,6 +233,7 @@ The [dossier](docs/thesis/README.md) is the specification; this table states the
 | S2 · identity and contract | Implemented: temporal registry, curated icon cache and the three MCP tools. |
 | S3 · Windows integration | Opt-in DXGI, SendInput, ONNX, Windows OCR and UI Automation; supervised evidence within the agreed profile. Integration cases IT-01–04 remain partial. |
 | S4 · acceptance | Reduced protocol: five flows, each 10/10 with no false success. The broader corpus and evaluation remain deferred. |
+| Several agents (proposed) | A broker in the MCP adapter that lets several agents share one engine under an input lease and per-client grants exists behind the proposed [ADR-0039](docs/adr/0039-several-agents-through-one-engine-with-an-input-lease.md) and [ADR-0040](docs/adr/0040-task-scoped-grants-narrower-than-the-local-policy.md), tested on in-memory streams only. The executable cannot reach it (no transport is built): it serves one agent over stdio. |
 | Definition of Done | **6/10 boxes checked: 1, 4, 5, 6, 8, 9.** Boxes 2 and 3 have scope acceptances, not fulfilment; box 7 lacks active-icon-cache memory evidence and run variation; box 10 retains partial integration and clean-installation work. |
 
 Source: [chapter 06 §6.7](docs/thesis/06_PLAN_INTEGRACION_DOD_Y_ROADMAP.md#67-definition-of-done-del-producto).

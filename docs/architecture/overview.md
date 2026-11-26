@@ -37,7 +37,9 @@ MVP opens no network port; MCP runs over stdio. See [context](../diagrams/contex
 
 ## Components
 
-The SDD defines twelve components ([diagram](../diagrams/components.md)).
+The SDD defines twelve components that the executable runs ([diagram](../diagrams/components.md)),
+and a thirteenth, the broker of the proposed ADR-0039, which is not wired into the executable
+(see [Where the code is today](#where-the-code-is-today)).
 [ADR-0014](../adr/0014-hexagonal-crate-layout.md) places them in crates:
 
 | Component | Responsibility | Contract | Crate |
@@ -136,7 +138,8 @@ unless the agent sets it to false, and even then the local consent and allowlist
   `rmcp`'s service loop has no size limit, closes the connection on early notifications, lets
   profiles mix and drops unparsable input silently
   ([ADR-0015](../adr/0015-mcp-transport-on-rmcp-wire-types.md)).
-- **Tools:** `observe_screen` (query, paging, no coordinates), `execute_action` (`click`,
+- **Tools:** `observe_screen` (query, paging, no coordinates; an optional `lease` that this
+  single-agent server accepts and ignores), `execute_action` (`click`,
   `type`, `scroll`) and `get_engine_metrics`, described with the dossier's schemas.
 - **Errors** carry a code (`STALE_SNAPSHOT`, `STALE_TARGET`, `AMBIGUOUS_TARGET`,
   `POLICY_DENIED`, `REQUEST_CONFLICT` and others), `retryable` and a `next_step` such as
@@ -304,10 +307,11 @@ The MVP closes with the reduced scope that the owner decided on 15 October 2026 
 | Change detection, fusion, identity, snapshots | Algorithms 1, 2, 3B; transactional commit | Implemented in `ommatix-domain` and run by the `Engine` | S1–S2 (done) |
 | Icon cache | Algorithm 3A in the observation | Run by the `Engine` on icon candidates of the planned regions with the operator's curated prototypes; off without them; context configured, thresholds not calibrated | S3 (context), S4 (calibration) |
 | Perception | Detector and OCR on ONNX Runtime, roles from the S0 spike | By default, flat-colour region detector (roles `unknown`) and no OCR (`NullTextRecognizer`); the simulated desktops report ground truth. Opt-in adapters exist for `images`, `screen` and `dxgi`, but no model is selected: a fail-closed ONNX detector driven by a SHA-256-pinned manifest (feature `onnx`) and Windows OCR for one language (feature `winrt-ocr`). The supervised and reduced S4 runs select `icon_detect_v3` on DirectML and Windows OCR (es-ES) through the operator's `[models]` section | S0 (models), S3 |
-| Agent contract | Ommatix 1.0 over MCP 2026-07-28; 2025-11-25 opt-in | Implemented (CT-01..10); driven live by the minimal clients `tools/s3/mcp_driver.py` and `tools/s4/e2e_driver.py` (the reduced S4 protocol, with ten of ten scored runs in each of E2E-01, E2E-02, S4R-02 and S4R-03 and three of ten in E2E-03, [S4 report](../thesis/S4_ACEPTACION_REDUCIDA.md)), not yet by a third-party client | S0/S3 for the client |
+| Agent contract | Ommatix 1.0 over MCP 2026-07-28; 2025-11-25 opt-in | Implemented (CT-01..10; CT-11 and CT-13 add the optional `lease` argument, which this server accepts and ignores, and CT-12 the broker's `_meta`, which the executable never emits); driven live by the minimal clients `tools/s3/mcp_driver.py` and `tools/s4/e2e_driver.py` (the reduced S4 protocol, with ten of ten scored runs in each of E2E-01, E2E-02, S4R-02 and S4R-03 and three of ten in E2E-03, [S4 report](../thesis/S4_ACEPTACION_REDUCIDA.md)), not yet by a third-party client | S0/S3 for the client |
 | Action gate | Freshness, policy, allowlist, focus, stop | Snapshot freshness (also re-checked by a capture before delivery), policy and the allowlist against the foreground application `SendInput` attests, all checked again right before delivery; the operator's stop file (`[safety] stop_file`) and, optionally, the operator's scope on windows (ADR-0020, accepted: window classes and a pinned window, checked on the foreground window and the window under the point); the actuator also checks the process under the target point, integrity level and held modifiers, and for `type` keyboard focus after the focusing click. Run under supervision on `notepad.exe` ([S3 runs](../thesis/S3_CORRIDAS_SUPERVISADAS.md)): the stop file, the freshness check and the policy refused live clicks without sending anything; a change of foreground application could not be provoked (SEC-02, SEC-05 in part) | S3 (supervised runs) |
 | Effect verification | Focus, value, scroll and visual postconditions | Visual change only, re-captured within a bounded settle window (`verify_timeout_ms`, `verify_poll_ms`); added after the S3 runs, where a single capture right after delivery never saw the effect (4 of 4 `indeterminate`); confirmed live in the second run (2 of 2 clicks `effect_observed`; with a 0 ms window, `indeterminate` and no retry: IT-04 in part) | S3 |
 | Telemetry | Metrics and audit without sensitive text | `get_engine_metrics`; stage timings in `_meta` | S3 |
+| Several agents | One engine shared by several agents under an input lease and per-client grants (proposed [ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md) and [ADR-0040](../adr/0040-task-scoped-grants-narrower-than-the-local-policy.md)) | A broker in `ommatix-adapter-mcp`, tested on in-memory streams only; the executable cannot reach it (no transport is built) and serves one agent over stdio | Not built into the executable |
 | Platform | Windows 11 x64: DXGI and `SendInput` | DXGI capture and `SendInput` input behind the `dxgi` and `sendinput` features (ADR-0016), built and tested in CI on Windows run in part under supervision ([S3 runs](../thesis/S3_CORRIDAS_SUPERVISADAS.md): IT-01, IT-03 and IT-04, eight real clicks on `notepad.exe` over two runs; the first DXGI frame shows the desktop live; IT-07 moved to the next cut and was then run on 15 October 2026: DPI 100/125/150 %, live epoch change, refusal at 175 %, one monitor and no live action off 100 %) and in the reduced S4 protocol (E2E-01, E2E-02, S4R-02 and S4R-03 with ten of ten scored runs each, E2E-03 with three of ten; `SendInput` attests a hosted UWP app, not `ApplicationFrameHost.exe`); simulated and fixture desktops for tests; interim `xcap` and `enigo` behind `screen` and `native-input` | S3 (supervised runs) |
 
 The thesis scenarios (BDD-01..37) stay in [`docs/thesis/features/`](../thesis/features),

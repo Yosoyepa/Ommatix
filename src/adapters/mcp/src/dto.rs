@@ -22,6 +22,7 @@ use ommatix_application::contract::{
     ObservedEffect, ScrollDirection, StageTimings, TimingsSource, ToolError, Zone, limits,
 };
 use ommatix_application::contract::{ElementView, SCHEMA_VERSION};
+use ommatix_application::lease::Standing;
 use ommatix_domain::fusion::{Actionability, Role, TextKind};
 use ommatix_domain::identity::{ActionStatus, TargetId};
 use ommatix_domain::incremental::FullRefreshReason;
@@ -289,10 +290,30 @@ struct ObserveScreenInput {
     cursor: Option<String>,
     #[serde(default, deserialize_with = "present")]
     include_values: Option<bool>,
+    #[serde(default, deserialize_with = "present")]
+    lease: Option<LeaseArgument>,
+}
+
+/// `observe_screen.lease` (ADR-0039, proposed, decision 5): what the client asks of the input
+/// lease before it is answered. Only these two strings are accepted; any other value, `null`
+/// or a non-string is invalid arguments, and the value is never echoed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseArgument {
+    Acquire,
+    Release,
 }
 
 /// Validates `observe_screen` arguments and applies the runtime defaults.
 pub fn parse_observe_args(arguments: &Value) -> Result<ObserveRequest, InvalidArguments> {
+    parse_observe_call(arguments).map(|(request, _)| request)
+}
+
+/// [`parse_observe_args`], with the `lease` argument when the client sent one. The stdio
+/// server accepts it and ignores it: its one client holds everything.
+pub fn parse_observe_call(
+    arguments: &Value,
+) -> Result<(ObserveRequest, Option<LeaseArgument>), InvalidArguments> {
     let input: ObserveScreenInput = parse_object(arguments)?;
     if let Some(query) = &input.query {
         check_len("query", query, 0, limits::MAX_QUERY_CHARS).map_err(invalid)?;
@@ -310,12 +331,13 @@ pub fn parse_observe_args(arguments: &Value) -> Result<ObserveRequest, InvalidAr
     if let Some(cursor) = &input.cursor {
         check_len("cursor", cursor, 1, limits::MAX_CURSOR_CHARS).map_err(invalid)?;
     }
-    Ok(ObserveRequest {
+    let request = ObserveRequest {
         query: input.query,
         limit,
         cursor: input.cursor,
         include_values: input.include_values.unwrap_or(false),
-    })
+    };
+    Ok((request, input.lease))
 }
 
 /// `execute_action` arguments as they arrive.
@@ -887,6 +909,38 @@ pub fn action_timings_meta(t: &ActionTimings) -> Value {
 /// `_meta` (a bounded read that was cut short is read again on the next observation).
 pub fn accessibility_meta(complete: bool) -> Value {
     serde_json::json!({ "complete": complete })
+}
+
+/// Where a client stands with respect to the input lease, and whether the page it got is the
+/// one already published, for result `_meta` under `io.ommatix/lease` (ADR-0039, proposed;
+/// schema `docs/thesis/contratos/esquemas/lease.meta.schema.json`):
+///
+/// - `state`: `holder`, `waiting` or `none`;
+/// - `number`: the explicit lease's number for its holder, otherwise `null` (the implicit lease
+///   of a sole client has none);
+/// - `position`: the place in the queue, counted from 1, for a waiting client, otherwise `null`;
+/// - `shared`: true when the page is the published one served again (`shared_age` is `Some`);
+/// - `age_ms`: that page's age in whole milliseconds on the engine's clock, otherwise `null`.
+///
+/// It is built only from these typed values: numbers, booleans, `null` and three closed words,
+/// never text from the screen or the agent.
+pub fn lease_meta(standing: Standing, shared_age: Option<std::time::Duration>) -> Value {
+    let (state, number, position) = match standing {
+        Standing::Holder { number } => ("holder", number, None),
+        Standing::Waiting { position } => (
+            "waiting",
+            None,
+            Some(u64::try_from(position).unwrap_or(u64::MAX)),
+        ),
+        Standing::None => ("none", None, None),
+    };
+    serde_json::json!({
+        "state": state,
+        "number": number,
+        "position": position,
+        "shared": shared_age.is_some(),
+        "age_ms": shared_age.map(|age| u64::try_from(age.as_millis()).unwrap_or(u64::MAX)),
+    })
 }
 
 #[cfg(test)]

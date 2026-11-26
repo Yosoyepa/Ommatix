@@ -17,7 +17,11 @@
 //! which no test drives. BDD-36 and BDD-37 (ADR-0020) show the operator's scope on windows
 //! over the same double: it attests the class and handle of the foreground window and of
 //! the window under the click, and the engine refuses the desktop, the taskbar and a
-//! window the operator did not record; BDD-37 uses the product's pin file.
+//! window the operator did not record; BDD-37 uses the product's pin file. BDD-63..67
+//! (ADR-0039 and ADR-0040, proposed) put several agents on one engine through the broker of
+//! the MCP adapter, over the same kind of double: one input lease asked for with the `lease`
+//! argument of `observe_screen` and reported in `_meta`, each client under its own grant. The
+//! executable does not serve the broker yet.
 
 // cucumber passes captured step parameters by value.
 #![allow(clippy::needless_pass_by_value)]
@@ -25,17 +29,19 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use cucumber::{World, given, then, when};
 use ommatix::policy::ConfigPolicy;
 use ommatix_adapter_mcp::{
-    Connection, LEGACY_PROTOCOL_VERSION, MODERN_PROTOCOL_VERSION, McpConfig, McpServer, Profile,
+    Broker, BrokerConnection, Connection, LEASE_META_KEY, LEGACY_PROTOCOL_VERSION,
+    MODERN_PROTOCOL_VERSION, McpConfig, McpServer, Profile,
 };
 use ommatix_adapter_sim::{FixtureDesktop, FixtureScene, confirmed};
 use ommatix_application::contract::{ActionKind, ValidatedAction};
 use ommatix_application::{
     AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, ActionFreshness,
-    Clock, DeliveryReceipt, Engine as ThesisEngine, EngineConfig, LocalPolicy, ManualClock,
+    Clock, DeliveryReceipt, Engine as ThesisEngine, EngineConfig, Grant, LocalPolicy, ManualClock,
     NoAccessibility, OsActuator, PolicyStore, PortError, Ports, TopLevelWindow, VerifyParams,
     WindowOpacity,
 };
@@ -68,7 +74,8 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
     "BDD-37", "BDD-38", "BDD-39", "BDD-40", "BDD-41", "BDD-42", "BDD-43", "BDD-44", "BDD-45",
     "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52", "BDD-53", "BDD-54",
-    "BDD-55", "BDD-56", "BDD-57", "BDD-58", "BDD-59", "BDD-60", "BDD-61", "BDD-62",
+    "BDD-55", "BDD-56", "BDD-57", "BDD-58", "BDD-59", "BDD-60", "BDD-61", "BDD-62", "BDD-63",
+    "BDD-64", "BDD-65", "BDD-66", "BDD-67",
 ];
 
 #[derive(Debug, Default, World)]
@@ -99,6 +106,8 @@ struct Engine {
     icon: Option<IconMatch>,
     agent: Option<Agent>,
     index: CandidateScene,
+    /// Several agents on one engine through the broker (BDD-63..BDD-67).
+    cohort: Option<Cohort>,
 }
 
 fn bx(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
@@ -3378,4 +3387,475 @@ fn the_action_is_delivered_and_the_snapshot_is_spent(e: &mut Engine) {
         "STALE_SNAPSHOT"
     );
     assert_eq!(agent.desktop.handed_actions().len(), 1);
+}
+
+// ---- BDD-63..BDD-67: several agents on one engine through the broker (ADR-0039, proposed) ----
+
+/// A value only the screen shows: the page of a client without a grant must not carry it.
+const SHARED_VALUE: &str = "Obsidiana-42";
+
+/// A window with a button and an input that holds a value.
+fn shared_desktop_scene() -> FixtureScene {
+    let mut scene = FixtureScene::new(320, 200);
+    scene.add_control(confirmed(Role::Button, bx(10.0, 10.0, 130.0, 40.0)));
+    scene.add_word("Guardar", bx(15.0, 15.0, 125.0, 35.0));
+    scene.add_control(confirmed(Role::Input, bx(10.0, 70.0, 220.0, 100.0)));
+    scene.add_word(SHARED_VALUE, bx(15.0, 75.0, 215.0, 95.0));
+    scene
+}
+
+/// The operator's consent to live input on [`ALLOWED_APP`], values allowed.
+fn shared_desktop_policy() -> LocalPolicy {
+    LocalPolicy {
+        include_values: true,
+        ..live_policy()
+    }
+}
+
+/// A grant that permits everything the operator's policy allows.
+fn delivering_grant() -> Grant {
+    Grant {
+        applications: BTreeSet::from([ALLOWED_APP.to_owned()]),
+        deliver_input: true,
+        read_values: true,
+        ..Grant::default()
+    }
+}
+
+/// A simulated desktop and the ports of an engine over it, with the [`LiveDouble`] actuator.
+fn shared_desktop_ports() -> (FixtureDesktop, Ports) {
+    let clock = Arc::new(ManualClock::new());
+    let desktop = FixtureDesktop::new(shared_desktop_scene(), clock.clone());
+    let ports = Ports {
+        capturer: Box::new(desktop.capturer()),
+        detector: Box::new(desktop.detector()),
+        recognizer: Box::new(desktop.recognizer()),
+        accessibility: Box::new(NoAccessibility),
+        actuator: Box::new(LiveDouble(
+            Box::new(desktop.actuator()),
+            Arc::new(Mutex::new(Foreground::default())),
+            Arc::new(Mutex::new(Typing::default())),
+        )),
+        policy: Arc::new(FixedPolicy(shared_desktop_policy())),
+        clock,
+    };
+    (desktop, ports)
+}
+
+/// Several MCP clients on one engine through the broker, over a simulated desktop and the
+/// [`LiveDouble`]; and, for BDD-67, the stdio server over a twin desktop.
+struct Cohort {
+    desktop: FixtureDesktop,
+    broker: Broker,
+    agents: Vec<BrokerConnection>,
+    /// Each agent's last observation page (`structuredContent`).
+    pages: Vec<Option<Value>>,
+    /// Each agent's last tool result.
+    results: Vec<Option<Value>>,
+    /// A delivered request and its result, kept to retry it (BDD-66).
+    recorded: Option<(Value, Value)>,
+    /// The stdio server's connection over a twin desktop, and every pair of response lines.
+    stdio: Option<(FixtureDesktop, Connection)>,
+    pairs: Vec<(Option<String>, Option<String>)>,
+    next_id: u64,
+    /// `get_engine_metrics.observations` when the scenario started counting.
+    observations: Option<Value>,
+}
+
+impl std::fmt::Debug for Cohort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cohort")
+            .field("agents", &self.agents.len())
+            .field("pages", &self.pages)
+            .field("results", &self.results)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Cohort {
+    fn new(grants: Vec<Option<Grant>>) -> Self {
+        let (desktop, ports) = shared_desktop_ports();
+        let broker = Broker::new(
+            EngineConfig::new(SESSION),
+            ports,
+            McpConfig::default(),
+            Duration::from_secs(2),
+            8,
+        )
+        .expect("a valid broker");
+        let agents: Vec<BrokerConnection> = grants
+            .into_iter()
+            .map(|grant| broker.connect(grant).expect("the agent is admitted"))
+            .collect();
+        let n = agents.len();
+        Self {
+            desktop,
+            broker,
+            agents,
+            pages: vec![None; n],
+            results: vec![None; n],
+            recorded: None,
+            stdio: None,
+            pairs: Vec::new(),
+            next_id: 0,
+            observations: None,
+        }
+    }
+
+    fn line(&mut self, name: &str, arguments: &Value) -> String {
+        self.next_id += 1;
+        json!({ "jsonrpc": "2.0", "id": self.next_id, "method": "tools/call",
+                "params": { "_meta": modern_meta(), "name": name, "arguments": arguments } })
+        .to_string()
+    }
+
+    /// One tool call by agent `who`; the result, checked against the dossier's schemas.
+    fn call(&mut self, who: usize, name: &str, arguments: &Value) -> Value {
+        let line = self.line(name, arguments);
+        let reply = self.agents[who]
+            .connection()
+            .handle_message(line.as_bytes())
+            .expect("a request gets a response");
+        let response: Value = serde_json::from_str(&reply).expect("replies are JSON");
+        let result = response["result"].clone();
+        let schema = match (name, result["isError"] == true) {
+            ("observe_screen", true) => "tool_error.output",
+            ("observe_screen", false) => "observe_screen.output",
+            ("execute_action", _) => "execute_action.output",
+            _ => "get_engine_metrics.output",
+        };
+        assert_schema(schema, &result["structuredContent"]);
+        if let Some(lease) = result["_meta"].get(LEASE_META_KEY) {
+            assert_schema("lease.meta", lease);
+        }
+        self.results[who] = Some(result.clone());
+        result
+    }
+
+    fn observe(&mut self, who: usize, arguments: &Value) -> Value {
+        let result = self.call(who, "observe_screen", arguments);
+        if result["isError"] != true {
+            self.pages[who] = Some(result["structuredContent"].clone());
+        }
+        result
+    }
+
+    fn page(&self, who: usize) -> Value {
+        self.pages[who].clone().expect("the agent has observed")
+    }
+
+    /// A click on the button of `page`.
+    fn click(page: &Value, request_id: &str, live: bool) -> Value {
+        let button = page["elements"]
+            .as_array()
+            .expect("a page")
+            .iter()
+            .find(|e| e["role"] == "button")
+            .expect("a button");
+        json!({
+            "request_id": request_id,
+            "session_id": page["session_id"],
+            "snapshot_id": page["snapshot_id"],
+            "geometry_epoch": page["geometry_epoch"],
+            "target_id": button["target_id"],
+            "expected_revision": button["revision"],
+            "action": "click",
+            "dry_run": !live
+        })
+    }
+
+    fn act(&mut self, who: usize, arguments: &Value) -> Value {
+        self.call(who, "execute_action", arguments)["structuredContent"].clone()
+    }
+
+    fn observations(&mut self) -> Value {
+        self.call(0, "get_engine_metrics", &json!({}))["structuredContent"]["observations"].clone()
+    }
+
+    fn events(&self) -> usize {
+        self.desktop.handed_actions().len()
+    }
+
+    /// The lease `_meta` of agent `who`'s last result.
+    fn lease(&self, who: usize) -> Value {
+        self.results[who].as_ref().expect("a result")["_meta"][LEASE_META_KEY].clone()
+    }
+}
+
+impl Engine {
+    fn cohort(&mut self) -> &mut Cohort {
+        self.cohort.as_mut().expect("a cohort of agents")
+    }
+}
+
+#[given("dos agentes conectados al mismo motor con concesiones que permiten entregar")]
+fn two_agents_on_one_engine(e: &mut Engine) {
+    e.cohort = Some(Cohort::new(vec![
+        Some(delivering_grant()),
+        Some(delivering_grant()),
+    ]));
+}
+
+#[given("el primero tiene el arrendamiento y ha observado la pantalla")]
+fn the_first_holds_the_lease_and_observed(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.observe(0, &json!({ "lease": "acquire" }));
+    assert_eq!(cohort.lease(0)["state"], "holder");
+    assert_eq!(cohort.lease(0)["shared"], false);
+}
+
+#[when("el segundo observa la pantalla")]
+fn the_second_observes(e: &mut Engine) {
+    let cohort = e.cohort();
+    let before = cohort.observations();
+    cohort.observations = Some(before);
+    cohort.observe(1, &json!({}));
+}
+
+#[then(
+    "recibe la página ya publicada, que _meta marca como compartida con su edad, sin que el motor capture"
+)]
+fn it_gets_the_published_page_marked_shared(e: &mut Engine) {
+    let cohort = e.cohort();
+    assert_eq!(cohort.page(1)["snapshot_id"], cohort.page(0)["snapshot_id"]);
+    let lease = cohort.lease(1);
+    assert_eq!(lease["state"], "none", "{lease}");
+    assert_eq!(lease["shared"], true, "{lease}");
+    assert!(lease["age_ms"].is_u64(), "{lease}");
+    let page = cohort.page(1).to_string();
+    assert!(!page.contains("shared") && !page.contains(LEASE_META_KEY));
+    let before = cohort.observations.clone().expect("counted");
+    assert_eq!(cohort.observations(), before, "nothing was observed again");
+}
+
+#[then("su acción real se rechaza con POLICY_DENIED sin entregar ningún evento")]
+fn its_live_action_is_refused_without_the_lease(e: &mut Engine) {
+    let cohort = e.cohort();
+    let page = cohort.page(1);
+    let refused = cohort.act(1, &Cohort::click(&page, "second-live", true));
+    assert_eq!(refused["status"], "rejected", "{refused}");
+    assert_eq!(refused["error"]["code"], "POLICY_DENIED", "{refused}");
+    assert_eq!(refused["input_delivered"], false);
+    assert_eq!(cohort.events(), 0);
+}
+
+#[then("la acción real del primero sobre su página se entrega")]
+fn the_first_delivers_on_its_page(e: &mut Engine) {
+    let cohort = e.cohort();
+    let page = cohort.page(0);
+    let result = cohort.act(0, &Cohort::click(&page, "first-live", true));
+    assert_eq!(result["status"], "input_delivered", "{result}");
+    assert_eq!(cohort.events(), 1);
+}
+
+#[given("el segundo pide el arrendamiento con su observación y queda primero en la espera")]
+fn the_second_asks_and_waits(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.observe(1, &json!({ "lease": "acquire" }));
+    let lease = cohort.lease(1);
+    assert_eq!(lease["state"], "waiting", "{lease}");
+    assert_eq!(lease["position"], 1, "{lease}");
+}
+
+#[when("el primero libera el arrendamiento con su observación")]
+fn the_first_releases(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.observe(0, &json!({ "lease": "release" }));
+    assert_eq!(cohort.lease(0)["state"], "none");
+}
+
+#[then(
+    "la acción real del segundo sobre la página anterior se rechaza con STALE_SNAPSHOT sin entregar nada y _meta le dice que tiene el arrendamiento"
+)]
+fn the_new_holder_must_observe_first(e: &mut Engine) {
+    let cohort = e.cohort();
+    let page = cohort.page(1);
+    let stale = cohort.act(1, &Cohort::click(&page, "second-stale", true));
+    assert_eq!(stale["error"]["code"], "STALE_SNAPSHOT", "{stale}");
+    assert_eq!(stale["input_delivered"], false);
+    assert_eq!(cohort.events(), 0);
+    let lease = cohort.lease(1);
+    assert_eq!(lease["state"], "holder", "{lease}");
+    assert_eq!(lease["number"], 2, "{lease}");
+}
+
+#[then("tras observar de nuevo su acción real se entrega")]
+fn after_observing_it_delivers(e: &mut Engine) {
+    let cohort = e.cohort();
+    let old = cohort.page(1);
+    cohort.observe(1, &json!({}));
+    let page = cohort.page(1);
+    assert_ne!(page["snapshot_id"], old["snapshot_id"], "a new snapshot");
+    let result = cohort.act(1, &Cohort::click(&page, "second-live", true));
+    assert_eq!(result["status"], "input_delivered", "{result}");
+    assert_eq!(cohort.events(), 1);
+}
+
+#[given("un agente conectado sin concesión al intermediario")]
+fn an_agent_without_a_grant(e: &mut Engine) {
+    e.cohort = Some(Cohort::new(vec![None]));
+}
+
+#[when("observa la pantalla pidiendo valores y solicita un clic real")]
+fn it_observes_with_values_and_clicks(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.observe(0, &json!({ "include_values": true }));
+    let page = cohort.page(0);
+    cohort.act(0, &Cohort::click(&page, "ungranted-live", true));
+}
+
+#[then("la página no muestra valores")]
+fn the_page_shows_no_values(e: &mut Engine) {
+    let cohort = e.cohort();
+    let page = cohort.page(0);
+    assert!(
+        !page.to_string().contains(SHARED_VALUE),
+        "no value without a grant: {page}"
+    );
+}
+
+#[then("el clic se rechaza con POLICY_DENIED sin entregar ningún evento")]
+fn the_click_is_refused(e: &mut Engine) {
+    let cohort = e.cohort();
+    let result = cohort.results[0].clone().expect("a result");
+    assert_eq!(
+        result["structuredContent"]["error"]["code"], "POLICY_DENIED",
+        "{result}"
+    );
+    assert_eq!(result["structuredContent"]["input_delivered"], false);
+    assert_eq!(cohort.events(), 0);
+}
+
+#[given("el primero ha entregado un clic real y luego ha perdido el arrendamiento")]
+fn the_first_delivered_then_lost_the_lease(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.observe(0, &json!({}));
+    let page = cohort.page(0);
+    let request = Cohort::click(&page, "first-delivered", true);
+    let result = cohort.act(0, &request);
+    assert_eq!(result["status"], "input_delivered", "{result}");
+    cohort.recorded = Some((request, result));
+    cohort.observe(1, &json!({ "lease": "acquire" }));
+    cohort.observe(0, &json!({ "lease": "release" }));
+    cohort.observe(1, &json!({}));
+    assert_eq!(cohort.lease(1)["state"], "holder");
+    assert_eq!(cohort.events(), 1);
+}
+
+#[when("el primero repite la misma petición con el mismo request_id")]
+fn the_first_retries(e: &mut Engine) {
+    let cohort = e.cohort();
+    let (request, _) = cohort.recorded.clone().expect("a delivered request");
+    cohort.act(0, &request);
+}
+
+#[then("recibe el mismo resultado entregado y no se entrega ningún evento nuevo")]
+fn it_gets_its_delivered_result_back(e: &mut Engine) {
+    let cohort = e.cohort();
+    let (_, first) = cohort.recorded.clone().expect("a delivered request");
+    let retry = cohort.results[0].clone().expect("a result");
+    assert_eq!(retry["structuredContent"], first);
+    assert_eq!(retry["structuredContent"]["input_delivered"], true);
+    assert_eq!(cohort.lease(0)["state"], "none");
+    assert_eq!(cohort.events(), 1);
+}
+
+#[then("una petición nueva suya se rechaza con POLICY_DENIED")]
+fn a_new_request_needs_the_lease(e: &mut Engine) {
+    let cohort = e.cohort();
+    let page = cohort.page(1);
+    let refused = cohort.act(0, &Cohort::click(&page, "first-new", true));
+    assert_eq!(refused["error"]["code"], "POLICY_DENIED", "{refused}");
+    assert_eq!(refused["input_delivered"], false);
+    assert_eq!(cohort.events(), 1);
+}
+
+#[given("un agente solo conectado al intermediario con una concesión igual a la política local")]
+fn a_sole_agent_and_the_stdio_server(e: &mut Engine) {
+    let policy = shared_desktop_policy();
+    let equal = Grant {
+        applications: policy.allowed_applications.iter().cloned().collect(),
+        deliver_input: policy.actuation_enabled,
+        read_values: policy.include_values,
+        ..Grant::default()
+    };
+    let mut cohort = Cohort::new(vec![Some(equal)]);
+    let (desktop, ports) = shared_desktop_ports();
+    let server = McpServer::new(
+        ThesisEngine::new(EngineConfig::new(SESSION), ports),
+        McpConfig::default(),
+    );
+    cohort.stdio = Some((desktop, server.connect()));
+    e.cohort = Some(cohort);
+}
+
+#[when("observa la pantalla y actúa sin enviar el argumento lease")]
+fn it_observes_and_acts_without_lease(e: &mut Engine) {
+    /// Sends one tool call to the broker's sole client and to the stdio server.
+    fn both(cohort: &mut Cohort, name: &str, arguments: &Value) -> Value {
+        let line = cohort.line(name, arguments);
+        let broker = cohort.agents[0]
+            .connection()
+            .handle_message(line.as_bytes());
+        let (_, stdio) = cohort.stdio.as_mut().expect("the stdio server");
+        let stdio = stdio.handle_message(line.as_bytes());
+        cohort.pairs.push((broker.clone(), stdio));
+        let response: Value = serde_json::from_str(&broker.expect("a response")).unwrap();
+        response["result"]["structuredContent"].clone()
+    }
+    let cohort = e.cohort();
+    let page = both(cohort, "observe_screen", &json!({ "include_values": true }));
+    both(
+        cohort,
+        "execute_action",
+        &Cohort::click(&page, "dry", false),
+    );
+    both(
+        cohort,
+        "execute_action",
+        &Cohort::click(&page, "live", true),
+    );
+    both(
+        cohort,
+        "execute_action",
+        &Cohort::click(&page, "live", true),
+    );
+    let page = both(cohort, "observe_screen", &json!({ "limit": 1 }));
+    both(
+        cohort,
+        "observe_screen",
+        &json!({ "limit": 1, "cursor": page["next_cursor"] }),
+    );
+    both(cohort, "get_engine_metrics", &json!({}));
+}
+
+#[then("cada respuesta es, byte a byte, la del servidor stdio")]
+fn every_response_is_the_stdio_servers(e: &mut Engine) {
+    let cohort = e.cohort();
+    assert_eq!(cohort.pairs.len(), 7);
+    for (broker, stdio) in &cohort.pairs {
+        assert!(broker.is_some());
+        assert_eq!(broker, stdio);
+    }
+    let (desktop, _) = cohort.stdio.as_ref().expect("the stdio server");
+    assert_eq!(desktop.handed_actions().len(), 1);
+    assert_eq!(cohort.events(), 1, "one delivery, then its replay");
+}
+
+#[then("ninguna lleva el arrendamiento en _meta")]
+fn none_carries_the_lease(e: &mut Engine) {
+    let cohort = e.cohort();
+    for (broker, _) in &cohort.pairs {
+        assert!(
+            !broker
+                .as_deref()
+                .unwrap_or_default()
+                .contains(LEASE_META_KEY),
+            "{broker:?}"
+        );
+    }
+    assert!(
+        cohort.broker.retained().is_some(),
+        "the broker is available"
+    );
 }

@@ -17,6 +17,14 @@ La entrada real exige **todo** lo siguiente:
    operador;
 3. `dry_run: false` del agente, sobre un objetivo del snapshot vigente.
 
+Estas son las condiciones del ejecutable, que sirve a un solo agente por stdio. El
+intermediario de las propuestas
+[ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md) y
+[ADR-0040](../adr/0040-task-scoped-grants-narrower-than-the-local-policy.md) (varios agentes,
+un arrendamiento de entrada, una concesión por cliente) existe en el adaptador MCP, pero el
+ejecutable no puede alcanzarlo; tal como está especificado, añadiría el arrendamiento y la
+concesión del cliente a estas condiciones, nunca las sustituiría.
+
 La línea de órdenes rechaza un adaptador de entrada real antes de abrir ningún adaptador si
 no se cumplen 1 o 2. En cada acción, el motor comprueba después la aplicación en primer plano
 que atestigua el actuador contra `allowed_applications`, vuelve a capturar la pantalla y

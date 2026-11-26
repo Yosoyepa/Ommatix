@@ -12,10 +12,11 @@ use common::{
     error_code, send_raw, server_with,
 };
 use ommatix_adapter_mcp::{
-    ACCESSIBILITY_META_KEY, ACTION_TIMINGS_META_KEY, McpConfig, McpServer, PLAN_META_KEY,
-    TIMINGS_META_KEY,
+    ACCESSIBILITY_META_KEY, ACTION_TIMINGS_META_KEY, LEASE_META_KEY, McpConfig, McpServer,
+    PLAN_META_KEY, TIMINGS_META_KEY, dto,
 };
-use ommatix_application::LocalPolicy;
+use ommatix_application::lease::Standing;
+use ommatix_application::{Grant, LocalPolicy};
 use ommatix_domain::fusion::{Actionability, Role, Word};
 use serde_json::{Value, json};
 
@@ -288,6 +289,147 @@ fn session_responses() -> Vec<Value> {
     responses
 }
 
+/// The words the broker's lease may carry (ADR-0039, proposed): its three states.
+const LEASE_WORDS: [&str; 3] = ["holder", "waiting", "none"];
+
+/// A broker's session with two clients over the same screen, values on for both: the holder
+/// and the other client observe (the page served again, a query that quotes a value, a cursor),
+/// type, dry-run and try live input; the lease is asked for and released on the wire; metrics
+/// and malformed calls quote the screen's and the agent's strings. Every response, in order.
+fn broker_session_responses() -> Vec<Value> {
+    let broker = common::broker_with(private_scene(), open_policy(), McpConfig::default());
+    let reader = Grant {
+        read_values: true,
+        ..Grant::default()
+    };
+    let mut a = broker.connect(Some(reader.clone())).expect("a is admitted");
+    let mut b = broker.connect(Some(reader)).expect("b is admitted");
+    let mut responses: Vec<Value> = Vec::new();
+    let mut id = 100;
+    let mut send = |conn: &mut ommatix_adapter_mcp::Connection, tool: &str, args: Value| {
+        id += 1;
+        let response = call(conn, id, tool, args);
+        responses.push(response.clone());
+        response["result"].clone()
+    };
+
+    let observed = send(
+        a.connection(),
+        "observe_screen",
+        json!({ "include_values": true, "limit": 2 }),
+    );
+    let cursor = observed["structuredContent"]["next_cursor"].clone();
+    assert!(cursor.is_string(), "{observed}");
+    send(
+        b.connection(),
+        "observe_screen",
+        json!({ "include_values": true, "limit": 2, "cursor": cursor, "lease": "acquire" }),
+    );
+    let page = send(
+        a.connection(),
+        "observe_screen",
+        json!({ "include_values": true }),
+    )["structuredContent"]
+        .clone();
+    assert!(element(&page, "Name")["text"].is_string());
+    let input = element(&page, "Name");
+    let button = element(&page, BUTTON);
+    let typed = json!({ "action": "type", "text": TYPED });
+    send(
+        a.connection(),
+        "execute_action",
+        action(&page, &input, "t1", &typed),
+    );
+    send(
+        b.connection(),
+        "execute_action",
+        action(&page, &input, "t1", &typed),
+    );
+    let live = json!({ "action": "click", "dry_run": false });
+    send(
+        a.connection(),
+        "execute_action",
+        action(&page, &button, "t2", &live),
+    );
+    send(
+        b.connection(),
+        "execute_action",
+        action(&page, &button, "t3", &live),
+    );
+    send(
+        b.connection(),
+        "observe_screen",
+        json!({ "query": VALUE, "include_values": true }),
+    );
+    send(
+        a.connection(),
+        "observe_screen",
+        json!({ "query": CAPTION, "lease": "release" }),
+    );
+    send(
+        b.connection(),
+        "observe_screen",
+        json!({ "include_values": true }),
+    );
+    send(b.connection(), "get_engine_metrics", json!({}));
+    // A tool error on an observation: a cursor that names no published page.
+    send(
+        a.connection(),
+        "observe_screen",
+        json!({ "cursor": "not-a-cursor", "include_values": true }),
+    );
+    send(b.connection(), "observe_screen", json!({ "lease": VALUE }));
+    send(b.connection(), "observe_screen", json!({ VALUE: CAPTION }));
+    send(a.connection(), "execute_action", json!({ "action": TYPED }));
+    responses
+}
+
+/// IT-06 (redaction): the lease `_meta` is built only from typed numbers, booleans and a closed
+/// state, so no value of it can carry text from the screen or the agent; every value the
+/// serializer can produce, at the bounds of each number, satisfies the dossier's schema.
+#[test]
+fn it_06_the_lease_meta_can_carry_no_text_from_the_screen_or_the_agent() {
+    let standings = [
+        Standing::Holder { number: None },
+        Standing::Holder { number: Some(1) },
+        Standing::Holder {
+            number: Some(u64::MAX),
+        },
+        Standing::Waiting { position: 1 },
+        Standing::Waiting {
+            position: usize::MAX,
+        },
+        Standing::None,
+    ];
+    let ages = [
+        None,
+        Some(Duration::ZERO),
+        Some(Duration::from_millis(1_234)),
+        Some(Duration::MAX),
+    ];
+    for standing in standings {
+        for age in ages {
+            let meta = dto::lease_meta(standing, age);
+            common::assert_valid("lease.meta", &meta);
+            let mut all = Vec::new();
+            leaves("", &meta, &mut all);
+            assert_eq!(all.len(), 5, "{meta}");
+            for (path, leaf) in &all {
+                assert!(
+                    leaf.is_null()
+                        || leaf.is_u64()
+                        || leaf.is_boolean()
+                        || leaf
+                            .as_str()
+                            .is_some_and(|word| LEASE_WORDS.contains(&word)),
+                    "{path}: {leaf}"
+                );
+            }
+            assert_eq!(meta["shared"], age.is_some(), "{meta}");
+        }
+    }
+}
+
 /// The names the plan may carry (ADR-0024): the closed vocabulary of the planner, never
 /// screen content.
 const PLAN_WORDS: [&str; 10] = [
@@ -305,11 +447,37 @@ const PLAN_WORDS: [&str; 10] = [
 
 /// IT-06 (redaction): in every result `_meta` there are the engine keys and the server's name
 /// and version; the engine's are whole numbers, booleans, `null` for a value not measured and,
-/// in the plan, the closed names of the planner; nothing from the screen or the agent is in
-/// any of them, and the typed text is in no response at all.
+/// in the plan, the closed names of the planner, and in the broker's lease (ADR-0039, proposed)
+/// the three closed words of its state; nothing from the screen or the agent is in any of them,
+/// and the typed text is in no response at all. The stdio server's session and a broker's
+/// session with two clients are both checked.
 #[test]
 fn it_06_telemetry_carries_numbers_only_and_nothing_from_the_screen() {
-    let responses = session_responses();
+    let mut responses = session_responses();
+    let stdio = responses.len();
+    responses.extend(broker_session_responses());
+    assert!(
+        responses[..stdio]
+            .iter()
+            .all(|r| r["result"]["_meta"].get(LEASE_META_KEY).is_none()),
+        "the stdio server never reports a lease"
+    );
+    let leases = responses[stdio..]
+        .iter()
+        .filter_map(|r| r["result"]["_meta"].get(LEASE_META_KEY))
+        .count();
+    assert!(leases >= 8, "{leases} broker results reported the lease");
+    // Tool errors carry the key too, and with no page they report no shared page (R-U4c-1).
+    let on_errors: Vec<&Value> = responses[stdio..]
+        .iter()
+        .filter(|r| r["result"]["isError"] == true)
+        .filter_map(|r| r["result"]["_meta"].get(LEASE_META_KEY))
+        .collect();
+    assert!(on_errors.len() >= 2, "{on_errors:?}");
+    for lease in on_errors {
+        assert_eq!(lease["shared"], false, "{lease}");
+        assert!(lease["age_ms"].is_null(), "{lease}");
+    }
     let mut meta_count = 0;
     for response in &responses {
         let Some(meta) = response["result"].get("_meta") else {
@@ -324,6 +492,18 @@ fn it_06_telemetry_carries_numbers_only_and_nothing_from_the_screen() {
                 assert!(!text.contains(secret), "{path}: {text}");
             }
             if path.starts_with(&format!("/{SERVER_INFO_KEY}")) {
+                continue;
+            }
+            if path.starts_with(&format!("/{LEASE_META_KEY}/")) {
+                assert!(
+                    leaf.is_null()
+                        || leaf.is_u64()
+                        || leaf.is_boolean()
+                        || leaf
+                            .as_str()
+                            .is_some_and(|word| LEASE_WORDS.contains(&word)),
+                    "{path}: the lease is numbers, booleans, null and closed words, not {leaf}"
+                );
                 continue;
             }
             if path.starts_with(&format!("/{PLAN_META_KEY}/")) {
@@ -349,11 +529,15 @@ fn it_06_telemetry_carries_numbers_only_and_nothing_from_the_screen() {
                     PLAN_META_KEY,
                     ACTION_TIMINGS_META_KEY,
                     ACCESSIBILITY_META_KEY,
+                    LEASE_META_KEY,
                     SERVER_INFO_KEY
                 ]
                 .contains(&key.as_str()),
                 "unexpected _meta key {key:?}"
             );
+        }
+        if let Some(lease) = meta.get(LEASE_META_KEY) {
+            common::assert_valid("lease.meta", lease);
         }
     }
     assert!(meta_count >= 5, "{meta_count} results carried _meta");

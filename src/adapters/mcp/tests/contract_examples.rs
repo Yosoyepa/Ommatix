@@ -71,9 +71,9 @@ fn validation_cases_agree_with_schemas_and_tool_payloads_roundtrip_through_dtos(
             "jsonschema verdict for {example_path}"
         );
 
-        if schema == "action_freshness_diff.meta" {
+        if schema == "action_freshness_diff.meta" || schema == "lease.meta" {
             // Result metadata is not parsed as a tool payload. IT-06 validates the
-            // production serializer's counts against this same schema.
+            // production serializers' output against these same schemas.
             continue;
         }
         match through_dto(schema, &example) {

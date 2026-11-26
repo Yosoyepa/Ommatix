@@ -38,7 +38,7 @@ Para tomar decisiones, leer primero la auditoría (00), el SDD (02) y los requis
 
 ## Artefactos de implementación y aceptación
 
-[`../adr/`](../adr/README.md) contiene los 12 registros de decisión de la tesis (ADR-0001 a ADR-0012, en inglés con la versión original en español). [`features/`](features) contiene 49 escenarios Gherkin en siete archivos; la suite de aceptación (`src/acceptance/tests/thesis.rs`) ejecuta los que la lista `IMPLEMENTED` nombra. [`contratos/`](contratos/README.md) contiene siete esquemas JSON, 17 casos de payload y ejemplos MCP. [`matrices/`](matrices) contiene 28 requisitos, 94 pruebas planificadas, trazabilidad BDD y 14 riesgos.
+[`../adr/`](../adr/README.md) contiene los 12 registros de decisión de la tesis (ADR-0001 a ADR-0012, en inglés con la versión original en español). [`features/`](features) contiene 67 escenarios Gherkin en nueve archivos; la suite de aceptación (`src/acceptance/tests/thesis.rs`) ejecuta los que la lista `IMPLEMENTED` nombra. [`contratos/`](contratos/README.md) contiene nueve esquemas JSON, 27 casos de payload y ejemplos MCP. [`matrices/`](matrices) contiene 29 requisitos, 154 pruebas planificadas, trazabilidad BDD y 15 riesgos.
 
 [`diagramas/`](diagramas/README.md) contiene fuentes Mermaid y DOT; las mismas vistas, con etiquetas en inglés, están en [`../diagrams/`](../diagrams/README.md). [`plantillas/`](plantillas) contiene configuración segura, inventario de modelos, perfil de hardware, resultados de evaluación vacíos e interfaces Rust. [`fuentes/referencias.json`](fuentes/referencias.json) cataloga las 24 fuentes primarias.
 
@@ -51,7 +51,7 @@ python referencia_ejecutable/run_tests.py
 python validar_paquete.py
 ```
 
-La integración continua del repositorio ejecuta ambos comandos en cada cambio. Resultados incluidos: **48/48 pruebas de referencia aprobadas**, siete schemas válidos y **17/17 expectativas de payload satisfechas**. Los ejemplos inválidos deben ser rechazados: que fallen la validación es el resultado correcto. Los informes están en `referencia_ejecutable/resultados/`.
+La integración continua del repositorio ejecuta ambos comandos en cada cambio. Resultados incluidos: **48/48 pruebas de referencia aprobadas**, nueve schemas válidos y **27/27 expectativas de payload satisfechas**. Los ejemplos inválidos deben ser rechazados: que fallen la validación es el resultado correcto. Los informes están en `referencia_ejecutable/resultados/`.
 
 Estas verificaciones no prueban un servidor MCP, una integración OCR/ONNX, un actuador Windows ni tiempos del producto. La plantilla Rust no se compiló. Los tests son una referencia para trasladar invariantes al runtime, no un reemplazo del desarrollo ni de la aceptación E2E.
 

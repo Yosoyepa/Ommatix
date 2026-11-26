@@ -10,7 +10,9 @@
 //! store that wraps the operator's store, into which the caller serving one client installs
 //! that client's grant for the length of the call.
 //!
-//! No clock, no I/O, no serialisation. Nothing outside the tests calls it yet.
+//! No clock, no I/O, no serialisation. The broker of the MCP adapter (ADR-0040, proposed)
+//! installs each client's grant through [`GrantedPolicy`] for the length of its call; nothing in
+//! the executable constructs a broker yet.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

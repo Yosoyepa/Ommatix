@@ -15,6 +15,10 @@ Sin inyectar entrada"];
 Efecto declarado verificado"];
  unknown [label="INDETERMINATE
 Sin retry ciego",fillcolor="#F6EBE2",color="#A87B53"];
+ lease [label="Con el intermediario (ADR-0039, propuesta):
+sin el arrendamiento, una petición real nueva
+→ POLICY_DENIED antes de la puerta",shape=note,style="filled,dashed"];
+ req->lease [style=dashed]; lease->no [style=dashed];
  obs->req->gate; gate->no[label="rechazo"];gate->sim[label="dry_run"];
  gate->yes[label="autorizado"]; yes->effect;effect->done[label="verificable"];effect->unknown[label="sin certeza"];
  {rank=same;no;sim;yes;} {rank=same;done;unknown;}
