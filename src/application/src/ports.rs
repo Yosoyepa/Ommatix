@@ -64,6 +64,31 @@ pub trait VisionDetector: Send {
     fn inference_shapes(&self) -> Option<Vec<InputShape>> {
         None
     }
+
+    /// The band, in pixels, of the surfaces this detector declares (ADR-0045), or `None` when
+    /// it declares none. `None` (the default: the ONNX detector and every fake) keeps the
+    /// region plan exactly as it was before ADR-0045.
+    ///
+    /// A detector that answers `Some(b)` promises, for every box it lists in
+    /// [`surfaces`](Self::surfaces): (1) for any area it is asked about, it reports the box
+    /// whole (the same box a read of the whole frame reports) or not at all; (2) the box a
+    /// read of the whole frame reports for it stays the same while no pixel within `b` pixels
+    /// of its edge, inside or outside, changes, the box does not touch the frame's edge, and
+    /// nothing inside it splits it in two (the stated limit L1 of ADR-0045); and (3) any box
+    /// that would repeat it as a duplicate (a fill inside its border) has every edge within
+    /// `b - 1` pixels of the surface's. The planner then leaves such a box out of the closure
+    /// while its band is unchanged and no region covers its inside (rule R2).
+    fn surface_band_px(&self) -> Option<u32> {
+        None
+    }
+
+    /// The boxes of the last [`detect`](Self::detect) call that are surfaces under the
+    /// contract of [`surface_band_px`](Self::surface_band_px): a subset of the boxes that
+    /// call returned. Read on the thread that made the call, right after it, as
+    /// [`inference_shapes`](Self::inference_shapes) is. Empty by default.
+    fn surfaces(&self) -> Vec<BBox> {
+        Vec::new()
+    }
 }
 
 /// Recognises words inside `regions` of `frame` (OCR). Deterministic like the detector.

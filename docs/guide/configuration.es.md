@@ -28,7 +28,8 @@
 | `--session-id ID` | de 1 a 64 caracteres ASCII visibles, para una salida reproducible; con actuación viva, un ID fijo se rechaza al arrancar (capítulo 08 §8.4) | derivado de la hora de inicio y del ID del proceso |
 | `--legacy` | sirve además el perfil MCP legacy 2025-11-25 (como `[mcp] legacy_enabled = true`) | apagado |
 | `--observations N` (sólo `demo`) | 1–20 | 3 |
-| `--plan-trace` (sólo `demo`) | escribe además una línea por observación en stderr, también de la que falló: `ommatix-plan-trace` y un objeto JSON (esquema `ommatix.plan-trace/1`) con por qué el planificador eligió ese trabajo, sólo con conteos y áreas; cada campo se define [abajo](#la-línea-de---plan-trace). Ningún píxel, texto ni coordenada; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
+| `--plan-trace` (sólo `demo`) | escribe además una línea por observación en stderr, también de la que falló: `ommatix-plan-trace` y un objeto JSON (esquema `ommatix.plan-trace/2`) con por qué el planificador eligió ese trabajo, sólo con conteos, áreas y nombres de clase; cada campo se define [abajo](#la-línea-de---plan-trace). Ningún píxel, texto ni coordenada; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
+| `--plan-check` (sólo `demo`) | compara además cada observación regional con una lectura completa del mismo fotograma, hecha después de confirmar la observación, y escribe una línea por observación en stderr: `ommatix-plan-check` y un objeto JSON (esquema `ommatix.plan-check/1`) con cuántas cajas tiene cada lectura que la otra no ([ADR-0045](../adr/0045-support-aware-closure.md)); cada campo se define [abajo](#la-línea-de---plan-check). Es un diagnóstico del operador: ejecuta la percepción dos veces, así que una observación regional cuesta alrededor del doble, y su tiempo nunca se informa como el de la observación. Sólo conteos; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
 
 ### La línea de `--plan-trace`
 
@@ -40,7 +41,7 @@ que el planificador no llegó a medir el campo (véase «Cuándo es `null` o est
 
 | Campo | Unidad | Significado |
 |---|---|---|
-| `schema` | texto | `ommatix.plan-trace/1` |
+| `schema` | texto | `ommatix.plan-trace/2` (el esquema 1, anterior a [ADR-0045](../adr/0045-support-aware-closure.md), no tenía `chosen`, `spanning`, `component_support_classes` ni `region_support_classes`) |
 | `observation_id` | número | la posición de la observación en esta corrida de `demo`, desde 1 (como en `--timings`) |
 | `outcome` | texto | `ok`, o `error` si la observación falló (no se publicó nada) |
 | `error_code` | texto | el código de error del contrato de una observación fallida (por ejemplo `CAPTURE_UNAVAILABLE`); `null` si `outcome` es `ok` |
@@ -56,7 +57,7 @@ que el planificador no llegó a medir el campo (véase «Cuándo es `null` o est
 | `components[].tight_area_px` | píxeles, una caja | la caja alrededor de las teselas del grupo, antes del halo |
 | `components[].padded_area_px` | píxeles, una caja | esa caja tras el halo, recortada al frame: la región **antes** del cierre |
 | `components[].closed_area_px` | píxeles, una caja | la región **después** del cierre |
-| `components[].largest_support_px` | píxeles, una caja | la mayor caja de evidencia (un control detectado, una palabra, un elemento de accesibilidad o un miembro de una relación) que la región cerrada solapa; `0` si ninguna |
+| `components[].largest_support_px` | píxeles, una caja | la mayor caja de evidencia (un control detectado, una palabra, un elemento de accesibilidad o un miembro de una relación) que la región cerrada solapa; `0` si ninguna. Con el cierre clásico la región la contiene; con el cierre consciente de los soportes puede ser una superficie abarcada o una caja de accesibilidad que la región solapa sin contener |
 | `regions` | lista | las regiones finales del plan tras fusionar y el último cierre, en el orden del plan |
 | `regions[].area_px` | píxeles, una caja | la región |
 | `regions[].components` | conteo | cuántos grupos terminaron en esta región |
@@ -67,10 +68,26 @@ que el planificador no llegó a medir el campo (véase «Cuándo es `null` o est
 | `max_regions` | conteo | `[engine] max_regions`, el máximo de regiones de un plan regional |
 | `decided_by` | texto | la comprobación que hizo del plan un refresco completo (los mismos nombres que `full_refresh_reason`); `null` si el plan es de reposo o regional |
 | `decisive_region` | índice | con `area_budget`: el índice (desde 0) en `regions` de la mayor región (la primera si hay empate); `null` en otro caso |
+| `chosen` | texto | qué cierre hizo el plan que se ejecutó: `spanning` (el cierre consciente de los soportes de [ADR-0045](../adr/0045-support-aware-closure.md)) o `classic` (el detector no declara banda, el plan se decidió antes de toda región, o la regla R4 cedió al plan clásico) |
+| `spanning` | objeto | qué hizo el cierre consciente de los soportes, cuando se ejecutó; `null` si no (el detector no declara superficies, o el plan se decidió antes de toda región). Si se ejecutó y R4 cedió al plan clásico, `components`, `regions`, `covered_area_px`, `decided_by` y `decisive_region` describen el intento consciente de los soportes, y `spanning.classic` el plan que se ejecutó |
+| `spanning.surfaces_declared` | conteo | superficies distintas que el detector declaró en la última evidencia |
+| `spanning.surfaces_spanned` | conteo | de ellas, las abarcadas (sin cerrar sobre ellas) |
+| `spanning.largest_spanned_px` | píxeles, una caja | la mayor superficie abarcada; `0` si ninguna |
+| `spanning.whole_on_read_cut` | conteo | cajas de accesibilidad que una región final solapa sin contener (regla R1: se releen enteras) |
+| `spanning.largest_whole_on_read_cut_px` | píxeles, una caja | la mayor de ellas; `0` si ninguna |
+| `spanning.relations_ignored` | conteo | relaciones que el cierre ignoró porque su control es una superficie abarcada o una caja de accesibilidad (regla R3) |
+| `spanning.attempt_reason` | texto | la razón por la que el intento consciente de los soportes fue un refresco completo (los nombres de `full_refresh_reason`); `null` si fue regional |
+| `spanning.classic` | objeto | el plan clásico, cuando la regla R4 lo calculó y lo ejecutó; `null` en otro caso |
+| `spanning.classic.work` | texto | `full` o `regions` |
+| `spanning.classic.full_refresh_reason` | texto | su razón; `null` si es regional |
+| `spanning.classic.region_count` | conteo | las regiones que produjo su cierre (lo que comparó el presupuesto de regiones); `0` si el cierre agotó las rondas |
+| `spanning.classic.covered_area_px` | píxeles, suma | la suma de sus áreas (lo que comparó el presupuesto de área) |
+| `component_support_classes` | lista | para cada entrada de `components`, en orden, la clase de su caja `largest_support_px`: `cut_prone` (una caja que una región debe contener entera), `surface` (una superficie del detector) o `whole_on_read` (una caja de accesibilidad); `null` si no toca ninguna o el cierre fue el clásico sin reparto de la evidencia |
+| `region_support_classes` | lista | lo mismo para cada entrada de `regions` |
 
 **Cuándo es `null` o está vacío.** Una observación fallida no publica nada, así que su línea sólo lleva
 `schema`, `observation_id`, `outcome` y `error_code`: todo lo demás es `null`, y `components` y
-`regions` son `[]`. Un refresco completo decidido antes de que exista una región (`no_committed_base`,
+`regions` son `[]` (`component_support_classes` y `region_support_classes` son `null`). Un refresco completo decidido antes de que exista una región (`no_committed_base`,
 `geometry_changed`, `experimental_baseline`) tiene `components` y `regions` vacíos y `covered_area_px`
 en `0`; también `closure_budget`, cuyo componente que agotó las rondas no deja entrada.
 `covered_area_px` y `regions` se llenan una vez fusionadas las regiones, así que también se llenan con
@@ -79,7 +96,33 @@ en `0`; también `closure_budget`, cuyo componente que agotó las rondas no deja
 Para saber por qué hubo un refresco completo, compare el `padded_area_px` de un componente con su
 `closed_area_px` y con el frame: un `padded_area_px` pequeño con un `closed_area_px` y un
 `largest_support_px` grandes significa que el cierre sobre una caja grande de evidencia hizo grande la
-región; un `padded_area_px` que ya es grande significa que el cambio mismo era grande.
+región; un `padded_area_px` que ya es grande significa que el cambio mismo era grande. Con el esquema
+2, la clase de esa caja dice qué era: una caja `surface` o `whole_on_read` en un refresco completo
+decidido por el cierre clásico es una caja que el cierre consciente de los soportes habría dejado
+fuera.
+
+### La línea de `--plan-check`
+
+Cada línea es `ommatix-plan-check ` y un objeto JSON (claves ordenadas), una por observación. Después
+de confirmar una observación **regional**, el detector, el reconocedor y el proveedor de accesibilidad
+se ejecutan otra vez sobre el fotograma entero y las dos evidencias se comparan caja a caja, como
+multiconjuntos. Una caja «en una caja abarcada o releída entera» solapa una superficie que el cierre
+abarcó (una región la tocó sin contenerla) o una caja de accesibilidad que tocó una región: donde
+[ADR-0045](../adr/0045-support-aware-closure.md) cambió lo que conserva una observación regional. Sus
+conteos ahí deben ser `0`; los conteos en otra parte vienen de una percepción que no es local (el OCR
+lee renglones en contexto: límite L3).
+
+| Campo | Unidad | Significado |
+|---|---|---|
+| `schema` | texto | `ommatix.plan-check/1` |
+| `observation_id`, `outcome`, `error_code`, `work` | | como en la línea de `--plan-trace` |
+| `checked` | booleano | `true` si la comparación se hizo: la observación fue regional y la lectura completa tuvo éxito |
+| `full_truncated` | booleano | el recorrido de accesibilidad de la lectura completa acabó en su presupuesto, así que sus ausencias no prueban nada; `null` si no se comparó |
+| `only_regional` | objeto | cajas en la evidencia de la observación regional y no en la de la lectura completa; `null` si no se comparó |
+| `only_full` | objeto | cajas en la evidencia de la lectura completa y no en la de la observación regional; `null` si no se comparó |
+| `….controls`, `….words`, `….accessibility` | objeto | por tipo de evidencia |
+| `….at_spanned_or_whole_on_read` | conteo | de esas cajas, las que solapan una superficie abarcada o una caja de accesibilidad que tocó una región |
+| `….elsewhere` | conteo | las demás |
 
 ## Archivo de configuración
 

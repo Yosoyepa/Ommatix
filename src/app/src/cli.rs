@@ -157,4 +157,13 @@ pub struct DemoArgs {
     /// compared, the check that decided). No pixel, label or coordinate; never on stdout.
     #[arg(long)]
     pub plan_trace: bool,
+    /// Also compare each regional observation with a full read of the same frame and write
+    /// one line to stderr (`ommatix-plan-check` and a JSON object): how many boxes each read
+    /// has and the other lacks, per kind, split by whether they overlap a box the
+    /// support-aware closure let a region meet without containing (ADR-0045). A diagnostic:
+    /// it runs perception a second time after the observation is committed, so it doubles
+    /// the cost of a regional observation, and its time is never reported as the
+    /// observation's. Counts only; never on stdout.
+    #[arg(long)]
+    pub plan_check: bool,
 }

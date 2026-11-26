@@ -84,6 +84,7 @@ fn run_demo(args: &DemoArgs) -> Result<()> {
         args.observations,
         args.timings,
         args.plan_trace,
+        args.plan_check,
     );
     Ok(())
 }

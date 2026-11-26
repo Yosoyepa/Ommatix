@@ -13,3 +13,4 @@ R11,Medio,Cliente MCP no compatible,Perfiles explícitos y tests con cliente con
 R12,Medio,Complejidad excesiva del MVP,"Una plataforma, monolito, gates S0–S4",DOC-01,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
 R13,Alto,Carrera residual del SO,"Revalidación inmediata, dominio de bajo riesgo",SEC-05,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
 R14,Medio,Caché/memoria sin límites,"TTL/LRU, colas acotadas y soak",PERF-03,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA
+R18,Medio,Una superficie conservada queda obsoleta si el cambio la divide (L1),Regla de la banda (R2) y refresco completo; un cambio en la banda o un refresco completo la relee (ADR-0045),UT-86,Responsable técnico por designar,ABIERTO_HASTA_EVIDENCIA

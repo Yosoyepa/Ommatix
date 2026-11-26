@@ -311,7 +311,7 @@ fn demo_plan_trace_is_on_stderr_only_when_asked_and_changes_nothing_on_stdout() 
     assert_eq!(lines.len(), 3, "{stderr}");
     for (i, line) in lines.iter().enumerate() {
         let record: Value = serde_json::from_str(line).expect("a JSON line");
-        assert_eq!(record["schema"], "ommatix.plan-trace/1", "{line}");
+        assert_eq!(record["schema"], "ommatix.plan-trace/2", "{line}");
         assert_eq!(record["observation_id"], i + 1, "{line}");
         assert_eq!(record["outcome"], "ok", "{line}");
         assert!(record["error_code"].is_null(), "{line}");
@@ -367,7 +367,7 @@ fn demo_plan_trace_says_when_an_observation_failed() {
         .collect();
     assert_eq!((trace.len(), timings.len()), (1, 1), "{stderr}");
     let record: Value = serde_json::from_str(trace[0]).expect("a JSON line");
-    assert_eq!(record["schema"], "ommatix.plan-trace/1");
+    assert_eq!(record["schema"], "ommatix.plan-trace/2");
     assert_eq!(record["observation_id"], 1);
     assert_eq!(record["outcome"], "error");
     let timing: Value = serde_json::from_str(timings[0]).unwrap();

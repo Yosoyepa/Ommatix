@@ -509,6 +509,75 @@ pub struct RegionPlan {
     pub work: Work,
 }
 
+/// The support-aware closure (ADR-0045): what the last snapshot's evidence is, by how a
+/// region may meet it. Passed beside [`Evidence`] to [`plan_regions_with`]; `None` there is
+/// today's closure over every support, bit for bit.
+///
+/// The three lists, as multisets, are `Evidence::supports`: the caller splits the same boxes.
+///
+/// - `cut_prone`: boxes a perception stage may report in pieces when a region cuts them
+///   (detector boxes that are not surfaces, OCR words). The closure always takes them whole.
+/// - `surfaces`: detector boxes the detector reports whole or not at all for any area it is
+///   asked about ([`VisionDetector::surfaces`](../../ommatix_application) in the
+///   application). One is *spanned*, not closed over, while its edge band is unchanged
+///   (rule R2 of ADR-0045).
+/// - `whole_on_read`: accessibility boxes. The provider returns every element whose box meets
+///   the regions it reads, whole, and the engine replaces every held element that meets them,
+///   so no region can cut one (rule R1): they are never closed over.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Spanning<'a> {
+    pub cut_prone: &'a [BBox],
+    pub surfaces: &'a [BBox],
+    pub whole_on_read: &'a [BBox],
+    /// The band, in pixels, inside and outside a surface's edge in which a changed pixel can
+    /// change the surface's box as the detector reports it (the flat-region detector: its
+    /// `nested_inset + 1`).
+    pub band_px: u32,
+}
+
+/// What a box of the last evidence is to the support-aware closure (ADR-0045), as the plan
+/// trace names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SupportClass {
+    /// A box a region must contain whole or not meet: closed over.
+    CutProne,
+    /// A detector surface: closed over unless spanned.
+    Surface,
+    /// An accessibility box, re-read whole: never closed over.
+    WholeOnRead,
+}
+
+impl SupportClass {
+    /// The class's name on the plan trace.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CutProne => "cut_prone",
+            Self::Surface => "surface",
+            Self::WholeOnRead => "whole_on_read",
+        }
+    }
+}
+
+/// Which closure made the plan that ran.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlanChoice {
+    /// Today's closure over every support (no [`Spanning`], or rule R4 gave way to it).
+    #[default]
+    Classic,
+    /// The support-aware closure of ADR-0045.
+    Spanning,
+}
+
+impl PlanChoice {
+    /// The choice's name on the plan trace.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Spanning => "spanning",
+        }
+    }
+}
+
 /// Plans the regions to re-analyse in `current`: the tiles that differ from the committed
 /// `base` plus the `pending` ones, grouped, padded, closed over `evidence` and merged.
 pub fn plan_regions(
@@ -518,7 +587,7 @@ pub fn plan_regions(
     evidence: Evidence<'_>,
     params: &PlanParams,
 ) -> Result<RegionPlan, IncrementalError> {
-    plan_regions_recorded(base, current, pending, evidence, params, None)
+    plan_regions_recorded(base, current, pending, evidence, None, params, None)
 }
 
 /// [`plan_regions`] and the numbers behind its decision (a [`PlanTrace`]). The plan is
@@ -531,12 +600,55 @@ pub fn plan_regions_traced(
     evidence: Evidence<'_>,
     params: &PlanParams,
 ) -> Result<(RegionPlan, PlanTrace), IncrementalError> {
+    plan_regions_with_traced(base, current, pending, evidence, None, params)
+}
+
+/// [`plan_regions`] with the support-aware closure of ADR-0045 when `spanning` is given
+/// (rules R1 to R4): an accessibility box is never closed over, a detector surface whose edge
+/// band is unchanged is spanned instead of closed over, a relation whose control is such a
+/// box is ignored, and a support-aware plan that is a full refresh gives way to the classic
+/// plan, so the full refreshes are a subset of today's, with today's reasons. With `None`
+/// it is [`plan_regions`].
+pub fn plan_regions_with(
+    base: Option<&BgraFrame>,
+    current: &BgraFrame,
+    pending: &BTreeSet<TileCoord>,
+    evidence: Evidence<'_>,
+    spanning: Option<Spanning<'_>>,
+    params: &PlanParams,
+) -> Result<RegionPlan, IncrementalError> {
+    plan_regions_recorded(base, current, pending, evidence, spanning, params, None)
+}
+
+/// [`plan_regions_with`] and its [`PlanTrace`]; the plan is the same.
+pub fn plan_regions_with_traced(
+    base: Option<&BgraFrame>,
+    current: &BgraFrame,
+    pending: &BTreeSet<TileCoord>,
+    evidence: Evidence<'_>,
+    spanning: Option<Spanning<'_>>,
+    params: &PlanParams,
+) -> Result<(RegionPlan, PlanTrace), IncrementalError> {
     let mut trace = PlanTrace::default();
-    let plan = plan_regions_recorded(base, current, pending, evidence, params, Some(&mut trace))?;
+    let plan = plan_regions_recorded(
+        base,
+        current,
+        pending,
+        evidence,
+        spanning,
+        params,
+        Some(&mut trace),
+    )?;
     trace.dirty_tiles = plan.dirty.len();
-    trace.decided_by = match plan.work {
+    // The reason of the plan the trace describes: the plan that ran, or the support-aware
+    // attempt when R4 gave way to the classic plan (whose own reason is in `spanning`).
+    let traced_reason = match plan.work {
         Work::FullRefresh(reason) => Some(reason),
         Work::Nothing | Work::Regions(_) => None,
+    };
+    trace.decided_by = match trace.spanning.as_ref() {
+        Some(s) if s.classic.is_some() => s.attempt_reason,
+        _ => traced_reason,
     };
     if trace.decided_by == Some(FullRefreshReason::AreaBudget) {
         // The first of the largest: the region most of the sum came from.
@@ -593,6 +705,51 @@ pub struct PlanTrace {
     pub decided_by: Option<FullRefreshReason>,
     /// For `area_budget`: the index in `regions` of the largest region (the first on a tie).
     pub decisive_region: Option<usize>,
+    /// Which closure made the plan that ran (ADR-0045): `Classic` when no [`Spanning`] was
+    /// given, when the plan was decided before any region (no base, a geometry change, the
+    /// baseline, nothing to do), or when rule R4 gave way to the classic plan.
+    pub chosen: PlanChoice,
+    /// What the support-aware closure did, when it ran. When it ran and R4 gave way to the
+    /// classic plan, `components`, `regions`, `covered_area_px`, `decided_by` and
+    /// `decisive_region` describe the support-aware attempt, and
+    /// [`SpanningTrace::classic`] the plan that ran.
+    pub spanning: Option<SpanningTrace>,
+}
+
+/// The support-aware closure of one plan (ADR-0045): counts and areas only.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct SpanningTrace {
+    /// Distinct surfaces the detector declared in the last evidence.
+    pub surfaces_declared: usize,
+    /// Of those, the ones spanned (not closed over) in the attempt the trace describes.
+    pub surfaces_spanned: usize,
+    /// The area of the largest spanned surface (one box); `0` when none was spanned.
+    pub largest_spanned_px: f64,
+    /// Accessibility boxes that a final region overlaps without containing: the boxes R1 lets
+    /// a region cut, because the provider re-reads them whole.
+    pub whole_on_read_cut: usize,
+    /// The area of the largest of those (one box); `0` when there is none.
+    pub largest_whole_on_read_cut_px: f64,
+    /// Relations the closure ignored because their control is a spanned surface or an
+    /// accessibility box (rule R3).
+    pub relations_ignored: usize,
+    /// The reason the support-aware attempt was a full refresh, `None` when it was regional.
+    pub attempt_reason: Option<FullRefreshReason>,
+    /// The classic plan, when R4 computed it because the attempt was a full refresh: it is
+    /// the plan that ran.
+    pub classic: Option<ClassicTrace>,
+}
+
+/// The classic plan rule R4 computed and ran.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ClassicTrace {
+    /// Its reason, `None` when it was regional.
+    pub full_refresh_reason: Option<FullRefreshReason>,
+    /// The regions its closure produced (the number the region budget compared); `0` when
+    /// its closure ran out of rounds.
+    pub region_count: usize,
+    /// The sum of their areas (the sum the area budget compared; they never overlap).
+    pub covered_area_px: f64,
 }
 
 /// One connected component of dirty tiles and what the closure did to its region.
@@ -608,9 +765,14 @@ pub struct ComponentTrace {
     /// box).
     pub closed_area_px: f64,
     /// The largest evidence box (a support, or a member of a relation) the closed region
-    /// overlaps, hence contains; `0` when it touches none. A box that large next to a small
-    /// `padded_area_px` is what makes the closure, and not the change, big.
+    /// overlaps; `0` when it touches none. Under the classic closure it contains that box; a
+    /// box that large next to a small `padded_area_px` is what makes the closure, and not the
+    /// change, big. Under the support-aware closure it may be a spanned surface or an
+    /// accessibility box the region overlaps without containing.
     pub largest_support_px: f64,
+    /// The class of that box (ADR-0045); `None` when it touches none, and under the classic
+    /// closure without [`Spanning`], which has no classes.
+    pub largest_support_class: Option<SupportClass>,
 }
 
 /// One region of the final plan.
@@ -626,22 +788,104 @@ pub struct RegionTrace {
     pub pre_closure_area_px: f64,
     /// As [`ComponentTrace::largest_support_px`], for the final region.
     pub largest_support_px: f64,
+    /// As [`ComponentTrace::largest_support_class`], for the final region.
+    pub largest_support_class: Option<SupportClass>,
 }
 
-/// The largest box of `evidence` that `region` overlaps: a support, or a member of a
+/// The largest box of the evidence that `region` overlaps: a support, or a member of a
 /// relation one of whose members it overlaps (the boxes the closure unions). `0` for none.
-fn largest_evidence_px(region: &BBox, evidence: &Evidence<'_>) -> f64 {
-    let supports = evidence
-        .supports
-        .iter()
-        .filter(|s| region.overlaps(s))
-        .map(BBox::area);
-    let related = evidence
-        .relations
+/// With `classed` (the support-aware closure), every box of the evidence counts, closed over
+/// or not, and the answer carries its class.
+fn largest_evidence(
+    region: &BBox,
+    supports: &[BBox],
+    relations: &[(BBox, BBox)],
+    classed: Option<&Classed>,
+) -> (f64, Option<SupportClass>) {
+    let related = relations
         .iter()
         .filter(|(a, b)| region.overlaps(a) || region.overlaps(b))
-        .flat_map(|(a, b)| [a.area(), b.area()]);
-    supports.chain(related).fold(0.0, f64::max)
+        .flat_map(|(a, b)| [*a, *b]);
+    let Some(classed) = classed else {
+        let area = supports
+            .iter()
+            .filter(|s| region.overlaps(s))
+            .map(BBox::area)
+            .chain(related.map(|b| b.area()))
+            .fold(0.0, f64::max);
+        return (area, None);
+    };
+    let mut best: Option<(f64, SupportClass)> = None;
+    let mut consider = |area: f64, class: SupportClass| {
+        // The larger area, then the class later in the list: a total order, so the answer
+        // does not depend on the order of the evidence.
+        if best.is_none_or(|(a, c)| area.total_cmp(&a).then(class.cmp(&c)).is_gt()) {
+            best = Some((area, class));
+        }
+    };
+    for (b, class) in &classed.all {
+        if region.overlaps(b) {
+            consider(b.area(), *class);
+        }
+    }
+    for b in related {
+        consider(b.area(), classed.class_of(&b));
+    }
+    best.map_or((0.0, None), |(area, class)| (area, Some(class)))
+}
+
+/// Every box of the support-aware evidence with its class, and sorted lists to look a box up.
+struct Classed {
+    all: Vec<(BBox, SupportClass)>,
+    cut_prone: Vec<BBox>,
+    surfaces: Vec<BBox>,
+    whole_on_read: Vec<BBox>,
+}
+
+fn sorted(boxes: &[BBox]) -> Vec<BBox> {
+    let mut out = boxes.to_vec();
+    out.sort_by(BBox::cmp_corners);
+    out.dedup();
+    out
+}
+
+fn holds(sorted: &[BBox], b: &BBox) -> bool {
+    sorted
+        .binary_search_by(|probe| probe.cmp_corners(b))
+        .is_ok()
+}
+
+impl Classed {
+    fn new(spanning: &Spanning<'_>) -> Self {
+        let mut all = Vec::new();
+        for (list, class) in [
+            (spanning.cut_prone, SupportClass::CutProne),
+            (spanning.surfaces, SupportClass::Surface),
+            (spanning.whole_on_read, SupportClass::WholeOnRead),
+        ] {
+            all.extend(list.iter().map(|b| (*b, class)));
+        }
+        Self {
+            all,
+            cut_prone: sorted(spanning.cut_prone),
+            surfaces: sorted(spanning.surfaces),
+            whole_on_read: sorted(spanning.whole_on_read),
+        }
+    }
+
+    /// A box's class; a box in no list (a relation member fusion made) is cut-prone, the
+    /// conservative answer. A box in several lists takes the first of cut-prone, surface.
+    fn class_of(&self, b: &BBox) -> SupportClass {
+        if holds(&self.cut_prone, b) {
+            SupportClass::CutProne
+        } else if holds(&self.surfaces, b) {
+            SupportClass::Surface
+        } else if holds(&self.whole_on_read, b) {
+            SupportClass::WholeOnRead
+        } else {
+            SupportClass::CutProne
+        }
+    }
 }
 
 /// The area of the union of `boxes`: a pixel covered by several boxes counts once. A sweep
@@ -745,16 +989,425 @@ fn members_of(regions: &[BBox], padded: &[BBox]) -> Vec<Vec<BBox>> {
     }
     members
 }
+/// One closure of the dirty tiles over a set of supports and relations, and the budget
+/// checks: the plan's work, and the merged regions the checks looked at (empty when the
+/// closure ran out of rounds).
+struct Decided {
+    work: Work,
+    closed: Vec<BBox>,
+}
+
+/// Algorithm 1 from the dirty tiles on: components, halo, closure, merge, budgets. With a
+/// `trace` it replaces the trace's components, regions and covered area by this closure's.
+// One algorithm of the thesis (Algorithm 1) in one place, as the oracle has it.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn close_and_decide(
+    grid: &TileGrid,
+    bounds: BBox,
+    dirty: &BTreeSet<TileCoord>,
+    supports: &[BBox],
+    relations: &[(BBox, BBox)],
+    classed: Option<&Classed>,
+    params: &PlanParams,
+    mut trace: Option<&mut PlanTrace>,
+) -> Result<Decided, IncrementalError> {
+    let full = |reason, closed| Decided {
+        work: Work::FullRefresh(reason),
+        closed,
+    };
+    if let Some(t) = trace.as_deref_mut() {
+        t.components.clear();
+        t.regions.clear();
+        t.covered_area_px = 0.0;
+    }
+    let mut regions = Vec::new();
+    // The padded regions, kept only to say which final region each component ended in.
+    let mut padded_boxes = Vec::new();
+    for component in connected_components(dirty) {
+        let tight = component
+            .iter()
+            .map(|&t| grid.tile_box(t))
+            .reduce(|a, b| a.union(&b))
+            .expect("a component has at least one tile");
+        let padded = tight
+            .pad(params.halo_px)
+            .clip(&bounds)
+            .expect("a padded tile still overlaps the frame");
+        match halo_close(
+            padded,
+            supports,
+            relations,
+            bounds,
+            params.max_closure_rounds,
+        )? {
+            Closure::Closed(region) => {
+                if let Some(t) = trace.as_deref_mut() {
+                    let (largest, class) = largest_evidence(&region, supports, relations, classed);
+                    t.components.push(ComponentTrace {
+                        tiles: component.len(),
+                        tight_area_px: tight.area(),
+                        padded_area_px: padded.area(),
+                        closed_area_px: region.area(),
+                        largest_support_px: largest,
+                        largest_support_class: class,
+                    });
+                    padded_boxes.push(padded);
+                }
+                regions.push(region);
+            }
+            Closure::BudgetExhausted => {
+                return Ok(full(FullRefreshReason::ClosureBudget, Vec::new()));
+            }
+        }
+    }
+    // Merging can make a region touch new evidence, so close and merge until both hold.
+    loop {
+        let merged = merge_regions(&regions);
+        let mut closed = Vec::with_capacity(merged.len());
+        for region in &merged {
+            match halo_close(
+                *region,
+                supports,
+                relations,
+                bounds,
+                params.max_closure_rounds,
+            )? {
+                Closure::Closed(r) => closed.push(r),
+                Closure::BudgetExhausted => {
+                    return Ok(full(FullRefreshReason::ClosureBudget, Vec::new()));
+                }
+            }
+        }
+        if closed == merged {
+            regions = merged;
+            break;
+        }
+        regions = closed;
+    }
+
+    if let Some(t) = trace {
+        t.regions = regions
+            .iter()
+            .zip(members_of(&regions, &padded_boxes))
+            .map(|(region, members)| {
+                let (largest, class) = largest_evidence(region, supports, relations, classed);
+                RegionTrace {
+                    area_px: region.area(),
+                    components: members.len(),
+                    // The union lies inside the region; the `min` only guards the last bit of
+                    // rounding of a sum of differences.
+                    pre_closure_area_px: union_area(&members).min(region.area()),
+                    largest_support_px: largest,
+                    largest_support_class: class,
+                }
+            })
+            .collect();
+        t.covered_area_px = regions.iter().map(BBox::area).sum();
+    }
+    if regions.len() > params.max_regions {
+        return Ok(full(FullRefreshReason::TooManyRegions, regions));
+    }
+    let covered: f64 = regions.iter().map(BBox::area).sum();
+    if covered > params.max_area_fraction * bounds.area() {
+        return Ok(full(FullRefreshReason::AreaBudget, regions));
+    }
+    if params.adaptive_min_regions > 0 && regions.len() >= params.adaptive_min_regions {
+        return Ok(full(FullRefreshReason::AdaptiveCost, regions));
+    }
+    Ok(Decided {
+        work: Work::Regions(regions.clone()),
+        closed: regions,
+    })
+}
+
+/// A coordinate of a box that lies inside a validated frame, as whole pixels.
+// The caller has checked the box against the frame's bounds: the value is finite and in
+// `0..=20_000_000` (`MAX_FRAME_PIXELS`), so the cast neither truncates nor wraps, and any
+// band of a `u32` added to it stays far inside `i64`.
+#[allow(clippy::cast_possible_truncation)]
+fn whole(v: f64) -> i64 {
+    v as i64
+}
+
+/// A relation of the evidence: a control and its external label.
+type Relation = (BBox, BBox);
+
+/// Pixel rectangle `[x0, x1) x [y0, y1)` as `i64`.
+type PixelBox = (i64, i64, i64, i64);
+
+/// The pixels of `s` shrunk by `band` on every side, rounding inwards; `None` when nothing is
+/// left (R2 (iv)).
+fn shrunk(s: &BBox, band: u32) -> Option<PixelBox> {
+    let b = i64::from(band);
+    let r = (
+        whole(s.x0().ceil()) + b,
+        whole(s.y0().ceil()) + b,
+        whole(s.x1().floor()) - b,
+        whole(s.y1().floor()) - b,
+    );
+    (r.0 < r.2 && r.1 < r.3).then_some(r)
+}
+
+/// The pixels a box covers, rounding outwards (what a stage reads for a region).
+fn covered_pixels(r: &BBox) -> PixelBox {
+    (
+        whole(r.x0().floor()),
+        whole(r.y0().floor()),
+        whole(r.x1().ceil()),
+        whole(r.y1().ceil()),
+    )
+}
+
+fn pixel_box_contains(outer: PixelBox, inner: PixelBox) -> bool {
+    outer.0 <= inner.0 && outer.1 <= inner.1 && outer.2 >= inner.2 && outer.3 >= inner.3
+}
+
+/// Whether some pixel of row `y`, columns `[x0, x1)`, differs from the base in B, G or R
+/// (exact, as [`dirty_tiles`]). The caller clipped the columns and the row to the frame.
+fn row_differs(base: &BgraFrame, current: &BgraFrame, y: i64, x0: i64, x1: i64) -> bool {
+    let (Ok(y), Ok(x0), Ok(x1)) = (u32::try_from(y), u32::try_from(x0), u32::try_from(x1)) else {
+        return true; // outside the frame: the conservative answer, never reached
+    };
+    if x0 >= x1 {
+        return false;
+    }
+    let (old, _) = base.row(y, x0, x1).as_chunks::<BPP>();
+    let (new, _) = current.row(y, x0, x1).as_chunks::<BPP>();
+    old.iter().zip(new).any(|(o, n)| o[..3] != n[..3])
+}
+
+/// Rule R2 (i) to (iv) of ADR-0045: whether the surface `s`, as the detector reported it on
+/// `base`, still has the same box on `current` whatever changed strictly inside it. It does
+/// when it does not touch the frame's edge (i), no pixel of its band `s.pad(band) \
+/// s.shrink(band)`, clipped to the frame, differs from the base (ii), no pending tile meets
+/// the outer box without lying inside the inner one (iii), and the inner box is not empty
+/// (iv). Pure in its inputs; `s` lies inside the frame, which has the base's geometry.
+pub fn band_unchanged(
+    s: &BBox,
+    base: &BgraFrame,
+    current: &BgraFrame,
+    grid: &TileGrid,
+    pending: &BTreeSet<TileCoord>,
+    band: u32,
+) -> bool {
+    let (w, h) = (i64::from(current.width()), i64::from(current.height()));
+    if (base.width(), base.height()) != (current.width(), current.height())
+        || !current.bounds().contains(s)
+    {
+        return false;
+    }
+    let b = i64::from(band);
+    let (sx0, sy0, sx1, sy1) = covered_pixels(s);
+    if sx0 <= 0 || sy0 <= 0 || sx1 >= w || sy1 >= h {
+        return false; // (i)
+    }
+    let Some(inner) = shrunk(s, band) else {
+        return false; // (iv)
+    };
+    let outer = (
+        (sx0 - b).max(0),
+        (sy0 - b).max(0),
+        (sx1 + b).min(w),
+        (sy1 + b).min(h),
+    );
+    // (ii): every row of the outer box, minus the inner box on the rows it spans.
+    for y in outer.1..outer.3 {
+        let changed = if (inner.1..inner.3).contains(&y) {
+            row_differs(base, current, y, outer.0, inner.0)
+                || row_differs(base, current, y, inner.2, outer.2)
+        } else {
+            row_differs(base, current, y, outer.0, outer.2)
+        };
+        if changed {
+            return false;
+        }
+    }
+    // (iii)
+    #[allow(clippy::cast_precision_loss)] // pixel coordinates far below 2^53
+    let to_box = |p: PixelBox| BBox::new(p.0 as f64, p.1 as f64, p.2 as f64, p.3 as f64);
+    let (Ok(outer_box), Ok(inner_box)) = (to_box(outer), to_box(inner)) else {
+        return false;
+    };
+    !pending
+        .iter()
+        .filter(|&&t| grid.contains(t))
+        .map(|&t| grid.tile_box(t))
+        .any(|tile| tile.overlaps(&outer_box) && !inner_box.contains(&tile))
+}
+
+/// The support-aware plan (rules R1 to R4 of ADR-0045) for the dirty tiles of a frame that
+/// has a committed base of its own geometry.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn plan_spanning(
+    grid: &TileGrid,
+    bounds: BBox,
+    base: &BgraFrame,
+    current: &BgraFrame,
+    dirty: &BTreeSet<TileCoord>,
+    pending: &BTreeSet<TileCoord>,
+    evidence: Evidence<'_>,
+    spanning: Spanning<'_>,
+    params: &PlanParams,
+    trace: Option<&mut PlanTrace>,
+) -> Result<Work, IncrementalError> {
+    let in_bounds = |b: &BBox| bounds.contains(b);
+    if !spanning
+        .cut_prone
+        .iter()
+        .chain(spanning.surfaces)
+        .chain(spanning.whole_on_read)
+        .all(in_bounds)
+    {
+        return Err(IncrementalError::SupportOutOfBounds);
+    }
+    let classed = Classed::new(&spanning);
+    // R2 (i) to (iv), fixed before any closure: pure in the frames, the pending tiles, the
+    // boxes and the band. A surface that is also a cut-prone box is closed over as one.
+    let surfaces = classed.surfaces.clone();
+    let mut spanned: Vec<bool> = surfaces
+        .iter()
+        .map(|s| {
+            !holds(&classed.cut_prone, s)
+                && band_unchanged(s, base, current, grid, pending, spanning.band_px)
+        })
+        .collect();
+    let tracing = trace.is_some();
+    let (decided, scratch, ignored) = loop {
+        // R1: accessibility boxes are not supports; R2: spanned surfaces are not.
+        let supports: Vec<BBox> = spanning
+            .cut_prone
+            .iter()
+            .copied()
+            .chain(
+                surfaces
+                    .iter()
+                    .zip(&spanned)
+                    .filter(|(_, spanned)| !**spanned)
+                    .map(|(s, _)| *s),
+            )
+            .collect();
+        // R3: a relation whose control is a box R1 or R2 leaves out (and no cut-prone box)
+        // does not pull its label in; the label is closed over as a word.
+        let left_out = |control: &BBox| {
+            !holds(&classed.cut_prone, control)
+                && (holds(&classed.whole_on_read, control)
+                    || surfaces
+                        .iter()
+                        .zip(&spanned)
+                        .any(|(s, spanned)| *spanned && s == control))
+        };
+        let (ignored, relations): (Vec<Relation>, Vec<Relation>) = evidence
+            .relations
+            .iter()
+            .partition(|(control, _)| left_out(control));
+        let mut scratch = tracing.then(PlanTrace::default);
+        let decided = close_and_decide(
+            grid,
+            bounds,
+            dirty,
+            &supports,
+            &relations,
+            Some(&classed),
+            params,
+            scratch.as_mut(),
+        )?;
+        // R2 (v): a spanned surface whose inner box a region covers is closed over: that
+        // region could read a box that repeats the surface (a fill inside its border), which
+        // a full read drops as a duplicate. Closing over more only grows the regions, so the
+        // loop ends, at a fixed point that does not depend on the order of the boxes.
+        let mut more = false;
+        if let Work::Regions(regions) = &decided.work {
+            for (s, spanned) in surfaces.iter().zip(spanned.iter_mut()) {
+                let covered = shrunk(s, spanning.band_px).is_some_and(|inner| {
+                    regions
+                        .iter()
+                        .any(|r| pixel_box_contains(covered_pixels(r), inner))
+                });
+                if *spanned && covered {
+                    *spanned = false;
+                    more = true;
+                }
+            }
+        }
+        if !more {
+            break (decided, scratch, ignored.len());
+        }
+    };
+    let attempt_reason = match decided.work {
+        Work::FullRefresh(reason) => Some(reason),
+        Work::Nothing | Work::Regions(_) => None,
+    };
+    // R4: a support-aware full refresh gives way to the classic plan, today's plan.
+    let classic = match attempt_reason {
+        Some(_) => Some(close_and_decide(
+            grid,
+            bounds,
+            dirty,
+            evidence.supports,
+            evidence.relations,
+            None,
+            params,
+            None,
+        )?),
+        None => None,
+    };
+    if let Some(t) = trace {
+        if let Some(s) = scratch {
+            t.components = s.components;
+            t.regions = s.regions;
+            t.covered_area_px = s.covered_area_px;
+        }
+        let spanned_boxes: Vec<&BBox> = surfaces
+            .iter()
+            .zip(&spanned)
+            .filter(|(_, spanned)| **spanned)
+            .map(|(s, _)| s)
+            .collect();
+        let cut: Vec<f64> = classed
+            .whole_on_read
+            .iter()
+            .filter(|a| {
+                decided
+                    .closed
+                    .iter()
+                    .any(|r| r.overlaps(a) && !r.contains(a))
+            })
+            .map(BBox::area)
+            .collect();
+        t.chosen = if classic.is_some() {
+            PlanChoice::Classic
+        } else {
+            PlanChoice::Spanning
+        };
+        t.spanning = Some(SpanningTrace {
+            surfaces_declared: surfaces.len(),
+            surfaces_spanned: spanned_boxes.len(),
+            largest_spanned_px: spanned_boxes.iter().map(|s| s.area()).fold(0.0, f64::max),
+            whole_on_read_cut: cut.len(),
+            largest_whole_on_read_cut_px: cut.iter().copied().fold(0.0, f64::max),
+            relations_ignored: ignored,
+            attempt_reason,
+            classic: classic.as_ref().map(|c| ClassicTrace {
+                full_refresh_reason: match c.work {
+                    Work::FullRefresh(reason) => Some(reason),
+                    Work::Nothing | Work::Regions(_) => None,
+                },
+                region_count: c.closed.len(),
+                covered_area_px: c.closed.iter().map(BBox::area).sum(),
+            }),
+        });
+    }
+    Ok(classic.map_or(decided.work, |c| c.work))
+}
 
 /// The planner's body. With a `trace` it also records what it computes; the plan does not
 /// depend on whether one is passed.
-// One algorithm of the thesis (Algorithm 1) in one place, as the oracle has it.
-#[allow(clippy::too_many_lines)]
 fn plan_regions_recorded(
     base: Option<&BgraFrame>,
     current: &BgraFrame,
     pending: &BTreeSet<TileCoord>,
     evidence: Evidence<'_>,
+    spanning: Option<Spanning<'_>>,
     params: &PlanParams,
     mut trace: Option<&mut PlanTrace>,
 ) -> Result<RegionPlan, IncrementalError> {
@@ -792,100 +1445,27 @@ fn plan_regions_recorded(
     }
 
     let bounds = current.bounds();
-    let full = |dirty, reason| {
-        Ok(RegionPlan {
-            dirty,
-            work: Work::FullRefresh(reason),
-        })
-    };
-    let mut regions = Vec::new();
-    // The padded regions, kept only to say which final region each component ended in.
-    let mut padded_boxes = Vec::new();
-    for component in connected_components(&dirty) {
-        let tight = component
-            .iter()
-            .map(|&t| grid.tile_box(t))
-            .reduce(|a, b| a.union(&b))
-            .expect("a component has at least one tile");
-        let padded = tight
-            .pad(params.halo_px)
-            .clip(&bounds)
-            .expect("a padded tile still overlaps the frame");
-        match halo_close(
-            padded,
-            evidence.supports,
-            evidence.relations,
-            bounds,
-            params.max_closure_rounds,
-        )? {
-            Closure::Closed(region) => {
-                if let Some(t) = trace.as_deref_mut() {
-                    t.components.push(ComponentTrace {
-                        tiles: component.len(),
-                        tight_area_px: tight.area(),
-                        padded_area_px: padded.area(),
-                        closed_area_px: region.area(),
-                        largest_support_px: largest_evidence_px(&region, &evidence),
-                    });
-                    padded_boxes.push(padded);
-                }
-                regions.push(region);
-            }
-            Closure::BudgetExhausted => return full(dirty, FullRefreshReason::ClosureBudget),
-        }
-    }
-    // Merging can make a region touch new evidence, so close and merge until both hold.
-    loop {
-        let merged = merge_regions(&regions);
-        let mut closed = Vec::with_capacity(merged.len());
-        for region in &merged {
-            match halo_close(
-                *region,
+    // R0: without a declared band the plan is today's, bit for bit. (Without a base the diff
+    // already made it a full refresh.)
+    let work = match (spanning, base) {
+        (Some(spanning), Some(base)) => plan_spanning(
+            &grid, bounds, base, current, &dirty, pending, evidence, spanning, params, trace,
+        )?,
+        _ => {
+            close_and_decide(
+                &grid,
+                bounds,
+                &dirty,
                 evidence.supports,
                 evidence.relations,
-                bounds,
-                params.max_closure_rounds,
-            )? {
-                Closure::Closed(r) => closed.push(r),
-                Closure::BudgetExhausted => return full(dirty, FullRefreshReason::ClosureBudget),
-            }
+                None,
+                params,
+                trace,
+            )?
+            .work
         }
-        if closed == merged {
-            regions = merged;
-            break;
-        }
-        regions = closed;
-    }
-
-    if let Some(t) = trace {
-        t.regions = regions
-            .iter()
-            .zip(members_of(&regions, &padded_boxes))
-            .map(|(region, members)| RegionTrace {
-                area_px: region.area(),
-                components: members.len(),
-                // The union lies inside the region; the `min` only guards the last bit of
-                // rounding of a sum of differences.
-                pre_closure_area_px: union_area(&members).min(region.area()),
-                largest_support_px: largest_evidence_px(region, &evidence),
-            })
-            .collect();
-        t.covered_area_px = regions.iter().map(BBox::area).sum();
-    }
-    if regions.len() > params.max_regions {
-        return full(dirty, FullRefreshReason::TooManyRegions);
-    }
-    let covered: f64 = regions.iter().map(BBox::area).sum();
-    if covered > params.max_area_fraction * bounds.area() {
-        return full(dirty, FullRefreshReason::AreaBudget);
-    }
-    if params.adaptive_min_regions > 0 && regions.len() >= params.adaptive_min_regions {
-        return full(dirty, FullRefreshReason::AdaptiveCost);
-    }
-    Ok(RegionPlan {
-        dirty,
-        work: Work::Regions(regions),
-    })
+    };
+    Ok(RegionPlan { dirty, work })
 }
 
 #[cfg(test)]
@@ -2067,19 +2647,38 @@ mod plan_trace_tests {
             max_regions: _max_regions,
             decided_by: _decided_by,
             decisive_region: _decisive,
+            chosen: _chosen,
+            spanning: _spanning,
         } = PlanTrace::default();
+        let SpanningTrace {
+            surfaces_declared: _declared,
+            surfaces_spanned: _spanned,
+            largest_spanned_px: _largest_spanned,
+            whole_on_read_cut: _cut,
+            largest_whole_on_read_cut_px: _largest_cut,
+            relations_ignored: _ignored,
+            attempt_reason: _attempt,
+            classic: _classic,
+        } = SpanningTrace::default();
+        let ClassicTrace {
+            full_refresh_reason: _reason,
+            region_count: _region_count,
+            covered_area_px: _classic_covered,
+        } = ClassicTrace::default();
         let ComponentTrace {
             tiles: _tiles,
             tight_area_px: _tight,
             padded_area_px: _padded,
             closed_area_px: _closed,
             largest_support_px: _support,
+            largest_support_class: _support_class,
         } = ComponentTrace::default();
         let RegionTrace {
             area_px: _area,
             components: _members,
             pre_closure_area_px: _pre,
             largest_support_px: _largest,
+            largest_support_class: _largest_class,
         } = RegionTrace::default();
         assert!(components.is_empty() && regions.is_empty());
     }
@@ -2511,5 +3110,638 @@ mod plan_trace_tests {
                 );
             }
         }
+    }
+}
+
+/// UT-83 (ADR-0045): the support-aware closure. Rules R0 to R4, the band of a surface to the
+/// pixel, the cases measured on the lab's screen, and a property over generated inputs.
+#[cfg(test)]
+mod support_aware_tests {
+    use super::*;
+
+    fn bx(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
+        BBox::new(x0, y0, x1, y1).unwrap()
+    }
+
+    fn blank(w: u32, h: u32) -> BgraFrame {
+        BgraFrame::new(w, h, 4 * w as usize, 1, vec![0u8; 4 * (w * h) as usize]).unwrap()
+    }
+
+    /// `frame` with every pixel of `rect` (`x0, y0, x1, y1`) given the BGR value `v`.
+    fn painted(frame: &BgraFrame, rect: (u32, u32, u32, u32), v: u8) -> BgraFrame {
+        let mut buf = frame.pixels().to_vec();
+        for y in rect.1..rect.3 {
+            for x in rect.0..rect.2 {
+                let i = y as usize * frame.row_stride() + 4 * x as usize;
+                buf[i..i + 3].copy_from_slice(&[v, v, v]);
+            }
+        }
+        BgraFrame::new(frame.width(), frame.height(), frame.row_stride(), 1, buf).unwrap()
+    }
+
+    /// The product configuration (`adaptive_min_regions = 2`, a 40 % area budget).
+    fn product() -> PlanParams {
+        PlanParams {
+            adaptive_min_regions: 2,
+            ..PlanParams::default()
+        }
+    }
+
+    /// The evidence as the engine splits it: `supports` is the three lists, in that order.
+    struct Split {
+        cut_prone: Vec<BBox>,
+        surfaces: Vec<BBox>,
+        whole_on_read: Vec<BBox>,
+        relations: Vec<(BBox, BBox)>,
+        band: u32,
+    }
+
+    impl Split {
+        fn supports(&self) -> Vec<BBox> {
+            self.cut_prone
+                .iter()
+                .chain(&self.surfaces)
+                .chain(&self.whole_on_read)
+                .copied()
+                .collect()
+        }
+
+        fn spanning(&self) -> Spanning<'_> {
+            Spanning {
+                cut_prone: &self.cut_prone,
+                surfaces: &self.surfaces,
+                whole_on_read: &self.whole_on_read,
+                band_px: self.band,
+            }
+        }
+    }
+
+    /// Plans with and without the trace and requires the same plan.
+    fn plan(
+        base: &BgraFrame,
+        current: &BgraFrame,
+        pending: &BTreeSet<TileCoord>,
+        split: &Split,
+        on: bool,
+        params: &PlanParams,
+    ) -> (RegionPlan, PlanTrace) {
+        let supports = split.supports();
+        let evidence = Evidence {
+            supports: &supports,
+            relations: &split.relations,
+        };
+        let spanning = on.then(|| split.spanning());
+        let plain =
+            plan_regions_with(Some(base), current, pending, evidence, spanning, params).unwrap();
+        let (traced, trace) =
+            plan_regions_with_traced(Some(base), current, pending, evidence, spanning, params)
+                .unwrap();
+        assert_eq!(plain, traced, "the traced plan must be the plan");
+        (plain, trace)
+    }
+
+    fn regions(work: &Work) -> &[BBox] {
+        match work {
+            Work::Regions(rs) => rs,
+            _ => panic!("expected regions, got {work:?}"),
+        }
+    }
+
+    fn covered(work: &Work) -> f64 {
+        regions(work).iter().map(BBox::area).sum()
+    }
+
+    const W: u32 = 1920;
+    const H: u32 = 1200;
+    const FRAME: f64 = 1920.0 * 1200.0;
+
+    /// The UI Automation Document of a maximised Notepad (section 2 of the unit: 1920 x 983
+    /// rows, 81.92 % of the frame).
+    fn document() -> BBox {
+        bx(0.0, 99.0, 1920.0, 1082.0)
+    }
+
+    /// The flat-region surface of a Notepad window at its default size (1426 x 811, 49.81 %
+    /// of a 1920 x 1200 frame before it was rounded to whole rows).
+    fn window_surface() -> BBox {
+        bx(247.0, 195.0, 1673.0, 1006.0)
+    }
+
+    fn only(cut_prone: Vec<BBox>, surfaces: Vec<BBox>, whole_on_read: Vec<BBox>) -> Split {
+        Split {
+            cut_prone,
+            surfaces,
+            whole_on_read,
+            relations: Vec::new(),
+            band: 4,
+        }
+    }
+
+    /// (3) Scene (e): a caret blinking inside the maximised Document. Classic: the closure
+    /// takes the Document, 81.92 %, `area_budget`. Support-aware: one region under 5 %.
+    #[test]
+    fn ut_83_a_caret_inside_a_maximised_document_stays_one_small_region() {
+        let base = blank(W, H);
+        let current = painted(&base, (300, 400, 302, 418), 200);
+        let split = only(
+            vec![bx(0.0, 49.0, 400.0, 80.0)],
+            Vec::new(),
+            vec![document()],
+        );
+        let (classic, _) = plan(&base, &current, &BTreeSet::new(), &split, false, &product());
+        assert_eq!(
+            classic.work,
+            Work::FullRefresh(FullRefreshReason::AreaBudget)
+        );
+        let (aware, trace) = plan(&base, &current, &BTreeSet::new(), &split, true, &product());
+        assert_eq!(regions(&aware.work).len(), 1);
+        assert!(covered(&aware.work) < 0.05 * FRAME, "{aware:?}");
+        assert_eq!(trace.chosen, PlanChoice::Spanning);
+        assert_eq!(
+            trace.regions[0].largest_support_class,
+            Some(SupportClass::WholeOnRead)
+        );
+        let s = trace.spanning.unwrap();
+        assert_eq!((s.whole_on_read_cut, s.classic), (1, None));
+        assert!((s.largest_whole_on_read_cut_px - document().area()).abs() < 1e-9);
+    }
+
+    /// (3) Scene (c): the clock in the taskbar; its padded box meets the Document's bottom.
+    /// Classic: 91.75 % (the Document and the clock's box). Support-aware: under 15 %.
+    #[test]
+    fn ut_83_a_clock_tick_next_to_the_document_stays_small() {
+        let base = blank(W, H);
+        let current = painted(&base, (1850, 1100, 1890, 1180), 200);
+        let split = only(Vec::new(), Vec::new(), vec![document()]);
+        let (classic, trace) = plan(&base, &current, &BTreeSet::new(), &split, false, &product());
+        assert_eq!(
+            classic.work,
+            Work::FullRefresh(FullRefreshReason::AreaBudget)
+        );
+        assert!((trace.covered_area_px / FRAME - 0.9175).abs() < 1e-3);
+        let (aware, trace) = plan(&base, &current, &BTreeSet::new(), &split, true, &product());
+        assert_eq!(regions(&aware.work).len(), 1);
+        assert!(covered(&aware.work) < 0.15 * FRAME, "{aware:?}");
+        assert_eq!(trace.chosen, PlanChoice::Spanning);
+    }
+
+    /// (3) Scene S4: a caret inside a window-sized flat surface. Spanned while its band is
+    /// unchanged: one region under 5 %.
+    #[test]
+    fn ut_83_a_caret_inside_a_window_surface_spans_the_surface() {
+        let base = blank(W, H);
+        let current = painted(&base, (700, 500, 702, 518), 200);
+        let split = only(Vec::new(), vec![window_surface()], Vec::new());
+        let (classic, _) = plan(&base, &current, &BTreeSet::new(), &split, false, &product());
+        assert_eq!(
+            classic.work,
+            Work::FullRefresh(FullRefreshReason::AreaBudget)
+        );
+        let (aware, trace) = plan(&base, &current, &BTreeSet::new(), &split, true, &product());
+        assert!(covered(&aware.work) < 0.05 * FRAME, "{aware:?}");
+        let s = trace.spanning.unwrap();
+        assert_eq!((s.surfaces_declared, s.surfaces_spanned), (1, 1));
+        assert!((s.largest_spanned_px - window_surface().area()).abs() < 1e-9);
+        assert_eq!(
+            trace.regions[0].largest_support_class,
+            Some(SupportClass::Surface)
+        );
+    }
+
+    /// R0: without `Spanning` (a detector that declares no band) the plan is `plan_regions`'s.
+    #[test]
+    fn ut_83_without_spanning_the_plan_is_todays() {
+        let base = blank(W, H);
+        let current = painted(&base, (700, 500, 702, 518), 200);
+        let split = only(Vec::new(), vec![window_surface()], vec![document()]);
+        let supports = split.supports();
+        let evidence = Evidence {
+            supports: &supports,
+            relations: &[],
+        };
+        let today = plan_regions(
+            Some(&base),
+            &current,
+            &BTreeSet::new(),
+            evidence,
+            &product(),
+        )
+        .unwrap();
+        let (off, trace) = plan(&base, &current, &BTreeSet::new(), &split, false, &product());
+        assert_eq!(today, off);
+        assert_eq!((trace.chosen, trace.spanning), (PlanChoice::Classic, None));
+        assert!(
+            trace
+                .components
+                .iter()
+                .all(|c| c.largest_support_class.is_none())
+        );
+    }
+
+    /// The surface for the band tests: 200 x 200 inside a 512 x 512 frame, band 4.
+    fn band_surface() -> BBox {
+        bx(100.0, 100.0, 300.0, 300.0)
+    }
+
+    fn closes_over_surface(current: &BgraFrame, pending: &BTreeSet<TileCoord>) -> bool {
+        let base = blank(512, 512);
+        let split = only(Vec::new(), vec![band_surface()], Vec::new());
+        let params = PlanParams::default();
+        let (aware, _) = plan(&base, current, pending, &split, true, &params);
+        match aware.work {
+            Work::Regions(rs) => rs.iter().any(|r| r.contains(&band_surface())),
+            Work::FullRefresh(_) => true,
+            Work::Nothing => false,
+        }
+    }
+
+    /// (4) The band to the pixel: a changed pixel at distance `b - 1` inside the edge is in
+    /// the band and closes over the surface; at distance `b` it is inside and does not; one
+    /// `b` px outside the edge (the last band pixel) closes over it, one further does not.
+    #[test]
+    fn ut_83_the_band_is_exact_to_the_pixel() {
+        let base = blank(512, 512);
+        let none = BTreeSet::new();
+        let at = |x: u32, y: u32| painted(&base, (x, y, x + 1, y + 1), 255);
+        assert!(closes_over_surface(&at(103, 200), &none), "inside, b - 1");
+        assert!(!closes_over_surface(&at(104, 200), &none), "inside, b");
+        assert!(
+            closes_over_surface(&at(296, 200), &none),
+            "inside right, b - 1"
+        );
+        assert!(
+            !closes_over_surface(&at(295, 200), &none),
+            "inside right, b"
+        );
+        assert!(closes_over_surface(&at(96, 200), &none), "outside, b");
+        assert!(!closes_over_surface(&at(95, 200), &none), "outside, b + 1");
+        assert!(
+            closes_over_surface(&at(200, 303), &none),
+            "outside below, b"
+        );
+        assert!(
+            !closes_over_surface(&at(200, 304), &none),
+            "outside below, b + 1"
+        );
+    }
+
+    /// (4) A pending tile on the band closes over the surface; one inside the inner box does
+    /// not.
+    #[test]
+    fn ut_83_a_pending_tile_on_the_band_closes_over_the_surface() {
+        let base = blank(512, 512);
+        let on_band: BTreeSet<TileCoord> = [TileCoord::new(1, 2)].into_iter().collect();
+        let inside: BTreeSet<TileCoord> = [TileCoord::new(3, 3)].into_iter().collect();
+        assert!(closes_over_surface(&base, &on_band));
+        assert!(!closes_over_surface(&base, &inside));
+    }
+
+    /// (4) A surface touching the frame's edge is closed over: whether it is background
+    /// depends on its pixels' mean colour, which a change inside it can move.
+    #[test]
+    fn ut_83_a_surface_on_the_frame_edge_is_closed_over() {
+        let base = blank(512, 512);
+        let current = painted(&base, (150, 200, 151, 201), 255);
+        let edge = bx(0.0, 100.0, 300.0, 300.0);
+        let split = only(Vec::new(), vec![edge], Vec::new());
+        let (aware, trace) = plan(
+            &base,
+            &current,
+            &BTreeSet::new(),
+            &split,
+            true,
+            &PlanParams::default(),
+        );
+        assert!(regions(&aware.work).iter().any(|r| r.contains(&edge)));
+        assert_eq!(trace.spanning.unwrap().surfaces_spanned, 0);
+        assert!(!band_unchanged(
+            &edge,
+            &base,
+            &current,
+            &TileGrid::for_frame(&current, 64).unwrap(),
+            &BTreeSet::new(),
+            4
+        ));
+    }
+
+    /// R2 (v): a region that covers a spanned surface's inner box closes over it, so a crop
+    /// never holds a box that repeats the surface without the surface.
+    #[test]
+    fn ut_83_a_region_covering_the_inner_box_closes_over_the_surface() {
+        let base = blank(256, 256);
+        let s = bx(100.0, 100.0, 140.0, 140.0);
+        // The whole inner box changes; the band does not.
+        let current = painted(&base, (104, 104, 136, 136), 255);
+        let split = only(Vec::new(), vec![s], Vec::new());
+        let params = PlanParams {
+            tile_size: 4,
+            halo_px: 0.0,
+            ..PlanParams::default()
+        };
+        let (aware, trace) = plan(&base, &current, &BTreeSet::new(), &split, true, &params);
+        assert_eq!(regions(&aware.work), &[s]);
+        assert_eq!(trace.spanning.unwrap().surfaces_spanned, 0);
+    }
+
+    /// (5) R3: a relation from the Document to a label word above it does not pull the
+    /// Document in; a relation from a cut-prone control still pulls its label.
+    #[test]
+    fn ut_83_a_relation_from_a_whole_on_read_box_does_not_pull_it_in() {
+        let base = blank(W, H);
+        let current = painted(&base, (900, 700, 902, 718), 200);
+        let label = bx(10.0, 60.0, 80.0, 80.0);
+        let mut split = only(vec![label], Vec::new(), vec![document()]);
+        split.relations = vec![(document(), label)];
+        let (aware, trace) = plan(&base, &current, &BTreeSet::new(), &split, true, &product());
+        assert!(covered(&aware.work) < 0.05 * FRAME, "{aware:?}");
+        assert!(!regions(&aware.work)[0].overlaps(&label));
+        assert_eq!(trace.spanning.unwrap().relations_ignored, 1);
+
+        let control = bx(880.0, 690.0, 960.0, 730.0);
+        let far = bx(1500.0, 300.0, 1560.0, 320.0);
+        let mut split = only(vec![control, far], Vec::new(), vec![document()]);
+        split.relations = vec![(control, far)];
+        let (aware, trace) = plan(&base, &current, &BTreeSet::new(), &split, true, &product());
+        assert!(regions(&aware.work)[0].contains(&far), "{aware:?}");
+        assert_eq!(trace.spanning.unwrap().relations_ignored, 0);
+    }
+
+    /// R4: when the support-aware plan is a full refresh the classic plan runs, with its own
+    /// reason, and the trace keeps both.
+    #[test]
+    fn ut_83_a_support_aware_full_refresh_gives_way_to_the_classic_plan() {
+        let base = blank(W, H);
+        // Five small changes far apart: five regions either way, `too_many_regions`.
+        let mut current = base.clone();
+        for x in [100, 500, 900, 1300, 1700] {
+            current = painted(&current, (x, 600, x + 2, 618), 200);
+        }
+        let split = only(Vec::new(), Vec::new(), vec![document()]);
+        let (classic, _) = plan(&base, &current, &BTreeSet::new(), &split, false, &product());
+        let (aware, trace) = plan(&base, &current, &BTreeSet::new(), &split, true, &product());
+        assert_eq!(aware, classic);
+        assert_eq!(trace.chosen, PlanChoice::Classic);
+        let s = trace.spanning.unwrap();
+        assert_eq!(s.attempt_reason, Some(FullRefreshReason::TooManyRegions));
+        assert_eq!(trace.decided_by, Some(FullRefreshReason::TooManyRegions));
+        let c = s.classic.unwrap();
+        assert_eq!(c.full_refresh_reason, Some(FullRefreshReason::AreaBudget));
+        assert_eq!(c.region_count, 1);
+    }
+
+    /// Out-of-frame boxes in the split are an error, as they are in the classic closure.
+    #[test]
+    fn ut_83_split_boxes_outside_the_frame_are_rejected() {
+        let base = blank(256, 256);
+        let current = painted(&base, (10, 10, 11, 11), 255);
+        let split = only(Vec::new(), vec![bx(200.0, 200.0, 300.0, 300.0)], Vec::new());
+        let supports = split.supports();
+        let evidence = Evidence {
+            supports: &supports,
+            relations: &[],
+        };
+        assert_eq!(
+            plan_regions_with(
+                Some(&base),
+                &current,
+                &BTreeSet::new(),
+                evidence,
+                Some(split.spanning()),
+                &PlanParams::default()
+            ),
+            Err(IncrementalError::SupportOutOfBounds)
+        );
+    }
+
+    /// The band check stays in range at the largest frame the engine accepts.
+    #[test]
+    fn ut_83_the_band_check_holds_at_the_pixel_bound() {
+        for (w, h) in [(20_000, 1_000), (1_000, 20_000)] {
+            let base = blank(w, h);
+            let current = painted(&base, (w / 2, h / 2, w / 2 + 1, h / 2 + 1), 9);
+            let grid = TileGrid::for_frame(&current, 64).unwrap();
+            let s = bx(1.0, 1.0, f64::from(w) - 1.0, f64::from(h) - 1.0);
+            assert!(!band_unchanged(
+                &s,
+                &base,
+                &current,
+                &grid,
+                &BTreeSet::new(),
+                u32::MAX
+            ));
+            assert!(band_unchanged(
+                &s,
+                &base,
+                &current,
+                &grid,
+                &BTreeSet::new(),
+                4
+            ));
+            let edge = painted(&current, (0, 0, 1, 1), 9);
+            assert!(!band_unchanged(
+                &s,
+                &base,
+                &edge,
+                &grid,
+                &BTreeSet::new(),
+                4
+            ));
+        }
+    }
+
+    /// splitmix64 (as UT-08): the same inputs on every run.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: u32) -> u32 {
+            (self.next_u64() % u64::from(n.max(1))) as u32
+        }
+    }
+
+    /// A box with whole-pixel corners inside `w x h`.
+    fn random_box(rng: &mut Rng, w: u32, h: u32, max_side: u32) -> BBox {
+        let bw = 1 + rng.below(max_side.min(w));
+        let bh = 1 + rng.below(max_side.min(h));
+        let x = rng.below(w - bw + 1);
+        let y = rng.below(h - bh + 1);
+        bx(
+            f64::from(x),
+            f64::from(y),
+            f64::from(x + bw),
+            f64::from(y + bh),
+        )
+    }
+
+    fn shuffled<T: Clone>(rng: &mut Rng, items: &[T]) -> Vec<T> {
+        let mut out = items.to_vec();
+        for i in (1..out.len()).rev() {
+            let j = rng.below(i as u32 + 1) as usize;
+            out.swap(i, j);
+        }
+        out
+    }
+
+    /// (1) and (2): on generated frames, boxes, relations and pending tiles,
+    /// - with no surface and no accessibility box the plan is the classic plan;
+    /// - every final region contains every cut-prone box it meets, and every surface it meets
+    ///   without containing has an unchanged band and an inner box no region covers (I1);
+    /// - permuting the boxes and the relations does not change the plan;
+    /// - R4: never a full refresh where the classic plan is regional, every region inside a
+    ///   classic region, never more covered area; a full refresh is the classic plan's.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn ut_83_property_the_support_aware_plan_keeps_i1_and_is_never_worse() {
+        const SEED: u64 = 0x5EED_0083;
+        let mut rng = Rng(SEED);
+        let mut spanning_regional = 0;
+        let mut spanned_met = 0;
+        let mut cases = 0;
+        for round in 0..400 {
+            let (w, h) = [(256, 192), (320, 320), (640, 400), (97, 61)][round % 4];
+            let tile = [16, 32, 64][round / 4 % 3];
+            let params = PlanParams {
+                tile_size: tile,
+                halo_px: f64::from([0, 4, 16, 32][round / 12 % 4]),
+                max_regions: 4,
+                max_area_fraction: [0.4, 0.9][round / 48 % 2],
+                adaptive_min_regions: [0, 2][round / 96 % 2],
+                ..PlanParams::default()
+            };
+            let band = [1, 4, 9][round % 3];
+            let base = blank(w, h);
+            let mut current = base.clone();
+            for _ in 0..rng.below(4) {
+                let b = random_box(&mut rng, w, h, 12);
+                current = painted(
+                    &current,
+                    (b.x0() as u32, b.y0() as u32, b.x1() as u32, b.y1() as u32),
+                    1 + rng.below(250) as u8,
+                );
+            }
+            let grid = TileGrid::for_frame(&current, tile).unwrap();
+            let pending: BTreeSet<TileCoord> = (0..rng.below(2))
+                .map(|_| TileCoord::new(rng.below(grid.cols()), rng.below(grid.rows())))
+                .collect();
+            let n = |rng: &mut Rng, k| (0..rng.below(k)).collect::<Vec<_>>();
+            let cut_prone: Vec<BBox> = n(&mut rng, 6)
+                .into_iter()
+                .map(|_| random_box(&mut rng, w, h, 40))
+                .collect();
+            let surfaces: Vec<BBox> = n(&mut rng, 4)
+                .into_iter()
+                .map(|_| random_box(&mut rng, w, h, w.max(h)))
+                .collect();
+            let whole_on_read: Vec<BBox> = n(&mut rng, 3)
+                .into_iter()
+                .map(|_| random_box(&mut rng, w, h, w.max(h)))
+                .collect();
+            let all: Vec<BBox> = cut_prone
+                .iter()
+                .chain(&surfaces)
+                .chain(&whole_on_read)
+                .copied()
+                .collect();
+            let relations: Vec<(BBox, BBox)> = if all.len() >= 2 {
+                (0..rng.below(3))
+                    .map(|_| {
+                        (
+                            all[rng.below(all.len() as u32) as usize],
+                            all[rng.below(all.len() as u32) as usize],
+                        )
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let split = Split {
+                cut_prone: cut_prone.clone(),
+                surfaces: surfaces.clone(),
+                whole_on_read: whole_on_read.clone(),
+                relations: relations.clone(),
+                band,
+            };
+            cases += 1;
+            let (classic, _) = plan(&base, &current, &pending, &split, false, &params);
+            let (aware, _) = plan(&base, &current, &pending, &split, true, &params);
+
+            // (1) Spanning with nothing to span is the classic plan.
+            let plain = Split {
+                cut_prone: split.supports(),
+                surfaces: Vec::new(),
+                whole_on_read: Vec::new(),
+                relations: relations.clone(),
+                band,
+            };
+            assert_eq!(
+                plan(&base, &current, &pending, &plain, true, &params).0,
+                classic,
+                "round {round}"
+            );
+
+            // Permutations.
+            let permuted = Split {
+                cut_prone: shuffled(&mut rng, &cut_prone),
+                surfaces: shuffled(&mut rng, &surfaces),
+                whole_on_read: shuffled(&mut rng, &whole_on_read),
+                relations: shuffled(&mut rng, &relations),
+                band,
+            };
+            assert_eq!(
+                plan(&base, &current, &pending, &permuted, true, &params).0,
+                aware,
+                "round {round}: order"
+            );
+
+            if let Work::FullRefresh(_) = aware.work {
+                assert_eq!(aware, classic, "round {round}: R4");
+            }
+            if let Work::Regions(rs) = &aware.work {
+                spanning_regional += 1;
+                if let Work::Regions(cs) = &classic.work {
+                    let total = |v: &[BBox]| v.iter().map(BBox::area).sum::<f64>();
+                    assert!(total(rs) <= total(cs) + 1e-9, "round {round}: area");
+                    for r in rs {
+                        assert!(cs.iter().any(|c| c.contains(r)), "round {round}: inside");
+                    }
+                }
+                for r in rs {
+                    for c in &cut_prone {
+                        assert!(!r.overlaps(c) || r.contains(c), "round {round}: I1");
+                    }
+                    for s in &surfaces {
+                        if r.overlaps(s) && !r.contains(s) {
+                            spanned_met += 1;
+                            assert!(!holds(&sorted(&cut_prone), s));
+                            assert!(
+                                band_unchanged(s, &base, &current, &grid, &pending, band),
+                                "round {round}: a cut surface with a changed band"
+                            );
+                            let inner = shrunk(s, band).unwrap();
+                            assert!(
+                                rs.iter()
+                                    .all(|q| !pixel_box_contains(covered_pixels(q), inner))
+                            );
+                        }
+                    }
+                }
+            }
+            if aware.work == Work::Nothing {
+                assert_eq!(classic.work, Work::Nothing);
+            }
+        }
+        assert_eq!(cases, 400);
+        assert!(spanning_regional > 100, "only {spanning_regional} regional");
+        assert!(
+            spanned_met > 20,
+            "only {spanned_met} surfaces spanned by a region"
+        );
     }
 }

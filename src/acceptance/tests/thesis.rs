@@ -54,8 +54,8 @@ use ommatix_domain::identity::{
     Registry, TargetId,
 };
 use ommatix_domain::incremental::{
-    BgraFrame, Closure, Evidence, FullRefreshReason, PlanParams, RegionPlan, TileCoord, Work,
-    halo_close, plan_regions,
+    BgraFrame, Closure, Evidence, FullRefreshReason, PlanParams, PlanTrace, RegionPlan, Spanning,
+    TileCoord, Work, halo_close, plan_regions, plan_regions_with_traced,
 };
 use ommatix_domain::snapshot::{CommitError, SnapshotStore, Staged, StoreState};
 use serde_json::{Value, json};
@@ -68,7 +68,8 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
     "BDD-37", "BDD-38", "BDD-39", "BDD-40", "BDD-41", "BDD-42", "BDD-43", "BDD-44", "BDD-45",
     "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52", "BDD-53", "BDD-54",
-    "BDD-55", "BDD-56", "BDD-57", "BDD-58", "BDD-59", "BDD-60", "BDD-61", "BDD-62",
+    "BDD-55", "BDD-56", "BDD-57", "BDD-58", "BDD-59", "BDD-60", "BDD-61", "BDD-62", "BDD-75",
+    "BDD-76",
 ];
 
 #[derive(Debug, Default, World)]
@@ -76,6 +77,9 @@ struct Engine {
     store: SnapshotStore<Vec<String>>,
     current: Option<BgraFrame>,
     supports: Vec<BBox>,
+    /// Detector surfaces of the last evidence (ADR-0045), besides `supports`.
+    surfaces: Vec<BBox>,
+    trace: Option<PlanTrace>,
     params: PlanParams,
     plan: Option<RegionPlan>,
     staged: Vec<Staged<Vec<String>>>,
@@ -180,6 +184,37 @@ impl Engine {
 
     fn base(&self) -> &BgraFrame {
         self.store.base().expect("a committed base")
+    }
+
+    /// The support-aware plan (ADR-0045) with a detector that declares a 4 px band: the
+    /// supports are cut-prone, the surfaces are surfaces.
+    fn plan_spanning(&mut self) -> &RegionPlan {
+        let current = self.current.as_ref().expect("a current frame");
+        let all: Vec<BBox> = self
+            .supports
+            .iter()
+            .chain(&self.surfaces)
+            .copied()
+            .collect();
+        let (plan, trace) = plan_regions_with_traced(
+            self.store.base(),
+            current,
+            self.store.pending_dirty(),
+            Evidence {
+                supports: &all,
+                relations: &[],
+            },
+            Some(Spanning {
+                cut_prone: &self.supports,
+                surfaces: &self.surfaces,
+                whole_on_read: &[],
+                band_px: 4,
+            }),
+            &self.params,
+        )
+        .expect("valid plan input");
+        self.trace = Some(trace);
+        self.plan.insert(plan)
     }
 
     fn plan(&mut self) -> &RegionPlan {
@@ -419,6 +454,80 @@ fn full_refresh_without_dropping(e: &mut Engine) {
         Work::FullRefresh(FullRefreshReason::ClosureBudget)
     );
     assert_eq!(plan.dirty, tiles(&[(0, 0), (14, 7)]));
+}
+
+/// The surface of a Notepad window at its default size on a 1920x1200 screen (ADR-0045).
+fn window_surface() -> BBox {
+    bx(247.0, 195.0, 1673.0, 1006.0)
+}
+
+#[given("una ventana cuya superficie el detector declara entera y una base confirmada")]
+fn window_surface_and_base(e: &mut Engine) {
+    e.commit_base(blank(1920, 1200, 0));
+    e.surfaces = vec![window_surface()];
+    e.params = PlanParams {
+        adaptive_min_regions: 2,
+        ..PlanParams::default()
+    };
+}
+
+#[when("parpadea el cursor dentro de la ventana, lejos de su borde")]
+fn caret_blinks_inside(e: &mut Engine) {
+    let mut frame = e.base().clone();
+    for y in 500..518 {
+        frame = with_pixel(&frame, 700, y);
+    }
+    e.current = Some(frame);
+    e.plan_spanning();
+}
+
+#[then("se reanaliza una región pequeña y la superficie de la ventana se conserva")]
+fn small_region_surface_kept(e: &mut Engine) {
+    let plan = e.planned();
+    let Work::Regions(regions) = &plan.work else {
+        panic!("expected regions, got {:?}", plan.work);
+    };
+    assert_eq!(regions.len(), 1);
+    assert!(regions[0].area() < 0.05 * 1920.0 * 1200.0, "{regions:?}");
+    // The region meets the surface without containing it: the merge keeps the surface.
+    assert!(regions[0].overlaps(&window_surface()) && !regions[0].contains(&window_surface()));
+    let spanning = e
+        .trace
+        .as_ref()
+        .and_then(|t| t.spanning)
+        .expect("support-aware");
+    assert_eq!(spanning.surfaces_spanned, 1);
+    // The classic closure, over every support, would have read the window: a full refresh.
+    e.supports.extend(e.surfaces.clone());
+    assert_eq!(
+        e.plan().work,
+        Work::FullRefresh(FullRefreshReason::AreaBudget)
+    );
+}
+
+#[when("cambia un píxel a menos de la banda declarada del borde de la ventana")]
+fn pixel_changes_on_the_band(e: &mut Engine) {
+    // Two pixels inside the left edge: within the 4 px band.
+    e.current = Some(with_pixel(e.base(), 249, 600));
+    e.plan_spanning();
+}
+
+#[then("la región reanalizada contiene la superficie entera")]
+fn region_contains_surface(e: &mut Engine) {
+    let plan = e.planned();
+    let contains = match &plan.work {
+        Work::Regions(regions) => regions.iter().any(|r| r.contains(&window_surface())),
+        // The whole frame is re-analysed.
+        Work::FullRefresh(_) => true,
+        Work::Nothing => false,
+    };
+    assert!(contains, "{:?}", plan.work);
+    let spanning = e
+        .trace
+        .as_ref()
+        .and_then(|t| t.spanning)
+        .expect("support-aware");
+    assert_eq!(spanning.surfaces_spanned, 0, "the surface is closed over");
 }
 
 // ---- 02_fusion.feature ----

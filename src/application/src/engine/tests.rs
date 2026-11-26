@@ -2764,6 +2764,7 @@ mod occluders;
 mod purge;
 mod security;
 mod snapshot_age;
+mod spanning;
 mod stop;
 mod typing;
 mod window_scope;

@@ -38,3 +38,15 @@ Característica: Percepción incremental consistente
     Dado regiones cuyo cierre supera el presupuesto configurado
     Cuando se selecciona el plan de percepción
     Entonces se elige refresco completo sin omitir cambios
+
+  @BDD-75 @RF-03 @UT-83
+  Escenario: BDD-75 Un parpadeo del cursor dentro de una ventana no relee la ventana
+    Dado una ventana cuya superficie el detector declara entera y una base confirmada
+    Cuando parpadea el cursor dentro de la ventana, lejos de su borde
+    Entonces se reanaliza una región pequeña y la superficie de la ventana se conserva
+
+  @BDD-76 @RF-03 @UT-83
+  Escenario: BDD-76 Un cambio en el borde de una superficie la relee entera
+    Dado una ventana cuya superficie el detector declara entera y una base confirmada
+    Cuando cambia un píxel a menos de la banda declarada del borde de la ventana
+    Entonces la región reanalizada contiene la superficie entera

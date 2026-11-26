@@ -28,7 +28,8 @@
 | `--session-id ID` | 1–64 visible ASCII characters, for reproducible output; with live input a fixed ID is refused at start (chapter 08 §8.4) | derived from the start time and the process ID |
 | `--legacy` | also serve the legacy MCP profile 2025-11-25 (like `[mcp] legacy_enabled = true`) | off |
 | `--observations N` (`demo` only) | 1–20 | 3 |
-| `--plan-trace` (`demo` only) | also write one line per observation to stderr, a failed observation included: `ommatix-plan-trace` and a JSON object (schema `ommatix.plan-trace/1`) with why the planner chose that work, as counts and areas only; every field is defined [below](#the---plan-trace-line). No pixel, text or coordinate; never on stdout, and no MCP client can ask for it | off |
+| `--plan-trace` (`demo` only) | also write one line per observation to stderr, a failed observation included: `ommatix-plan-trace` and a JSON object (schema `ommatix.plan-trace/2`) with why the planner chose that work, as counts, areas and class names only; every field is defined [below](#the---plan-trace-line). No pixel, text or coordinate; never on stdout, and no MCP client can ask for it | off |
+| `--plan-check` (`demo` only) | also compare each regional observation with a full read of the same frame, run after the observation is committed, and write one line per observation to stderr: `ommatix-plan-check` and a JSON object (schema `ommatix.plan-check/1`) with how many boxes each read has and the other lacks ([ADR-0045](../adr/0045-support-aware-closure.md)); every field is defined [below](#the---plan-check-line). A diagnostic of the operator's: it runs perception a second time, so a regional observation costs about twice as much, and its time is never reported as the observation's. Counts only; never on stdout, and no MCP client can ask for it | off |
 
 ### The `--plan-trace` line
 
@@ -40,7 +41,7 @@ did not get to measure the field (see "When it is `null` or empty").
 
 | Field | Unit | Meaning |
 |---|---|---|
-| `schema` | text | `ommatix.plan-trace/1` |
+| `schema` | text | `ommatix.plan-trace/2` (schema 1, before [ADR-0045](../adr/0045-support-aware-closure.md), had no `chosen`, `spanning`, `component_support_classes` or `region_support_classes`) |
 | `observation_id` | number | the observation's position in this `demo` run, from 1 (as in `--timings`) |
 | `outcome` | text | `ok`, or `error` when the observation failed (nothing was published) |
 | `error_code` | text | the contract's error code of a failed observation (for example `CAPTURE_UNAVAILABLE`); `null` when `outcome` is `ok` |
@@ -56,7 +57,7 @@ did not get to measure the field (see "When it is `null` or empty").
 | `components[].tight_area_px` | pixels, one box | the box around the group's tiles, before the halo |
 | `components[].padded_area_px` | pixels, one box | that box after the halo, clipped to the frame: the region **before** the closure |
 | `components[].closed_area_px` | pixels, one box | the region **after** the closure |
-| `components[].largest_support_px` | pixels, one box | the largest evidence box (a detected control, a word, an accessibility element, or a member of a relation) that the closed region overlaps; `0` when none |
+| `components[].largest_support_px` | pixels, one box | the largest evidence box (a detected control, a word, an accessibility element, or a member of a relation) that the closed region overlaps; `0` when none. Under the classic closure the region contains it; under the support-aware closure it may be a spanned surface or an accessibility box that the region overlaps without containing |
 | `regions` | list | the plan's final regions after merging and the last closure, in the plan's order |
 | `regions[].area_px` | pixels, one box | the region |
 | `regions[].components` | count | how many groups ended in this region |
@@ -67,10 +68,26 @@ did not get to measure the field (see "When it is `null` or empty").
 | `max_regions` | count | `[engine] max_regions`, the most regions a regional plan may have |
 | `decided_by` | text | the check that made the plan a full refresh (the same names as `full_refresh_reason`); `null` for an idle or regional plan |
 | `decisive_region` | index | for `area_budget`: the 0-based index in `regions` of the largest region (the first on a tie); `null` otherwise |
+| `chosen` | text | which closure made the plan that ran: `spanning` (the support-aware closure of [ADR-0045](../adr/0045-support-aware-closure.md)) or `classic` (no detector band declared, a plan decided before any region, or rule R4 gave way to the classic plan) |
+| `spanning` | object | what the support-aware closure did, when it ran; `null` when it did not (the detector declares no surfaces, or the plan was decided before any region). When it ran and R4 gave way to the classic plan, `components`, `regions`, `covered_area_px`, `decided_by` and `decisive_region` describe the support-aware attempt, and `spanning.classic` the plan that ran |
+| `spanning.surfaces_declared` | count | distinct surfaces the detector declared in the last evidence |
+| `spanning.surfaces_spanned` | count | of those, the ones spanned (not closed over) |
+| `spanning.largest_spanned_px` | pixels, one box | the largest spanned surface; `0` when none |
+| `spanning.whole_on_read_cut` | count | accessibility boxes that a final region overlaps without containing (rule R1: they are re-read whole) |
+| `spanning.largest_whole_on_read_cut_px` | pixels, one box | the largest of those; `0` when none |
+| `spanning.relations_ignored` | count | relations the closure ignored because their control is a spanned surface or an accessibility box (rule R3) |
+| `spanning.attempt_reason` | text | the reason the support-aware attempt was a full refresh (the names of `full_refresh_reason`); `null` when it was regional |
+| `spanning.classic` | object | the classic plan, when rule R4 computed and ran it; `null` otherwise |
+| `spanning.classic.work` | text | `full` or `regions` |
+| `spanning.classic.full_refresh_reason` | text | its reason; `null` when regional |
+| `spanning.classic.region_count` | count | the regions its closure produced (what the region budget compared); `0` when the closure ran out of rounds |
+| `spanning.classic.covered_area_px` | pixels, sum | the sum of their areas (what the area budget compared) |
+| `component_support_classes` | list | for each entry of `components`, in order, the class of its `largest_support_px` box: `cut_prone` (a box a region must contain whole), `surface` (a detector surface) or `whole_on_read` (an accessibility box); `null` when it touches none or the closure was the classic one without a split of the evidence |
+| `region_support_classes` | list | the same for each entry of `regions` |
 
 **When it is `null` or empty.** A failed observation publishes nothing, so its line carries only
 `schema`, `observation_id`, `outcome` and `error_code`: every other field is `null`, and `components`
-and `regions` are `[]`. A full refresh decided before any region exists (`no_committed_base`,
+and `regions` are `[]` (`component_support_classes` and `region_support_classes` are `null`). A full refresh decided before any region exists (`no_committed_base`,
 `geometry_changed`, `experimental_baseline`) has `components` and `regions` empty and
 `covered_area_px` `0`; so has `closure_budget`, whose component that ran out of rounds leaves no
 entry. `covered_area_px` and `regions` are filled once the regions are merged, so they are also filled
@@ -79,7 +96,31 @@ for `too_many_regions`. An idle plan has both lists empty.
 To tell why a full refresh happened, compare a component's `padded_area_px` with its `closed_area_px`
 and the frame: a small `padded_area_px` with a large `closed_area_px` and `largest_support_px` means
 that the closure over a large evidence box made the region large; a `padded_area_px` that is already
-large means that the change itself was large.
+large means that the change itself was large. With schema 2 the class of that box says what it
+was: a `surface` or a `whole_on_read` box on a full refresh decided by the classic closure is a box
+the support-aware closure would have left out.
+
+### The `--plan-check` line
+
+Each line is `ommatix-plan-check ` and one JSON object (keys sorted), one per observation. After a
+**regional** observation is committed, the detector, the recogniser and the accessibility provider run
+again on the whole frame, and the two sets of evidence are compared box by box, as multisets. A box
+"at a spanned or whole-on-read box" overlaps a surface the closure spanned (a region met it without
+containing it) or an accessibility box a region met: where [ADR-0045](../adr/0045-support-aware-closure.md)
+changed what a regional observation keeps. Its counts there must be `0`; counts elsewhere come from
+perception that is not local (OCR reads lines in context: limit L3).
+
+| Field | Unit | Meaning |
+|---|---|---|
+| `schema` | text | `ommatix.plan-check/1` |
+| `observation_id`, `outcome`, `error_code`, `work` | | as in the `--plan-trace` line |
+| `checked` | boolean | `true` when the comparison ran: the observation was regional and the full read succeeded |
+| `full_truncated` | boolean | the full read's accessibility walk ended on its budget, so its absences prove nothing; `null` when not checked |
+| `only_regional` | object | boxes in the regional observation's evidence and not in the full read's; `null` when not checked |
+| `only_full` | object | boxes in the full read's evidence and not in the regional observation's; `null` when not checked |
+| `….controls`, `….words`, `….accessibility` | object | per kind of evidence |
+| `….at_spanned_or_whole_on_read` | count | of those boxes, the ones that overlap a spanned surface or an accessibility box a region met |
+| `….elsewhere` | count | the others |
 
 ## Configuration file
 

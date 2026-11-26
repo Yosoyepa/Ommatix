@@ -8,11 +8,20 @@
 //! on the run, so they never reach stdout, and no label is written, only its signature.
 //!
 //! With `--plan-trace`, each observation also writes one line to stderr (`ommatix-plan-trace`
-//! followed by a JSON object, schema `ommatix.plan-trace/1`): the numbers behind the plan's
+//! followed by a JSON object, schema `ommatix.plan-trace/2`): the numbers behind the plan's
 //! choice of work, counts and areas only. An observation that failed gets its line too, with
 //! `outcome` `error`, its code and nothing else measured, as `--timings` does. It is the
 //! planner's own record of why an observation was a full refresh; it is off unless asked for
 //! and no MCP client can reach it. Every field is defined in `docs/guide/configuration.md`.
+//! Schema 2 (ADR-0045) adds which closure made the plan (`chosen`), what the support-aware
+//! closure did (`spanning`) and the class of each component's and region's largest support
+//! (`component_support_classes`, `region_support_classes`): counts, areas and class names.
+//!
+//! With `--plan-check`, each regional observation is also compared with a full read of the
+//! same frame, run after it is committed (its time is not the observation's), and one line
+//! goes to stderr (`ommatix-plan-check`, schema `ommatix.plan-check/1`): how many boxes of
+//! each kind one read has and the other lacks, split by whether they overlap a box ADR-0045
+//! lets a region meet without containing. Counts only.
 
 // `demo` is the one command whose output is meant for a human on stdout.
 #![allow(clippy::print_stdout)]
@@ -21,12 +30,12 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use ommatix_adapter_sim::{SimulatedDesktop, layout};
-use ommatix_application::Engine;
 use ommatix_application::contract::{
     ActionKind, ActionRequest, ElementView, ExpectedEffect, ObservePage, ObserveRequest, ToolError,
 };
+use ommatix_application::{CheckCount, CheckKinds, Engine, PlanCheck};
 use ommatix_domain::fusion::Actionability;
-use ommatix_domain::incremental::{FullRefreshReason, PlanTrace};
+use ommatix_domain::incremental::{FullRefreshReason, PlanTrace, SpanningTrace, SupportClass};
 use ommatix_domain::{Action, MouseButton};
 use serde_json::{Value, json};
 
@@ -34,7 +43,10 @@ use serde_json::{Value, json};
 const OBSERVATION_SCHEMA: &str = "ommatix.observation/1";
 
 /// The schema of the per-observation line written by `--plan-trace`.
-const PLAN_TRACE_SCHEMA: &str = "ommatix.plan-trace/1";
+const PLAN_TRACE_SCHEMA: &str = "ommatix.plan-trace/2";
+
+/// The schema of the per-observation line written by `--plan-check`.
+const PLAN_CHECK_SCHEMA: &str = "ommatix.plan-check/1";
 
 /// `TextNode` → `text_node`: the contract's spelling of a variant name.
 fn snake(debug: impl std::fmt::Debug) -> String {
@@ -243,6 +255,82 @@ fn plan_trace_record(n: u8, page: &ObservePage, trace: &PlanTrace) -> Value {
         "max_regions": trace.max_regions,
         "decided_by": trace.decided_by.map(FullRefreshReason::as_str),
         "decisive_region": trace.decisive_region,
+        "chosen": trace.chosen.as_str(),
+        "spanning": trace.spanning.as_ref().map(spanning_record),
+        "component_support_classes": trace
+            .components
+            .iter()
+            .map(|c| c.largest_support_class.map(SupportClass::as_str))
+            .collect::<Vec<_>>(),
+        "region_support_classes": trace
+            .regions
+            .iter()
+            .map(|r| r.largest_support_class.map(SupportClass::as_str))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// What the support-aware closure did (ADR-0045): counts, areas and reasons.
+fn spanning_record(s: &SpanningTrace) -> Value {
+    json!({
+        "surfaces_declared": s.surfaces_declared,
+        "surfaces_spanned": s.surfaces_spanned,
+        "largest_spanned_px": s.largest_spanned_px,
+        "whole_on_read_cut": s.whole_on_read_cut,
+        "largest_whole_on_read_cut_px": s.largest_whole_on_read_cut_px,
+        "relations_ignored": s.relations_ignored,
+        "attempt_reason": s.attempt_reason.map(FullRefreshReason::as_str),
+        "classic": s.classic.map(|c| json!({
+            "work": if c.full_refresh_reason.is_some() { "full" } else { "regions" },
+            "full_refresh_reason": c.full_refresh_reason.map(FullRefreshReason::as_str),
+            "region_count": c.region_count,
+            "covered_area_px": c.covered_area_px,
+        })),
+    })
+}
+
+fn check_kinds(k: &CheckKinds) -> Value {
+    let count = |c: &CheckCount| {
+        json!({
+            "at_spanned_or_whole_on_read": c.at_spanned_or_whole_on_read,
+            "elsewhere": c.elsewhere,
+        })
+    };
+    json!({
+        "controls": count(&k.controls),
+        "words": count(&k.words),
+        "accessibility": count(&k.accessibility),
+    })
+}
+
+/// One observation of `--plan-check`. `checked` is `false` (and the counts `null`) when no
+/// comparison ran: the observation was not regional, or the full read failed.
+fn plan_check_record(n: u8, page: &ObservePage, check: Option<&PlanCheck>) -> Value {
+    json!({
+        "schema": PLAN_CHECK_SCHEMA,
+        "observation_id": n,
+        "outcome": "ok",
+        "error_code": null,
+        "work": page.plan.work.as_str(),
+        "checked": check.is_some(),
+        "full_truncated": check.map(|c| c.full_truncated),
+        "only_regional": check.map(|c| check_kinds(&c.only_regional)),
+        "only_full": check.map(|c| check_kinds(&c.only_full)),
+    })
+}
+
+/// The `--plan-check` line of an observation that failed.
+fn plan_check_error_record(n: u8, error: &ToolError) -> Value {
+    json!({
+        "schema": PLAN_CHECK_SCHEMA,
+        "observation_id": n,
+        "outcome": "error",
+        "error_code": error.code.as_str(),
+        "work": null,
+        "checked": false,
+        "full_truncated": null,
+        "only_regional": null,
+        "only_full": null,
     })
 }
 
@@ -269,6 +357,10 @@ fn plan_trace_error_record(n: u8, error: &ToolError) -> Value {
         "max_regions": null,
         "decided_by": null,
         "decisive_region": null,
+        "chosen": null,
+        "spanning": null,
+        "component_support_classes": null,
+        "region_support_classes": null,
     })
 }
 
@@ -295,7 +387,8 @@ fn clickable(page: &ObservePage) -> Option<&ElementView> {
 
 /// Runs `observations` observations, then a dry-run click on the first confirmed,
 /// enabled element of the last page. With `timings`, each observation's per-stage timings
-/// go to stderr; with `plan_trace`, so does the planner's trace of it.
+/// go to stderr; with `plan_trace`, so does the planner's trace of it; with `plan_check`, so
+/// does the comparison of each regional observation with a full read of its frame.
 pub fn run(
     engine: &mut Engine,
     sim: Option<&SimulatedDesktop>,
@@ -303,9 +396,11 @@ pub fn run(
     observations: u8,
     timings: bool,
     plan_trace: bool,
+    plan_check: bool,
 ) {
     println!("ommatix demo | session {} | {summary}", engine.session_id());
     engine.set_plan_trace(plan_trace);
+    engine.set_plan_check(plan_check);
     let mut last = None;
     for n in 1..=observations {
         if let Some(what) = sim.and_then(|desktop| play_user(desktop, n)) {
@@ -325,6 +420,12 @@ pub fn run(
                 if let Some(trace) = engine.last_plan_trace() {
                     eprintln!("ommatix-plan-trace {}", plan_trace_record(n, &page, trace));
                 }
+                if plan_check {
+                    eprintln!(
+                        "ommatix-plan-check {}",
+                        plan_check_record(n, &page, engine.last_plan_check())
+                    );
+                }
                 last = Some(page);
             }
             Err(e) => {
@@ -334,6 +435,9 @@ pub fn run(
                 }
                 if plan_trace {
                     eprintln!("ommatix-plan-trace {}", plan_trace_error_record(n, &e));
+                }
+                if plan_check {
+                    eprintln!("ommatix-plan-check {}", plan_check_error_record(n, &e));
                 }
                 break;
             }
@@ -446,7 +550,7 @@ mod tests {
 
     /// The keys of one `--plan-trace` line (JSON writes them sorted). Every one is a
     /// count, an area, a closed-list name or an index: none names a place on the screen.
-    const TRACE_KEYS: [&str; 18] = [
+    const TRACE_KEYS: [&str; 22] = [
         "schema",
         "observation_id",
         "outcome",
@@ -465,6 +569,10 @@ mod tests {
         "max_regions",
         "decided_by",
         "decisive_region",
+        "chosen",
+        "spanning",
+        "component_support_classes",
+        "region_support_classes",
     ];
 
     fn sorted_keys(value: &Value) -> Vec<String> {
@@ -646,6 +754,108 @@ mod tests {
             out
         };
         assert_eq!(run(true), run(false));
+    }
+
+    /// The keys of one `--plan-check` line (ADR-0045).
+    const CHECK_KEYS: [&str; 9] = [
+        "checked",
+        "error_code",
+        "full_truncated",
+        "observation_id",
+        "only_full",
+        "only_regional",
+        "outcome",
+        "schema",
+        "work",
+    ];
+
+    /// `--plan-check` on the simulated desktop: a regional observation is compared with a
+    /// full read, and the line is counts only. The simulated detector reports whole ground
+    /// truth, so nothing differs.
+    #[test]
+    fn a_plan_check_line_holds_counts_only_and_finds_no_difference_on_the_simulated_desktop() {
+        let mut wired = sim_wired("check");
+        wired.engine.set_plan_check(true);
+        let sim = wired.sim.as_ref().unwrap();
+        let mut regional = 0;
+        for n in 1..=3 {
+            let _ = play_user(sim, n);
+            let page = wired
+                .engine
+                .observe_screen(&ObserveRequest::default())
+                .unwrap();
+            let check = wired.engine.last_plan_check();
+            let record = plan_check_record(n, &page, check);
+            let line = record.to_string();
+            assert_eq!(sorted_keys(&record), CHECK_KEYS, "{line}");
+            assert_eq!(record["schema"], PLAN_CHECK_SCHEMA);
+            assert_eq!(
+                record["checked"],
+                page.plan.work == ommatix_application::contract::WorkKind::Regions
+            );
+            if let Some(check) = check {
+                regional += 1;
+                assert_eq!(check.only_regional, CheckKinds::default(), "{line}");
+                assert_eq!(check.only_full, CheckKinds::default(), "{line}");
+                for side in ["only_regional", "only_full"] {
+                    for kind in ["controls", "words", "accessibility"] {
+                        let counts = record[side][kind].as_object().unwrap();
+                        assert!(counts.values().all(Value::is_number), "{line}");
+                    }
+                }
+            }
+            for text in ["Name", "Cancel", "Save", "hello"] {
+                assert!(!line.contains(text), "{text:?} in {line}");
+            }
+        }
+        assert!(regional > 0, "the demo planned a regional observation");
+    }
+
+    #[test]
+    fn asking_for_the_plan_check_does_not_change_what_the_engine_does() {
+        let run = |check: bool| {
+            let mut wired = sim_wired("check-same");
+            wired.engine.set_plan_check(check);
+            let sim = wired.sim.as_ref().unwrap();
+            let mut out = Vec::new();
+            for n in 1..=3 {
+                let _ = play_user(sim, n);
+                let page = wired
+                    .engine
+                    .observe_screen(&ObserveRequest::default())
+                    .unwrap();
+                out.push((page.plan.clone(), all_elements(&mut wired.engine, &page)));
+            }
+            out
+        };
+        assert_eq!(run(true), run(false));
+    }
+
+    #[test]
+    fn a_failed_observation_has_a_plan_check_line_that_measures_nothing() {
+        let error = ToolError::new(ErrorCode::InferenceFailed, "detection failed");
+        let record = plan_check_error_record(2, &error);
+        assert_eq!(sorted_keys(&record), CHECK_KEYS);
+        assert_eq!(record["outcome"], "error");
+        assert_eq!(record["checked"], false);
+        assert!(record["only_regional"].is_null() && record["only_full"].is_null());
+    }
+
+    /// Schema 2 of the trace (ADR-0045): on the simulated desktop the detector declares no
+    /// surfaces, so the closure is the classic one and there is no `spanning` record.
+    #[test]
+    fn a_plan_trace_line_says_which_closure_ran() {
+        let mut wired = sim_wired("trace-chosen");
+        wired.engine.set_plan_trace(true);
+        let page = wired
+            .engine
+            .observe_screen(&ObserveRequest::default())
+            .unwrap();
+        let record = plan_trace_record(1, &page, wired.engine.last_plan_trace().unwrap());
+        assert_eq!(record["schema"], "ommatix.plan-trace/2");
+        assert_eq!(record["chosen"], "classic");
+        assert!(record["spanning"].is_null());
+        assert!(record["component_support_classes"].is_array());
     }
 
     #[test]

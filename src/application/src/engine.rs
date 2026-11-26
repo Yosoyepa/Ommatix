@@ -18,6 +18,7 @@ mod freshness;
 mod icons;
 mod journal;
 mod observe;
+mod plan_check;
 mod state_sizes;
 mod view;
 
@@ -47,6 +48,7 @@ pub use freshness::{
 };
 pub use icons::{IconResolverConfig, grey_grid};
 pub use journal::JOURNAL_CAPACITY;
+pub use plan_check::{CheckCount, CheckKinds, PlanCheck};
 
 use journal::Journal;
 use observe::{Measured, Published};
@@ -180,6 +182,9 @@ pub struct Engine {
     /// Whether each observation also keeps the numbers behind its plan ([`PlanTrace`]). Off
     /// unless the composition root asks; no request of a client can turn it on.
     trace_plan: bool,
+    /// Whether each regional observation is also compared with a full read of its frame
+    /// ([`PlanCheck`], ADR-0045). Off unless the composition root asks.
+    check_plan: bool,
 }
 
 impl Engine {
@@ -195,6 +200,7 @@ impl Engine {
             purged_identity: None,
             measured: None,
             trace_plan: false,
+            check_plan: false,
         }
     }
 
@@ -303,6 +309,22 @@ impl Engine {
     /// when that observation ran with the trace off. Not part of the MCP contract.
     pub fn last_plan_trace(&self) -> Option<&PlanTrace> {
         self.measured.as_ref().and_then(|m| m.plan_trace.as_ref())
+    }
+
+    /// Asks each following regional observation to be compared with a full read of the same
+    /// frame, for [`Engine::last_plan_check`] (`demo --plan-check`, ADR-0045). A diagnostic of
+    /// the operator's: it runs the three perception stages a second time, after the
+    /// observation is committed, so the snapshot, the plan, every response and the timings
+    /// are the same with it on or off, and only the composition root can call this.
+    pub fn set_plan_check(&mut self, on: bool) {
+        self.check_plan = on;
+    }
+
+    /// The comparison of the last committed observation with a full read of its frame:
+    /// counts only. `None` when the check is off, when that observation was not regional, and
+    /// when the full read failed. Not part of the MCP contract.
+    pub fn last_plan_check(&self) -> Option<&PlanCheck> {
+        self.measured.as_ref().and_then(|m| m.plan_check.as_ref())
     }
 
     /// Whether the accessibility evidence of the published snapshot is complete: `false`

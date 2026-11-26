@@ -61,3 +61,5 @@ BDD-59,RF-11,UT-65,features/06_accion_segura.feature,Un cambio en una ventana po
 BDD-60,RF-11,UT-68,features/06_accion_segura.feature,Una ventana que sube sobre el objetivo rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-61,RF-11,UT-69,features/06_accion_segura.feature,Un cambio de la ventana de primer plano rechaza la acción,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-62,RF-11,UT-70,features/06_accion_segura.feature,Un objetivo no atestiguado como opaco compara la pantalla entera,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-75,RF-03,UT-83,features/01_incrementalidad.feature,Un parpadeo del cursor dentro de una ventana no relee la ventana,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL
+BDD-76,RF-03,UT-83,features/01_incrementalidad.feature,Un cambio en el borde de una superficie la relee entera,EJECUTADO_SOBRE_NUCLEO_EXPERIMENTAL

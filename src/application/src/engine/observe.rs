@@ -38,11 +38,13 @@ use ommatix_domain::fusion::{
 };
 use ommatix_domain::identity::{Changes, Observation, Registry, TargetId};
 use ommatix_domain::incremental::{
-    BgraFrame, Evidence, PlanTrace, RegionPlan, Work, plan_regions, plan_regions_traced,
+    BgraFrame, Evidence, PlanTrace, RegionPlan, Spanning, Work, plan_regions_with,
+    plan_regions_with_traced,
 };
 
 use super::accessibility::accessible_control;
 use super::icons::{self, IconLabel, Scope};
+use super::plan_check::{CheckKinds, PlanCheck, count, missing};
 use super::{Engine, Ports, aged_out};
 use crate::PortError;
 use crate::contract::{ErrorCode, LabelSource, ObservationPlan, StageTimings, ToolError, WorkKind};
@@ -55,6 +57,19 @@ pub(super) struct EvidenceSet {
     pub words: Vec<Word>,
     /// Accessibility elements on screen (ADR-0017), each with the instant its read started.
     pub accessible: Vec<ReadAccessible>,
+    /// The boxes of `controls` the detector declared as surfaces (ADR-0045): reported whole
+    /// or not at all, so the planner may span them instead of closing over them. Each one is
+    /// the box of a control here and is kept and dropped with it. Empty when the detector
+    /// declares no surfaces.
+    pub surfaces: Vec<BBox>,
+}
+
+/// The last evidence split for the support-aware closure (ADR-0045): the same boxes as
+/// [`EvidenceSet::supports`], as multisets.
+pub(super) struct SpanningLists {
+    pub cut_prone: Vec<BBox>,
+    pub surfaces: Vec<BBox>,
+    pub whole_on_read: Vec<BBox>,
 }
 
 /// An accessibility element and the instant its read started on the injected clock
@@ -68,7 +83,7 @@ pub(super) struct ReadAccessible {
 
 impl EvidenceSet {
     /// Boxes a region must not cut in half.
-    fn supports(&self) -> Vec<BBox> {
+    pub(super) fn supports(&self) -> Vec<BBox> {
         self.controls
             .iter()
             .map(|c| c.bbox)
@@ -77,16 +92,50 @@ impl EvidenceSet {
             .collect()
     }
 
+    /// [`supports`](Self::supports) split by how a region may meet each box (ADR-0045): a
+    /// control the detector declared a surface, an accessibility element (re-read whole), and
+    /// everything else (a control or a word a region must contain whole).
+    pub(super) fn spanning_lists(&self) -> SpanningLists {
+        let is_surface = |b: &BBox| self.surfaces.binary_search_by(|s| s.cmp_corners(b)).is_ok();
+        let (surfaces, controls): (Vec<BBox>, Vec<BBox>) =
+            self.controls.iter().map(|c| c.bbox).partition(is_surface);
+        SpanningLists {
+            cut_prone: controls
+                .into_iter()
+                .chain(self.words.iter().map(|w| w.bbox))
+                .collect(),
+            surfaces,
+            whole_on_read: self
+                .accessible
+                .iter()
+                .map(|a| a.element.control.bbox)
+                .collect(),
+        }
+    }
+
     /// Keeps the evidence outside the regions that were looked at again and adds the fresh
     /// evidence found inside them. `detected` are the regions the detector and the
     /// recogniser re-analysed (the plan); `read` are those the accessibility provider read,
     /// the plan plus the regions of an earlier truncated read.
     ///
+    /// A held control is replaced when it lies **inside** a re-analysed region (ADR-0045). The
+    /// classic closure makes every control a region overlaps lie inside it, so for a classic
+    /// plan this is the overlap rule it replaces; under the support-aware closure the only
+    /// controls a region overlaps without containing are spanned surfaces, which the detector
+    /// reports whole or not at all, so they are kept. Words and accessibility elements keep
+    /// the overlap rule.
+    ///
     /// When the accessibility read was `truncated`, a held element inside `read` is kept
     /// unless the plan re-analysed its area (its pixels changed, so it may be gone) or the
     /// read found an element at the same box (the fresh one replaces it): a partial read
     /// proves nothing about what it did not reach.
-    fn merged(&self, detected: &[BBox], read: &[BBox], fresh: Self, truncated: bool) -> Self {
+    pub(super) fn merged(
+        &self,
+        detected: &[BBox],
+        read: &[BBox],
+        fresh: Self,
+        truncated: bool,
+    ) -> Self {
         let outside = |regions: &[BBox], b: &BBox| !regions.iter().any(|r| r.overlaps(b));
         let keeps = |a: &ReadAccessible| {
             let b = &a.element.control.bbox;
@@ -98,13 +147,22 @@ impl EvidenceSet {
                         .iter()
                         .any(|f| f.element.control.bbox == *b))
         };
+        let inside = |b: &BBox| detected.iter().any(|r| r.contains(b));
+        let controls: Vec<Control> = self
+            .controls
+            .iter()
+            .filter(|c| !inside(&c.bbox))
+            .cloned()
+            .collect();
+        let surfaces = self
+            .surfaces
+            .iter()
+            .filter(|s| controls.iter().any(|c| c.bbox == **s))
+            .copied()
+            .chain(fresh.surfaces)
+            .collect();
         let mut next = Self {
-            controls: self
-                .controls
-                .iter()
-                .filter(|c| outside(detected, &c.bbox))
-                .cloned()
-                .collect(),
+            controls,
             words: self
                 .words
                 .iter()
@@ -117,6 +175,7 @@ impl EvidenceSet {
                 .filter(|a| keeps(a))
                 .cloned()
                 .collect(),
+            surfaces,
         };
         next.controls.extend(fresh.controls);
         next.words.extend(fresh.words);
@@ -126,7 +185,7 @@ impl EvidenceSet {
 
     /// Clips every box to `bounds`, drops what falls outside, sorts and removes exact
     /// duplicates (a detector asked about two regions may report one control twice).
-    fn normalised(mut self, bounds: &BBox) -> Self {
+    pub(super) fn normalised(mut self, bounds: &BBox) -> Self {
         self.controls = self
             .controls
             .into_iter()
@@ -191,6 +250,15 @@ impl EvidenceSet {
                 .then(a.element.sensitive.cmp(&b.element.sensitive))
         });
         self.accessible.dedup();
+        let controls = &self.controls;
+        self.surfaces = self
+            .surfaces
+            .into_iter()
+            .filter_map(|s| s.clip(bounds))
+            .filter(|s| controls.iter().any(|c| c.bbox == *s))
+            .collect();
+        self.surfaces.sort_by(BBox::cmp_corners);
+        self.surfaces.dedup();
         self
     }
 }
@@ -254,6 +322,40 @@ pub(super) struct Measured {
     /// What the planner saw (counts and areas), only when the operator asked for it
     /// ([`Engine::set_plan_trace`]); never part of the MCP contract.
     pub plan_trace: Option<PlanTrace>,
+    /// The comparison with a full read of the frame, only when the operator asked for it
+    /// ([`Engine::set_plan_check`]) and the observation was regional.
+    pub plan_check: Option<PlanCheck>,
+}
+
+/// What `--plan-check` needs from a regional observation, kept aside until it is committed.
+struct CheckInput {
+    frame: BgraFrame,
+    evidence: EvidenceSet,
+    /// The boxes a region met without the closure taking them: the held surfaces a region
+    /// overlaps without containing, and every accessibility box a region overlaps.
+    met: Vec<BBox>,
+}
+
+/// The boxes of the last and the new evidence that ADR-0045 lets a region meet without
+/// containing.
+fn met_boxes(regions: &[BBox], previous: Option<&Published>, merged: &EvidenceSet) -> Vec<BBox> {
+    let met = |b: &BBox| regions.iter().any(|r| r.overlaps(b));
+    let mut out: Vec<BBox> = previous
+        .map(|p| {
+            p.evidence
+                .surfaces
+                .iter()
+                .filter(|s| met(s) && !regions.iter().any(|r| r.contains(s)))
+                .copied()
+                .chain(p.evidence.accessible.iter().map(|a| a.element.control.bbox))
+                .collect()
+        })
+        .unwrap_or_default();
+    out.extend(merged.accessible.iter().map(|a| a.element.control.bbox));
+    out.retain(met);
+    out.sort_by(BBox::cmp_corners);
+    out.dedup();
+    out
 }
 
 /// An observation before identity: what the registry sees, plus the view's extras.
@@ -668,6 +770,16 @@ impl Engine {
         );
         let windows = self.observation_windows(windows, &tracked.registry);
         let dimensions = (frame.width(), frame.height());
+        // `--plan-check` (ADR-0045): kept aside and run after the commit, so that its time is
+        // never the observation's.
+        let check_input = match (&plan.work, self.check_plan) {
+            (Work::Regions(rs), true) => Some(CheckInput {
+                frame: frame.clone(),
+                met: met_boxes(rs, previous, &evidence),
+                evidence: evidence.clone(),
+            }),
+            _ => None,
+        };
         let staged = self.store.stage(
             frame,
             Published {
@@ -712,8 +824,48 @@ impl Engine {
             },
             plan: observed_plan,
             plan_trace,
+            plan_check: None,
         });
+        if let Some(input) = check_input {
+            let check = self.plan_check(&input);
+            if let Some(measured) = self.measured.as_mut() {
+                measured.plan_check = check;
+            }
+        }
         Ok(())
+    }
+
+    /// Runs the three stages again on the whole frame of a committed regional observation and
+    /// counts the boxes each read has and the other lacks (`--plan-check`, ADR-0045). `None`
+    /// when the full read fails. It changes nothing the engine publishes.
+    fn plan_check(&mut self, input: &CheckInput) -> Option<PlanCheck> {
+        let bounds = input.frame.bounds();
+        let full = self.infer(&input.frame, &[bounds], &[bounds]).ok()?;
+        let full_truncated = full.truncated;
+        let full = full.evidence.normalised(&bounds);
+        let regional = &input.evidence;
+        let met = &input.met;
+        let kinds = |a: &EvidenceSet, b: &EvidenceSet| {
+            let elements = |e: &EvidenceSet| -> Vec<AccessibleControl> {
+                e.accessible.iter().map(|x| x.element.clone()).collect()
+            };
+            let (ea, eb) = (elements(a), elements(b));
+            CheckKinds {
+                controls: count(
+                    missing(&a.controls, &b.controls)
+                        .into_iter()
+                        .map(|c| c.bbox),
+                    met,
+                ),
+                words: count(missing(&a.words, &b.words).into_iter().map(|w| w.bbox), met),
+                accessibility: count(missing(&ea, &eb).into_iter().map(|x| x.control.bbox), met),
+            }
+        };
+        Some(PlanCheck {
+            only_regional: kinds(regional, &full),
+            only_full: kinds(&full, regional),
+            full_truncated,
+        })
     }
 
     /// The successful planner already validated this exact frame and tile size.
@@ -777,21 +929,42 @@ impl Engine {
             supports: &supports,
             relations,
         };
+        // R0 (ADR-0045): the support-aware closure only for a detector that declares
+        // surfaces; otherwise the plan is the classic one, bit for bit.
+        let band = self.ports.detector.surface_band_px();
+        let lists = band.map(|_| {
+            previous.map_or_else(
+                || SpanningLists {
+                    cut_prone: Vec::new(),
+                    surfaces: Vec::new(),
+                    whole_on_read: Vec::new(),
+                },
+                |p| p.evidence.spanning_lists(),
+            )
+        });
+        let spanning = band.zip(lists.as_ref()).map(|(band_px, l)| Spanning {
+            cut_prone: &l.cut_prone,
+            surfaces: &l.surfaces,
+            whole_on_read: &l.whole_on_read,
+            band_px,
+        });
         let planned = if self.trace_plan {
-            plan_regions_traced(
+            plan_regions_with_traced(
                 self.store.base(),
                 frame,
                 self.store.pending_dirty(),
                 evidence,
+                spanning,
                 &self.config.plan,
             )
             .map(|(plan, trace)| (plan, Some(trace)))
         } else {
-            plan_regions(
+            plan_regions_with(
                 self.store.base(),
                 frame,
                 self.store.pending_dirty(),
                 evidence,
+                spanning,
                 &self.config.plan,
             )
             .map(|plan| (plan, None))
@@ -834,10 +1007,10 @@ impl Engine {
         // inferences of that call. With nothing to detect no call is made, so no inference ran.
         let detect = |detector: &mut Box<dyn VisionDetector>| {
             if regions.is_empty() {
-                (idle(), Some(Vec::new()))
+                (idle(), Some(Vec::new()), Vec::new())
             } else {
                 let stage = timed(clock, || detector.detect(frame, regions));
-                (stage, detector.inference_shapes())
+                (stage, detector.inference_shapes(), detector.surfaces())
             }
         };
         let recognize = |recognizer: &mut Box<dyn TextRecognizer>| {
@@ -879,7 +1052,7 @@ impl Engine {
             (detected, words, tree)
         };
 
-        let (controls, inference_shapes) = detected;
+        let (controls, inference_shapes, surfaces) = detected;
         let (detect_took, recognize_took, access_took) = (controls.took, words.took, tree.took);
         // Evidence is dated by when its read started: the state it reports is no older
         // than that, so the age it is judged by is never understated (ADR-0025).
@@ -899,6 +1072,7 @@ impl Engine {
                 controls,
                 words,
                 accessible,
+                surfaces,
             },
             detect: detect_took,
             recognize: recognize_took,

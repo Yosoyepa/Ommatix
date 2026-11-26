@@ -63,6 +63,7 @@ continuity abstain with a new ID and a recorded reason. ADR-0027, accepted the s
 | [0036](0036-llm-only-agent-experiment-on-the-test-applications.md) | Run an LLM-only agent experiment (AG-02) on the two test applications | Accepted (2026-10-17); exploratory, no checkbox |
 | [0037](0037-ag02-other-providers-through-a-confinable-agent.md) | Run AG-02 with other providers' models through an agent we can confine | Accepted (2026-10-18); exploratory, no checkbox |
 | [0038](0038-ag03-vision-baseline-and-ag02-repetitions.md) | Prepare AG-03 (a vision-agent baseline) and repetitions of AG-02 | Accepted (2026-10-19); nothing run, no checkbox |
+| [0045](0045-support-aware-closure.md) | Keep a small change small inside a window-sized support: the closure leaves out accessibility boxes and spanned detector surfaces, and gives way to the classic plan when it would be a full refresh | Proposed (2026-11-26); not validated on a real screen |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They
