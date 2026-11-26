@@ -736,7 +736,8 @@ mod tests {
     }
 
     #[test]
-    fn a_transient_error_of_accepting_is_retried_and_a_fatal_one_stops_the_listener_visibly() {
+    fn it_30_a_transient_error_of_accepting_is_retried_and_a_fatal_one_stops_the_listener_visibly()
+    {
         let shared = shared();
         let mut script = vec![
             Err(io::Error::from_raw_os_error(1450)),
@@ -767,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn the_stop_interrupts_the_pause_between_two_tries_of_accepting() {
+    fn it_30_the_stop_interrupts_the_pause_between_two_tries_of_accepting() {
         let shared = Arc::new(shared());
         let tries = Arc::new(Mutex::new(0_u32));
         let looping = {
@@ -823,7 +824,7 @@ mod tests {
     /// R-T2-2: a connection thread whose broker work is done still holds its place, and still
     /// counts as alive, while its connection is being closed; both go only when it has closed.
     #[test]
-    fn a_connection_thread_holds_its_place_until_its_connection_is_closed() {
+    fn it_29_a_connection_thread_holds_its_place_until_its_connection_is_closed() {
         let shared = Arc::new(shared());
         // The place, taken at accept.
         shared.update(|s| s.connections += 1);
@@ -849,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_s_reader_hands_one_line_at_a_time_and_nothing_once_stopped() {
+    fn it_30_a_connection_s_reader_hands_one_line_at_a_time_and_nothing_once_stopped() {
         let shared = shared();
         let input: &[u8] = b"one\r\ntwo\nthree";
         let mut reader = UntilStopped::new(input, &shared);

@@ -34,12 +34,14 @@
 //!   [`ommatix_application::GrantStore`] on every call (ADR-0040, ADR-0043, proposed). A
 //!   handshake reads a bounded number of bytes, and a listener counts a connection whose
 //!   handshake is not settled against the bound on clients with a [`Reservation`]
-//!   ([`Broker::reserve`]). Nothing in the executable constructs one yet; only tests do (this crate's and the
-//!   acceptance suite's scenarios): the binary serves stdio only, and no transport serves a
-//!   broker yet.
+//!   ([`Broker::reserve`]). The executable constructs one only when it is built with the
+//!   feature `broker-pipe` and configured with `[mcp] transport = "pipe"`; otherwise only tests
+//!   do (this crate's and the acceptance suite's scenarios).
 //! - With the cargo feature `broker-pipe`, on Windows, `pipe` serves a broker over a local
 //!   named pipe and opens that pipe as a client (ADR-0043, proposed): `pipe::PipeServer`,
-//!   `pipe::connect` and `pipe::relay`. Off by default; nothing in the executable uses it yet.
+//!   `pipe::connect` and `pipe::relay`. Off by default; the executable's `serve` and
+//!   `attach` use it when built with its own feature `broker-pipe` and configured with
+//!   `[mcp] transport = "pipe"`.
 //! - [`McpConfig`] is the `[mcp]` configuration section.
 //! - [`dto`] holds the wire DTOs and their mapping to the application contract types.
 //! - [`schemas`] embeds the contract's JSON schemas from `docs/thesis/contratos/esquemas/`.

@@ -1407,7 +1407,7 @@ fn it_30_shutdown_stops_accepting_at_once_and_connections_end_when_their_clients
 /// never runs more connection threads than the bound on clients, as the threads count
 /// themselves.
 #[test]
-fn churn_never_runs_more_connection_threads_than_the_bound_on_clients() {
+fn it_29_churn_never_runs_more_connection_threads_than_the_bound_on_clients() {
     const BOUND: usize = 2;
     const CHURNERS: usize = 8;
     const CYCLES: usize = 500;
@@ -1459,7 +1459,7 @@ fn churn_never_runs_more_connection_threads_than_the_bound_on_clients() {
 /// test holds closed), the listener still accepts clients up to the bound and refuses the one
 /// beyond it, and none of that waits for the call to finish.
 #[test]
-fn accepting_never_waits_on_a_call_that_holds_the_broker() {
+fn it_29_accepting_never_waits_on_a_call_that_holds_the_broker() {
     let world = World::new();
     let broker = world.bounded(3);
     let mut server = bind(&broker, "long-call");
@@ -1549,7 +1549,7 @@ fn competitor(name: &PipeName, instances: usize) -> std::process::Child {
 /// shutdown says that its accept thread is still alive, keeps it, says so again when asked again,
 /// and completes once the other instances are gone.
 #[test]
-fn shutdown_tells_when_its_accept_thread_could_not_be_woken_and_completes_once_it_can() {
+fn it_30_shutdown_tells_when_its_accept_thread_could_not_be_woken_and_completes_once_it_can() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "compete");
@@ -1591,7 +1591,7 @@ fn shutdown_tells_when_its_accept_thread_could_not_be_woken_and_completes_once_i
 /// R-T2-6: requests the connection received before the stop and has not handed to the broker
 /// yet are never served after it.
 #[test]
-fn requests_already_received_are_not_served_after_shutdown() {
+fn it_30_requests_already_received_are_not_served_after_shutdown() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "buffered");

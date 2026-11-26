@@ -573,7 +573,7 @@ fn sec_04_the_source_check_refuses_the_pipe_client_with_anything_more() {
 /// A test-module marker in the client file does not hide what follows it from the check: the
 /// file is collected whole, and the marker is itself refused.
 #[test]
-fn a_test_module_marker_in_the_pipe_client_hides_nothing() {
+fn sec_04_a_test_module_marker_in_the_pipe_client_hides_nothing() {
     let (_, text) = pipe_client();
     let hidden = format!(
         "{text}\n#[cfg(test)]\nmod hidden {{\n    fn f() {{ let _ = std::fs::File::create(\"x\"); }}\n}}\n"
@@ -650,7 +650,7 @@ fn sec_04_the_source_check_refuses_open_options_in_any_other_file() {
 /// identification-level client is the only way in; and the server's wake-up at shutdown goes
 /// through that client.
 #[test]
-fn the_pipe_is_opened_only_through_the_identification_level_client() {
+fn sec_04_the_pipe_is_opened_only_through_the_identification_level_client() {
     const CONNECTING: [&str; 6] = [
         "connect_by_path",
         "ConnectWaitMode",

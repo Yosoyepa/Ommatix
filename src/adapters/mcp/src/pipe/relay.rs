@@ -413,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn a_thread_that_cannot_start_leaves_the_pipe_unwritten_and_the_input_unread() {
+    fn it_31_a_thread_that_cannot_start_leaves_the_pipe_unwritten_and_the_input_unread() {
         for refused in [1_u32, 2] {
             let pipe = Arc::new(Duplex::default());
             let input = Arc::new(Lane::default());

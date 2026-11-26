@@ -51,7 +51,8 @@ pub enum Failure {
     Output(io::ErrorKind),
     /// Opening the pipe, with the operating system's code.
     Connect(Option<i32>),
-    /// A relay thread could not be started.
+    /// A relay thread could not be started: the relay starts both before it writes the
+    /// handshake, so nothing was sent to the engine and nothing read from the input.
     Thread,
 }
 
@@ -112,7 +113,11 @@ impl Outcome {
                 format!("the pipe could not be opened (os error {code})")
             }
             Self::Failed(Failure::Connect(None)) => "the pipe could not be opened".to_owned(),
-            Self::Failed(Failure::Thread) => "a relay thread could not be started".to_owned(),
+            Self::Failed(Failure::Thread) => {
+                "a relay thread could not be started; nothing was sent to the engine or read \
+                 from the input"
+                    .to_owned()
+            }
         }
     }
 }

@@ -233,7 +233,7 @@ Apagado por defecto y **sin validar** con un segundo usuario local, un motor ele
    ```
 
    Una concesión sólo estrecha la política local de `[safety]`: nunca permite lo que ésta no permite.
-5. Arrancar el motor, el operador, desde una sesión **no elevada**: `ommatix.exe serve --config <configuración>` (con `--source dxgi` para la pantalla). No escribe nada en stdout; en stderr dice el nombre del tubo y cuántas concesiones lee. Un segundo `serve` con el mismo nombre se niega a arrancar.
+5. Arrancar el motor, el operador, desde una sesión **no elevada**: `ommatix.exe serve --config <configuración>` (con `--source dxgi` para la pantalla). No escribe nada en stdout; en stderr dice el nombre del tubo y cuántas concesiones lee. Un segundo `serve` con el mismo nombre se niega a arrancar. Sirve hasta que se le termina (Ctrl+C); si el oyente deja de aceptar por un error que no es pasajero, `serve` lo dice en stderr, lo para y sale con 3 (la parada del oyente se dio por completa), 4 (quedaban conexiones abiertas, de clientes que ni enviaban ni se iban, que el fin del proceso cierra) o 5 (el hilo de aceptación no se pudo despertar, porque otro proceso del usuario tiene instancias del mismo nombre; el fin del proceso lo termina). Con 1 se negó a arrancar.
 6. En el anfitrión MCP de cada agente, lanzar `attach` en lugar de `serve`; `attach` nunca arranca un motor:
 
    ```json

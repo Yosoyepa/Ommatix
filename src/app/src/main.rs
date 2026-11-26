@@ -14,6 +14,8 @@ mod clock;
 mod config;
 mod demo;
 mod freshness_probe;
+#[cfg(all(windows, feature = "broker-pipe"))]
+mod pipe_end;
 mod prototypes;
 mod wiring;
 
@@ -99,11 +101,10 @@ fn serve(args: &RunArgs) -> Result<()> {
 
 /// `serve` with `[mcp] transport = "pipe"`: the broker of ADR-0039 behind the pipe of ADR-0043
 /// (proposed), and nothing on stdio. It serves until the process ends (Ctrl+C) or the pipe's
-/// listener fails.
+/// listener stops accepting; then it shuts the listener down, says why and where it was left,
+/// and exits with 3, 4 or 5 ([`pipe_end`]).
 #[cfg(all(windows, feature = "broker-pipe"))]
 fn serve_pipe(args: &RunArgs, config: &Config) -> Result<()> {
-    use std::time::Duration;
-
     use ommatix_adapter_mcp::pipe::{PipeName, PipeServer};
     use ommatix_application::JOURNAL_CLIENTS;
 
@@ -117,7 +118,7 @@ fn serve_pipe(args: &RunArgs, config: &Config) -> Result<()> {
         PipeName::new(&config.pipe_name()?).map_err(|e| anyhow::anyhow!("[mcp] pipe_name: {e}"))?;
     let wired = wiring::build_broker(args, config)?;
     let policy = config.local_policy();
-    let server = PipeServer::bind(wired.broker, name.clone())
+    let mut server = PipeServer::bind(wired.broker, name.clone())
         .map_err(|e| anyhow::anyhow!("cannot serve on the pipe {}: {e}", name.path()))?;
     eprintln!(
         "ommatix: serving MCP {MODERN_PROTOCOL_VERSION} on the pipe {} to at most \
@@ -142,13 +143,14 @@ fn serve_pipe(args: &RunArgs, config: &Config) -> Result<()> {
     if let Some(indicator) = &wired.active_control {
         eprintln!("ommatix: {indicator}");
     }
-    // The listener serves on its own threads; this one only watches for its failure.
-    loop {
-        if let Some(failure) = server.failure() {
-            anyhow::bail!("the pipe's listener stopped: {failure}");
-        }
-        let _ = server.wait_until(Duration::from_secs(1), |_| false);
+    // The listener serves on its own threads; this one only watches whether it still accepts.
+    let ended = pipe_end::watch(&mut server, pipe_end::WATCH_EVERY, pipe_end::SHUTDOWN_WAIT);
+    for line in ended.lines() {
+        eprintln!("ommatix: {line}");
     }
+    // Exit now: a connection still open, or an accept thread still waiting, ends with the
+    // process, and nothing of it is served meanwhile.
+    std::process::exit(ended.code())
 }
 
 #[cfg(not(all(windows, feature = "broker-pipe")))]

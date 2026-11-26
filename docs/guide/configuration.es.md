@@ -141,7 +141,7 @@ El anfitrión MCP de cada agente lanza entonces `ommatix attach --config <archiv
 que retransmite su stdio al tubo y no arranca ningún motor. Un agente sin concesión válida
 observa sin valores y no entrega nada. No se ha validado con un segundo usuario local, un proceso
 elevado, un anfitrión MCP real ni la cadena MSVC; los pasos, la forma del archivo de concesiones
-y los códigos de salida de `attach` están en la
+y los códigos de salida de `attach`, y los de `serve` cuando el oyente del tubo se detiene, están en la
 [guía de instalación](../thesis/S4_INSTALACION_Y_REVERSION.md) §7.1.
 
 Véase [control del operador](live-input.es.md) para la parada, purga y alcance por ventanas.

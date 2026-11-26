@@ -1,6 +1,7 @@
 //! A local Windows named pipe that serves [`Broker`](crate::Broker) connections, and the client
 //! that opens it (ADR-0043, proposed). Compiled only with the cargo feature `broker-pipe`; its
-//! operating-system parts only on Windows. Nothing in the executable uses it yet.
+//! operating-system parts only on Windows. The executable's `serve` and `attach` use it when
+//! built with the feature `broker-pipe` and configured with `[mcp] transport = "pipe"`.
 //!
 //! - [`PipeServer`] binds a pipe name and serves each connection on its own blocking thread
 //!   with [`Broker::serve_sync_with_handshake`](crate::Broker::serve_sync_with_handshake):

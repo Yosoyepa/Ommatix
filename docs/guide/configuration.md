@@ -132,7 +132,7 @@ Each agent's MCP host then starts `ommatix attach --config <file> [--ticket-file
 relays its stdio to the pipe and starts no engine. An agent without a valid grant observes
 without values and delivers nothing. This has not been validated with a second local user, an
 elevated process, a real MCP host or the MSVC toolchain; the steps, the grants file's form and
-the exit codes of `attach` are in the
+the exit codes of `attach`, and of `serve` when the pipe's listener stops, are in the
 [installation guide](../thesis/S4_INSTALACION_Y_REVERSION.md) §7.1.
 
 See [operator control](live-input.md) for stop, purge and window scope.

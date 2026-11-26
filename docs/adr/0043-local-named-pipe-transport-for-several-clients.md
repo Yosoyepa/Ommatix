@@ -165,7 +165,13 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    the user's name is left the start is refused. Pipe names are not scoped to a logon session,
    so two sessions of one user share the name, and one engine serves them. The name is
    predictable, and whoever starts the process can set `USERNAME`: the name is not a defence
-   (first open point).
+   (first open point). The descriptor gives the owner every right, so any process of the same
+   user can also add instances to the engine's pipe after it is created. A client reaches the
+   oldest free instance first, so such instances can receive clients, an agent's `attach`
+   included, and the shutdown's own wake-up connections (decision 7): a second way, beside
+   taking the name first, for another process of the same user to receive `attach`'s traffic.
+   A second engine of the same user is still refused, because it cannot create the first
+   instance.
 5. **A descriptor that grants the owner only: `D:P(A;;GA;;;OW)`.** Protected, one allow entry for
    the object's owner, nothing for Everyone, Anonymous, SYSTEM or Administrators. Without it, the
    default pipe descriptor lets Everyone and Anonymous read (from the first experiment). The user's own
@@ -190,25 +196,72 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    re-created sees the pipe as busy. A connection takes its place among the clients when it is
    accepted, before a byte of it is read, and holds it while its handshake is read; the
    handshake's size is bounded (decision 9), so peers that connect and send nothing, or send a
-   handshake without end, hold at most the bound's places and threads.
+   handshake without end, hold at most the bound's places and threads. The listener counts its
+   own places, taken at accept before the broker is asked; the broker counts its places
+   (connected clients and reservations) with atomic operations, apart from its servicing lock,
+   so a reservation never waits on a call in progress. The bound on threads, as the next commit
+   of the pipe (T2c) enforces it: at any moment the listener's live threads are at most
+   `1 + R + P`, the accept thread, a fixed number `R` (0 or 1) of helpers, and `P` places
+   (clients and refusal workers), because a place is given back only after `JoinHandle::join`
+   has returned for the thread that held it, by a thread other than that worker; joining a
+   thread that has finished is the only wait the accept thread makes for a worker. Until that
+   commit, a worker gives its place back itself as its last act, after it has closed its
+   connection, and the threads count themselves: the count is kept within the bound, but the
+   bound is not enforced by a join. An error of accepting is either transient (OS errors 8, 14,
+   1450 and 1816, memory, resources or quota short for a moment; 232 and 233, a client that left
+   while it was being connected), retried with a pause that doubles up to one second and that
+   the stop interrupts, or fatal: any other error ends the listener visibly (it is kept as the
+   listener's failure, the listener says it no longer accepts, and shutdown reports it). That
+   pause does not bound every retry: when a client connects and leaves before the accept
+   returns, the dependency disconnects that instance and waits again inside its own call,
+   without our pause and without our count. Each such repetition costs the peer one connection
+   of its own, only a process that may open the pipe (the same user, by the descriptor) can
+   cause it, and the stop is still observed, because the wake-up is itself a connection. When
+   the listener stops accepting, `serve` shuts it down, says why and where the shutdown left it
+   on stderr, and exits with a code for each state (3, 4 or 5), never lingering as if it served.
 
    **What the listener cannot do.** The crate's safe API has no timeout and no cancel for a
    blocked read, write or flush, and ending such a thread needs `CancelIoEx` or
    `DisconnectNamedPipe`, which are `unsafe`. So a client that connects and then neither sends
    nor reads holds one place, one thread and the pipe's name until it acts, leaves or the engine
    process ends; the handshake has a bound on its size and none on its time; and the bound on
-   clients, counted from accept, is the only limit. Shutdown stops accepting at once, serves no
-   further message and reports what remains, but it cannot end such a connection: the real end
-   of an engine is the end of its process, which closes every handle. Shutdown wakes its accept
-   thread by connecting to its own pipe, and waits for that thread a bounded time, never with a
-   bare join: the descriptor gives the pipe's owner every right, so any process of the same user
-   can add instances under the name, and the wake-up connection, like any other connection,
-   may land on one of those instead of the engine's.
+   clients, counted from accept, is the only limit. Shutdown stops accepting at once. What it
+   guarantees about requests, as the next commit of the pipe (T2c) states and enforces it: there
+   is one stop check per request, made immediately before the request is handed to the broker,
+   and no request passes that check after the stop is set; a request that passed it earlier
+   runs to its end, so the engine's work, a delivered action and its reply may all happen after
+   the stop. Nothing more is promised. Until that commit the stop reaches the line reader as an
+   ordinary end of input, so a frame accumulated without its line end can still be dispatched
+   after the stop. Shutdown cannot end a connection blocked on a silent client: the real end of
+   an engine is the end of its process, which closes every handle.
+   Shutdown wakes its accept thread by connecting to its own pipe through the
+   identification-level client of decision 12, and waits for that thread a bounded time (twenty
+   tries of 100 ms), never with a bare join: the descriptor gives the pipe's owner every right, so
+   any process of the same user can add instances under the name (decision 4), and the wake-up
+   connection, like any other connection, may land on one of those instead of the engine's. Its
+   report names one of three states: complete; connections remaining (the accept thread ended,
+   but connections or refusals are still being served); or the accept thread still alive (no
+   wake-up reached it; it is kept, and the next shutdown tries again). That complete means that
+   the accept thread and every worker have been joined, a worker whose work has returned but
+   whose thread is not joined yet counting as remaining, is what the next commit of the pipe
+   (T2c) enforces; until then, complete means that the accept thread was joined and the counts
+   of connections and refusals reached zero. `serve` calls shutdown only once its listener has
+   stopped accepting, and then exits; otherwise the engine ends with its process.
 8. **`attach` only relays, and never starts an engine.** The executable gains an `attach` mode
    that connects to the pipe of the current user session and relays its standard input and output
    to it, so an MCP host keeps starting a stdio server. When no engine listens, `attach` fails with
    a clear error on stderr and starts nothing. The operator, or an agent host's launcher acting
-   with the operator's authority, starts the one engine process with the broker on.
+   with the operator's authority, starts the one engine process with the broker on. The relay
+   starts both of its threads before it writes the handshake, so a thread that cannot start
+   leaves the pipe unwritten and the input unread. The crate hands a dropped stream it counts as
+   unflushed (a client stream made from a handle, or one written since its last flush) to a
+   process-wide pool that flushes it before closing it, and a flush waits until the peer has
+   read everything: a dropped stream is not closed at once, and one whose peer never reads keeps
+   a pool thread blocked until the process ends. So every stream of the pipe, on both ends, is
+   marked flushed before it is dropped, the server's on every exit, unwinding included, and
+   `attach`'s by whichever relay thread drops it last; the direction still running when the
+   relay returns holds the stream until its source ends, and `attach` exits at once, which
+   closes everything.
 9. **The ticket handshake.** A ticket reaches `attach` as the path of a file (`--ticket-file`),
    never as an argument value or an environment variable: an argument is visible in the process
    list and the environment is inherited by children, while a file can be restricted, and removed
@@ -260,15 +313,31 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
     - it is a named allowlist entry in the test, the pair of one file and one substring
       (`src/adapters/mcp/src/pipe/client.rs`, `OpenOptions`), not a relaxed pattern: every other
       production file keeps failing on `OpenOptions`, and that file keeps failing on every other
-      forbidden substring;
-    - in that file the substring is allowed on the lines that need it and nowhere else: its two
-      `use` lines, which may not rename it (`as`), and one `OpenOptions::new(` call; the test
-      fails on a second call;
-    - the file contains only the function that opens the client handle and wraps it; it opens a
-      path it builds itself from the fixed prefix `\\.\pipe\` and the per-session name; its one
-      custom flag is the `FILE_FLAG_OVERLAPPED` constant; and the test refuses in it `.create(`,
-      `.create_new(`, `.truncate(`, `.append(` and `.creation_disposition(`, so the exception
-      cannot create, truncate or extend a file.
+      forbidden substring; a list of exceptions other than that one pair is itself a finding;
+    - the digest pin is the guarantee: the test pins the file by its SHA-256, with its line ends
+      read as `\n`, so the exception covers exactly the bytes a reviewer read, and any change to
+      the client is a change to the pin in the same commit. The lexical rules below are a second,
+      best-effort tripwire that records what the reviewed file may contain; they read the file
+      whole (a test-module marker hides nothing), but they are not claimed to be independent of
+      formatting or to tie each setter to the open when the file and the pin change together. A
+      change to the file, the pin or the rules is visible in the diff of one test file and one
+      source file, and that review is the control;
+    - in that file the substring appears exactly three times, in its two `use` lines, which may
+      not rename it (`as`), and in one `OpenOptions::new()` call, and the file has one `.open(`,
+      of the pipe's path;
+    - the file contains only the function that opens the client handle and wraps it (the retry of
+      a busy pipe is beside it, in the module); it opens a path it builds itself from the fixed
+      prefix `\\.\pipe\` and the per-session name; its one custom flag is the
+      `FILE_FLAG_OVERLAPPED` constant and its one quality of service `SECURITY_IDENTIFICATION`,
+      each defined once with its value; the test refuses in it, as a word anywhere, comments
+      included, `create`, `create_new`, `truncate`, `append`, `creation_disposition` and
+      `attributes` (which can carry `FILE_FLAG_DELETE_ON_CLOSE`), so the exception cannot create,
+      truncate, extend or delete a file, and `unsafe`, `cfg`, `extern`, `mod`, `include`,
+      `include_str`, `include_bytes`, `macro_rules` and `asm`; and it refuses in it any string
+      literal, block comment, attribute or macro;
+    - this client is the one way the product opens the pipe, the server's own wake-up at
+      shutdown included: a second test refuses, in every production source, the crate's own ways
+      of connecting.
 
     The second experiment (see Context) showed what this decision needs: the wrapped handle
     carries traffic in both directions at once with no `unsafe` of our own, and a server that
@@ -353,16 +422,20 @@ From the spike, each with its reason:
   is off by default. What does not: a process that takes the name first can still read the ticket
   and the traffic of an `attach` that connects to it, and answer the agent as if it were the
   engine, with fabricated observations and invented action results; it holds no engine, so it
-  delivers nothing to the desktop through this relay, but it can mislead the agent (open point).
+  delivers nothing to the desktop through this relay, but it can mislead the agent (open point);
+  and a process of the same user can add instances to the engine's pipe and receive some of
+  `attach`'s connections in the same way (decision 4).
 - **A residual denial of service, from processes of the same user.** A client that stays
   connected without sending or reading holds a place, a thread and the name with no time bound,
   and shutdown cannot end it (decision 7); a peer that presents enough distinct tickets fills
   the set of spent tickets, after which nobody new is admitted by ticket until the engine
   restarts (decision 9). Only the user's own processes can open the pipe, and ADR-0040 places
   them outside what a grant defends against; the bound on clients and the set's bound keep both
-  to memory and threads that are counted in advance.
-- **One exception to the SEC-04 source check**, the first: one file, one substring, one call, with
-  the calls that could create or change a file refused in that file. The test that enforces SEC-04
+  to memory and threads that are counted in advance (decision 7 states the bound on the
+  listener's threads and who enforces it).
+- **One exception to the SEC-04 source check**, the first: one file pinned by its digest, one
+  substring, one call, with the calls that could create, change or delete a file refused in that
+  file. The test that enforces SEC-04
   changes with the implementation to carry it.
 - **Two serving loops.** The pipe uses a synchronous reader next to the asynchronous one of stdio;
   both must keep the same bounds, and the tests compare them.
@@ -375,10 +448,14 @@ and, in the executable, the switch `[mcp] transport = "pipe"`, both off by defau
 - the synchronous loop, the grants asked of a `GrantStore` at every call and the ticket
   handshake, in `adapter-mcp` (`feat/transport-core`);
 - the listener and the identification-level client of decisions 2 to 7 and 12, the relay, the
-  one bounded SEC-04 exception and the CI step, in `adapter-mcp` (`feat/broker-pipe`);
-- the switch, the derivation of the name, the grants file, `attach` and the process tests, in the
-  executable, with requirement RF-20, its planned tests and scenarios, and the dossier
-  (`feat/broker-attach`).
+  one bounded SEC-04 exception, pinned to the reviewed file, and the CI step, in `adapter-mcp`,
+  with the resolution of its first review (places counted at accept, the reservation outside
+  the broker's lock, the three states of shutdown, the errors of accepting), and a second
+  resolution to come (T2c: places freed after a join, the stop at the dispatch, the limits
+  stated exactly) (`feat/broker-pipe`);
+- the switch, the derivation of the name, the grants file, `attach`, `serve`'s exit when the
+  listener stops accepting and the process tests, in the executable, with requirement RF-20, its
+  planned tests and scenarios, and the dossier (`feat/broker-attach`).
 
 Run on the development machine (Windows 11, GNU host, not elevated), through real pipes between
 threads and between processes. Not run: a second local user, an elevated engine, a real MCP
@@ -418,10 +495,11 @@ New planned tests, with identifiers to be assigned in the matrix when the ADR is
   observable separates the two levels.
 - `attach` retries a busy pipe (231) a bounded number of times and then fails; with no engine (2)
   it fails at once.
-- The SEC-04 source check fails if `OpenOptions` appears in any other production file, on any
-  line of the allowed file other than its two `use` lines and one `OpenOptions::new(` call, if a
-  `use` line renames it, or with `.create(`, `.create_new(`, `.truncate(`, `.append(` or
-  `.creation_disposition(` in that file.
+- The SEC-04 source check fails if `OpenOptions` appears in any other production file, in the
+  allowed file other than in its two `use` lines and one `OpenOptions::new()` call, if a `use`
+  line renames it, or with `create`, `create_new`, `truncate`, `append`, `creation_disposition`
+  or `attributes` in that file (a best-effort tripwire), and in every case when that file's
+  digest is not the pinned one (the guarantee).
 - A client that disconnects in mid-message, or never reads, does not disturb the others.
 - `attach` with no engine listening fails and starts no process.
 - The repository's SEC-04 source and lockfile checks and the REL-01 checks pass with the new crates.
@@ -467,8 +545,8 @@ primera instancia, lo que impide un segundo motor; el descriptor `D:P(A;;GA;;;OW
 al propietario, y el motor no se ejecuta elevado. El límite de clientes se aplica al aceptar.
 `attach` sólo retransmite y nunca arranca un motor; se conecta con calidad de servicio de
 identificación, para que quien haya ocupado antes el nombre no pueda actuar como el usuario, con
-una sola llamada a `OpenOptions` en un archivo que es la única excepción, acotada, a la
-comprobación SEC-04, abierta con `FILE_FLAG_OVERLAPPED`; un segundo experimento mostró que ese
+una sola llamada a `OpenOptions` en un archivo, fijado por su SHA-256, que es la única excepción,
+acotada, a la comprobación SEC-04, abierta con `FILE_FLAG_OVERLAPPED`; un segundo experimento mostró que ese
 manejador envuelto transmite en ambos sentidos a la vez sin `unsafe` propio y que el servidor sólo
 obtiene nivel de identificación. Un tubo ocupado se reintenta un número acotado de veces y uno
 ausente significa que no hay motor. Un cliente rechazado no bloquea la
@@ -485,6 +563,14 @@ elevado; tampoco están probados el anfitrión MSVC ni un anfitrión MCP real. E
 `[mcp] pipe_name` o se deriva del nombre del usuario; el tique son 32 a 128 caracteres base64url
 en un archivo, de un solo uso por proceso, y su concesión sale del archivo de concesiones,
 leído en cada llamada. Un cliente callado retiene una plaza, un hilo y el nombre sin límite de
-tiempo, y la parada no lo puede terminar; el conjunto de tiques gastados se puede llenar. El
+tiempo, y la parada no lo puede terminar; la parada dice en qué estado deja el oyente (completo,
+con conexiones que quedan o con su hilo de aceptación vivo), y `serve`, si el oyente deja de
+aceptar por un error que no es pasajero, lo para y sale con 3, 4 o 5; el próximo commit del
+tubo (T2c) hace cumplir que una plaza sólo se devuelve tras unir su hilo, que ninguna petición
+pasa la comprobación de parada después de la parada (una que ya la pasó llega a su fin) y que
+«completo» signifique todos los hilos unidos; un proceso del mismo usuario puede añadir
+instancias del nombre y recibir conexiones de `attach`; el conjunto de tiques gastados se puede
+llenar. La garantía de la excepción a SEC-04 es el resumen fijado; sus reglas de texto son un
+aviso de buena fe. El
 transporte, `attach` y el interruptor existen en ramas locales, detrás de una función de
 compilación y de un interruptor apagados por defecto.

@@ -38,7 +38,7 @@ Para tomar decisiones, leer primero la auditoría (00), el SDD (02) y los requis
 
 ## Artefactos de implementación y aceptación
 
-[`../adr/`](../adr/README.md) contiene los 12 registros de decisión de la tesis (ADR-0001 a ADR-0012, en inglés con la versión original en español). [`features/`](features) contiene 71 escenarios Gherkin en nueve archivos; la suite de aceptación (`src/acceptance/tests/thesis.rs`) ejecuta los que la lista `IMPLEMENTED` nombra. [`contratos/`](contratos/README.md) contiene nueve esquemas JSON, 27 casos de payload y ejemplos MCP. [`matrices/`](matrices) contiene 30 requisitos, 177 pruebas planificadas, trazabilidad BDD y 16 riesgos.
+[`../adr/`](../adr/README.md) contiene los 12 registros de decisión de la tesis (ADR-0001 a ADR-0012, en inglés con la versión original en español). [`features/`](features) contiene 71 escenarios Gherkin en nueve archivos; la suite de aceptación (`src/acceptance/tests/thesis.rs`) ejecuta los que la lista `IMPLEMENTED` nombra. [`contratos/`](contratos/README.md) contiene nueve esquemas JSON, 27 casos de payload y ejemplos MCP. [`matrices/`](matrices) contiene 30 requisitos, 178 pruebas planificadas, trazabilidad BDD y 16 riesgos.
 
 [`diagramas/`](diagramas/README.md) contiene fuentes Mermaid y DOT; las mismas vistas, con etiquetas en inglés, están en [`../diagrams/`](../diagrams/README.md). [`plantillas/`](plantillas) contiene configuración segura, inventario de modelos, perfil de hardware, resultados de evaluación vacíos e interfaces Rust. [`fuentes/referencias.json`](fuentes/referencias.json) cataloga las 24 fuentes primarias.
 
