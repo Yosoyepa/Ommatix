@@ -148,8 +148,10 @@ fn serve_pipe(args: &RunArgs, config: &Config) -> Result<()> {
     for line in ended.lines() {
         eprintln!("ommatix: {line}");
     }
-    // Exit now: a connection still open, or an accept thread still waiting, ends with the
-    // process, and nothing of it is served meanwhile.
+    // Exit now, without dropping the server: whatever the listener still holds (a worker not
+    // joined, a request that passed its stop check and still runs, an accept thread still
+    // waiting, the reaper) ends with the process. `exit` runs no destructor, so the broker's
+    // final teardown is the end of the process, never a detached thread of the listener.
     std::process::exit(ended.code())
 }
 

@@ -181,8 +181,18 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
 6. **The engine never runs elevated for this.** The owner of an object created by an elevated
    process is, by default, the Administrators group, not the user, so `OW` would then grant the
    pipe to every administrator of the machine and not to the user alone. The operator starts the
-   engine with the broker on from an unelevated session. How the engine refuses to start the
-   broker when it is elevated is an open point.
+   engine with the broker on from an unelevated session. Measured, not inferred: in CI run
+   45814291197 (`feat/broker-pipe` at `37c0ea0`, GitHub's Windows runner, the process elevated:
+   integrity `S-1-16-12288`, Administrators enabled, the token's default owner `S-1-5-32-544`)
+   the pipe's descriptor, read through a connected client handle, is
+   `O:BA G:<the user's primary group> D:P(A;;FA;;;OW)`: the same protected DACL, one entry of full
+   access to OWNER RIGHTS, as when not elevated, with `BUILTIN\Administrators` as its owner
+   instead of the user. Not elevated, on the development machine, it reads `D:P(A;;FA;;;OW)` with
+   the user as owner. So "the owner only" means, when the engine runs elevated, every process
+   whose token holds the Administrators group as owner, that is any elevated process of any
+   administrator of the machine, not only the user's; when it is not elevated, it means the
+   user. The descriptor is the same in both cases; who its owner is differs. The engine does not
+   refuse to start elevated; whether it should is the owner's decision (second open point).
 7. **The bound on clients is enforced in the accept loop.** ADR-0039 allows eight clients at once.
    The pipe's own instance limit cannot enforce that: it makes a further client connect and wait,
    not fail (from the first experiment). The crate's limit is left at its default, and the accept loop
@@ -190,63 +200,112 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    engine is full, and closed. The accept thread never flushes or waits on a refused client: a
    flush waits until the peer has read, so a refused client that never reads would stall
    accepting. The refusal line is written and flushed, and the connection closed, on a short-lived
-   thread of its own; those threads are bounded too, and past that bound a refused connection is
-   closed with no line, which `attach` reports as a refusal. The loop does no other work between
-   two accepts, because the listener keeps one waiting instance and a client arriving while it is
+   thread of its own; those threads are bounded too (four), and past that bound a refused
+   connection is closed with no line, which `attach` reports as a refusal; a connection is also
+   closed with no line when the broker is unavailable after a failed call. The loop does no
+   other work between two accepts, because the listener keeps one waiting instance and a client arriving while it is
    re-created sees the pipe as busy. A connection takes its place among the clients when it is
    accepted, before a byte of it is read, and holds it while its handshake is read; the
    handshake's size is bounded (decision 9), so peers that connect and send nothing, or send a
    handshake without end, hold at most the bound's places and threads. The listener counts its
    own places, taken at accept before the broker is asked; the broker counts its places
    (connected clients and reservations) with atomic operations, apart from its servicing lock,
-   so a reservation never waits on a call in progress. The bound on threads, as the next commit
-   of the pipe (T2c) enforces it: at any moment the listener's live threads are at most
-   `1 + R + P`, the accept thread, a fixed number `R` (0 or 1) of helpers, and `P` places
-   (clients and refusal workers), because a place is given back only after `JoinHandle::join`
-   has returned for the thread that held it, by a thread other than that worker; joining a
-   thread that has finished is the only wait the accept thread makes for a worker. Until that
-   commit, a worker gives its place back itself as its last act, after it has closed its
-   connection, and the threads count themselves: the count is kept within the bound, but the
-   bound is not enforced by a join. An error of accepting is either transient (OS errors 8, 14,
-   1450 and 1816, memory, resources or quota short for a moment; 232 and 233, a client that left
-   while it was being connected), retried with a pause that doubles up to one second and that
-   the stop interrupts, or fatal: any other error ends the listener visibly (it is kept as the
-   listener's failure, the listener says it no longer accepts, and shutdown reports it). That
-   pause does not bound every retry: when a client connects and leaves before the accept
-   returns, the dependency disconnects that instance and waits again inside its own call,
-   without our pause and without our count. Each such repetition costs the peer one connection
-   of its own, only a process that may open the pipe (the same user, by the descriptor) can
-   cause it, and the stop is still observed, because the wake-up is itself a connection. When
-   the listener stops accepting, `serve` shuts it down, says why and where the shutdown left it
-   on stderr, and exits with a code for each state (3, 4 or 5), never lingering as if it served.
+   so a reservation never waits on a call in progress.
+
+   **The bound on threads, and who enforces it.** At any moment the listener's threads not yet
+   joined number at most `1 + 1 + P`: the accept thread, one reaper, and `P` workers, with
+   `P = connections + refusals <= n + 4`, where `n` is the broker's bound on clients (eight in
+   the executable). That makes `n + 6` at most. A place is given back only after
+   `JoinHandle::join` has returned for its worker, by the reaper, never by the worker. The accept
+   thread joins nobody and waits on nobody: when every place is held, ending workers included,
+   it refuses. The cost: one reaper joins one worker at a time, so a slow exit delays the places
+   behind it, and admission refuses meanwhile; a worker's thread-local teardown can be such a
+   slow exit (accepted).
+
+   **The reaper accounts first and never runs a worker's panic payload.** The join's result is
+   held in `ManuallyDrop`; the entry and the place go first, and only then is the result looked
+   at. A worker's panic payload is forgotten, never dropped, because its destructor is foreign
+   code that could panic or block on the one thread that frees places. The cost: such a payload,
+   with whatever it owns, stays allocated for the life of the process, once per worker that
+   panicked. A worker builds its notice inside its own thread, so a thread that could not start
+   sends none, and every notice has its entry.
+
+   **Foreign teardown stays off the helper threads.** The accept thread and the reaper never run
+   a destructor of a value the user supplied (the broker, its ports, its grant store). The server
+   keeps its own reference to the broker for its whole life. Each helper's completion signal is
+   the drop of the last thing it owns, a channel's sender, after everything else it captured is
+   dropped (for the reaper: its receiver of notices and its reference to the shared state). The
+   server learns of a helper's end from that channel; after the signal only the thread's exit
+   remains, and shutdown joins it only after the signal. The listener's reference is released on
+   the thread that drops the server. **Limit:** this holds only for a server dropped after
+   `Complete`, and only when nothing else owns the broker. A server dropped earlier detaches its
+   accept thread, its reaper or its workers, each of which may still own a clone of the broker,
+   and the final teardown of the broker's ports may then run on one of them. The advice: reach
+   `Complete` before dropping, and keep no other owner of the broker if the teardown must run on
+   the caller's thread. Process-wide hooks, and thread-locals that a user's port installs on a
+   worker thread, are outside this guarantee.
+
+   **Errors of accepting, and the dependency's own retry (a limit).** An error of accepting is
+   either transient (OS errors 8, 14, 1450 and 1816, memory, resources or quota short for a
+   moment; 232 and 233, a client that left while it was being connected), retried with a pause
+   that doubles up to one second and that the stop interrupts, or fatal: any other error ends
+   the listener visibly (it is kept as the listener's failure, the listener says it no longer
+   accepts, and shutdown reports it). The handling of errors 232 and 233 is a defence; whether
+   Windows returns them through the paths that reach the listener was not established. Inside
+   `interprocess` 2.4.9, a client that connects and leaves before the accept returns makes the
+   accept disconnect that instance and wait again, without the listener's back-off or stop. Each
+   such iteration costs the peer one connection (no amplification), and only a process the
+   descriptor admits can cause it (the same user, with an engine that is not elevated; an
+   elevated engine is the second open point, decision 6); the listener's retry counter does not
+   count these iterations. When the listener stops accepting, `serve` shuts it down, says why and
+   where the shutdown left it on stderr, and exits with a code for each state (3, 4 or 5), never
+   lingering as if it served; it ends its process right after, without dropping the listener.
 
    **What the listener cannot do.** The crate's safe API has no timeout and no cancel for a
    blocked read, write or flush, and ending such a thread needs `CancelIoEx` or
    `DisconnectNamedPipe`, which are `unsafe`. So a client that connects and then neither sends
    nor reads holds one place, one thread and the pipe's name until it acts, leaves or the engine
    process ends; the handshake has a bound on its size and none on its time; and the bound on
-   clients, counted from accept, is the only limit. Shutdown stops accepting at once. What it
-   guarantees about requests, as the next commit of the pipe (T2c) states and enforces it: there
-   is one stop check per request, made immediately before the request is handed to the broker,
-   and no request passes that check after the stop is set; a request that passed it earlier
-   runs to its end, so the engine's work, a delivered action and its reply may all happen after
-   the stop. Nothing more is promised. Until that commit the stop reaches the line reader as an
-   ordinary end of input, so a frame accumulated without its line end can still be dispatched
-   after the stop. Shutdown cannot end a connection blocked on a silent client: the real end of
-   an engine is the end of its process, which closes every handle.
-   Shutdown wakes its accept thread by connecting to its own pipe through the
-   identification-level client of decision 12, and waits for that thread a bounded time (twenty
-   tries of 100 ms), never with a bare join: the descriptor gives the pipe's owner every right, so
-   any process of the same user can add instances under the name (decision 4), and the wake-up
-   connection, like any other connection, may land on one of those instead of the engine's. Its
-   report names one of three states: complete; connections remaining (the accept thread ended,
-   but connections or refusals are still being served); or the accept thread still alive (no
-   wake-up reached it; it is kept, and the next shutdown tries again). That complete means that
-   the accept thread and every worker have been joined, a worker whose work has returned but
-   whose thread is not joined yet counting as remaining, is what the next commit of the pipe
-   (T2c) enforces; until then, complete means that the accept thread was joined and the counts
-   of connections and refusals reached zero. `serve` calls shutdown only once its listener has
-   stopped accepting, and then exits; otherwise the engine ends with its process.
+   clients, counted from accept, is the only limit. Shutdown stops accepting at once, but cannot
+   end a connection blocked on a silent client: the real end of an engine is the end of its
+   process, which closes every handle.
+
+   **What the stop guarantees, and its limit.** There is one stop check per request, immediately
+   before the request is handed to the broker (the handshake's admission, and every message
+   after it), and no request passes it after the stop is set. A request that passed it earlier
+   runs to its end: engine work, a delivered action and its reply may happen after the stop, and
+   its connection counts as remaining until its worker is joined. A request begun but not ended
+   at the stop is discarded: the stop reaches a connection's reader as a distinct outcome, not as
+   an end of input. Nothing more is promised. The operator's stop of actuation (ADR-0007 and its
+   successors) is independent and unchanged.
+
+   **The wake-up, and what shutdown reports.** Shutdown wakes its accept thread by connecting to
+   its own pipe through the identification-level client of decision 12, and waits for that
+   thread a bounded time (twenty tries of 100 ms), never with a bare join: the descriptor gives
+   the pipe's owner every right, so any process of the same user can add instances under the
+   name (decision 4), and the wake-up connection, like any other connection, may land on one of
+   those instead of the engine's. The wake-up ends the accept's wait only when it reaches this
+   listener's instance and the accept returns; otherwise the stop takes effect at the next
+   connection that reaches the listener, so the stop is not always observed. Shutdown's report
+   names one of three states:
+   - complete: the accept thread, every worker and the reaper are joined;
+   - remaining: workers not yet joined, or only the reaper's end awaited (`only_reaper_left`);
+     the server keeps them, and a later call can complete;
+   - the accept thread still alive: the wake-up did not reach the listener's instance; the thread
+     is kept, and the next shutdown tries again.
+
+   Shutdown's deadline covers the protocol's waits. The two final joins, of the accept thread and
+   the reaper, follow each thread's end signal, after which no foreign teardown owned by the
+   listener is left, and are bounded only by the thread's own exit. A time too large to
+   represent means no deadline. Dropping the server without `shutdown` sets the stop, spends at
+   most a bounded wake-up interval (20 connections, 100 ms after each, about 2 s), and joins
+   nothing (see above for where the teardown then runs). A caller's wait on the listener's counts
+   (`wait_until`) returns once its predicate holds on a copy of the counts; the predicate runs
+   outside the listener's lock, no change between the copy and the wait is missed, and the time
+   is checked before every wait, so counts that keep changing do not keep it from giving up; it
+   is not bounded against a predicate that itself takes time. `serve` calls shutdown only once
+   its listener has stopped accepting, and then exits; otherwise the engine ends with its
+   process.
 8. **`attach` only relays, and never starts an engine.** The executable gains an `attach` mode
    that connects to the pipe of the current user session and relays its standard input and output
    to it, so an MCP host keeps starting a stdio server. When no engine listens, `attach` fails with
@@ -365,9 +424,13 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
   derived so that another user cannot predict and take it, are not decided; the calls that tell
   who owns a pipe are not in the crate's safe API. A process of the same user is outside what the
   grant defends against (ADR-0040); another user's is not.
-- **How the engine refuses to start the broker when elevated.** The only integrity read in the
-  code is the input adapter's, under ADR-0016 and only with `sendinput`. Reusing it through the
-  composition root, or another way, is not decided; until then decision 6 is the operator's rule.
+- **Whether, and how, the engine refuses to start the broker when elevated.** The engine does
+  not refuse today. Elevated, the pipe's owner is `BUILTIN\Administrators` (measured in CI run
+  45814291197, decision 6), so any elevated process of any administrator of the machine can open
+  the pipe, not only the user's. Whether the engine should refuse is the owner's decision. The
+  only integrity read in the code is the input adapter's, under ADR-0016 and only with
+  `sendinput`. Reusing it through the composition root, or another way, is not decided; until
+  then decision 6 is the operator's rule.
 
 ## Alternatives considered
 
@@ -408,7 +471,12 @@ From the spike, each with its reason:
   to the table of `docs/thesis/S4_REPRODUCIBILIDAD.md` with a CHANGELOG entry. `widestring` becomes
   a direct dependency of `adapter-mcp` (same version, licence already listed), because the SDDL
   call takes its type and the crate does not re-export it. `doctest-file` is a proc-macro crate,
-  the kind of artefact Smart App Control has refused on the development machine.
+  the kind of artefact Smart App Control has refused on the development machine. REL-01's
+  licence test reads the default features only, so the crates behind `broker-pipe`
+  (`interprocess`, `recvmsg`, `doctest-file`) are not checked by it; their licences were checked
+  by hand and are listed in `S4_REPRODUCIBILIDAD.md` §3. With all features, `ISC` and
+  `MIT OR Apache-2.0 OR Zlib` are missing from that document; they belong to other features'
+  crates, a gap from before this transport.
 - **Speed.** Flushing after every reply, as `serve` does today, cost up to 1.9 times the time of
   the same run without it on large replies, and never blocked while the client read. The client's
   quality of service did not change throughput measurably. Because `OpenOptions` does not wait on
@@ -429,10 +497,15 @@ From the spike, each with its reason:
   connected without sending or reading holds a place, a thread and the name with no time bound,
   and shutdown cannot end it (decision 7); a peer that presents enough distinct tickets fills
   the set of spent tickets, after which nobody new is admitted by ticket until the engine
-  restarts (decision 9). Only the user's own processes can open the pipe, and ADR-0040 places
+  restarts (decision 9). With an engine that is not elevated, only the user's own processes can
+  open the pipe (an elevated engine is the second open point, decision 6), and ADR-0040 places
   them outside what a grant defends against; the bound on clients and the set's bound keep both
   to memory and threads that are counted in advance (decision 7 states the bound on the
   listener's threads and who enforces it).
+- **Kept until the process ends.** A listener worker's panic payload is forgotten, not dropped,
+  so it stays allocated, with whatever it owns, for the life of the process, once per worker
+  that panicked (decision 7). The broker's fail-closed poisoning, unchanged, stops service for
+  every client after a panic under its lock.
 - **One exception to the SEC-04 source check**, the first: one file pinned by its digest, one
   substring, one call, with the calls that could create, change or delete a file refused in that
   file. The test that enforces SEC-04
@@ -440,7 +513,7 @@ From the spike, each with its reason:
 - **Two serving loops.** The pipe uses a synchronous reader next to the asynchronous one of stdio;
   both must keep the same bounds, and the tests compare them.
 
-## What exists (2026-11-25)
+## What exists (2026-11-26)
 
 On local branches stacked on the broker of ADR-0039, all behind the cargo feature `broker-pipe`
 and, in the executable, the switch `[mcp] transport = "pipe"`, both off by default:
@@ -449,10 +522,11 @@ and, in the executable, the switch `[mcp] transport = "pipe"`, both off by defau
   handshake, in `adapter-mcp` (`feat/transport-core`);
 - the listener and the identification-level client of decisions 2 to 7 and 12, the relay, the
   one bounded SEC-04 exception, pinned to the reviewed file, and the CI step, in `adapter-mcp`,
-  with the resolution of its first review (places counted at accept, the reservation outside
-  the broker's lock, the three states of shutdown, the errors of accepting), and a second
-  resolution to come (T2c: places freed after a join, the stop at the dispatch, the limits
-  stated exactly) (`feat/broker-pipe`);
+  with the resolutions of its four reviews (places counted at accept and given back only after
+  the reaper has joined their worker, the reservation outside the broker's lock, one stop check
+  at the dispatch, the three states of shutdown, the errors of accepting and the dependency's
+  own retry as a limit, foreign teardown kept off the helper threads, a worker's panic payload
+  never dropped, the digest pin as the guarantee of the exception) (`feat/broker-pipe`);
 - the switch, the derivation of the name, the grants file, `attach`, `serve`'s exit when the
   listener stops accepting and the process tests, in the executable, with requirement RF-20, its
   planned tests and scenarios, and the dossier (`feat/broker-attach`).
@@ -502,14 +576,17 @@ New planned tests, with identifiers to be assigned in the matrix when the ADR is
   digest is not the pinned one (the guarantee).
 - A client that disconnects in mid-message, or never reads, does not disturb the others.
 - `attach` with no engine listening fails and starts no process.
-- The repository's SEC-04 source and lockfile checks and the REL-01 checks pass with the new crates.
+- The repository's SEC-04 source and lockfile checks and the REL-01 checks pass with the new crates
+  (REL-01's licence test reads the default features only; see Consequences).
 - The `windows` job of CI (MSVC host) builds and tests the pipe.
 - **Supervised by the owner, because it needs administrator rights:** a second local user cannot
   open the pipe; a pipe created first by a second local user, playing the squatter, cannot act as
   the `attach` user; and the descriptor created by an elevated process is checked for what `OW`
-  then grants. Neither experiment tested these. Until they have run, the claim that the pipe is restricted
-  to the current user rests on one read-back descriptor and a negative control, and this ADR must
-  not be accepted on it.
+  then grants. Neither experiment tested these; the last one has a first measurement in CI (run
+  45814291197, decision 6: the owner is `BUILTIN\Administrators`), not yet a supervised check.
+  Until they have run, the claim that the pipe is restricted to the current user, with an engine
+  that is not elevated, rests on one read-back descriptor and a negative control, and this ADR
+  must not be accepted on it.
 
 ## Reversibility
 
@@ -557,18 +634,29 @@ actuar como el usuario, pero sí leer el tique y las peticiones y responder como
 observaciones inventadas, que pueden llevar instrucciones para el modelo, y resultados de acciones
 que no ocurrieron; no entrega nada al escritorio por este canal, pero puede engañar al agente.
 Quedan abiertos cómo comprobar quién es dueño del tubo antes de retransmitir cualquier mensaje y
-cómo se niega el motor a arrancar elevado. No se acepta sin probar
+si el motor debe negarse a arrancar elevado, lo que decide el responsable: hoy no se niega, y
+elevado el dueño del tubo es el grupo `BUILTIN\Administrators` (medido en la ejecución de CI
+45814291197), así que cualquier proceso elevado de cualquier administrador de la máquina lo
+puede abrir; sin elevar, el dueño es el usuario. No se acepta sin probar
 antes, con el responsable, un segundo usuario (también como ocupante del nombre) y un proceso
 elevado; tampoco están probados el anfitrión MSVC ni un anfitrión MCP real. El nombre del tubo es
 `[mcp] pipe_name` o se deriva del nombre del usuario; el tique son 32 a 128 caracteres base64url
 en un archivo, de un solo uso por proceso, y su concesión sale del archivo de concesiones,
 leído en cada llamada. Un cliente callado retiene una plaza, un hilo y el nombre sin límite de
-tiempo, y la parada no lo puede terminar; la parada dice en qué estado deja el oyente (completo,
-con conexiones que quedan o con su hilo de aceptación vivo), y `serve`, si el oyente deja de
-aceptar por un error que no es pasajero, lo para y sale con 3, 4 o 5; el próximo commit del
-tubo (T2c) hace cumplir que una plaza sólo se devuelve tras unir su hilo, que ninguna petición
-pasa la comprobación de parada después de la parada (una que ya la pasó llega a su fin) y que
-«completo» signifique todos los hilos unidos; un proceso del mismo usuario puede añadir
+tiempo, y la parada no lo puede terminar. Una plaza sólo se devuelve después de que el hilo
+segador ha unido (join) el hilo que la tenía, así que el oyente tiene a lo sumo n + 6 hilos sin
+unir (el de aceptación, el segador y n + 4 plazas); el segador no ejecuta nunca la carga del
+pánico de un hilo de trabajo, que queda en memoria mientras viva el proceso. Hay una
+comprobación de parada por petición, justo antes de entregarla al intermediario: ninguna la pasa
+después de la parada, una que ya la pasó llega a su fin y una a medio leer se descarta. La
+parada dice en qué estado deja el oyente: completo (todos sus hilos unidos, el segador
+incluido), con hilos que quedan o con su hilo de aceptación vivo, porque el despertar no siempre
+lo alcanza; su espera no acota las dos uniones finales, que siguen a la señal de fin de cada
+hilo. Un servidor soltado antes de completo puede ejecutar la destrucción final del
+intermediario en un hilo desligado. Dentro de la dependencia, un cliente que se conecta y se va
+antes de que vuelva la aceptación hace que ésta vuelva a esperar sin la pausa ni la parada del
+oyente. `serve`, si el oyente deja de aceptar por un error que no es pasajero, lo para y sale
+con 3, 4 o 5; un proceso del mismo usuario puede añadir
 instancias del nombre y recibir conexiones de `attach`; el conjunto de tiques gastados se puede
 llenar. La garantía de la excepción a SEC-04 es el resumen fijado; sus reglas de texto son un
 aviso de buena fe. El
