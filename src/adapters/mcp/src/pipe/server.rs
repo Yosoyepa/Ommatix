@@ -36,9 +36,11 @@
 //! - *Foreign teardown stays off the helper threads (D43).* The accept thread and the reaper
 //!   never run a destructor of a value the listener's user supplied (the broker, its ports, its
 //!   grant store): the server keeps its own reference to the broker for its whole life, so a
-//!   helper thread's reference is never the last one. Each helper drops everything it captured
-//!   before its last act, the signal that it has ended; after that signal only the thread's own
-//!   exit remains, and shutdown joins it only after the signal. The server's own reference is
+//!   helper thread's reference is never the last one. Each helper's completion signal is the
+//!   drop of the last thing it owns, a channel's sender, after everything else it captured is
+//!   dropped (for the reaper: its receiver of notices and its reference to the shared state); the
+//!   server learns that the helper has ended from that channel. After the signal only the
+//!   thread's own exit remains, and shutdown joins it only after the signal. The server's own reference is
 //!   released on the thread that drops the server. **Limit:** this holds for a server dropped
 //!   after [`ShutdownState::Complete`], with no other owner of the broker. A server dropped
 //!   earlier detaches its accept thread, its reaper or its workers, each of which may still own
@@ -232,8 +234,6 @@ struct State {
     /// Every worker not joined yet, with its place.
     workers: BTreeMap<u64, Worker>,
     next_worker: u64,
-    /// Whether the reaper's loop has ended (all its senders are gone and every worker joined).
-    reaper_done: bool,
     /// Entries of the accept loop into its pause, and how the last one ended (for tests).
     pauses: u64,
     last_pause: Option<PauseEnd>,
@@ -562,6 +562,8 @@ pub struct PipeServer {
     accept_ended: Mutex<Receiver<()>>,
     /// The reaper, kept until it is joined.
     reaper: Option<JoinHandle<()>>,
+    /// Disconnected when the reaper has ended: its sender is the last thing the reaper drops.
+    reaper_ended: Mutex<Receiver<()>>,
     /// The server's own reference to the broker, so that no helper thread's is ever the last;
     /// released on the thread that drops the server.
     _broker: Broker,
@@ -594,7 +596,8 @@ impl PipeServer {
         let shared = Arc::new(Shared::new());
         // The accept thread and the reaper, counted until they are joined.
         shared.update(|s| s.threads = 2);
-        let (to_reaper, reaper) = start_reaper(&shared).map_err(|e| PipeError::Thread(e.kind()))?;
+        let (to_reaper, reaper, reaper_ended) =
+            start_reaper(&shared).map_err(|e| PipeError::Thread(e.kind()))?;
         let (ending, accept_ended) = mpsc::channel::<()>();
         let accept = {
             let shared = Arc::clone(&shared);
@@ -622,6 +625,7 @@ impl PipeServer {
             accept: Some(accept),
             accept_ended: Mutex::new(accept_ended),
             reaper: Some(reaper),
+            reaper_ended: Mutex::new(reaper_ended),
             _broker: broker,
         })
     }
@@ -728,8 +732,13 @@ impl PipeServer {
     /// thread and of the reaper, follow each thread's signal that it has ended, after which no
     /// foreign teardown owned by the listener is left on it; they are bounded only by the
     /// thread's own exit. Dropping the server after `Complete` releases the listener's last
-    /// reference to the broker on the dropping thread; see [`PipeServer`] for a server dropped
-    /// earlier.
+    /// reference to the broker on the dropping thread. **Limit (A1):** that holds only for a
+    /// server dropped after `Complete` and only when nothing else owns the broker. A server
+    /// dropped before `Complete` detaches its accept thread, its reaper or its workers, each of
+    /// which may still own a clone of the broker, and the final teardown of the broker's ports
+    /// may then run on one of those detached threads. To have that teardown on the caller's own
+    /// thread, reach `Complete` before dropping the server and keep no other owner of the
+    /// broker.
     pub fn shutdown(&mut self, wait: Duration) -> ShutdownReport {
         self.shared.stop();
         let deadline = deadline_after(wait);
@@ -746,11 +755,13 @@ impl PipeServer {
             None => true,
         };
         if accept_stopped && self.reaper.is_some() {
-            let ended = self.shared.wait_for(deadline, |state| {
-                state.workers.is_empty() && state.reaper_done
-            });
+            // Every worker joined, then the reaper's own end, both within `wait`.
+            let ended = self
+                .shared
+                .wait_for(deadline, |state| state.workers.is_empty())
+                && self.reaper_ended_by(deadline);
             if ended && let Some(reaper) = self.reaper.take() {
-                // The reaper's loop has ended; it is only leaving its thread.
+                // The reaper has dropped everything it owned; it is only leaving its thread.
                 let _ = reaper.join();
                 self.shared.update(|s| s.threads -= 1);
             }
@@ -771,6 +782,23 @@ impl PipeServer {
             state: left,
             stats,
             failure: self.failure(),
+        }
+    }
+
+    /// Whether the reaper has ended (its completion channel is disconnected), waiting at most
+    /// until `deadline` (`None`: no deadline).
+    fn reaper_ended_by(&self, deadline: Option<Instant>) -> bool {
+        let ended = self
+            .reaper_ended
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match left_until(deadline) {
+            Left::Passed => matches!(ended.try_recv(), Err(TryRecvError::Disconnected)),
+            Left::For(left) => matches!(
+                ended.recv_timeout(left),
+                Err(RecvTimeoutError::Disconnected)
+            ),
+            Left::Unbounded => ended.recv().is_err(),
         }
     }
 
@@ -823,24 +851,27 @@ impl Drop for PipeServer {
 /// out of the table under the lock, releases the lock, joins the worker, and only then gives the
 /// worker's place back. It ends when every sender is gone (the accept thread's and every
 /// worker's), after the last join.
-fn start_reaper(shared: &Arc<Shared>) -> io::Result<(Sender<u64>, JoinHandle<()>)> {
+///
+/// Returns the sender for notices, the reaper's handle, and the receiver of its end: it
+/// disconnects when the reaper drops its completion sender, the last thing it owns, after its
+/// receiver of notices and its reference to the shared state.
+fn start_reaper(shared: &Arc<Shared>) -> io::Result<(Sender<u64>, JoinHandle<()>, Receiver<()>)> {
     let (to_reaper, ending) = mpsc::channel::<u64>();
+    let (done, reaper_ended) = mpsc::channel::<()>();
     let shared = Arc::clone(shared);
     let reaper = thread::Builder::new()
         .name("ommatix-pipe-reaper".to_owned())
         .spawn(move || {
             {
-                // The receiver, which holds identifiers only, is dropped at the end of this scope.
-                let ending = ending;
+                // Everything the reaper captured but its completion sender, dropped at the end
+                // of this scope: its receiver of notices and its reference to the shared state.
+                let (ending, shared) = (ending, shared);
                 reap(&shared, &ending);
             }
-            // The last act: the signal that the reaper has ended.
-            let mut state = shared.lock();
-            state.reaper_done = true;
-            state.version += 1;
-            shared.seam.wake_all();
+            // The last act: the drop of the last thing it owns is the signal that it has ended.
+            drop(done);
         })?;
-    Ok((to_reaper, reaper))
+    Ok((to_reaper, reaper, reaper_ended))
 }
 
 fn reap(shared: &Shared, ending: &Receiver<u64>) {
@@ -900,59 +931,7 @@ fn accept_loop(listener: &Listener, broker: &Broker, shared: &Arc<Shared>, reape
         if shared.stopping() {
             return;
         }
-        // The server's own place first: only this thread takes one, so the count cannot rise
-        // under it. A place held by a worker not joined yet is not free.
-        let has_place = {
-            let mut state = shared.lock();
-            let free = state.stats.connections < broker.max_clients();
-            if free {
-                state.stats.connections += 1;
-                state.stats.peak_connections =
-                    state.stats.peak_connections.max(state.stats.connections);
-                state.version += 1;
-                shared.seam.wake_all();
-            }
-            free
-        };
-        // Then the broker's, outside the server's lock. It never waits: the broker counts its
-        // places apart from the lock that serves calls.
-        let reserved = if has_place {
-            broker.reserve()
-        } else {
-            Err(BrokerError::Lease(LeaseRefusal::TooManyClients))
-        };
-        let place = {
-            let mut guard = shared.lock();
-            let stats = &mut guard.stats;
-            let place = match reserved {
-                Ok(reservation) => {
-                    stats.accepted += 1;
-                    stats.serving += 1;
-                    Place::Serve(reservation)
-                }
-                Err(refusal) => {
-                    if has_place {
-                        stats.connections -= 1;
-                    }
-                    match refusal {
-                        BrokerError::Lease(LeaseRefusal::TooManyClients)
-                            if stats.refusing < MAX_REFUSING =>
-                        {
-                            stats.refusing += 1;
-                            stats.told_full += 1;
-                            Place::Refuse
-                        }
-                        _ => {
-                            stats.closed_full += 1;
-                            Place::Close
-                        }
-                    }
-                }
-            };
-            guard.version += 1;
-            shared.seam.wake_all();
-            place
-        };
+        let place = place_for(shared, broker);
         match place {
             Place::Serve(reservation) => {
                 start_worker(shared, reaper, false, move |shared| {
@@ -963,6 +942,61 @@ fn accept_loop(listener: &Listener, broker: &Broker, shared: &Arc<Shared>, reape
             Place::Close => drop(stream),
         }
     }
+}
+
+/// Where a connection just accepted goes, decided before anything is read from it: its place
+/// among the server's connections (a place held by a worker not joined yet is not free), then the
+/// broker's ([`Broker::reserve`], outside the server's lock; it never waits); a connection beyond
+/// either bound is told the engine is full while a refusal worker is free, and is closed
+/// otherwise. Only the accept thread calls it, so the count of places cannot rise under it.
+fn place_for(shared: &Shared, broker: &Broker) -> Place {
+    let has_place = {
+        let mut state = shared.lock();
+        let free = state.stats.connections < broker.max_clients();
+        if free {
+            state.stats.connections += 1;
+            state.stats.peak_connections =
+                state.stats.peak_connections.max(state.stats.connections);
+            state.version += 1;
+            shared.seam.wake_all();
+        }
+        free
+    };
+    let reserved = if has_place {
+        broker.reserve()
+    } else {
+        Err(BrokerError::Lease(LeaseRefusal::TooManyClients))
+    };
+    let mut guard = shared.lock();
+    let stats = &mut guard.stats;
+    let place = match reserved {
+        Ok(reservation) => {
+            stats.accepted += 1;
+            stats.serving += 1;
+            Place::Serve(reservation)
+        }
+        Err(refusal) => {
+            if has_place {
+                stats.connections -= 1;
+            }
+            match refusal {
+                BrokerError::Lease(LeaseRefusal::TooManyClients)
+                    if stats.refusing < MAX_REFUSING =>
+                {
+                    stats.refusing += 1;
+                    stats.told_full += 1;
+                    Place::Refuse
+                }
+                _ => {
+                    stats.closed_full += 1;
+                    Place::Close
+                }
+            }
+        }
+    };
+    guard.version += 1;
+    shared.seam.wake_all();
+    place
 }
 
 /// The next connection `accept` gives, retrying it after a transient error (see
