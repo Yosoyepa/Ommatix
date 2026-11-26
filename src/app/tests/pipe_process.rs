@@ -11,6 +11,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -52,10 +53,17 @@ impl Sandbox {
     }
 
     /// Runs the binary with `args` and `input` on stdin, to the end of stdin (a broken pipe
-    /// while writing is the binary's early exit, not a harness failure).
+    /// while writing is the binary's early exit, not a harness failure), and waits at most
+    /// [`RUN_PATIENCE`] for it to end: past that the test fails, and the child is killed. Its
+    /// output is read on threads of their own, to the end of each stream.
     fn run(&self, args: &[&str], input: &str) -> Output {
-        let mut child = self.command(args).spawn().expect("the binary starts");
+        // Small enough for the input pipe: writing it never waits on the child.
+        assert!(input.len() < 32 * 1024, "{}", input.len());
+        let mut child = KillOnDrop(self.command(args).spawn().expect("the binary starts"));
+        let stdout = read_to_end_on_a_thread(child.0.stdout.take().expect("stdout"));
+        let stderr = read_to_end_on_a_thread(child.0.stderr.take().expect("stderr"));
         let written = child
+            .0
             .stdin
             .take()
             .expect("stdin")
@@ -63,7 +71,22 @@ impl Sandbox {
         if let Err(error) = written {
             assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
         }
-        child.wait_with_output().expect("the binary ends")
+        let started = Instant::now();
+        let status = loop {
+            if let Some(status) = child.0.try_wait().expect("the child's status") {
+                break status;
+            }
+            assert!(
+                started.elapsed() < RUN_PATIENCE,
+                "ommatix {args:?} did not end within {RUN_PATIENCE:?}; it is killed"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        Output {
+            status,
+            stdout: stdout.recv_timeout(RUN_PATIENCE).expect("stdout ends"),
+            stderr: stderr.recv_timeout(RUN_PATIENCE).expect("stderr ends"),
+        }
     }
 
     /// Every file under the sandbox, with its bytes.
@@ -84,6 +107,33 @@ impl Sandbox {
         walk(&self.0, &mut out);
         out
     }
+}
+
+/// How long [`Sandbox::run`] waits for the binary to end before the test fails.
+const RUN_PATIENCE: Duration = Duration::from_secs(60);
+
+/// A child process killed (and reaped) when this is dropped, however the test ends: a watchdog
+/// that fails a test never leaves the child running.
+struct KillOnDrop(std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Everything `stream` yields to its end, sent once on the returned channel.
+fn read_to_end_on_a_thread(
+    mut stream: impl std::io::Read + Send + 'static,
+) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stream.read_to_end(&mut bytes);
+        let _ = send.send(bytes);
+    });
+    receive
 }
 
 impl Drop for Sandbox {
@@ -378,7 +428,7 @@ mod pipe {
 
         /// Everything, once the stream has ended (the writer's process exited and nothing else
         /// holds the stream); a test fails instead of waiting longer than [`PATIENCE`].
-        fn to_end(self) -> String {
+        fn into_text_at_end(self) -> String {
             let deadline = Instant::now() + PATIENCE;
             while !self.reader.is_finished() {
                 assert!(Instant::now() < deadline, "the stream did not end");
@@ -402,23 +452,27 @@ mod pipe {
 
     /// `serve` with the pipe switch on, listening: its stderr is collected.
     struct Engine {
-        child: Child,
+        child: KillOnDrop,
         _stdin: ChildStdin,
         stdout: Collected,
         stderr: Arc<Mutex<Vec<String>>>,
     }
 
     impl Engine {
-        /// Starts `serve` and waits for the line that says it listens.
+        /// Starts `serve` and waits at most [`PATIENCE`] for the line that says it listens; past
+        /// that the test fails and the child is killed (it is held by [`KillOnDrop`] from the
+        /// start).
         fn start(sandbox: &Sandbox, config: &Path) -> Self {
             let config = config.to_str().unwrap();
-            let mut child = sandbox
-                .command(&["serve", "--config", config, "--session-id", "pipe"])
-                .spawn()
-                .expect("the binary starts");
-            let stdin = child.stdin.take().unwrap();
-            let stdout = collect(child.stdout.take().unwrap());
-            let lines = lines_of(child.stderr.take().unwrap());
+            let mut child = KillOnDrop(
+                sandbox
+                    .command(&["serve", "--config", config, "--session-id", "pipe"])
+                    .spawn()
+                    .expect("the binary starts"),
+            );
+            let stdin = child.0.stdin.take().unwrap();
+            let stdout = collect(child.0.stdout.take().unwrap());
+            let lines = lines_of(child.0.stderr.take().unwrap());
             let stderr = Arc::new(Mutex::new(Vec::new()));
             let deadline = Instant::now() + PATIENCE;
             loop {
@@ -467,8 +521,8 @@ mod pipe {
         }
 
         fn stop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
+            let _ = self.child.0.kill();
+            let _ = self.child.0.wait();
         }
     }
 
@@ -567,7 +621,7 @@ mod pipe {
         /// its end, so that nothing written just before the exit is missed) and any reply.
         fn exit(mut self) -> (i32, String, Vec<String>) {
             let status = wait(&mut self.child);
-            let stderr = self.stderr.take().expect("stderr").to_end();
+            let stderr = self.stderr.take().expect("stderr").into_text_at_end();
             // The reader thread ends with the process's stdout.
             let mut rest = Vec::new();
             while let Ok(line) = self.replies.recv_timeout(Duration::from_millis(200)) {
@@ -862,17 +916,6 @@ mod pipe {
         );
     }
 
-    /// A child process that the test kills when it ends, whatever happened: the watchdog of a
-    /// bounded wait only fails the test, and this cleans up.
-    struct Killed(Child);
-
-    impl Drop for Killed {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-
     /// The capacity of the pipe the standard library creates for a child's piped stdout (pinned
     /// 1.99.0, `child_pipe.rs`: `PIPE_BUFFER_CAPACITY`, 64 KiB).
     const STD_PIPE_CAPACITY: usize = 64 * 1024;
@@ -893,7 +936,7 @@ mod pipe {
     /// for the replies to fill the pipes on their way.
     struct StalledHost {
         engine: Engine,
-        child: Killed,
+        child: KillOnDrop,
         stdin: Option<ChildStdin>,
         stdout: std::process::ChildStdout,
         stderr: Option<Collected>,
@@ -904,7 +947,7 @@ mod pipe {
         fn start(sandbox: &Sandbox, tag: &str, requests: u64) -> Self {
             let config = configure(sandbox, tag, None);
             let engine = Engine::start(sandbox, &config);
-            let mut child = Killed(
+            let mut child = KillOnDrop(
                 sandbox
                     .command(&["attach", "--config", config.to_str().unwrap()])
                     .spawn()
@@ -946,7 +989,7 @@ mod pipe {
         }
 
         /// [`Self::after_exit`], or, when the process did not exit (`timed_out`), a failure that
-        /// says so with what stderr held; the watchdog only fails the test, and [`Killed`] ends
+        /// says so with what stderr held; the watchdog only fails the test, and [`KillOnDrop`] ends
         /// the process.
         fn after_exit_or_fail(&mut self, timed_out: bool) -> (String, usize, usize) {
             assert!(
@@ -963,10 +1006,10 @@ mod pipe {
         /// After the exit: the whole of stderr, and what the stdout pipe still held (the host
         /// reads it only now), with its count of whole replies.
         fn after_exit(&mut self) -> (String, usize, usize) {
-            let stderr = self.stderr.take().unwrap().to_end();
+            let stderr = self.stderr.take().unwrap().into_text_at_end();
             let mut held = Vec::new();
             self.stdout.read_to_end(&mut held).unwrap();
-            let whole = held.iter().filter(|&&b| b == b'\n').count();
+            let whole = held.iter().fold(0, |n, &b| n + usize::from(b == b'\n'));
             (stderr, held.len(), whole)
         }
     }
