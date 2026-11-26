@@ -64,10 +64,28 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
   space or punctuation that more text follows, and before every character after the first checks
   again the operator's stop, the foreground window, the foreground application with keyboard
   focus and held modifier keys. A failed check ends the text there and the action is
-  `indeterminate`, never retried. A paced `type` whose pauses add up to more than 30 s is refused
-  before anything is sent. These keys change how the keys reach the application, not whether
-  they may; no CLI flag or agent can set them. The effect on a real application is not measured
-  yet, so leave them at `0` unless you are measuring it.
+  `indeterminate` (input delivered, snapshot spent), never retried. A paced `type` whose pauses
+  add up to more than 30 s is **rejected** before anything is sent, as `LIMIT_EXCEEDED` with
+  `next_step: reduce_request` (send less text per call), also as a dry run, and the snapshot is
+  not spent. These keys change how the keys reach the application, not whether they may; no
+  CLI flag or agent can set them. The effect on a real application is not measured yet, so
+  leave them at `0` unless you are measuring it.
+  **What a paced `type` costs.** The engine serves one request at a time, so it is held, and
+  every other call of the session waits, for the whole delivery. The pauses alone are at most
+  30 s (the bound above: 2048 characters, the longest `type`, at 14 ms each is 28.7 s; 600
+  characters at 50 ms is 30 s). To that add the sends and checks of each character (not
+  measured; tens to hundreds of microseconds each, about a second at most for 2048
+  characters) and the timer's overshoot: each pause is one sleep (the boundary pause is added
+  to the key pause, not slept separately), and a sleep may last up to one timer tick longer than
+  asked, about 15.6 ms where the system timer is coarse. So the worst case, 2048 characters, is
+  about 30 s + 1 s + 2047 × 15.6 ms ≈ 63 s; a sentence of 29 characters at 10 ms and 50 ms
+  takes 0.53 s plus at most 0.44 s. The operator's stop is read before every character, so it
+  takes effect within one pause (at most 300 ms) plus the overshoot. Between a check and the
+  `SendInput` that follows it there is a window of tens to hundreds of microseconds (the
+  checks themselves and the allocation of the events; not measured). It cannot be zero:
+  Windows has no call that reads the foreground window and sends input atomically, so the
+  foreground can change between any check and the send after it, as before the first key
+  (chapter 08 §8.3).
 - **Accepted with no effect** (a note on stderr at startup): `actuation_enabled = true` with
   an input adapter that is not live.
 

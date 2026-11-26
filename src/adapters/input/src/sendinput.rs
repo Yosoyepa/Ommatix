@@ -297,45 +297,59 @@ impl TypePacing {
         self.key_pause.is_zero() && self.boundary_pause.is_zero()
     }
 
+    /// The wait after the character `c` when another follows: the key pause and, after a
+    /// word boundary, the boundary pause as well, as one sleep. `None` when the two add up
+    /// to more than a `Duration` holds.
+    fn pause_after(self, c: char) -> Option<Duration> {
+        if is_word_boundary(c) {
+            self.key_pause.checked_add(self.boundary_pause)
+        } else {
+            Some(self.key_pause)
+        }
+    }
+
     /// The time the pauses of a paced delivery of `text` add up to (the sends themselves
-    /// are not counted). Saturates.
-    pub fn duration_of(self, text: &str) -> Duration {
-        let mut gaps = 0u32;
-        let mut boundaries = 0u32;
+    /// are not counted). Checked arithmetic: `None` when the sum overflows, which is a
+    /// refusal and never a saturated value that could pass for small.
+    pub fn duration_of(self, text: &str) -> Option<Duration> {
+        let mut total = Duration::ZERO;
         let mut chars = text.chars().peekable();
         while let Some(c) = chars.next() {
             if chars.peek().is_some() {
-                gaps = gaps.saturating_add(1);
-                if is_word_boundary(c) {
-                    boundaries = boundaries.saturating_add(1);
-                }
+                total = total.checked_add(self.pause_after(c)?)?;
             }
         }
-        self.key_pause
-            .saturating_mul(gaps)
-            .saturating_add(self.boundary_pause.saturating_mul(boundaries))
+        Some(total)
     }
 
-    /// Refuses a `type` whose paced delivery would hold the engine longer than
-    /// [`MAX_PACED_TYPE`]. Called before anything is sent. Never refuses with pacing off.
-    pub fn check_text(self, text: &str) -> Result<(), PortError> {
-        if !self.is_off() && self.duration_of(text) > MAX_PACED_TYPE {
-            return Err(PortError::new(
-                ADAPTER,
-                format!(
-                    "a paced type may take at most {} s with the configured pauses; nothing was \
-                     sent",
-                    MAX_PACED_TYPE.as_secs()
-                ),
-            ));
+    /// Why a paced delivery of `text` is refused before anything is sent: its pauses add up to
+    /// more than [`MAX_PACED_TYPE`], or overflow. `None` when it fits, and always with pacing
+    /// off. The engine tells the agent this as a rejection (`LIMIT_EXCEEDED`).
+    pub fn refusal(self, text: &str) -> Option<String> {
+        if self.is_off() {
+            return None;
         }
-        Ok(())
+        match self.duration_of(text) {
+            Some(total) if total <= MAX_PACED_TYPE => None,
+            _ => Some(format!(
+                "a paced type may take at most {} s with the pauses the operator configured; \
+                 send less text at a time; nothing was sent",
+                MAX_PACED_TYPE.as_secs()
+            )),
+        }
+    }
+
+    /// [`Self::refusal`] as an error, for the actuator's own last check.
+    pub fn check_text(self, text: &str) -> Result<(), PortError> {
+        self.refusal(text)
+            .map_or(Ok(()), |reason| Err(PortError::new(ADAPTER, reason)))
     }
 }
 
 /// Whether the pause after a word boundary follows `c`: white space, ASCII punctuation, the
 /// Spanish opening marks and guillemets, and the general punctuation block (dashes, quotes,
-/// ellipsis). A letter, a digit or a symbol is not a boundary.
+/// ellipsis). ASCII symbols (`+`, `=`, `$`, `_`, ...) count with the punctuation, because
+/// [`char::is_ascii_punctuation`] does; a letter or a digit is not a boundary.
 pub(crate) fn is_word_boundary(c: char) -> bool {
     c.is_whitespace()
         || c.is_ascii_punctuation()
@@ -416,11 +430,17 @@ pub(crate) fn send_text_keys(
         offset = end;
         sent_chars += 1;
         if chars.peek().is_some() {
-            if !pacing.key_pause.is_zero() {
-                sleep(pacing.key_pause);
-            }
-            if is_word_boundary(c) && !pacing.boundary_pause.is_zero() {
-                sleep(pacing.boundary_pause);
+            // One sleep per character, however many pauses it carries: every sleep is a
+            // timer tick that can overshoot.
+            let Some(pause) = pacing.pause_after(c) else {
+                return KeyRun::Stopped {
+                    sent_chars,
+                    of_chars,
+                    why: "the configured pauses overflow".to_owned(),
+                };
+            };
+            if !pause.is_zero() {
+                sleep(pause);
             }
         }
     }
@@ -990,9 +1010,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // After `a`: the key pause. After the space: the key pause and the boundary pause.
-        // After `b`: the key pause. After the trailing space (nothing follows): nothing.
-        assert_eq!(sleeps, vec![MS(2), MS(2), MS(7), MS(2)]);
+        // After `a`: the key pause. After the space: the key pause and the boundary pause, as
+        // ONE sleep (each sleep is a timer tick that can overshoot). After `b`: the key
+        // pause. After the trailing space (nothing follows): nothing.
+        assert_eq!(sleeps, vec![MS(2), MS(9), MS(2)]);
         // Only a boundary pause: the characters that are not boundaries wait for nothing.
         let (_, steps) = run("ab,c", pacing(0, 9), all, never);
         let sleeps: Vec<&Step> = steps
@@ -1225,12 +1246,58 @@ mod tests {
         let spaced = "a ".repeat(100);
         assert_eq!(
             pacing(10, 100).duration_of(&spaced),
-            MS(10 * 199 + 100 * 99)
+            Some(MS(10 * 199 + 100 * 99))
         );
         assert!(pacing(0, 250).check_text(&"a ".repeat(100)).is_ok());
         assert!(pacing(0, 250).check_text(&"a ".repeat(150)).is_err());
         // With pacing off nothing is refused, whatever the length.
         assert!(TypePacing::default().check_text(&text(2048)).is_ok());
+    }
+
+    #[test]
+    fn a_sum_of_pauses_that_overflows_is_a_refusal_and_not_a_saturated_value() {
+        let text = "abc";
+        // Two gaps of the largest `Duration` do not fit in one: no total, not `Duration::MAX`.
+        let huge = TypePacing {
+            key_pause: Duration::MAX,
+            boundary_pause: Duration::ZERO,
+        };
+        assert_eq!(huge.duration_of(text), None);
+        // The key pause and the boundary pause of one gap overflow likewise.
+        let both = TypePacing {
+            key_pause: Duration::MAX,
+            boundary_pause: MS(1),
+        };
+        assert_eq!(both.duration_of("a b"), None);
+        for p in [huge, both] {
+            let reason = p.refusal("a b c").unwrap_or_default();
+            assert!(reason.contains("at most 30 s"), "{reason}");
+            assert!(p.check_text("a b c").is_err());
+        }
+        // A delivery whose pauses overflow stops at the pause that does and sends no more.
+        let (result, steps) = run("a b", both, all, never);
+        assert!(matches!(
+            result,
+            KeyRun::Stopped { sent_chars: 2, ref why, .. } if why.contains("overflow")
+        ));
+        assert_eq!(
+            steps.iter().filter(|s| matches!(s, Step::Send(_))).count(),
+            2
+        );
+        // Nothing to wait for is a total of zero, which fits.
+        assert_eq!(huge.duration_of("a"), Some(Duration::ZERO));
+        assert_eq!(huge.refusal("a"), None);
+    }
+
+    #[test]
+    fn the_refusal_says_what_to_do_and_that_nothing_was_sent() {
+        let reason = pacing(50, 0).refusal(&"a".repeat(2048)).unwrap_or_default();
+        assert!(reason.contains("at most 30 s"), "{reason}");
+        assert!(reason.contains("send less text"), "{reason}");
+        assert!(reason.contains("nothing was sent"), "{reason}");
+        // The same text with pacing off, or with pauses that fit, is not refused.
+        assert_eq!(TypePacing::default().refusal(&"a".repeat(2048)), None);
+        assert_eq!(pacing(14, 0).refusal(&"a".repeat(2048)), None);
     }
 
     #[test]
@@ -1245,7 +1312,7 @@ mod tests {
                     _ => None,
                 })
                 .sum();
-            assert_eq!(waited, p.duration_of(text), "{text:?}");
+            assert_eq!(Some(waited), p.duration_of(text), "{text:?}");
         }
     }
 

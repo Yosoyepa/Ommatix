@@ -325,6 +325,12 @@ impl Engine {
         // Simulation meets the same bound, so it never accepts what the live path would
         // refuse. It sends nothing, so it has no boundary after this one (ADR-0025).
         self.check_age(target_id)?;
+        // What the actuator would refuse before sending anything (a paced `type` that would
+        // hold the engine too long) is rejected here, simulation included: nothing is sent,
+        // the snapshot is not spent, and the agent is told to ask for less.
+        if let Some(reason) = self.ports.actuator.delivery_refusal(&request.action) {
+            return Err(ToolError::new(ErrorCode::LimitExceeded, reason));
+        }
 
         if request.dry_run {
             return Ok(Outcome::simulated());

@@ -84,6 +84,8 @@ struct World {
     access_limit: Option<usize>,
     /// The accessibility provider reads keyboard focus (UI Automation on, ADR-0018).
     reads_focus: bool,
+    /// Why the actuator refuses every `type` before sending anything (`delivery_refusal`).
+    delivery_refusal: Option<String>,
     /// The element with keyboard focus once `focus_script` is used up.
     focused: Option<AccessibleElement>,
     /// Answers to the next keyboard-focus reads: focus that arrives after the click.
@@ -153,6 +155,7 @@ impl Default for World {
             fail_access: false,
             access_limit: None,
             reads_focus: false,
+            delivery_refusal: None,
             focused: None,
             focus_script: VecDeque::new(),
             fail_focus: false,
@@ -432,6 +435,13 @@ impl OsActuator for Actuator {
             Some(answer) => answer,
             None => w.opacity,
         }
+    }
+
+    /// Like the real actuator's pacing: only a `type` is refused.
+    fn delivery_refusal(&self, kind: &ActionKind) -> Option<String> {
+        matches!(kind, ActionKind::Type { .. })
+            .then(|| lock(&self.0).delivery_refusal.clone())
+            .flatten()
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
@@ -2761,6 +2771,7 @@ mod concurrency;
 mod freshness;
 mod identity;
 mod occluders;
+mod pacing;
 mod purge;
 mod security;
 mod snapshot_age;

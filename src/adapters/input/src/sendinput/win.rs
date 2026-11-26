@@ -732,7 +732,9 @@ impl SendInputActuator {
     }
 
     /// Refuses, before anything is sent, a `type` whose paced delivery would hold the engine
-    /// longer than [`super::MAX_PACED_TYPE`].
+    /// longer than [`super::MAX_PACED_TYPE`]. The engine asks first through
+    /// [`OsActuator::delivery_refusal`] and tells the agent; this is the actuator's own last
+    /// check for a caller that did not ask.
     fn check_pacing(&self, kind: &ActionKind) -> Result<(), PortError> {
         match (&self.paced, kind) {
             (Some(paced), ActionKind::Type { text }) => paced.pacing.check_text(text),
@@ -922,6 +924,13 @@ impl OsActuator for SendInputActuator {
 
     fn window_opacity(&self, window: &TopLevelWindow) -> Option<WindowOpacity> {
         read_window_opacity(window.handle)
+    }
+
+    fn delivery_refusal(&self, kind: &ActionKind) -> Option<String> {
+        match (&self.paced, kind) {
+            (Some(paced), ActionKind::Type { text }) => paced.pacing.refusal(text),
+            _ => None,
+        }
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {

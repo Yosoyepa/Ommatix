@@ -67,7 +67,12 @@ purge_file = ""
 # después del primero vuelve a comprobar la parada, la ventana en primer plano, el foco de
 # teclado y las teclas modificadoras. Si una comprobación falla, el texto termina ahí
 # (indeterminate, sin reintento). Un `type` cuyas pausas sumen más de 30 s se rechaza antes de
-# enviar nada. No cambia si una entrada está permitida, sólo cómo se entrega.
+# enviar nada (LIMIT_EXCEEDED, reduce_request; también en simulación). No cambia si una entrada
+# está permitida, sólo cómo se entrega. El motor atiende una petición a la vez: queda retenido
+# durante toda la entrega, como mucho unos 63 s en el peor caso (30 s de pausas, los envíos y
+# el exceso del temporizador, unos 15,6 ms por espera con un temporizador grueso); la parada se
+# lee antes de cada carácter y entre una lectura y el envío que la sigue queda una ventana de
+# decenas a cientos de microsegundos que no puede ser cero.
 type_key_pause_ms = 0
 type_boundary_pause_ms = 0
 

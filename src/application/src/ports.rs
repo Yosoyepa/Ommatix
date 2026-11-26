@@ -13,7 +13,7 @@ use ommatix_domain::fusion::{Control, Role, Word};
 use ommatix_domain::incremental::BgraFrame;
 
 use crate::PortError;
-use crate::contract::ValidatedAction;
+use crate::contract::{ActionKind, ValidatedAction};
 
 /// Monotonic time and waiting. Injected so that stage timings and settle waits are
 /// reproducible under test (see [`ManualClock`](crate::ManualClock)).
@@ -304,6 +304,16 @@ pub trait OsActuator: Send {
     /// cannot attest it (the default): the scoped freshness check then compares the whole
     /// frame. Never reads a title or any text the window shows.
     fn window_opacity(&self, _window: &TopLevelWindow) -> Option<WindowOpacity> {
+        None
+    }
+
+    /// Why this actuator would refuse `kind` before sending anything, because of its own
+    /// configuration and not of what is on the screen; `None` (the default) refuses nothing.
+    /// The engine asks before it starts any delivery, for a simulated action too, and rejects
+    /// the action as `LIMIT_EXCEEDED` with this reason: nothing was sent and the snapshot is
+    /// not spent. The answer must be the same each time the same request is repeated (a paced
+    /// `type` that would hold the engine longer than the actuator allows).
+    fn delivery_refusal(&self, _kind: &ActionKind) -> Option<String> {
         None
     }
 

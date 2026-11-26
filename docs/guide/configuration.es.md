@@ -64,11 +64,30 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
   segunda tras un espacio o un signo de puntuación al que sigue más texto, y antes de cada
   carácter después del primero vuelve a comprobar la parada del operador, la ventana en primer
   plano, la aplicación en primer plano con el foco de teclado y las teclas modificadoras
-  pulsadas. Una comprobación que falla termina el texto ahí y la acción queda `indeterminate`,
-  sin reintento. Un `type` con pausas cuya suma pase de 30 s se rechaza antes de enviar nada.
-  Estas claves cambian cómo llegan las teclas a la aplicación, no si pueden llegar; ninguna
-  opción de la línea de órdenes ni el agente puede fijarlas. El efecto en una aplicación real
-  aún no está medido: déjelas en `0` salvo que lo esté midiendo.
+  pulsadas. Una comprobación que falla termina el texto ahí y la acción queda `indeterminate`
+  (entrada entregada, snapshot gastado), sin reintento. Un `type` con pausas cuya suma pase de
+  30 s se **rechaza** antes de enviar nada, como `LIMIT_EXCEEDED` con `next_step:
+  reduce_request` (enviar menos texto por llamada), también en simulación, y no se gasta el
+  snapshot. Estas claves cambian cómo llegan las teclas a la aplicación, no si pueden llegar;
+  ninguna opción de la línea de órdenes ni el agente puede fijarlas. El efecto en una
+  aplicación real aún no está medido: déjelas en `0` salvo que lo esté midiendo.
+  **Lo que cuesta un `type` espaciado.** El motor atiende una petición a la vez, así que queda
+  retenido, y cualquier otra llamada de la sesión espera, durante toda la entrega. Sólo las
+  pausas suman como mucho 30 s (la cota de arriba: 2048 caracteres, el `type` más largo, a 14 ms
+  cada uno son 28,7 s; 600 caracteres a 50 ms son 30 s). A eso se suman los envíos y las
+  comprobaciones de cada carácter (no medidos; decenas a cientos de microsegundos cada uno,
+  como mucho un segundo para 2048 caracteres) y el exceso del temporizador: cada pausa es una
+  sola espera (la pausa de límite de palabra se suma a la de tecla, no se espera aparte), y una
+  espera puede durar hasta un tic del temporizador más de lo pedido, unos 15,6 ms donde el
+  temporizador del sistema es grueso. El peor caso, 2048 caracteres, es por tanto de unos 30 s
+  + 1 s + 2047 × 15,6 ms ≈ 63 s; una frase de 29 caracteres con 10 ms y 50 ms tarda 0,53 s más
+  0,44 s como mucho. La parada del operador se lee antes de cada carácter, así que surte efecto
+  en una pausa (300 ms como mucho) más el exceso. Entre una comprobación y el `SendInput` que la
+  sigue hay una ventana de decenas a cientos de microsegundos (las propias comprobaciones y la
+  reserva de los eventos; no medida). No puede ser cero: Windows no tiene una llamada que lea
+  la ventana de primer plano y envíe entrada de forma atómica, así que el primer plano puede
+  cambiar entre cualquier comprobación y el envío siguiente, como antes de la primera tecla
+  (capítulo 08 §8.3).
 - **Se acepta sin efecto** (una nota en stderr al arrancar): `actuation_enabled = true` con un
   adaptador de entrada que no es real.
 
