@@ -7,7 +7,8 @@ sources stay canonical; the hexagon shows how ADR-0014 lays those components out
 and the engine view shows the code as of S2b. These views show what the executable does: one
 agent over stdio. The Spanish sources of the context, components and action views also show the
 broker of the proposed [ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md),
-which exists in `ommatix-adapter-mcp` and cannot be reached from the executable yet.
+which exists in `ommatix-adapter-mcp` and which the executable serves only behind the pipe
+switch of the proposed [ADR-0043](../adr/0043-local-named-pipe-transport-for-several-clients.md) (Windows, `broker-pipe`, `[mcp] transport = "pipe"`).
 
 | Diagram | Shows |
 |---|---|

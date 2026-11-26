@@ -292,7 +292,7 @@ fn pipe_client() -> (String, String) {
 /// The exception admits the client file as it is: the check above passes on it, and it is
 /// among the sources scanned.
 #[test]
-fn the_source_check_admits_the_pipe_client_as_it_is() {
+fn sec_04_the_source_check_admits_the_pipe_client_as_it_is() {
     let (path, text) = pipe_client();
     assert_eq!(text.matches("OpenOptions::new(").count(), 1);
     assert_eq!(sec_04_findings(&[(path, text)]), Vec::<String>::new());
@@ -306,7 +306,7 @@ fn the_source_check_admits_the_pipe_client_as_it_is() {
 
 /// Every way of widening the exception inside the client file is refused.
 #[test]
-fn the_source_check_refuses_the_pipe_client_with_anything_more() {
+fn sec_04_the_source_check_refuses_the_pipe_client_with_anything_more() {
     let (path, text) = pipe_client();
     let flag = ".custom_flags(FILE_FLAG_OVERLAPPED)";
     let qos = ".security_qos_flags(SECURITY_IDENTIFICATION)";
@@ -383,7 +383,7 @@ fn the_source_check_refuses_the_pipe_client_with_anything_more() {
 /// `OpenOptions` anywhere else is refused, the client's own text included under another path,
 /// and every other forbidden substring is still refused everywhere.
 #[test]
-fn the_source_check_refuses_open_options_in_any_other_file() {
+fn sec_04_the_source_check_refuses_open_options_in_any_other_file() {
     let (_, text) = pipe_client();
     let plain = "use std::fs::OpenOptions;\nfn f() { let _ = OpenOptions::new(); }\n";
     for path in [
@@ -422,7 +422,7 @@ fn the_source_check_refuses_open_options_in_any_other_file() {
 /// is pinned with its default features off, no other crate turns the feature on, and the
 /// `windows` job of CI builds, lints and tests it.
 #[test]
-fn the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_only() {
+fn it_33_the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_only() {
     let manifest: toml::Value = toml::from_str(&read("src/adapters/mcp/Cargo.toml")).unwrap();
     let features = manifest["features"].as_table().expect("features");
     assert_eq!(features["default"], toml::Value::Array(Vec::new()));
@@ -446,8 +446,23 @@ fn the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_only() {
         Some(false)
     );
     assert_eq!(pinned["widestring"].as_str(), Some("=1.2.1"));
+    // The executable turns on the adapter's feature with its own, also off by default, and
+    // nothing else (T3: the switch and `attach`); no other crate mentions it.
+    let app: toml::Value = toml::from_str(&read("src/app/Cargo.toml")).unwrap();
+    let app_features = app["features"].as_table().expect("features");
+    assert_eq!(app_features["default"], toml::Value::Array(Vec::new()));
+    assert_eq!(
+        app_features["broker-pipe"],
+        toml::Value::Array(vec!["ommatix-adapter-mcp/broker-pipe".into()])
+    );
+    assert!(
+        app_features
+            .iter()
+            .filter(|(name, _)| *name != "broker-pipe")
+            .all(|(_, enabled)| !enabled.to_string().contains("broker-pipe")),
+        "only the feature of that name turns it on"
+    );
     for other in [
-        "src/app/Cargo.toml",
         "src/acceptance/Cargo.toml",
         "src/adapters/accessibility/Cargo.toml",
         "src/adapters/capture/Cargo.toml",
@@ -462,6 +477,8 @@ fn the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_only() {
         "cargo build -p ommatix-adapter-mcp --features broker-pipe",
         "cargo clippy -p ommatix-adapter-mcp --features broker-pipe --all-targets -- -D warnings",
         "cargo test -p ommatix-adapter-mcp --features broker-pipe",
+        "cargo clippy -p ommatix --features broker-pipe --all-targets -- -D warnings",
+        "cargo test -p ommatix --features broker-pipe",
     ] {
         assert!(ci.contains(step), "{step}");
     }

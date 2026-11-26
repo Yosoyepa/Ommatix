@@ -212,8 +212,109 @@ fn check_consent(input: &str, config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Everything an engine is built from, and what the front ends need to know about it: the
+/// stdio server builds the [`Engine`] itself ([`build`]); the broker builds it inside its own
+/// lock, over the policy store it wraps ([`build_broker`]).
+struct Prepared {
+    engine_config: EngineConfig,
+    ports: Ports,
+    sim: Option<SimulatedDesktop>,
+    summary: String,
+    notes: Vec<String>,
+    active_control: Option<String>,
+}
+
 /// Builds the engine for `args` under `config`.
 pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
+    let prepared = prepare(args, config)?;
+    Ok(Wired {
+        engine: Engine::new(prepared.engine_config, prepared.ports),
+        sim: prepared.sim,
+        summary: prepared.summary,
+        notes: prepared.notes,
+        active_control: prepared.active_control,
+    })
+}
+
+/// The broker over the pipe, and what `serve` says about it on stderr
+/// (`[mcp] transport = "pipe"`; ADR-0039, ADR-0040, ADR-0043, proposed).
+#[cfg(feature = "broker-pipe")]
+pub struct WiredBroker {
+    pub broker: ommatix_adapter_mcp::Broker,
+    pub session_id: String,
+    pub summary: String,
+    pub notes: Vec<String>,
+    pub active_control: Option<String>,
+    /// What `serve` says about the grants file at start, once.
+    pub grants: String,
+}
+
+/// Builds the broker for `args` under `config`: the same adapters, policy and engine settings
+/// as [`build`], handed to the broker, which builds the engine over the operator's policy store
+/// narrowed by each client's grant. The lease term is the validity window of ADR-0025
+/// (`[engine] max_snapshot_age_ms`); the bound on clients is the engine's, the clients it keeps
+/// a journal share for. The grants come from `[safety] grants_file`, read on every call; with
+/// none configured, no client has a grant.
+#[cfg(feature = "broker-pipe")]
+pub fn build_broker(args: &RunArgs, config: &Config) -> Result<WiredBroker> {
+    use ommatix::grants::GrantsFile;
+    use ommatix_adapter_mcp::Broker;
+    use ommatix_application::JOURNAL_CLIENTS;
+
+    let prepared = prepare(args, config)?;
+    let session_id = prepared.engine_config.session_id.clone();
+    let mcp = config.mcp_config(args.legacy);
+    let term = config.max_snapshot_age();
+    let (broker, grants) = match config.grants_file() {
+        Some(path) => {
+            let file = GrantsFile::new(&path);
+            let note = match file.count() {
+                Ok(n) => format!(
+                    "grants file {}: {n} grant(s) now; read again at every call",
+                    path.display()
+                ),
+                Err(problem) => format!(
+                    "grants file {} is invalid now ({problem}): until it is fixed, no client \
+                     has a grant (each observes without values and delivers nothing)",
+                    path.display()
+                ),
+            };
+            let broker = Broker::with_grant_store(
+                prepared.engine_config,
+                prepared.ports,
+                mcp,
+                term,
+                JOURNAL_CLIENTS,
+                Arc::new(file),
+            );
+            (broker, note)
+        }
+        None => (
+            Broker::new(
+                prepared.engine_config,
+                prepared.ports,
+                mcp,
+                term,
+                JOURNAL_CLIENTS,
+            ),
+            "[safety] grants_file is not set: no client has a grant (each observes without \
+             values and delivers nothing)"
+                .to_owned(),
+        ),
+    };
+    Ok(WiredBroker {
+        broker: broker.map_err(|e| anyhow::anyhow!("the broker cannot be built: {e}"))?,
+        session_id,
+        summary: prepared.summary,
+        notes: prepared.notes,
+        active_control: prepared.active_control,
+        grants,
+    })
+}
+
+/// Chooses and opens the adapters for `args` under `config`, after every refusal that needs
+/// nothing opened.
+fn prepare(args: &RunArgs, config: &Config) -> Result<Prepared> {
     let session_id = session_id(args.session_id.as_deref())?;
     let input = input_kind(args, config);
     check_session_id(args.session_id.is_some(), input, config)?;
@@ -288,9 +389,9 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
     engine_config.max_snapshot_age = config.max_snapshot_age();
     engine_config.fusion.candidate_search = config.engine.candidate_search.search();
     engine_config.icons = icons;
-    let engine = Engine::new(
+    Ok(Prepared {
         engine_config,
-        Ports {
+        ports: Ports {
             capturer,
             detector,
             recognizer,
@@ -299,9 +400,6 @@ pub fn build(args: &RunArgs, config: &Config) -> Result<Wired> {
             policy: Arc::new(operator_policy(config)),
             clock,
         },
-    );
-    Ok(Wired {
-        engine,
         sim,
         summary,
         notes,
@@ -697,6 +795,8 @@ mod tests {
         match Cli::parse_from(argv).command {
             Command::Serve(a) => a,
             Command::Demo(d) => d.run,
+            #[cfg(feature = "broker-pipe")]
+            Command::Attach(_) => panic!("this helper accepts engine commands only"),
             Command::FreshnessProbe(_) => panic!("this helper accepts engine commands only"),
         }
     }
@@ -1068,6 +1168,56 @@ accessibility = \"uia\"
             "[cache] 0 curated icon prototypes, 0 for context \"notepad.exe\"; the thresholds \
              are the operator's, not calibrated by this build"
         );
+    }
+
+    /// The broker is built from the same preparation as the stdio engine, and says at start
+    /// what the grants file holds, by count or by cause, never by content.
+    #[cfg(feature = "broker-pipe")]
+    #[test]
+    fn the_broker_is_built_like_the_engine_and_names_its_grants_file_state() {
+        let wired = build_broker(&args("serve --session-id b-1"), &Config::default()).unwrap();
+        assert_eq!(wired.session_id, "b-1");
+        assert_eq!(
+            wired.summary,
+            build(&args("serve --session-id b-1"), &Config::default())
+                .unwrap()
+                .summary
+        );
+        assert!(
+            wired.grants.contains("grants_file is not set"),
+            "{}",
+            wired.grants
+        );
+        assert_eq!(wired.broker.config(), Config::default().mcp_config(false));
+
+        let dir =
+            std::env::temp_dir().join(format!("ommatix-wiring-grants-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = Config::default();
+        config.safety.grants_file = "grants.toml".to_owned();
+        config.base_dir = Some(dir.clone());
+        let invalid = build_broker(&args("serve"), &config).unwrap();
+        assert!(
+            invalid
+                .grants
+                .contains("is invalid now (it does not exist)"),
+            "{}",
+            invalid.grants
+        );
+        std::fs::write(
+            dir.join("grants.toml"),
+            format!(
+                "[[grant]]\nticket_sha256 = \"{}\"\napplications = []\ndeliver_input = false\n\
+                 read_values = false\n",
+                "ab".repeat(32)
+            ),
+        )
+        .unwrap();
+        let valid = build_broker(&args("serve"), &config).unwrap();
+        assert!(valid.grants.contains("1 grant(s) now"), "{}", valid.grants);
+        assert!(!valid.grants.contains(&"ab".repeat(32)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

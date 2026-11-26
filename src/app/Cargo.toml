@@ -35,6 +35,10 @@ winrt-ocr = ["ommatix-adapter-vision/winrt-ocr"]
 ## Enable UI Automation evidence (`[models] accessibility = "uia"`, ADR-0017). Windows
 ## only; used with a live source (`--source dxgi` or `screen`).
 uia = ["ommatix-adapter-accessibility/uia"]
+## Enable the broker over a local named pipe (`[mcp] transport = "pipe"`) and the `attach`
+## subcommand (ADR-0043 and ADR-0040, proposed). Windows only; off by default, and the
+## configuration switch is off by default too.
+broker-pipe = ["ommatix-adapter-mcp/broker-pipe"]
 
 [dependencies]
 ommatix-adapter-accessibility = { workspace = true }

@@ -156,9 +156,17 @@ impl Default for EngineSection {
 #[serde(deny_unknown_fields, default)]
 pub struct McpSection {
     pub profile: String,
+    /// `"stdio"` (the default): `serve` is one agent's MCP server on its standard streams.
+    /// `"pipe"`: `serve` runs the broker of ADR-0039 behind the local named pipe of ADR-0043
+    /// (both proposed) and serves nothing on stdio; agents reach it through `attach`. Only on
+    /// a Windows build with the `broker-pipe` feature.
     pub transport: String,
     pub legacy_enabled: bool,
     pub max_message_bytes: usize,
+    /// With `transport = "pipe"`, the pipe's name after `\\.\pipe\`: 1 to 128 ASCII letters,
+    /// digits, `-`, `_` or `.`. Empty (the default): derived from the user's name, the same way
+    /// by `serve` and `attach` ([`Config::pipe_name`]).
+    pub pipe_name: String,
 }
 
 impl Default for McpSection {
@@ -168,8 +176,55 @@ impl Default for McpSection {
             transport: "stdio".to_owned(),
             legacy_enabled: false,
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+            pipe_name: String::new(),
         }
     }
+}
+
+/// The prefix of a pipe name derived from the user's name.
+#[cfg_attr(
+    not(feature = "broker-pipe"),
+    allow(
+        dead_code,
+        reason = "used by serve and attach over the pipe, which need the feature"
+    )
+)]
+pub const PIPE_NAME_PREFIX: &str = "ommatix-";
+
+/// The longest pipe name (after `\\.\pipe\`), the pipe module's own bound.
+pub const MAX_PIPE_NAME: usize = 128;
+
+/// A name the pipe module accepts: 1 to [`MAX_PIPE_NAME`] ASCII letters, digits, `-`, `_` or
+/// `.` (the rule of `ommatix_adapter_mcp::pipe::PipeName`, which a build without the feature
+/// does not have).
+pub fn valid_pipe_name(name: &str) -> bool {
+    (1..=MAX_PIPE_NAME).contains(&name.len()) && name.bytes().all(pipe_name_byte)
+}
+
+const fn pipe_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')
+}
+
+/// The default pipe name (D38): [`PIPE_NAME_PREFIX`] and the user's name as the process
+/// received it (`USERNAME`), lower-cased, with every character the pipe module does not accept
+/// left out, cut so that the whole name fits [`MAX_PIPE_NAME`]. `None` when no user name is set
+/// or nothing of it is left.
+#[cfg_attr(
+    not(feature = "broker-pipe"),
+    allow(
+        dead_code,
+        reason = "used by serve and attach over the pipe, which need the feature"
+    )
+)]
+pub fn derive_pipe_name(user: Option<&std::ffi::OsStr>) -> Option<String> {
+    let user = user?.to_string_lossy().to_lowercase();
+    let kept: String = user
+        .bytes()
+        .filter(|b| pipe_name_byte(*b))
+        .take(MAX_PIPE_NAME - PIPE_NAME_PREFIX.len())
+        .map(char::from)
+        .collect();
+    (!kept.is_empty()).then(|| format!("{PIPE_NAME_PREFIX}{kept}"))
 }
 
 /// `[safety]`: the local policy. Its defaults deny everything.
@@ -202,6 +257,11 @@ pub struct SafetySection {
     /// and never deletes the file. Relative to the configuration file. Empty (the default): no
     /// purge file.
     pub purge_file: String,
+    /// The operator's grants file (ADR-0040, decisions 3 to 5; proposed): which grant each
+    /// ticket selects for a client of the broker. Read on every tool call of such a client; a
+    /// missing or invalid file gives no client a grant. Only with `[mcp] transport = "pipe"`.
+    /// Relative to the configuration file. Empty (the default): no client has a grant.
+    pub grants_file: String,
 }
 
 /// The OCR engine (`[models] ocr`).
@@ -603,8 +663,8 @@ impl Config {
              legacy_enabled = true",
         );
         check(
-            m.transport == "stdio",
-            "[mcp] transport: only \"stdio\" is implemented",
+            m.transport == "stdio" || m.transport == "pipe",
+            "[mcp] transport: \"stdio\" (the default) or \"pipe\" (ADR-0043, proposed)",
         );
         check(
             (MIN_MAX_MESSAGE_BYTES..=DEFAULT_MAX_MESSAGE_BYTES).contains(&m.max_message_bytes),
@@ -643,10 +703,102 @@ impl Config {
              sends no screenshots",
         );
 
+        out.extend(self.transport_problems());
         out.extend(window_class_problems(s));
         out.extend(self.models.problems());
         out.extend(self.cache.problems());
         out
+    }
+
+    /// Whether `serve` runs the broker over the pipe (`[mcp] transport = "pipe"`).
+    pub fn pipe(&self) -> bool {
+        self.mcp.transport == "pipe"
+    }
+
+    /// What the pipe transport cannot be combined with, or needs, each with its reason. Checked
+    /// when the configuration is read, so `serve` refuses before it builds or opens anything.
+    fn transport_problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let (m, s) = (&self.mcp, &self.safety);
+        if !self.pipe() {
+            if !m.pipe_name.is_empty() {
+                out.push(
+                    "[mcp] pipe_name is used only with transport = \"pipe\"; leave it empty"
+                        .to_owned(),
+                );
+            }
+            if !s.grants_file.is_empty() {
+                out.push(
+                    "[safety] grants_file is read only with [mcp] transport = \"pipe\": the \
+                     stdio server has one agent, which no grant narrows; leave it empty"
+                        .to_owned(),
+                );
+            }
+            return out;
+        }
+        if !cfg!(all(windows, feature = "broker-pipe")) {
+            out.push(
+                "[mcp] transport = \"pipe\" needs a Windows build with `--features \
+                 broker-pipe` (ADR-0043, proposed); this build serves stdio only"
+                    .to_owned(),
+            );
+        }
+        if m.legacy_enabled {
+            out.push(
+                "[mcp] legacy_enabled = true cannot be combined with transport = \"pipe\": the \
+                 broker serves the 2026-07-28 profile only"
+                    .to_owned(),
+            );
+        }
+        if !m.pipe_name.is_empty() && !valid_pipe_name(&m.pipe_name) {
+            out.push(
+                "[mcp] pipe_name must be 1 to 128 ASCII letters, digits, '-', '_' or '.', or \
+                 empty to derive it from the user's name"
+                    .to_owned(),
+            );
+        }
+        if !s.grants_file.is_empty() && s.grants_file.trim().is_empty() {
+            out.push("[safety] grants_file must be a path, or empty for none".to_owned());
+        }
+        out
+    }
+
+    /// The pipe's name with `transport = "pipe"`: `[mcp] pipe_name`, or the one derived from the
+    /// user's name ([`derive_pipe_name`]). `serve` and `attach` call this on the same
+    /// configuration, so they meet on the same name.
+    ///
+    /// # Errors
+    ///
+    /// When `pipe_name` is empty and no usable user name is set.
+    #[cfg_attr(
+        not(feature = "broker-pipe"),
+        allow(
+            dead_code,
+            reason = "used by serve and attach over the pipe, which need the feature"
+        )
+    )]
+    pub fn pipe_name(&self) -> Result<String> {
+        if !self.mcp.pipe_name.is_empty() {
+            return Ok(self.mcp.pipe_name.clone());
+        }
+        derive_pipe_name(std::env::var_os("USERNAME").as_deref()).context(
+            "the pipe's name cannot be derived: USERNAME is not set or has no ASCII letter, \
+             digit, '-', '_' or '.'; set [mcp] pipe_name",
+        )
+    }
+
+    /// The operator's grants file, resolved like every path in this file; `None` when
+    /// `[safety] grants_file` is empty.
+    #[cfg_attr(
+        not(feature = "broker-pipe"),
+        allow(
+            dead_code,
+            reason = "used by serve and attach over the pipe, which need the feature"
+        )
+    )]
+    pub fn grants_file(&self) -> Option<PathBuf> {
+        let path = &self.safety.grants_file;
+        (!path.is_empty()).then(|| self.resolve_path(path))
     }
 
     /// Notes on settings that change the run and are not production behaviour, reported on
@@ -1413,6 +1565,135 @@ allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
         let message = format!("{:#}", Config::load(Some(path)).unwrap_err());
         assert!(message.contains("cannot read"), "{message}");
     }
+    /// UT-77: `[mcp] transport = "pipe"` is refused, before anything is built or opened,
+    /// where this build cannot honour it and with whatever it cannot be combined with; the keys
+    /// it brings are refused without it.
+    #[test]
+    fn ut_77_the_pipe_switch_is_refused_where_it_cannot_be_honoured() {
+        let pipe = "[mcp]\ntransport = \"pipe\"\n";
+        let built = cfg!(all(windows, feature = "broker-pipe"));
+        assert_eq!(Config::parse(pipe).is_ok(), built);
+        if !built {
+            let message = error(pipe);
+            assert!(
+                message.contains("needs a Windows build with `--features broker-pipe`"),
+                "{message}"
+            );
+        }
+        let long = format!(
+            "[mcp]\ntransport = \"pipe\"\npipe_name = \"{}\"\n",
+            "a".repeat(129)
+        );
+        for (text, expected) in [
+            (
+                "[mcp]\ntransport = \"pipe\"\nlegacy_enabled = true\n",
+                "legacy_enabled = true cannot be combined",
+            ),
+            (
+                "[mcp]\ntransport = \"pipe\"\npipe_name = \"a b\"\n",
+                "pipe_name must be",
+            ),
+            (
+                "[mcp]\ntransport = \"pipe\"\npipe_name = '..\\x'\n",
+                "pipe_name must be",
+            ),
+            (
+                "[mcp]\ntransport = \"pipe\"\npipe_name = \"a/b\"\n",
+                "pipe_name must be",
+            ),
+            (
+                "[mcp]\ntransport = \"pipe\"\npipe_name = \"é\"\n",
+                "pipe_name must be",
+            ),
+            (long.as_str(), "pipe_name must be"),
+            (
+                "[mcp]\ntransport = \"pipe\"\n[safety]\ngrants_file = \" \"\n",
+                "grants_file must be a path",
+            ),
+            ("[mcp]\npipe_name = \"x\"\n", "pipe_name is used only with"),
+            (
+                "[safety]\ngrants_file = \"g.toml\"\n",
+                "grants_file is read only with",
+            ),
+            ("[mcp]\ntransport = \"Pipe\"\n", "[mcp] transport"),
+            ("[mcp]\ntransport = \"tcp\"\n", "[mcp] transport"),
+        ] {
+            let message = error(text);
+            assert!(message.contains(expected), "{text}: {message}");
+        }
+        // The defaults keep the switch off and the new keys empty.
+        let default = Config::default();
+        assert!(!default.pipe());
+        assert_eq!(default.mcp.pipe_name, "");
+        assert_eq!(default.grants_file(), None);
+        if built {
+            let mut config = Config::parse(
+                "[mcp]\ntransport = \"pipe\"\npipe_name = \"ommatix-test.1_A\"\n\
+                 [safety]\ngrants_file = \"grants.toml\"\n",
+            )
+            .unwrap();
+            assert!(config.pipe());
+            assert_eq!(config.pipe_name().unwrap(), "ommatix-test.1_A");
+            config.base_dir = Some(PathBuf::from("operator"));
+            assert_eq!(
+                config.grants_file(),
+                Some(Path::new("operator").join("grants.toml"))
+            );
+        }
+    }
+
+    /// UT-78: the default pipe name is derived from the user's name, the same way for `serve`
+    /// and `attach` (D38); a user name with nothing usable is refused.
+    #[test]
+    fn ut_78_the_pipe_name_derives_from_the_user_name_or_is_refused() {
+        use std::ffi::OsStr;
+
+        let derive = |user: &str| derive_pipe_name(Some(OsStr::new(user)));
+        assert_eq!(derive("Juan").as_deref(), Some("ommatix-juan"));
+        assert_eq!(derive("José María").as_deref(), Some("ommatix-josmara"));
+        assert_eq!(derive(r"CORP\ana.b").as_deref(), Some("ommatix-corpana.b"));
+        assert_eq!(derive("a:b/c d").as_deref(), Some("ommatix-abcd"));
+        assert_eq!(derive("user_1-x").as_deref(), Some("ommatix-user_1-x"));
+        for nothing in ["", "ü", "東京", " \t", r"\/:"] {
+            assert_eq!(derive(nothing), None, "{nothing:?}");
+        }
+        assert_eq!(derive_pipe_name(None), None);
+        let long = derive(&"Ab".repeat(200)).unwrap();
+        assert_eq!(long.len(), MAX_PIPE_NAME);
+        assert!(long.starts_with(PIPE_NAME_PREFIX));
+        for user in ["Juan", "José María", r"CORP\ana.b", &"x".repeat(500)] {
+            let name = derive(user).unwrap();
+            assert!(valid_pipe_name(&name), "{name}");
+            #[cfg(feature = "broker-pipe")]
+            assert!(ommatix_adapter_mcp::pipe::PipeName::new(&name).is_ok());
+        }
+        // The app's rule is the pipe module's rule.
+        #[cfg(feature = "broker-pipe")]
+        for name in [
+            "a",
+            "a.b-c_D9",
+            "",
+            "a b",
+            "a/b",
+            r"a\b",
+            "a:b",
+            "é",
+            "a\0",
+            &"a".repeat(128),
+            &"a".repeat(129),
+        ] {
+            assert_eq!(
+                valid_pipe_name(name),
+                ommatix_adapter_mcp::pipe::PipeName::new(name).is_ok(),
+                "{name:?}"
+            );
+        }
+        // A configured name wins over the user's.
+        let mut config = Config::default();
+        config.mcp.pipe_name = "ommatix-fixed".to_owned();
+        assert_eq!(config.pipe_name().unwrap(), "ommatix-fixed");
+    }
+
     #[test]
     fn ut_64_the_default_freshness_scope_is_the_whole_frame_and_unknown_values_are_refused() {
         let default = Config::parse("").unwrap();

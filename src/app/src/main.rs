@@ -1,9 +1,14 @@
 //! `ommatix` binary: read the configuration, wire the engine, run a front end.
 //!
 //! - `serve`: the MCP server on stdio. stdout carries protocol messages only; every
-//!   diagnostic goes to stderr.
+//!   diagnostic goes to stderr. With `[mcp] transport = "pipe"` (a Windows build with the
+//!   `broker-pipe` feature; ADR-0043, proposed) it serves the broker over a local named pipe
+//!   instead, and nothing on stdio.
+//! - `attach` (with `broker-pipe`): relays stdio to that pipe, for one agent.
 //! - `demo`: a few observations and one dry-run click, printed for a human.
 
+#[cfg(feature = "broker-pipe")]
+mod attach;
 mod cli;
 mod clock;
 mod config;
@@ -24,7 +29,23 @@ fn main() -> Result<()> {
         Command::Serve(args) => serve(&args),
         Command::Demo(args) => run_demo(&args),
         Command::FreshnessProbe(args) => freshness_probe::run(&args),
+        #[cfg(feature = "broker-pipe")]
+        Command::Attach(args) => run_attach(&args),
     }
+}
+
+/// `attach`: one stderr line that says which side ended, then the exit code that tells it
+/// (`attach::Outcome::code`). A refusal to start is an error, exit code 1.
+#[cfg(feature = "broker-pipe")]
+fn run_attach(args: &cli::AttachArgs) -> Result<()> {
+    use std::io::Write as _;
+
+    let ended = attach::run(args)?;
+    eprintln!("ommatix: attach: {}", ended.message());
+    let _ = std::io::stdout().flush();
+    // Exit now: the relay's other direction may still wait on a read, and nothing of this
+    // process needs to outlive its relay.
+    std::process::exit(ended.code())
 }
 
 fn report_notes(notes: &[String]) {
@@ -35,6 +56,9 @@ fn report_notes(notes: &[String]) {
 
 fn serve(args: &RunArgs) -> Result<()> {
     let config = Config::load(args.config.as_deref())?;
+    if config.pipe() {
+        return serve_pipe(args, &config);
+    }
     let wired = wiring::build(args, &config)?;
     let mcp = config.mcp_config(args.legacy);
     let policy = config.local_policy();
@@ -71,6 +95,66 @@ fn serve(args: &RunArgs) -> Result<()> {
     // The session is over, however it ended: the engine has deleted its state and cache.
     eprintln!("ommatix: session ended; the engine's state and cache were deleted");
     outcome.context("the stdio transport failed")
+}
+
+/// `serve` with `[mcp] transport = "pipe"`: the broker of ADR-0039 behind the pipe of ADR-0043
+/// (proposed), and nothing on stdio. It serves until the process ends (Ctrl+C) or the pipe's
+/// listener fails.
+#[cfg(all(windows, feature = "broker-pipe"))]
+fn serve_pipe(args: &RunArgs, config: &Config) -> Result<()> {
+    use std::time::Duration;
+
+    use ommatix_adapter_mcp::pipe::{PipeName, PipeServer};
+    use ommatix_application::JOURNAL_CLIENTS;
+
+    if args.legacy {
+        anyhow::bail!(
+            "--legacy cannot be combined with [mcp] transport = \"pipe\": the broker serves the \
+             2026-07-28 profile only"
+        );
+    }
+    let name =
+        PipeName::new(&config.pipe_name()?).map_err(|e| anyhow::anyhow!("[mcp] pipe_name: {e}"))?;
+    let wired = wiring::build_broker(args, config)?;
+    let policy = config.local_policy();
+    let server = PipeServer::bind(wired.broker, name.clone())
+        .map_err(|e| anyhow::anyhow!("cannot serve on the pipe {}: {e}", name.path()))?;
+    eprintln!(
+        "ommatix: serving MCP {MODERN_PROTOCOL_VERSION} on the pipe {} to at most \
+         {JOURNAL_CLIENTS} clients through `ommatix attach` (ADR-0043, proposed) | session {} | \
+         {} | actuation {} | values {}",
+        name.path(),
+        wired.session_id,
+        wired.summary,
+        if policy.actuation_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if policy.include_values {
+            "allowed"
+        } else {
+            "redacted"
+        },
+    );
+    eprintln!("ommatix: {}", wired.grants);
+    report_notes(&wired.notes);
+    if let Some(indicator) = &wired.active_control {
+        eprintln!("ommatix: {indicator}");
+    }
+    // The listener serves on its own threads; this one only watches for its failure.
+    loop {
+        if let Some(failure) = server.failure() {
+            anyhow::bail!("the pipe's listener stopped: {failure}");
+        }
+        let _ = server.wait_until(Duration::from_secs(1), |_| false);
+    }
+}
+
+#[cfg(not(all(windows, feature = "broker-pipe")))]
+fn serve_pipe(_: &RunArgs, _: &Config) -> Result<()> {
+    // `Config::validate` refuses the switch on this build before anything is built.
+    anyhow::bail!("[mcp] transport = \"pipe\" needs a Windows build with `--features broker-pipe`")
 }
 
 fn run_demo(args: &DemoArgs) -> Result<()> {

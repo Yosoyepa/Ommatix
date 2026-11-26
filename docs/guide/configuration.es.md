@@ -47,7 +47,7 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
   aplicarse o que nombra el escritorio, la barra de tareas o `applicationframehost.exe`); y valores que este binario no puede cumplir: un `platform` distinto de
   `windows`, un `snapshot_policy`
   distinto de `strict`, un `profile` distinto de `2026-07-28` (el perfil legacy se habilita
-  con `legacy_enabled`), un `transport` distinto de `stdio`, `allow_destructive = true`,
+  con `legacy_enabled`), un `transport` distinto de `stdio` o `pipe`, `pipe` en un binario sin `broker-pipe`, fuera de Windows o con `legacy_enabled`, un `pipe_name` o `grants_file` sin `pipe`, `allow_destructive = true`,
   `allow_screenshots_to_client = true`, `[models] detector_path`, `detector_sha256`,
   `ocr_path` u `ocr_sha256` (los pesos se declaran en el manifiesto del modelo), un detector
   configurado a medias o con hashes mal formados (abajo) y `[cache] persist = true`.
@@ -122,12 +122,26 @@ Los errores del dominio vuelven como resultados de herramienta con `isError: tru
 accesibilidad es completa bajo `io.ommatix/accessibility` (`observe_screen`), y los tiempos
 por etapa de la acción bajo `io.ommatix/action_timings` (`execute_action`).
 
-El ejecutable sirve a un solo agente por stdio. En el adaptador MCP existe un intermediario que
-permite a varios agentes compartir un motor con un arrendamiento de entrada y una concesión por
-cliente, detrás de las propuestas
+Por defecto el ejecutable sirve a un solo agente por stdio, y todo lo anterior es ese camino. En
+el adaptador MCP existe un intermediario que permite a varios agentes compartir un motor con un
+arrendamiento de entrada y una concesión por cliente, detrás de las propuestas
 [ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md) y
-[ADR-0040](../adr/0040-task-scoped-grants-narrower-than-the-local-policy.md); el ejecutable
-todavía no puede alcanzarlo (no hay transporte), así que nada de lo que aquí se configura lo
-afecta.
+[ADR-0040](../adr/0040-task-scoped-grants-narrower-than-the-local-policy.md). El ejecutable
+lo sirve por un tubo con nombre local (propuesta [ADR-0043](../adr/0043-local-named-pipe-transport-for-several-clients.md))
+**sólo** en Windows, **sólo** en un binario compilado con `--features broker-pipe` y **sólo**
+con estas claves, apagadas o vacías por defecto:
+
+| Clave | Significado | Por defecto |
+|---|---|---|
+| `[mcp] transport` | `stdio`, o `pipe`: `serve` sirve el intermediario por el tubo y nada por stdio; se rechaza con `legacy_enabled` o `--legacy` | `stdio` |
+| `[mcp] pipe_name` | el nombre del tubo tras `\\.\pipe\`, 1–128 letras ASCII, dígitos, `-`, `_`, `.`; vacío: `ommatix-` y el nombre del usuario en minúsculas, sin otros caracteres (`serve` y `attach` lo derivan igual) | vacío |
+| `[safety] grants_file` | el archivo de concesiones del operador: una tabla `[[grant]]` por tique (su SHA-256 y lo que permite), leído en cada llamada; si falta o no vale, ningún agente tiene concesión | vacío: ningún agente tiene concesión |
+
+El anfitrión MCP de cada agente lanza entonces `ommatix attach --config <archivo> [--ticket-file <archivo>]`,
+que retransmite su stdio al tubo y no arranca ningún motor. Un agente sin concesión válida
+observa sin valores y no entrega nada. No se ha validado con un segundo usuario local, un proceso
+elevado, un anfitrión MCP real ni la cadena MSVC; los pasos, la forma del archivo de concesiones
+y los códigos de salida de `attach` están en la
+[guía de instalación](../thesis/S4_INSTALACION_Y_REVERSION.md) §7.1.
 
 Véase [control del operador](live-input.es.md) para la parada, purga y alcance por ventanas.

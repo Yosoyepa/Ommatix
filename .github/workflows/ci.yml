@@ -137,6 +137,10 @@ jobs:
       - run: cargo build -p ommatix-adapter-mcp --features broker-pipe
       - run: cargo clippy -p ommatix-adapter-mcp --features broker-pipe --all-targets -- -D warnings
       - run: cargo test -p ommatix-adapter-mcp --features broker-pipe
+      # The switch in the executable and `attach` (ADR-0043, proposed): `serve` with
+      # `[mcp] transport = "pipe"` and `attach` processes over the simulated desktop.
+      - run: cargo clippy -p ommatix --features broker-pipe --all-targets -- -D warnings
+      - run: cargo test -p ommatix --features broker-pipe
 
   cross-check:
     name: capture + native input compile for ${{ matrix.target }}

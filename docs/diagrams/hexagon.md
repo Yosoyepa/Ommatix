@@ -6,12 +6,15 @@ dependency; nothing points out of the domain.*
 la dependencia; nada sale del dominio.*
 
 *`ommatix-adapter-mcp` also holds the broker of the proposed ADR-0039 (several agents, one input
-lease). Nothing in the executable constructs it, the composition root included; only tests do,
-the crate's own and the acceptance suite's scenarios BDD-63 to BDD-67.*
+lease). The composition root constructs it only on Windows, in a build with `broker-pipe` and
+with `[mcp] transport = "pipe"` (proposed ADR-0043), and serves it over a local named pipe;
+otherwise only tests do, the crate's own and the acceptance suite's scenarios BDD-63 to
+BDD-71.*
 *`ommatix-adapter-mcp` contiene también el intermediario de la propuesta ADR-0039 (varios
-agentes, un arrendamiento de entrada). Nada en el ejecutable lo construye, tampoco la raíz de
-composición; sólo lo hacen las pruebas, las del propio crate y los escenarios BDD-63 a BDD-67 de
-la suite de aceptación.*
+agentes, un arrendamiento de entrada). La raíz de composición lo construye sólo en Windows, en
+un binario con `broker-pipe` y con `[mcp] transport = "pipe"` (propuesta ADR-0043), y lo sirve
+por un tubo con nombre local; si no, sólo lo hacen las pruebas, las del propio crate y los
+escenarios BDD-63 a BDD-71 de la suite de aceptación.*
 
 ```mermaid
 flowchart TB

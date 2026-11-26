@@ -32,9 +32,17 @@ verify_poll_ms = 50
 
 [mcp]
 profile = "2026-07-28"
+# Transporte (ADR-0043, propuesta): "stdio" (por defecto) sirve a un solo agente por la entrada
+# y la salida estándar. "pipe" sirve el intermediario de ADR-0039 por un tubo con nombre local a
+# varios agentes, que se conectan con `ommatix attach`; sólo en Windows, en un binario compilado
+# con `--features broker-pipe`, y nunca junto con legacy_enabled.
 transport = "stdio"
 legacy_enabled = false
 max_message_bytes = 65536
+# Con transport = "pipe": nombre del tubo (1 a 128 letras ASCII, dígitos, '-', '_' o '.').
+# Vacío: "ommatix-" y el nombre del usuario en minúsculas, sin los caracteres que el tubo no
+# admite; `serve` y `attach` lo derivan igual de la misma configuración.
+pipe_name = ""
 
 [safety]
 actuation_enabled = false
@@ -59,6 +67,11 @@ window_pin_file = ""
 # operador cree este archivo, el motor borra su estado y su caché en su siguiente petición, una
 # vez por cada archivo nuevo. El motor nunca borra el archivo. Vacío: sin archivo de purga.
 purge_file = ""
+# Concesiones por tique (ADR-0040, propuesta), sólo con [mcp] transport = "pipe": ruta de un
+# archivo TOML con una tabla [[grant]] por tique (el SHA-256 del tique y lo que permite). Se lee
+# en cada llamada; si falta o no es válido, ningún cliente tiene concesión. Vacío: ningún
+# cliente tiene concesión (observa sin valores y no entrega).
+grants_file = ""
 
 [models]
 # El runtime futuro debe fallar de forma segura mientras no se configure S0.

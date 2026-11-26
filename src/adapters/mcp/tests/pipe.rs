@@ -400,7 +400,7 @@ fn scripted_session() -> Vec<u8> {
 }
 
 #[test]
-fn a_ticket_client_through_the_pipe_gets_byte_for_byte_what_in_memory_streams_get() {
+fn it_27_a_ticket_client_through_the_pipe_gets_byte_for_byte_what_in_memory_streams_get() {
     let mut input = format!("{}\n", ticket(1)).into_bytes();
     input.extend_from_slice(&scripted_session());
 
@@ -445,7 +445,7 @@ fn a_ticket_client_through_the_pipe_gets_byte_for_byte_what_in_memory_streams_ge
 // ---- 2. one listener per name ----
 
 #[test]
-fn a_second_listener_on_the_same_name_fails_and_a_new_one_binds_once_the_first_is_gone() {
+fn it_28_a_second_listener_on_the_same_name_fails_and_a_new_one_binds_once_the_first_is_gone() {
     let world = World::new();
     let broker = world.broker();
     let mut first = bind(&broker, "second");
@@ -502,7 +502,7 @@ fn descriptor_of(name: &PipeName) -> (String, String, String) {
 }
 
 #[test]
-fn the_pipe_s_descriptor_grants_its_owner_only_and_the_owner_is_this_user() {
+fn sec_08_the_pipe_s_descriptor_grants_its_owner_only_and_the_owner_is_this_user() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "acl");
@@ -554,7 +554,8 @@ fn squat(open: impl FnOnce(&PipeName) -> PipeStream) -> io::Result<()> {
 }
 
 #[test]
-fn a_squatter_cannot_act_as_the_production_client_but_can_as_a_client_without_quality_of_service() {
+fn sec_09_a_squatter_cannot_act_as_the_production_client_but_can_as_a_client_without_quality_of_service()
+ {
     const ERROR_BAD_IMPERSONATION_LEVEL: i32 = 1346;
     let production = squat(|name| connect(name, CONNECT_ATTEMPTS, CONNECT_PAUSE).unwrap());
     assert_eq!(
@@ -571,7 +572,7 @@ fn a_squatter_cannot_act_as_the_production_client_but_can_as_a_client_without_qu
 // ---- 5. the bound on clients ----
 
 #[test]
-fn connections_beyond_the_bound_are_refused_at_accept_and_never_stall_it() {
+fn it_29_connections_beyond_the_bound_are_refused_at_accept_and_never_stall_it() {
     let world = World::new();
     let broker = world.bounded(2);
     let mut server = bind(&broker, "bound");
@@ -621,8 +622,8 @@ fn connections_beyond_the_bound_are_refused_at_accept_and_never_stall_it() {
 }
 
 #[test]
-fn a_peer_that_streams_a_handshake_without_end_is_dropped_after_a_bounded_read_and_its_place_freed()
-{
+fn it_24_a_peer_that_streams_a_handshake_without_end_is_dropped_after_a_bounded_read_and_its_place_freed()
+ {
     let world = World::new();
     let broker = world.bounded(1);
     let mut server = bind(&broker, "endless");
@@ -664,7 +665,7 @@ fn a_peer_that_streams_a_handshake_without_end_is_dropped_after_a_bounded_read_a
 // ---- 6. handshakes that admit nobody ----
 
 #[test]
-fn a_bad_handshake_admits_nobody_and_the_listener_keeps_serving_the_others() {
+fn it_24_a_bad_handshake_admits_nobody_and_the_listener_keeps_serving_the_others() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "handshake");
@@ -705,7 +706,7 @@ fn a_bad_handshake_admits_nobody_and_the_listener_keeps_serving_the_others() {
 // ---- 7. lines after the handshake ----
 
 #[test]
-fn an_oversized_line_is_answered_and_a_client_leaving_mid_line_disturbs_nobody() {
+fn it_27_an_oversized_line_is_answered_and_a_client_leaving_mid_line_disturbs_nobody() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "lines");
@@ -754,7 +755,7 @@ struct Record {
 
 #[test]
 #[allow(clippy::too_many_lines)] // one run: the clients, then the checks of its record
-fn eight_clients_through_the_pipe_at_once_keep_the_brokers_invariants() {
+fn it_27_eight_clients_through_the_pipe_at_once_keep_the_brokers_invariants() {
     const STEPS: usize = 60;
     let world = World::new();
     for n in 10..18 {
@@ -903,7 +904,7 @@ fn eight_clients_through_the_pipe_at_once_keep_the_brokers_invariants() {
 // ---- 9. the client ----
 
 #[test]
-fn an_absent_pipe_is_no_engine_and_a_busy_one_is_retried_a_bounded_number_of_times() {
+fn it_32_an_absent_pipe_is_no_engine_and_a_busy_one_is_retried_a_bounded_number_of_times() {
     let started = Instant::now();
     assert_eq!(
         connect(&unique("absent"), CONNECT_ATTEMPTS, CONNECT_PAUSE).err(),
@@ -1054,7 +1055,7 @@ fn echo_engine(
 }
 
 #[test]
-fn the_relay_carries_pipelined_requests_and_large_replies_both_ways_at_once() {
+fn it_31_the_relay_carries_pipelined_requests_and_large_replies_both_ways_at_once() {
     const REQUESTS: usize = 10_000;
     let name = unique("relay");
     let listener: Listener = PipeListenerOptions::new()
@@ -1117,7 +1118,7 @@ fn expected_replies(requests: usize) -> usize {
 }
 
 #[test]
-fn the_relay_reports_the_engine_closing_the_pipe_and_refuses_a_bad_handshake_unwritten() {
+fn it_31_the_relay_reports_the_engine_closing_the_pipe_and_refuses_a_bad_handshake_unwritten() {
     let name = unique("relay-end");
     let listener: Listener = PipeListenerOptions::new()
         .path(name.path())
@@ -1201,7 +1202,7 @@ fn open_remote(name: &PipeName) -> io::Result<std::fs::File> {
 }
 
 #[test]
-fn a_client_through_the_smb_loopback_path_is_refused() {
+fn sec_10_a_client_through_the_smb_loopback_path_is_refused() {
     // The control: a pipe that accepts remote clients must be reachable this way, or this
     // machine cannot carry the test.
     let control_name = unique("remote-control");
@@ -1238,7 +1239,7 @@ fn a_client_through_the_smb_loopback_path_is_refused() {
 // ---- 12. shutdown ----
 
 #[test]
-fn shutdown_with_no_client_leaves_nothing_and_the_name_binds_again_at_once() {
+fn it_30_shutdown_with_no_client_leaves_nothing_and_the_name_binds_again_at_once() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "down");
@@ -1258,7 +1259,7 @@ fn shutdown_with_no_client_leaves_nothing_and_the_name_binds_again_at_once() {
 }
 
 #[test]
-fn shutdown_stops_accepting_at_once_and_connections_end_when_their_clients_act_or_leave() {
+fn it_30_shutdown_stops_accepting_at_once_and_connections_end_when_their_clients_act_or_leave() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "down-busy");

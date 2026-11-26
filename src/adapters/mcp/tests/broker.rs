@@ -1679,7 +1679,7 @@ fn it_21_generated_interleavings_that_ask_for_the_lease_only_on_the_wire_keep_ev
 }
 
 #[test]
-fn generated_interleavings_with_clients_admitted_by_ticket_and_grants_changed_between_calls_keep_every_invariant()
+fn it_23_generated_interleavings_with_clients_admitted_by_ticket_and_grants_changed_between_calls_keep_every_invariant()
  {
     generated_run(Drive::Tickets);
 }
@@ -2976,7 +2976,7 @@ fn scripted_stream() -> Vec<u8> {
 }
 
 #[test]
-fn the_blocking_loop_serves_a_scripted_session_byte_for_byte_as_the_asynchronous_loop() {
+fn it_22_the_blocking_loop_serves_a_scripted_session_byte_for_byte_as_the_asynchronous_loop() {
     let script = scripted_stream();
     for handshake in [false, true] {
         for chunk in [1, 7, 8192] {
@@ -3022,7 +3022,7 @@ fn the_blocking_loop_serves_a_scripted_session_byte_for_byte_as_the_asynchronous
 
 #[test]
 #[allow(clippy::too_many_lines)] // one generator: each kind of line beside the others
-fn the_blocking_and_asynchronous_loops_agree_on_generated_byte_streams() {
+fn it_22_the_blocking_and_asynchronous_loops_agree_on_generated_byte_streams() {
     const CASES: usize = 160;
     // The smallest limit, so that oversized lines stay cheap.
     let config = McpConfig {
@@ -3116,7 +3116,7 @@ fn see(conn: &mut BrokerConnection) -> Value {
 }
 
 #[test]
-fn a_grant_withdrawn_or_changed_in_the_store_takes_effect_at_the_clients_next_call() {
+fn it_23_a_grant_withdrawn_or_changed_in_the_store_takes_effect_at_the_clients_next_call() {
     let world = World::new();
     let grants = Arc::new(Grants::default());
     let broker = world.ticket_broker(grants.clone(), 8);
@@ -3199,7 +3199,7 @@ impl GrantStore for Probing {
 }
 
 #[test]
-fn the_store_is_asked_once_per_call_inside_the_brokers_one_lock() {
+fn it_23_the_store_is_asked_once_per_call_inside_the_brokers_one_lock() {
     let world = World::new();
     let probing = Arc::new(Probing::default());
     let broker = world.ticket_broker(probing.clone(), 8);
@@ -3219,7 +3219,7 @@ fn the_store_is_asked_once_per_call_inside_the_brokers_one_lock() {
 }
 
 #[test]
-fn a_client_connected_with_a_grant_handed_in_is_never_looked_up_in_the_store() {
+fn it_23_a_client_connected_with_a_grant_handed_in_is_never_looked_up_in_the_store() {
     let world = World::new();
     let grants = Arc::new(Grants::default());
     grants.set(&ticket(1), Some(full()));
@@ -3241,7 +3241,7 @@ fn a_client_connected_with_a_grant_handed_in_is_never_looked_up_in_the_store() {
 }
 
 #[test]
-fn a_store_that_lists_nothing_or_panics_grants_nothing_and_the_broker_keeps_serving() {
+fn it_23_a_store_that_lists_nothing_or_panics_grants_nothing_and_the_broker_keeps_serving() {
     for panics in [false, true] {
         let world = World::new();
         let grants = Arc::new(Grants::default());
@@ -3309,7 +3309,7 @@ fn one_client_broker() -> (World, Arc<Grants>, Broker) {
 }
 
 #[test]
-fn a_handshake_admits_a_listed_ticket_an_unlisted_one_and_an_empty_line() {
+fn it_24_a_handshake_admits_a_listed_ticket_an_unlisted_one_and_an_empty_line() {
     let (listed, unlisted) = (listed_ticket(), ticket(2));
     let at_most = "Z".repeat(TICKET_MAX_LEN);
     let at_least = "-".repeat(TICKET_MIN_LEN);
@@ -3343,7 +3343,7 @@ fn a_handshake_admits_a_listed_ticket_an_unlisted_one_and_an_empty_line() {
 }
 
 #[test]
-fn a_handshake_of_any_other_form_ends_the_connection_and_grants_nothing() {
+fn it_24_a_handshake_of_any_other_form_ends_the_connection_and_grants_nothing() {
     let (_world, _grants, probe) = one_client_broker();
     let limit = probe.config().message_limit();
     let a = "A".repeat(20);
@@ -3432,7 +3432,7 @@ fn a_handshake_of_any_other_form_ends_the_connection_and_grants_nothing() {
 }
 
 #[test]
-fn a_spent_ticket_is_refused_while_its_first_connection_lasts_and_after_it_left() {
+fn it_25_a_spent_ticket_is_refused_while_its_first_connection_lasts_and_after_it_left() {
     let world = World::new();
     let grants = Arc::new(Grants::default());
     let listed = listed_ticket();
@@ -3482,7 +3482,7 @@ fn a_spent_ticket_is_refused_while_its_first_connection_lasts_and_after_it_left(
 }
 
 #[test]
-fn the_spent_set_is_bounded_and_a_full_set_admits_nobody_new_by_ticket() {
+fn it_25_the_spent_set_is_bounded_and_a_full_set_admits_nobody_new_by_ticket() {
     let world = World::new();
     let grants = Arc::new(Grants::default());
     let broker = world.ticket_broker(grants.clone(), 8);
@@ -3521,7 +3521,7 @@ fn the_spent_set_is_bounded_and_a_full_set_admits_nobody_new_by_ticket() {
 }
 
 #[test]
-fn a_ticket_never_appears_in_what_the_broker_writes_returns_or_formats() {
+fn it_26_a_ticket_never_appears_in_what_the_broker_writes_returns_or_formats() {
     let world = World::new();
     let grants = Arc::new(Grants::default());
     let broker = world.ticket_broker(grants.clone(), 8);
@@ -3589,7 +3589,7 @@ fn a_ticket_never_appears_in_what_the_broker_writes_returns_or_formats() {
 }
 
 #[test]
-fn a_handshake_beyond_the_bound_on_clients_is_refused_and_leaves_no_trace() {
+fn it_29_a_handshake_beyond_the_bound_on_clients_is_refused_and_leaves_no_trace() {
     let world = World::new();
     let grants = Arc::new(Grants::default());
     let (first, second) = (ticket(1), ticket(2));
@@ -3706,7 +3706,7 @@ where
 }
 
 #[test]
-fn an_endless_handshake_without_a_line_end_is_refused_after_a_bounded_read() {
+fn it_24_an_endless_handshake_without_a_line_end_is_refused_after_a_bounded_read() {
     for which in [Loop::Asynchronous, Loop::Blocking] {
         for place in [Place::Unreserved, Place::Reserved] {
             let (_world, grants, broker) = one_client_broker();
@@ -3740,7 +3740,7 @@ fn an_endless_handshake_without_a_line_end_is_refused_after_a_bounded_read() {
 }
 
 #[test]
-fn an_oversized_handshake_that_ends_with_a_line_end_is_refused_without_reading_the_rest() {
+fn it_24_an_oversized_handshake_that_ends_with_a_line_end_is_refused_without_reading_the_rest() {
     for which in [Loop::Asynchronous, Loop::Blocking] {
         let (_world, _grants, broker) = one_client_broker();
         let bound = broker.handshake_read_bound();
@@ -3763,7 +3763,7 @@ fn an_oversized_handshake_that_ends_with_a_line_end_is_refused_without_reading_t
 }
 
 #[test]
-fn an_established_connection_still_survives_an_oversized_message_after_its_handshake() {
+fn it_24_an_established_connection_still_survives_an_oversized_message_after_its_handshake() {
     for which in [Loop::Asynchronous, Loop::Blocking] {
         let (_world, _grants, broker) = one_client_broker();
         let limit = broker.config().message_limit();
@@ -3791,7 +3791,7 @@ fn an_established_connection_still_survives_an_oversized_message_after_its_hands
 // ---- reservations: a connection counts from the start (R-T1-1, D36) ----
 
 #[test]
-fn a_reservation_whose_handshake_is_refused_frees_its_place() {
+fn it_29_a_reservation_whose_handshake_is_refused_frees_its_place() {
     let (_world, _grants, broker) = one_client_broker();
     let bad = handshake_then_observe(b"not a ticket");
     for which in [Loop::Asynchronous, Loop::Blocking] {
@@ -3820,7 +3820,7 @@ fn a_reservation_whose_handshake_is_refused_frees_its_place() {
 }
 
 #[test]
-fn reservations_fill_the_bound_and_one_more_is_refused_before_anything_is_read() {
+fn it_29_reservations_fill_the_bound_and_one_more_is_refused_before_anything_is_read() {
     let world = World::new();
     let grants = Arc::new(Grants::default());
     let broker = world.ticket_broker(grants.clone(), 3);
@@ -3854,7 +3854,7 @@ fn reservations_fill_the_bound_and_one_more_is_refused_before_anything_is_read()
 }
 
 #[test]
-fn a_reservation_dropped_without_a_handshake_frees_its_place() {
+fn it_29_a_reservation_dropped_without_a_handshake_frees_its_place() {
     let (_world, _grants, broker) = one_client_broker();
     let reservation = broker.reserve().unwrap();
     assert!(format!("{reservation:?}").starts_with("Reservation"));
@@ -3868,7 +3868,7 @@ fn a_reservation_dropped_without_a_handshake_frees_its_place() {
 }
 
 #[test]
-fn a_reserved_place_goes_to_the_admitted_client_and_is_freed_when_it_leaves() {
+fn it_29_a_reserved_place_goes_to_the_admitted_client_and_is_freed_when_it_leaves() {
     let (_world, grants, broker) = one_client_broker();
     let mut conn = broker
         .reserve()
@@ -3888,7 +3888,7 @@ fn a_reserved_place_goes_to_the_admitted_client_and_is_freed_when_it_leaves() {
 // ---- coverage the QA of T1 asked for ----
 
 #[test]
-fn two_connections_that_present_one_ticket_at_the_same_moment_admit_exactly_one() {
+fn it_25_two_connections_that_present_one_ticket_at_the_same_moment_admit_exactly_one() {
     let world = World::new();
     let grants = Arc::new(Grants::default());
     let broker = world.ticket_broker(grants, 8);
@@ -3922,7 +3922,7 @@ fn two_connections_that_present_one_ticket_at_the_same_moment_admit_exactly_one(
 type Narrowing = fn(&mut LocalPolicy);
 
 #[test]
-fn a_grant_wider_than_the_operators_policy_is_still_bounded_by_the_policy() {
+fn it_23_a_grant_wider_than_the_operators_policy_is_still_bounded_by_the_policy() {
     let wider = Grant {
         applications: BTreeSet::from([APP.to_owned(), "another-app".to_owned()]),
         deliver_input: true,

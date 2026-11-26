@@ -14,12 +14,16 @@ sets `dry_run: false`; and no CLI flag loosens `[safety]`. Live input needs **al
    lowercase executable names (`"notepad.exe"`), both in the operator's configuration;
 3. `dry_run: false` from the agent, on a target of the current snapshot.
 
-These are the conditions of the executable, which serves one agent over stdio. The broker of
-the proposed [ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md)
+These are the conditions of the executable as it serves one agent over stdio, the default. The
+broker of the proposed [ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md)
 and [ADR-0040](../adr/0040-task-scoped-grants-narrower-than-the-local-policy.md) (several
-agents, an input lease, per-client grants) exists in the MCP adapter but cannot be reached from
-the executable; as specified, it would add the lease and the client's grant to these
-conditions, never replace them.
+agents, an input lease, per-client grants) is reachable only on Windows, in a build with
+`broker-pipe` and with `[mcp] transport = "pipe"` (proposed
+[ADR-0043](../adr/0043-local-named-pipe-transport-for-several-clients.md)); there it adds two
+conditions to these and replaces none: the agent holds the input lease, and the grant its ticket
+selects in the operator's grants file allows the application and live input. An agent attached
+without a ticket, or whose grant is withdrawn, delivers nothing. That path has not been
+validated with a second local user, an elevated process, a real MCP host or the MSVC toolchain.
 
 The CLI refuses a live input adapter before any adapter opens when 1 or 2 does not hold.
 For each action the engine then checks the foreground application the actuator attests
