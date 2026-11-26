@@ -4,7 +4,10 @@
 use std::sync::{Arc, Mutex, PoisonError};
 
 use ommatix_application::Engine;
-use ommatix_application::contract::{ErrorCode, NextStep, ToolError, limits};
+use ommatix_application::contract::{
+    ActionRequest, ActionResult, ActionTimings, ErrorCode, NextStep, ObservePage, ObserveRequest,
+    ToolError, limits,
+};
 use rmcp::model::Tool;
 use serde::Serialize;
 use serde_json::Value;
@@ -71,6 +74,34 @@ pub(crate) fn descriptors() -> Vec<Tool> {
 pub(crate) enum CallError {
     UnknownTool,
     InvalidArguments(InvalidArguments),
+    /// The broker cannot serve the call: a call panicked while it held the broker's lock, so
+    /// nothing is served and nothing is delivered from then on (fail closed, ADR-0039). The
+    /// stdio server never returns it.
+    Unavailable,
+}
+
+/// A tool call whose arguments passed the tool's input schema.
+#[derive(Debug, Clone)]
+pub(crate) enum ToolCall {
+    Observe(ObserveRequest),
+    Act(ActionRequest),
+    Metrics,
+}
+
+/// Parses one tool call, without touching the engine.
+pub(crate) fn parse(name: &str, arguments: &Value) -> Result<ToolCall, CallError> {
+    match name {
+        OBSERVE_SCREEN => dto::parse_observe_args(arguments)
+            .map(ToolCall::Observe)
+            .map_err(CallError::InvalidArguments),
+        EXECUTE_ACTION => dto::parse_action_args(arguments)
+            .map(ToolCall::Act)
+            .map_err(CallError::InvalidArguments),
+        GET_ENGINE_METRICS => dto::parse_metrics_args(arguments)
+            .map(|()| ToolCall::Metrics)
+            .map_err(CallError::InvalidArguments),
+        _ => Err(CallError::UnknownTool),
+    }
 }
 
 /// What a tool produced, before it is wrapped in a `CallToolResult`.
@@ -100,7 +131,7 @@ impl ToolOutput {
         }
     }
 
-    fn tool_error(tool: &'static str, error: &ToolError) -> Self {
+    pub(crate) fn tool_error(tool: &'static str, error: &ToolError) -> Self {
         Self::new(tool, &ToolErrorOutput::from(error), true)
     }
 }
@@ -111,71 +142,69 @@ pub(crate) fn call(
     name: &str,
     arguments: &Value,
 ) -> Result<ToolOutput, CallError> {
-    match name {
-        OBSERVE_SCREEN => {
-            let request =
-                dto::parse_observe_args(arguments).map_err(CallError::InvalidArguments)?;
-            let mut engine = engine.lock().unwrap_or_else(PoisonError::into_inner);
-            let output = match engine.observe_screen(&request) {
-                Ok(page) => {
-                    ToolOutput::new(OBSERVE_SCREEN, &ObserveScreenOutput::from(&page), false)
-                }
-                Err(error) => ToolOutput::tool_error(OBSERVE_SCREEN, &error),
-            };
-            let timings = engine.last_timings();
-            let plan = engine.last_plan();
-            let complete = engine.accessibility_complete();
-            drop(engine);
-            Ok(match (timings, plan, complete) {
-                (Some(t), Some(plan), Some(complete)) if !output.is_error => ToolOutput {
-                    meta: vec![
-                        (TIMINGS_META_KEY, dto::timings_meta(&t)),
-                        (PLAN_META_KEY, dto::plan_meta(&plan)),
-                        (ACCESSIBILITY_META_KEY, dto::accessibility_meta(complete)),
-                    ],
-                    ..output
-                },
-                _ => output,
-            })
+    let call = parse(name, arguments)?;
+    let mut engine = engine.lock().unwrap_or_else(PoisonError::into_inner);
+    Ok(match call {
+        ToolCall::Observe(request) => {
+            let result = engine.observe_screen(&request);
+            observation(&engine, result)
         }
-        EXECUTE_ACTION => {
-            let request = dto::parse_action_args(arguments).map_err(CallError::InvalidArguments)?;
-            let (result, timings) = {
-                let mut engine = engine.lock().unwrap_or_else(PoisonError::into_inner);
-                let result = engine.execute_action(&request);
-                (result, engine.last_action_timings())
-            };
-            // A rejection, or an indeterminate effect with its error, is an expected
-            // domain error: the agent must see it as one.
-            let is_error = result.error.is_some()
-                || result.status == ommatix_domain::identity::ActionStatus::Rejected;
-            let output = ToolOutput::new(
-                EXECUTE_ACTION,
-                &ExecuteActionOutput::from(&result),
-                is_error,
-            );
-            Ok(match timings {
-                Some(t) => ToolOutput {
-                    meta: vec![(ACTION_TIMINGS_META_KEY, dto::action_timings_meta(&t))],
-                    ..output
-                },
-                None => output,
-            })
+        ToolCall::Act(request) => {
+            let result = engine.execute_action(&request);
+            action(&result, engine.last_action_timings())
         }
-        GET_ENGINE_METRICS => {
-            dto::parse_metrics_args(arguments).map_err(CallError::InvalidArguments)?;
-            let metrics = engine
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .engine_metrics();
-            Ok(ToolOutput::new(
-                GET_ENGINE_METRICS,
-                &EngineMetricsOutput::from(&metrics),
-                false,
-            ))
-        }
-        _ => Err(CallError::UnknownTool),
+        ToolCall::Metrics => metrics(&engine),
+    })
+}
+
+/// The `observe_screen` result for `result`, with the `_meta` of the observation the
+/// published snapshot came from when it is a page.
+pub(crate) fn observation(engine: &Engine, result: Result<ObservePage, ToolError>) -> ToolOutput {
+    let output = match result {
+        Ok(page) => ToolOutput::new(OBSERVE_SCREEN, &ObserveScreenOutput::from(&page), false),
+        Err(error) => ToolOutput::tool_error(OBSERVE_SCREEN, &error),
+    };
+    match (
+        engine.last_timings(),
+        engine.last_plan(),
+        engine.accessibility_complete(),
+    ) {
+        (Some(t), Some(plan), Some(complete)) if !output.is_error => ToolOutput {
+            meta: vec![
+                (TIMINGS_META_KEY, dto::timings_meta(&t)),
+                (PLAN_META_KEY, dto::plan_meta(&plan)),
+                (ACCESSIBILITY_META_KEY, dto::accessibility_meta(complete)),
+            ],
+            ..output
+        },
+        _ => output,
     }
+}
+
+/// The `execute_action` result for `result`, with the stage timings of the gate that ran it,
+/// if one did.
+pub(crate) fn action(result: &ActionResult, timings: Option<ActionTimings>) -> ToolOutput {
+    // A rejection, or an indeterminate effect with its error, is an expected domain error:
+    // the agent must see it as one.
+    let is_error =
+        result.error.is_some() || result.status == ommatix_domain::identity::ActionStatus::Rejected;
+    let output = ToolOutput::new(EXECUTE_ACTION, &ExecuteActionOutput::from(result), is_error);
+    match timings {
+        Some(t) => ToolOutput {
+            meta: vec![(ACTION_TIMINGS_META_KEY, dto::action_timings_meta(&t))],
+            ..output
+        },
+        None => output,
+    }
+}
+
+/// The `get_engine_metrics` result.
+pub(crate) fn metrics(engine: &Engine) -> ToolOutput {
+    ToolOutput::new(
+        GET_ENGINE_METRICS,
+        &EngineMetricsOutput::from(&engine.engine_metrics()),
+        false,
+    )
 }
 
 /// The replacement for an `observe_screen` result that would not fit in one message.

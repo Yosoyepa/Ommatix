@@ -2336,6 +2336,7 @@ name = "ommatix-adapter-mcp"
 version = "0.1.0"
 dependencies = [
  "jsonschema",
+ "ommatix-adapter-sim",
  "ommatix-application",
  "ommatix-domain",
  "rmcp",

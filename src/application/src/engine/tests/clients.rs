@@ -169,6 +169,45 @@ fn two_clients_with_one_request_id_get_their_own_results_and_each_retry_replays_
 }
 
 #[test]
+fn a_client_journal_knows_only_its_own_request_ids_until_it_is_forgotten_or_purged() {
+    let mut r = rig(form());
+    let ids = clients(2);
+    let (a, b) = (ids[0], ids[1]);
+    let page = r.observe();
+    assert!(!r.engine.knows_request(a, "r1"), "nothing journaled yet");
+    let _ = r.engine.execute_action_for(a, &dry_click(&page, "r1"));
+    let _ = r.engine.execute_action(&dry_click(&page, "none"));
+    let sizes = r.engine.retained_state_sizes();
+
+    assert!(r.engine.knows_request(a, "r1"), "known for its client");
+    assert!(
+        !r.engine.knows_request(b, "r1"),
+        "unknown for another client"
+    );
+    assert!(
+        !r.engine.knows_request(a, "none") && !r.engine.knows_request(b, "none"),
+        "an action of no client is unknown to every client"
+    );
+    assert_eq!(
+        r.engine.retained_state_sizes(),
+        sizes,
+        "asking changes nothing"
+    );
+
+    r.engine.forget_client(a);
+    assert!(
+        !r.engine.knows_request(a, "r1"),
+        "unknown after forget_client"
+    );
+
+    let page = r.observe();
+    let _ = r.engine.execute_action_for(b, &dry_click(&page, "r2"));
+    assert!(r.engine.knows_request(b, "r2"));
+    r.engine.purge();
+    assert!(!r.engine.knows_request(b, "r2"), "unknown after a purge");
+}
+
+#[test]
 fn a_client_that_fills_its_share_forgets_only_its_own_results_that_reported_no_input() {
     let mut r = rig(form());
     r.world().live = true;
@@ -852,7 +891,10 @@ fn several_clients_on_one_engine_deliver_once_per_snapshot_only_as_holder_under_
                 if !request.dry_run {
                     let outcome = table.may_deliver(id, now);
                     apply(&mut r.engine, &outcome.change, &mut seen);
-                    if !outcome.result.unwrap() {
+                    // A client's own retry is answered from its journal before the lease is
+                    // asked for (ADR-0039, decision 11).
+                    if !outcome.result.unwrap() && !r.engine.knows_request(id, &request.request_id)
+                    {
                         seen.note("refused without the lease");
                         continue;
                     }

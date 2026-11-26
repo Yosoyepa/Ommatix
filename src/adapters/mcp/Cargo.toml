@@ -18,6 +18,7 @@ tokio = { workspace = true, features = ["io-std", "io-util"] }
 
 [dev-dependencies]
 jsonschema = { workspace = true }
+ommatix-adapter-sim = { workspace = true }
 tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt"] }
 
 [lints]

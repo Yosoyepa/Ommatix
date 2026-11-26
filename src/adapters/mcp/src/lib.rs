@@ -22,6 +22,10 @@
 //!   a byte stream, [`McpServer::serve_stdio`] over the process's stdio.
 //! - [`Connection`] is the transport-independent protocol core: envelope validation,
 //!   profile selection and routing ([`protocol`] documents every rule and error code).
+//! - [`Broker`] serves several connections on one engine under a single input lease and each
+//!   client's grant (ADR-0039, ADR-0040); each [`BrokerConnection`] speaks the same protocol
+//!   through a [`Connection`]. Nothing outside this crate's tests constructs one yet: the
+//!   binary serves stdio only.
 //! - [`McpConfig`] is the `[mcp]` configuration section.
 //! - [`dto`] holds the wire DTOs and their mapping to the application contract types.
 //! - [`schemas`] embeds the contract's JSON schemas from `docs/thesis/contratos/esquemas/`.
@@ -62,6 +66,7 @@
 //! session mix `initialize` with per-request metadata. The connection state machine here
 //! replaces them.
 
+mod broker;
 pub mod config;
 pub mod dto;
 pub mod protocol;
@@ -70,6 +75,7 @@ mod server;
 mod tools;
 mod transport;
 
+pub use broker::{Broker, BrokerConnection, BrokerError, BrokerState};
 pub use config::{DEFAULT_MAX_MESSAGE_BYTES, McpConfig};
 pub use protocol::{
     Connection, LEGACY_PROTOCOL_VERSION, MODERN_PROTOCOL_VERSION, Profile, SERVER_NAME,

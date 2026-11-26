@@ -67,13 +67,41 @@ enum Reply {
     Tool(ToolOutput),
 }
 
+/// How a connection reaches the engine: what happens at each request boundary and how a tool
+/// runs. The stdio server's backend is the shared engine; the broker's adds the lease and the
+/// client's grant (ADR-0039, ADR-0040). The protocol around it is the same.
+pub(crate) trait Backend: Send + Sync {
+    /// Called before each non-blank message is handled, never while one is: the request
+    /// boundary at which the operator's purge is honoured (SEC-07).
+    fn request_boundary(&self);
+
+    /// Runs one tool.
+    fn call_tool(&self, name: &str, arguments: &Value) -> Result<ToolOutput, CallError>;
+}
+
+/// The stdio server's backend: the engine behind its mutex, the single writer.
+struct SharedEngine(Arc<Mutex<Engine>>);
+
+impl Backend for SharedEngine {
+    fn request_boundary(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .honour_purge_request();
+    }
+
+    fn call_tool(&self, name: &str, arguments: &Value) -> Result<ToolOutput, CallError> {
+        tools::call(&self.0, name, arguments)
+    }
+}
+
 /// One client connection over a shared engine.
 ///
 /// Feed it each incoming message with [`Connection::handle_message`]; write every returned
 /// string as one line. Messages are handled one at a time, in order.
 #[allow(missing_debug_implementations)] // holds the engine (trait objects)
 pub struct Connection {
-    engine: Arc<Mutex<Engine>>,
+    backend: Box<dyn Backend>,
     config: McpConfig,
     tools: Arc<[Tool]>,
     state: State,
@@ -81,8 +109,17 @@ pub struct Connection {
 
 impl Connection {
     pub(crate) fn new(engine: Arc<Mutex<Engine>>, config: McpConfig, tools: Arc<[Tool]>) -> Self {
+        Self::with_backend(Box::new(SharedEngine(engine)), config, tools)
+    }
+
+    /// A connection that reaches the engine through `backend`.
+    pub(crate) fn with_backend(
+        backend: Box<dyn Backend>,
+        config: McpConfig,
+        tools: Arc<[Tool]>,
+    ) -> Self {
         Self {
-            engine,
+            backend,
             config,
             tools,
             state: State::Unselected,
@@ -116,10 +153,7 @@ impl Connection {
         }
         // The request boundary (SEC-07): the operator's purge is honoured here, before the
         // message is handled, and never while a message is being handled.
-        self.engine
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .honour_purge_request();
+        self.backend.request_boundary();
         let Ok(value) = serde_json::from_slice::<Value>(message) else {
             return Some(self.encode_error(
                 &Value::Null,
@@ -375,7 +409,7 @@ impl Connection {
         };
         let empty = Value::Object(Map::new());
         let arguments = params.get("arguments").unwrap_or(&empty);
-        match tools::call(&self.engine, name, arguments) {
+        match self.backend.call_tool(name, arguments) {
             Ok(output) => Ok(Reply::Tool(output)),
             // The name is the agent's text, which may carry what it read on the screen: it
             // is not echoed (IT-06, SEC-04). The error lists the tools that exist instead.
@@ -387,6 +421,10 @@ impl Connection {
             )),
             Err(CallError::InvalidArguments(e)) => Err(ErrorData::invalid_params(
                 format!("Invalid arguments for tool {name}: {e}"),
+                None,
+            )),
+            Err(CallError::Unavailable) => Err(ErrorData::internal_error(
+                "Internal error: the engine is unavailable; nothing was done",
                 None,
             )),
         }
