@@ -63,10 +63,11 @@ continuity abstain with a new ID and a recorded reason. ADR-0027, accepted the s
 | [0036](0036-llm-only-agent-experiment-on-the-test-applications.md) | Run an LLM-only agent experiment (AG-02) on the two test applications | Accepted (2026-10-17); exploratory, no checkbox |
 | [0037](0037-ag02-other-providers-through-a-confinable-agent.md) | Run AG-02 with other providers' models through an agent we can confine | Accepted (2026-10-18); exploratory, no checkbox |
 | [0038](0038-ag03-vision-baseline-and-ag02-repetitions.md) | Prepare AG-03 (a vision-agent baseline) and repetitions of AG-02 | Accepted (2026-10-19); nothing run, no checkbox |
-| [0039](0039-several-agents-through-one-engine-with-an-input-lease.md) | Serve several agents through one engine, with a single lease over the observe-and-act cycle | Proposed (2026-11-22); draft, nothing implemented |
-| [0040](0040-task-scoped-grants-narrower-than-the-local-policy.md) | Give each agent a task-scoped grant that can only narrow the local policy | Proposed (2026-11-22); draft, nothing implemented |
+| [0039](0039-several-agents-through-one-engine-with-an-input-lease.md) | Serve several agents through one engine, with a single lease over the observe-and-act cycle | Proposed (2026-11-22); revised 2026-11-24 against the code; nothing wired |
+| [0040](0040-task-scoped-grants-narrower-than-the-local-policy.md) | Give each agent a task-scoped grant that can only narrow the local policy | Proposed (2026-11-22); revised 2026-11-24 against the code; nothing wired |
 | [0041](0041-two-performance-candidates-decided-by-measurement.md) | Measure two performance candidates before adopting either: one inference for several regions, and accessibility evidence reused between observations | Proposed (2026-11-22); draft, nothing measured |
 | [0042](0042-formal-model-as-a-third-oracle.md) | Keep a machine-checked model of the core algorithms as a third oracle, tied to the code by generated tests | Proposed (2026-11-22); the three tests exist, the model is outside the repository |
+| [0043](0043-local-named-pipe-transport-for-several-clients.md) | Serve several clients over a local named pipe, through a safe wrapper crate and a synchronous loop | Proposed (2026-11-24); draft, nothing implemented |
 
 The twelve ADRs written while the repository was bootstrapped, before the dossier was
 consolidated, are archived in [`bootstrap/`](bootstrap/README.md) as B0001–B0012. They
