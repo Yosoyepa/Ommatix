@@ -5,8 +5,9 @@ revisions, snapshot names and results are read from the dossier's contract examp
 (docs/thesis/contratos/ejemplos). The refusal shown is the age bound of ADR-0025: a dry run
 ends before any capture, so its STALE_SNAPSHOT comes from the snapshot's age, never from pixels.
 
-The loop ends on a summary that holds every exchange; that frame is the poster a reader with
-reduced motion sees.
+The loop ends on a summary: the changed tiles, the identifiers, the expired snapshot with its
+limit beside the new one, and every exchange. That frame is the poster a reader with reduced
+motion sees, so it has to say what the animation says.
 """
 from __future__ import annotations
 
@@ -25,13 +26,14 @@ BEATS = [  # start, end, label, caption (desktop), caption (mobile, two lines)
      ("Each control gets a session ID", "and a revision.")),
     (8.6, 12.6, "Read", "The agent reads elements: no pixels, no coordinates.",
      ("The agent reads elements:", "no pixels, no coordinates.")),
-    (12.6, 17.4, "Refuse", "An observation older than the limit is refused. No input is sent.",
-     ("An observation older than the limit", "is refused. No input is sent.")),
+    (12.6, 17.4, "Refuse", "An action on an expired snapshot is refused. No input is sent.",
+     ("An action on an expired snapshot", "is refused. No input is sent.")),
     (17.4, 22.0, "Act", "Observe again, then act: the dry run reports what happened.",
      ("Observe again, then act: the dry", "run reports what happened.")),
 ]
-SUMMARY = ("By ID and revision: a stale reference is refused, a dry run sends nothing.",
-           ("By ID and revision: a stale reference", "is refused, a dry run sends nothing."))
+SUMMARY = ("The agent acts by ID and revision; an action on a stale snapshot is refused.",
+           ("The agent acts by ID and revision; an", "action on a stale snapshot is refused."))
+EXPIRED = "age > 10 s limit"  # [engine] max_snapshot_age_ms, 10 000 by default (ADR-0025)
 
 
 def examples(root: Path) -> dict:
@@ -102,7 +104,7 @@ def scene(theme: str, layout: str, d: dict) -> tuple[Scene, float, float, str, s
     still += text(cx + (20 if not mobile else 14), cy + (26 if not mobile else 22), "Documento", 16 if not mobile else 14, p["ink"], 700)
     fx, fy, fw, fh = cx + (19 if not mobile else 13), cy + cell + (6 if not mobile else 4), cell * 6.5 - 0, cell - (12 if not mobile else 8)
     still += rect(fx, fy, fw, fh, p["bg"], p["line"], r=5)
-    for lw, dy in [(0.5, 0.42), (0.36, 0.8), (0.44, 1.32), (0.5, 2.5), (0.3, 2.88)][:2 if mobile else 5]:
+    for lw, dy in [(0.5, 0.42), (0.36, 0.8), (0.44, 1.32), (0.5, 2.05), (0.3, 2.42)][:1 if mobile else 5]:
         still += rect(cx + (20 if not mobile else 14), cy + 2 * cell + dy * cell - (0 if not mobile else 2), ww * lw,
                       6 if not mobile else 5, p["inset"], r=3)
     side_x, side_w = cx + 7 * cell + (10 if not mobile else 8), ww - 7 * cell - (26 if not mobile else 20)
@@ -130,10 +132,10 @@ def scene(theme: str, layout: str, d: dict) -> tuple[Scene, float, float, str, s
     grid += "".join(f"M{n(cx)} {n(cy + j * cell)}h{n(ww)}" for j in range(1, rows))
     changed = "".join(rect(cx + i * cell + 1.5, cy + cell + 1.5, cell - 3, cell - 3, p["warn_tint"], p["warn_line"], r=3,
                            extra='fill-opacity="0.72"') for i in range(7))
-    s.add(path(grid, p["rule"], 0.75), s.visible((1.5, 4.5), (17.8, 19.0), fade=0.35))
-    s.add(changed, s.visible((2.1, 4.5), (18.0, 19.0), fade=0.3))
+    s.add(path(grid, p["rule"], 0.75), s.visible((1.5, 4.5), (17.8, 19.0), (22.0, None), fade=0.35))
+    s.add(changed, s.visible((2.1, 4.5), (18.0, 19.0), (22.0, None), fade=0.3))
     note, nw = tag(cx + 7 * cell + 8, cy + cell + cell / 2 - 11, "changed", p, "warn", 12)
-    s.add(note, s.visible((2.5, 4.5), (18.1, 19.0)), s.slide(2.5, -6, 0))
+    s.add(note, s.visible((2.5, 4.5), (18.1, 19.0), (22.0, None)), s.slide(2.5, -6, 0))
 
     # ---- identity: an outline and a tag for each control
     tw = width(t["label"], title_size, 600)
@@ -145,17 +147,21 @@ def scene(theme: str, layout: str, d: dict) -> tuple[Scene, float, float, str, s
     s.add(button_box + button_tag, s.visible((5.7, None)), s.slide(5.7, 0, 4))
 
     # ---- the snapshot the agent holds, and its age against the bound of ADR-0025
+    # The old snapshot stays to the end, above the new one: once expired it names its cause.
     kx, ky = cx + (16 if not mobile else 12), by + bh / 2 - 11
-    old_tag, kw = tag(kx, ky, old, p, "accent", 12)
+    oy = ky - 27
+    old_tag, kw = tag(kx, oy, old, p, "accent", 12)
     mw = 54 if not mobile else 46
-    meter_x, meter_y = kx + kw + 8, ky + 8
-    s.add(old_tag + rect(meter_x, meter_y, mw, 6, p["inset"], r=3), s.visible((9.5, 18.3)))
+    meter_x, meter_y = kx + kw + 8, oy + 8
+    s.add(old_tag, s.visible((9.5, None)))
+    s.add(rect(meter_x, meter_y, mw, 6, p["inset"], r=3) + text(meter_x + mw + 7, oy + 15.5, "age", 12, p["muted"]),
+          s.visible((9.5, 14.3)))
     s.add(rect(meter_x, meter_y, mw, 6, p["accent"], r=3), s.visible((9.5, 14.3)), s.grow(9.5, 14.3, meter_x, 14.5))
-    s.add(rect(meter_x, meter_y, mw, 6, p["warn"], r=3) + rect(kx, ky, kw, 22, p["warn_tint"], p["warn_line"], r=4) +
-          text(kx + kw / 2, ky + 15.5, old, 12, p["warn"], 600, "middle", True), s.visible((14.3, 18.3), fade=0.15))
-    limit = "age" if mobile else "age"
-    s.add(text(meter_x + mw + 7, ky + 15.5, limit, 12, p["muted"]), s.visible((9.5, 14.3)))
-    s.add(text(meter_x + mw + 7, ky + 15.5, "over 10 s", 12, p["warn"], 600), s.visible((14.3, 18.3), fade=0.15))
+    limit_width = width(EXPIRED, 12, 600)
+    if meter_x + limit_width > bx - 8:
+        raise ValueError("the age limit does not fit beside the button's tag")
+    s.add(rect(kx, oy, kw, 22, p["warn_tint"], p["warn_line"], r=4) + text(kx + kw / 2, oy + 15.5, old, 12, p["warn"], 600, "middle", True) +
+          text(meter_x, oy + 15.5, EXPIRED, 12, p["warn"], 600), s.visible((14.3, None), fade=0.15))
     new_tag, nkw = tag(kx, ky, new, p, "accent", 12)
     s.add(new_tag + text(kx + nkw + 8, ky + 15.5, "new", 12, p["accent"], 600), s.visible((18.4, None)), s.slide(18.4, 0, 4))
 
@@ -205,7 +211,7 @@ def scene(theme: str, layout: str, d: dict) -> tuple[Scene, float, float, str, s
     code = d["stale"]["error"]["code"]
     stamp = rect(sx, sy, sw_, sh, p["warn_tint"], p["warn"], r=8, sw=1.5)
     stamp += text(sx + sw_ / 2, sy + 27, code, 17 if not mobile else 16, p["warn"], 700, "middle", True, fit=sw_ - 20)
-    stamp += text(sx + sw_ / 2, sy + 47, f"{old} is over the 10 s limit · no input sent", 12, p["warn"], anchor="middle", fit=sw_ - 16)
+    stamp += text(sx + sw_ / 2, sy + 47, "no input sent", 12, p["warn"], anchor="middle", fit=sw_ - 16)
     s.add(stamp, s.visible((15.7, 17.2), fade=0.15), s.pop(15.7, (sx + sw_ / 2, sy + sh / 2)))
 
     # ---- the dry run on the fresh snapshot: a press that is reported, not delivered
@@ -229,7 +235,7 @@ def scene(theme: str, layout: str, d: dict) -> tuple[Scene, float, float, str, s
     s.add("".join(text(wx, cap_y + k * 20, line, 17 if not mobile else 15, p["ink"], 600, fit=W - 2 * wx) for k, line in enumerate(lines)),
           s.visible((22.0, None), fade=0.2))
 
-    title = "Ommatix protocol demo: observe, refuse a stale reference, observe again, act"
+    title = "Ommatix protocol demo: observe, an action on a stale snapshot refused, observe again, act"
     desc = (f'On a simulated desktop, only the changed tiles are analysed; the controls get identifiers and revisions '
             f'({b["target_id"]} revision {b["revision"]}, {t["target_id"]} revision {t["revision"]}). The agent calls '
             f'observe_screen and execute_action. A dry-run action on snapshot {old}, older than the 10-second limit, is '

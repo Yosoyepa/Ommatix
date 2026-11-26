@@ -31,9 +31,9 @@ SOCIAL = "social-preview.png"
 INPUTS = {
     "contract": "docs/thesis/contratos/ejemplos",
     "results": "docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911",
-    "gate": "AGENTS.md#5 rule 6, docs/diagrams/engine.md",
+    "gate": "AGENTS.md#5 rule 6, src/application/src/engine/act.rs",
     "toolchain": "rust-toolchain.toml",
-    "verified_against": "6ddff53941b013efb06785b48a72cef46bd88dcf",
+    "verified_against": "030a3e42e37c36b7243116bff97b94c5e2450c75",
 }
 
 

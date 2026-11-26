@@ -4,9 +4,9 @@
   "inputs": {
     "contract": "docs/thesis/contratos/ejemplos",
     "results": "docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911",
-    "gate": "AGENTS.md#5 rule 6, docs/diagrams/engine.md",
+    "gate": "AGENTS.md#5 rule 6, src/application/src/engine/act.rs",
     "toolchain": "rust-toolchain.toml",
-    "verified_against": "6ddff53941b013efb06785b48a72cef46bd88dcf"
+    "verified_against": "030a3e42e37c36b7243116bff97b94c5e2450c75"
   },
   "demo": {
     "duration_s": 24.0,
@@ -74,104 +74,104 @@
     "gate-dark.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 8217,
-      "sha256": "cf8e3116bac23384b7fa3d7ac6ea8c48ff583760c1848ea1dd7e2d09756929c0"
+      "bytes": 8400,
+      "sha256": "967a359cc08be7163cdad0dfad227c7b273b7de75c77d33b7d09018294ea4204"
     },
     "gate-light.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 8217,
-      "sha256": "cb8811e6af37af617d167e117e8e50a2a63ab6e9975356c70811dd48abf3321c"
+      "bytes": 8400,
+      "sha256": "937f7c22feec525aa24c7e4ce46d3622914ecaede07d21cd8a73bc458b4ba7a8"
     },
     "gate-mobile-dark.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 7153,
-      "sha256": "2f37dff82a7f89e0514611a7f1bc5da9900548f146f15cfcd5db98bb51d7a396"
+      "bytes": 7085,
+      "sha256": "aef960a9dfca93d3b1327b9ef300e95765e26088196c95b9f50018b4d7c480fe"
     },
     "gate-mobile-light.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 7153,
-      "sha256": "0dee223f9bbf66cb0c343c453b4ce089b6950e8d4bfc7c026feae7c15e43fae9"
+      "bytes": 7085,
+      "sha256": "c75f8749460d148349a20610cf7c098e66a8eee4797a2c9ee42a3b17765cdf0a"
     },
     "hero-dark.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 5638,
-      "sha256": "02cbd7780151e9a8330776896f4c57a7bcd181156df9139cc55ff645eb9ab571"
+      "bytes": 5716,
+      "sha256": "97ea1cb89cebc4ca2d5545dc21ff7a8b94a1044e0a803ace67a9d4d9ec7a2c75"
     },
     "hero-light.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 5638,
-      "sha256": "8bc6aeb08e740201ddda1fdae5c53fdc4103639bf501ef9d7bc3062d908b3aa6"
+      "bytes": 5716,
+      "sha256": "bd3b5b1b10f00920509aba4c834f342ee5199494e45c64a194283375333ef2bd"
     },
     "hero-mobile-dark.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 5739,
-      "sha256": "a71f25f09cab3e257d64646259adac698b47590685ade789697068bb19bfd014"
+      "bytes": 5817,
+      "sha256": "30977411057131994cd7127fc48ad5fdcc202d0544b710cb331870ba3ed0c6bc"
     },
     "hero-mobile-light.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 5739,
-      "sha256": "aafa704d777334ad3f397c1b74460269df6967a24a58390ff5276eba4ba68ee5"
+      "bytes": 5817,
+      "sha256": "0eed008d7ac497beee49427a50d9da38a88c2f1ec461c82e1fb7b27aca30eb21"
     },
     "pipeline-dark.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 10747,
-      "sha256": "338d71fc61b546ffddab4db9d2bf66d0b638fd1eedc04c3f510fc817c853e199"
+      "bytes": 10445,
+      "sha256": "033378238e9d669b4bf223568284667d3a28b6164dbd1c6950b65e958436a851"
     },
     "pipeline-light.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 10747,
-      "sha256": "69175024ee914e4d2cd0703520f3096c1feff2037595c782580a42cd97aa62da"
+      "bytes": 10445,
+      "sha256": "fde12b617dc60b018e6517c63b619c130243f5ad49e1fba204928ebb0e628379"
     },
     "pipeline-mobile-dark.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 8856,
-      "sha256": "dd88dc1a24d0fb0334e97538507ad23e31dc691f7cf126420c93b81ff392a629"
+      "bytes": 8663,
+      "sha256": "38bed0fc71c4e68b415b68840593213f47d35fe1438d110efcbff1f843e3ec10"
     },
     "pipeline-mobile-light.svg": {
       "kind": "svg",
       "reproducible": "bytes",
-      "bytes": 8856,
-      "sha256": "5a5a3bd198b9e7187d152fef354658dff96ecce30f7a90f0610eb4dd9c0bf8f0"
+      "bytes": 8663,
+      "sha256": "6ea27ef3cb9545f19b6a739b8e013a28ec989b94c7be539e2619ab1148790b50"
     },
     "protocol-demo-dark.svg": {
       "kind": "animated-svg",
       "reproducible": "bytes",
-      "bytes": 30015,
-      "sha256": "f6fc808d8bf954de46377da533ceea1a43d4ed1994263eff6b20976b2481e9c0"
+      "bytes": 30049,
+      "sha256": "89cc5f8a6f551f77ec4bf967ccf36180bfce6ae1630bb226c2d8ba6aaf8d9c64"
     },
     "protocol-demo-light.svg": {
       "kind": "animated-svg",
       "reproducible": "bytes",
-      "bytes": 30015,
-      "sha256": "3d14d65884e3a1f8822de502d52cde6d877f25d36317d25c4806fb1007b0ba1f"
+      "bytes": 30049,
+      "sha256": "3a444b1013bf846bc1417c8d06067625c43df9bed34218a8fe30a12bb16d9945"
     },
     "protocol-demo-mobile-dark.svg": {
       "kind": "animated-svg",
       "reproducible": "bytes",
-      "bytes": 29684,
-      "sha256": "552012fb3700e9c93f455c67eef73e0f63fd29d8bb6c6760ca4db32f4999b255"
+      "bytes": 29645,
+      "sha256": "3e6672e5ef08a2e198b92ecfd85f60e86e676e7f9708a2d2eb05031c293d566d"
     },
     "protocol-demo-mobile-light.svg": {
       "kind": "animated-svg",
       "reproducible": "bytes",
-      "bytes": 29684,
-      "sha256": "edef3779910f036b82743d812e153d13e80b23593c16f51141524c9b79445a7d"
+      "bytes": 29645,
+      "sha256": "0126c8b5464c44caaac370c80d9a99bb438a12e6e0d05b38f6a029f348be1548"
     },
     "protocol-demo.gif": {
       "kind": "gif",
       "reproducible": "renderer",
-      "bytes": 401070,
-      "sha256": "51a319af1840ba829120f39082f78c6166914409098d4c70237fea85eed70355"
+      "bytes": 427616,
+      "sha256": "a6cd7000d14b16dbd9d65417f73dbecff8098f8a3bb28b66b90ff58cf2164a45"
     },
     "results-dark.svg": {
       "kind": "svg",
@@ -200,8 +200,8 @@
     "social-preview.png": {
       "kind": "png",
       "reproducible": "renderer",
-      "bytes": 68234,
-      "sha256": "3aac4f1a6550281d6b36041d62e7dc36ebf417d75410d7ba51b8ee75dcb5bd7e"
+      "bytes": 68237,
+      "sha256": "a3249dec24cc7058274f4fa60b161dc94fc14e7b30a23bd5d853e599da15dbd0"
     }
   }
 }

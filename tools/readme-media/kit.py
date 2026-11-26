@@ -44,7 +44,8 @@ THEMES = {
     },
 }
 
-# Type scale, in units (about CSS pixels at the README's width). Nothing is set below 12.
+# Type scale, in units (about CSS pixels at the README's width). A figure sets nothing below 12;
+# a badge is set at 11, the size of the CI badge it sits beside (`smallest` in `text`).
 OVERLINE, SMALL, BODY, LABEL, TITLE = 12, 13, 14, 15, 20
 
 # Helvetica advance widths per 1000 units of the em: a conservative stand-in for the system
@@ -201,9 +202,10 @@ def pill(x: float, y: float, value: str, p: dict, role: str = "accent", size: fl
             text(x + w / 2, y + h / 2 + size * 0.35, value, size, ink, 600, "middle", mono)), w
 
 
-def tag(x: float, y: float, value: str, p: dict, role: str = "accent", size: float = SMALL) -> tuple[str, float]:
+def tag(x: float, y: float, value: str, p: dict, role: str = "accent", size: float = SMALL,
+        pad: float = 7) -> tuple[str, float]:
     """A square-cornered identifier, set in the monospace face: `e7`, `s17`, a status."""
-    w = round(width(value, size, 600, True) + 14)
+    w = round(width(value, size, 600, True) + 2 * pad)
     return (rect(x, y, w, 22, p[role + "_tint"], p[role + "_line"], r=4) +
             text(x + w / 2, y + 15.5, value, size, p[role], 600, "middle", True)), w
 

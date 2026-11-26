@@ -1,4 +1,5 @@
 """The generator is deterministic, says only what its sources say, and the committed files are its output."""
+import html
 import json
 import re
 import unittest
@@ -62,10 +63,13 @@ class Facts(unittest.TestCase):
             self.assertTrue(beats["Act"][0] <= simulated < beats["Act"][1])
 
     def test_the_poster_holds_the_whole_exchange_and_says_it_is_simulated(self):
-        still = demo.demo("light", "desktop", build.ROOT, at=demo.POSTER)
-        shown = re.sub(r'<g opacity="0">.*?</g>', "", still)
-        for expected in ("Simulated desktop", "STALE_SNAPSHOT", "simulated · input_delivered: false", "e7 · rev 3", "s17"):
-            self.assertIn(expected, shown)
+        for layout in ("desktop", "mobile"):
+            still = demo.demo("light", layout, build.ROOT, at=demo.POSTER)
+            shown = html.unescape(re.sub(r'<g opacity="0">.*?</g>', "", still))
+            for expected in ("Simulated desktop", "STALE_SNAPSHOT", "simulated · input_delivered: false", "e7 · rev 3", "s17",
+                             ">changed<", ">s16<", demo.EXPIRED, 'fill-opacity="0.72"'):
+                self.assertTrue(expected in shown, f"the {layout} still lacks {expected!r}")
+        self.assertIn("10 s limit", demo.EXPIRED)
         self.assertLess(demo.POSTER, demo.DURATION)
         self.assertEqual(demo.BEATS[-1][1], 22.0)
 
@@ -76,11 +80,28 @@ class Facts(unittest.TestCase):
         self.assertIn("| Éxito (puntuación de la fase 2) | 6 de 11 | 7 de 11 | 7 de 11 |", chapter)
 
     def test_the_gate_names_every_status_of_the_contract(self):
-        gate = figures.gate("light", "desktop")
         schema = json.loads((build.ROOT / "docs/thesis/contratos/esquemas/execute_action.output.schema.json").read_text(encoding="utf-8"))
         statuses = schema["properties"]["status"]["enum"]
-        for status in statuses:
-            self.assertIn(f">{status}<", gate)
+        for layout in ("desktop", "mobile"):
+            gate = figures.gate("light", layout)
+            for status in statuses:
+                self.assertIn(f">{status}<", gate)
+
+    def test_the_gate_draws_the_order_of_the_engine_and_claims_no_more(self):
+        source = (build.ROOT / "src/application/src/engine/act.rs").read_text(encoding="utf-8")
+        order = [source.index(step) for step in ("check_arguments(request)", "self.journal.lookup(", "self.gate_and_perform(request)")]
+        self.assertEqual(order, sorted(order), "arguments and the journal come before the gate")
+        inside = source[source.index("fn gate_and_perform"):source.index("fn check_age")]
+        steps = ["registry\n            .check_action(&action, Delivery::DryRun)", "self.check_age(target_id)?;\n\n        if request.dry_run",
+                 "policy.stopped", "self.ports.actuator.foreground_application()", "self.fresh_frame(", "self.last_look(",
+                 "self.deliver("]
+        positions = [inside.index(step) for step in steps]
+        self.assertEqual(positions, sorted(positions), "reference, dry run, policy, foreground, freshness, last look, delivery")
+        gate = figures.gate("light", "desktop")
+        drawn = [gate.index(f">{label}<") for label in ("Request", "Reference", "Policy", "Foreground", "Freshness", "Last look", "Deliver", "Verify")]
+        self.assertEqual(len(set(drawn)), 8)
+        for claim in ("every action", "same screen", "Every action"):
+            self.assertNotIn(claim, gate)
 
     def test_the_rust_badge_follows_the_pinned_toolchain(self):
         channel = re.search(r'channel = "([^"]+)"', (build.ROOT / "rust-toolchain.toml").read_text(encoding="utf-8")).group(1)

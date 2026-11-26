@@ -10,7 +10,8 @@ Every picture is built from the same kit ([`kit.py`](kit.py)):
 
 | Part | Rule |
 |---|---|
-| Size | Drawn at the size GitHub shows it: 840 units for the README column, 360 for a phone. One unit is about one CSS pixel, so no label is set below 12. |
+| Size | Drawn at the size GitHub shows it: 840 units for the README column, 360 for a phone. One unit is about one CSS pixel. A figure sets no label below 12; a badge is set at 11, the size of the CI badge beside it. |
+| Words | A figure carries only the words its drawing needs and does not repeat its section's sentence. `check.py` counts the words drawn in the pictures with the README's prose. |
 | Variants | Light and dark, desktop and phone, chosen by `<picture>`. Each picture has its own background and border, so it reads on any page. |
 | Colour | GitHub's neutrals, and three hues with one meaning each: teal for the engine, iris for the agent, amber for what needs attention (changed, stale, refused, preliminary). |
 | Type | GitHub's own sans and monospace stacks. Identifiers and wire names are monospace. |
@@ -61,7 +62,7 @@ reader's theme.
 | 8.6–12.6 s | The agent calls `observe_screen` and reads the element list of snapshot `s16`, whose age starts to count (compressed clock) | `observe_output.json` (elements), `stale_output.json` (snapshot) |
 | 12.6–17.4 s | `s16` passes the 10 s `max_snapshot_age_ms` bound; the dry-run `execute_action` on it stops at the gate: `STALE_SNAPSHOT`, no input | `stale_output.json`, chapter 07 §7.4, ADR-0025 |
 | 17.4–22 s | A new observation marks the changed tiles again and publishes `s17`; the dry run on it returns `simulated`, `input_delivered: false` | `click_input.json`, `simulated_output.json` |
-| 22–24 s | Summary: the whole exchange stays on screen | — |
+| 22–24 s | Summary: the changed tiles again, `s16` past its limit beside `s17`, and the whole exchange | — |
 
 The animation illustrates the protocol on a drawn window. It is not a recording, a live action
 or a latency measurement, and every variant says so inside the picture. A dry run ends before
@@ -71,7 +72,9 @@ snapshot's age. A revision mismatch would be `STALE_TARGET`.
 **Reduced motion.** The animations run only inside `@media (prefers-reduced-motion:
 no-preference)`. Each animated group also carries, as plain attributes, the value it has in the
 summary at 23 s; a reader who asked for reduced motion, or a renderer that plays no CSS
-animation, sees that still, which holds the whole exchange.
+animation, sees that still. It has to say what the animation says, so it shows the changed
+tiles, the identifiers, the expired snapshot with its limit (`age > 10 s limit`) beside the new
+one, and both exchanges.
 
 **One timeline, two outputs.** [`timeline.py`](timeline.py) writes the keyframes and can freeze
 the scene at any time. The frames of the GIF, the contact sheets and the still all come from
@@ -79,7 +82,12 @@ that second output; `preview.py motion` pauses the browser's animation at given 
 compares it with the computed frames.
 
 `protocol-demo.gif` (840×454, 24 s, 10 frames per second, 128 colours) is the same loop for
-places that play no SVG animation. The results figure transcribes
+places that play no SVG animation. A GIF has no reduced-motion form: opened directly it loops
+whatever the reader asked for, which is why the README shows the SVG and only links the GIF.
+
+The gate figure follows the order of `Engine::act` (`src/application/src/engine/act.rs`): the
+arguments and the `request_id` journal come before the gate, and a repeated `request_id`
+returns its stored result without passing it. The results figure transcribes
 [chapter 09 §9.11](../../docs/thesis/09_EVALUACION_EXPERIMENTAL.md), including its phase-1
 decoy-verdict exception and the provider-version attribution.
 
@@ -99,7 +107,7 @@ an animated SVG (CSS only, inside the reduced-motion guard, a still for every an
 one loop of at most 30 s, the word "Simulated desktop" in the picture), the four variants and
 their order in every `<picture>`, alt text on every image, that the language twins have the same
 structure and destinations, and the verbatim JSON examples. It also prints each README's word
-count. `preview.py` writes to `.qa/`; look at those files before committing. It uses GitHub's own
+count: its prose, the words drawn in its pictures, and its alt text. `preview.py` writes to `.qa/`; look at those files before committing. It uses GitHub's own
 Markdown parser with a local approximation of its styles, and no online service.
 
 Budgets, enforced by `check.py`: 16 kB per still SVG, 48 kB per animated SVG, 600 kB for the
