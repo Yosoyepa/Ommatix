@@ -2,6 +2,8 @@
 
 [README](../../README.md) → [Getting started](getting-started.md) → **Configuration** → [Live input](live-input.md) · [Development](development.md) · [All documentation](../README.md) · [Español](configuration.es.md)
 
+<a id="build-features-all-off-by-default"></a>
+
 ## Build features
 
 All off by default.

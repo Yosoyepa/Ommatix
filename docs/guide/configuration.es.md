@@ -2,6 +2,8 @@
 
 [README](../../README.es.md) → [Primeros pasos](getting-started.es.md) → **Configuración** → [Entrada real](live-input.es.md) · [Desarrollo](development.es.md) · [Toda la documentación](../README.md) · [English](configuration.md)
 
+<a id="features-de-compilación-todas-apagadas-por-defecto"></a>
+
 ## Features de compilación
 
 Todas apagadas por defecto.
