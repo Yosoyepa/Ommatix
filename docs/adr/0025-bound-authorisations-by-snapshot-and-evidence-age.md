@@ -158,18 +158,28 @@ observation that takes milliseconds.
    before every real input, and "a publication never renews a read" stand. The horizon only
    moves the instant at which reuse is judged, so the set read is never smaller than before:
    with a fast observation it differs only for evidence within `h` of its expiry.
-4. **Cost.** More accessibility reads, only for evidence that would have expired before the
-   observation ended. No observation makes a second provider call: the regions of that evidence
-   join the one call the observation already makes for its plan and its gaps, so the extra is
-   the elements of those regions, bounded by the accessibility budget of ADR-0017, never an
-   extra call. The evidence added is the one whose age at the start is in the band
-   `(max_snapshot_age_ms - h, max_snapshot_age_ms]`, which today is kept. Once re-read it has a
-   new `read_at`, so on a static screen a given region is read again about every
-   `max_snapshot_age_ms - h` instead of every `max_snapshot_age_ms`, and when `h` is at least
-   `max_snapshot_age_ms` every observation reads all the evidence it holds. With a fast
-   observation (`h` of tens of milliseconds) the band is that narrow. No safeguard is relaxed;
-   the refusal an agent saw for age becomes a read made by the observation that would have
-   published expired evidence.
+4. **Cost.** More accessibility reads, only for evidence whose age at the start is in the band
+   `(max_snapshot_age_ms - h, max_snapshot_age_ms]`, which today is kept. What that costs depends
+   on the plan of the observation:
+   - **An idle observation** (nothing planned, no gap of an earlier truncated read, nothing
+     expired at the start): today no provider call; with the horizon, none or one. It is one
+     when the engine holds evidence in the band: a call over the regions of that evidence only,
+     with the cost of any call (the foreground attestation and the window walk), bounded by the
+     accessibility budget of ADR-0017. This is the only case that adds a call.
+   - **A regional observation:** no extra call. The regions of that evidence join the call the
+     observation already makes for its plan and its gaps, which reads more elements.
+   - **A full refresh:** no change; it reads everything already.
+
+   How often, on a static screen: `h` is the duration of the last committed observation, idle
+   ones included, and an idle observation skips detection and recognition, so after the first
+   one `h` is a few milliseconds. The band is then that narrow and the evidence is read again
+   about `h` earlier than before: the cycle of one read per `max_snapshot_age_ms` shortens by
+   milliseconds, and the number of calls does not grow. The calls that are new follow a slow
+   observation (a full refresh with the detector, `h` of seconds): the next observation reads the
+   evidence in the wide band, once, and its own commit makes `h` small again; when that `h` is at
+   least `max_snapshot_age_ms` the next observation reads all the evidence it holds, once. No
+   safeguard is relaxed; the refusal an agent saw for age becomes a read made by the observation
+   that would have published expired evidence.
 5. **Overflow.** `t0 + h` is computed with checked arithmetic. If it does not fit in the clock's
    range the horizon is beyond every bound, so the evidence is read again (the horizon is at
    the limit), the same as `h >= max_snapshot_age_ms`; it is never saturated into a shorter
