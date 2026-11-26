@@ -68,8 +68,10 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
   add up to more than 30 s is **rejected** before anything is sent, as `LIMIT_EXCEEDED` with
   `next_step: reduce_request` (send less text per call), also as a dry run, and the snapshot is
   not spent. These keys change how the keys reach the application, not whether they may; no
-  CLI flag or agent can set them. The effect on a real application is not measured yet, so
-  leave them at `0` unless you are measuring it.
+  CLI flag or agent can set them. The effect was measured only in an agent-run exploratory
+  session on one laptop, on one build of one application (see the measured profile below); it is
+  not measured on any other application, nor by the dossier's supervised sessions, so leave them
+  at `0` unless you are measuring it.
   **What a paced `type` costs.** The engine serves one request at a time, so it is held, and
   every other call of the session waits, for the whole delivery. The pauses alone are at most
   30 s (the bound above: 2048 characters, the longest `type`, at 14 ms each is 28.7 s; 600

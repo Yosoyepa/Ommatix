@@ -69,8 +69,10 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
   30 s se **rechaza** antes de enviar nada, como `LIMIT_EXCEEDED` con `next_step:
   reduce_request` (enviar menos texto por llamada), también en simulación, y no se gasta el
   snapshot. Estas claves cambian cómo llegan las teclas a la aplicación, no si pueden llegar;
-  ninguna opción de la línea de órdenes ni el agente puede fijarlas. El efecto en una
-  aplicación real aún no está medido: déjelas en `0` salvo que lo esté midiendo.
+  ninguna opción de la línea de órdenes ni el agente puede fijarlas. El efecto sólo se midió
+  en una sesión exploratoria ejecutada por un agente, en un portátil, con una compilación de una
+  aplicación (véase el perfil medido más abajo); no está medido en ninguna otra aplicación ni por
+  las sesiones supervisadas del dossier: déjelas en `0` salvo que lo esté midiendo.
   **Lo que cuesta un `type` espaciado.** El motor atiende una petición a la vez, así que queda
   retenido, y cualquier otra llamada de la sesión espera, durante toda la entrega. Sólo las
   pausas suman como mucho 30 s (la cota de arriba: 2048 caracteres, el `type` más largo, a 14 ms
