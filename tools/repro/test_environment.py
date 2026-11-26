@@ -105,5 +105,32 @@ class VerifyTest(unittest.TestCase):
         self.assertEqual(self.statuses()['directml_sha256'], 'absent')
 
 
+class MachineFactsTest(unittest.TestCase):
+    """Two facts a clean-machine session needs to read its own failures (S4_SESIONES_PENDIENTES
+    §A.2): whether Smart App Control can block a locally built binary, and which Rust host built it."""
+
+    def test_the_smart_app_control_state_is_a_closed_name(self):
+        # HKLM\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy, VerifiedAndReputablePolicyState
+        self.assertEqual(environment.smart_app_control(0), 'off')
+        self.assertEqual(environment.smart_app_control(1), 'on')
+        self.assertEqual(environment.smart_app_control(2), 'evaluation')
+
+    def test_a_missing_or_unknown_smart_app_control_value_is_never_off(self):
+        self.assertEqual(environment.smart_app_control(None), 'not_reported')
+        self.assertEqual(environment.smart_app_control(7), 'unknown')
+        self.assertEqual(environment.smart_app_control('1'), 'unknown')
+        self.assertEqual(environment.smart_app_control(True), 'unknown')
+
+    def test_the_rust_host_is_read_from_rustc_verbose_version(self):
+        verbose = ('rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\n'
+                   'commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\n'
+                   'host: x86_64-pc-windows-gnu\nrelease: 1.99.0\n')
+        self.assertEqual(environment.rustc_host(verbose), 'x86_64-pc-windows-gnu')
+
+    def test_no_rustc_output_is_no_host(self):
+        self.assertIsNone(environment.rustc_host(None))
+        self.assertIsNone(environment.rustc_host('rustc 1.99.0\n'))
+
+
 if __name__ == '__main__':
     unittest.main()

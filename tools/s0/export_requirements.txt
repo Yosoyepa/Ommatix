@@ -7,7 +7,8 @@
 #
 # Pinning every package makes the export numerically reproducible. It does NOT make the file
 # byte-identical across machines: a clean machine with every package at these versions exported
-# the same numbers but another SHA-256 (docs/thesis/S4_SESIONES_PENDIENTES.md, session A).
+# the same numbers but another SHA-256 (docs/thesis/S4_SESIONES_PENDIENTES.md, session A). The
+# measured factor is the float32 sqrt kernel MKL dispatches for the BatchNorm folding (§A.2).
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Top level (what the script imports or runs)

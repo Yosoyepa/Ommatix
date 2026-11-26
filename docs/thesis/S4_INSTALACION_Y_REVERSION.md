@@ -267,6 +267,7 @@ Esperado tras una retirada completa: ningún proceso, `False`, sólo el árbol d
 | Detector | `icon_detect_v3` con una sola clase (rol `unknown`) | `S0_RESULTADOS.md` §4 |
 | Entrada | sólo `SendInput`; rechaza primer plano elevado, punto fuera de las ventanas, modificadores pulsados; sin `applicationframehost.exe` | ADR-0007, ADR-0020 |
 | Otras plataformas | `screen` y `native-input` (macOS, Linux) son interinos; el motor nunca los deja actuar en vivo | `AGENTS.md` regla 6 |
+| Control inteligente de aplicaciones (Smart App Control) | Activado (`(Get-MpComputerStatus).SmartAppControlState` es `On`), Windows puede negarse a ejecutar binarios recién compilados en la máquina, que no van firmados: el error es `os error 4551` / `WinError 4551` («Una directiva de Control de aplicaciones bloqueó este archivo») y el registro `Microsoft-Windows-CodeIntegrity/Operational` anota los eventos 3033 y 3077. En un segundo equipo bloqueó `ommatix.exe`, un ejemplo de pruebas y dos *build scripts*, mientras otros binarios del mismo `target` se ejecutaron: el bloqueo depende de cada archivo y no se puede prever. `tools/repro/environment.py` registra el estado en `machine.smart_app_control`. Esta guía no lo resuelve: desactivar el control es una decisión del operador y firmar el binario no está decidido | [§A.2](S4_SESIONES_PENDIENTES.md) |
 
 ## 11. Lo que sigue siendo del responsable
 

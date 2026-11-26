@@ -37,21 +37,28 @@ def rehearse(test, engine_argv, proxy_flags, profile, live_calls=3):
     log, ledger, report = tmp / "proxy.jsonl", tmp / "ledger.txt", tmp / "report.json"
     argv = [sys.executable, str(HERE / "proxy.py"), "--log", str(log),
             *[f.format(ledger=ledger) for f in proxy_flags], "--", *engine_argv]
-    # The fake agent is the proxy's client: the proxy's stdin/stdout are wired to its stdout/stdin.
-    proxy = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.DEVNULL)
-    agent = subprocess.Popen(
-        [sys.executable, str(HERE / "fake_agent.py"), "--report", str(report), "--profile", profile,
-         "--live-calls", str(live_calls)],
-        stdin=proxy.stdout, stdout=proxy.stdin, stderr=subprocess.DEVNULL)
-    agent_code = agent.wait(timeout=120)
-    proxy.stdin.close()
-    proxy.stdout.close()
-    proxy.wait(timeout=60)
-    records = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
-    return {"agent_code": agent_code, "records": records, "ledger": ledger,
+    # Each side's stderr goes to a file of the scratch directory, so that a failed rehearsal says
+    # why (an engine the operating system refused to start, say) instead of a bare exit code.
+    with (tmp / "proxy.err").open("wb") as proxy_err, (tmp / "agent.err").open("wb") as agent_err:
+        # The fake agent is the proxy's client: the proxy's stdin/stdout are wired to its stdout/stdin.
+        proxy = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=proxy_err)
+        agent = subprocess.Popen(
+            [sys.executable, str(HERE / "fake_agent.py"), "--report", str(report), "--profile", profile,
+             "--live-calls", str(live_calls)],
+            stdin=proxy.stdout, stdout=proxy.stdin, stderr=agent_err)
+        agent_code = agent.wait(timeout=120)
+        proxy.stdin.close()
+        proxy.stdout.close()
+        proxy.wait(timeout=60)
+    log_text = log.read_text(encoding="utf-8") if log.exists() else ""
+    stderr_tail = "\n".join(
+        f"--- {name} ---\n" + (tmp / name).read_text(encoding="utf-8", errors="replace")[-1500:]
+        for name in ("proxy.err", "agent.err"))
+    return {"agent_code": agent_code, "records": [json.loads(l) for l in log_text.splitlines()],
+            "ledger": ledger,
             "report": json.loads(report.read_text(encoding="utf-8")) if report.exists() else None,
-            "log_text": log.read_text(encoding="utf-8"), "dir": tmp}
+            "log_text": log_text, "dir": tmp, "stderr_tail": stderr_tail}
 
 
 def fake_engine():
@@ -68,7 +75,7 @@ class RehearsalBase:
     def check_budget_refusal(self):
         engine_argv, cleanup = self.engine()
         result = rehearse(self, engine_argv, ["--max-live", "2", "--ledger", "{ledger}", "--goal-id", "G01"], self.profile)
-        self.assertEqual(result["agent_code"], 0)
+        self.assertEqual(result["agent_code"], 0, result["stderr_tail"])
         live = result["report"]["live"]
         self.assertEqual([("rpc_error" in o) for o in live], [False, False, True])
         self.assertEqual(live[2]["rpc_error"], "LIVE_BUDGET_EXHAUSTED")
@@ -99,7 +106,7 @@ class RehearsalBase:
     def check_dry_run_only(self):
         engine_argv, cleanup = self.engine()
         result = rehearse(self, engine_argv, ["--dry-run-only"], self.profile)
-        self.assertEqual(result["agent_code"], 0)
+        self.assertEqual(result["agent_code"], 0, result["stderr_tail"])
         self.assertTrue(all(o.get("rpc_error") == "DRY_RUN_ONLY" for o in result["report"]["live"]))
         self.assertEqual([r for r in result["records"]
                           if r["dir"] == "agent->engine" and r.get("live_counted")], [])
@@ -141,6 +148,19 @@ class SimulatedDesktopRehearsal(RehearsalBase, unittest.TestCase):
 
     def test_phase_one_refuses_every_live_call_on_the_simulated_desktop(self):
         self.check_dry_run_only()
+
+
+class RehearsalDiagnosticsTests(unittest.TestCase):
+    """A rehearsal that fails says why. The proxy's and the agent's stderr used to go to DEVNULL, so
+    an engine the operating system refused to start (Windows Smart App Control, ``WinError 4551``,
+    S4_SESIONES_PENDIENTES.md §A.2) failed as a bare ``1 != 0``."""
+
+    def test_an_engine_that_cannot_start_leaves_its_cause_in_the_result(self):
+        missing = Path(tempfile.gettempdir()) / "ommatix-rehearsal-missing" / "ommatix-missing.exe"
+        result = rehearse(self, [str(missing), "serve", "--source", "sim"], ["--dry-run-only"], "legacy")
+        self.assertNotEqual(result["agent_code"], 0)
+        self.assertEqual(result["records"], [])
+        self.assertIn("FileNotFoundError", result["stderr_tail"])
 
 
 if __name__ == "__main__":
