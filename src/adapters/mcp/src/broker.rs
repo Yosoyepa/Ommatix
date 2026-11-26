@@ -124,7 +124,7 @@ use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use crate::config::McpConfig;
 use crate::dto::LeaseArgument;
 use crate::protocol::{Backend, Connection};
-use crate::server::{READ_CHUNK, exchange, exchange_blocking};
+use crate::server::{self, READ_CHUNK, exchange, exchange_blocking, exchange_blocking_until};
 use crate::tools::{self, CallError, LeaseReport, ToolCall, ToolOutput};
 use crate::transport::{Frame, LineReader};
 
@@ -363,8 +363,33 @@ impl Reservation {
         R: io::Read,
         W: io::Write,
     {
+        self.serve_sync_with_handshake_until(reader, writer, || false)
+    }
+
+    /// [`Reservation::serve_sync_with_handshake`] under a listener's stop (ADR-0043; D40):
+    /// `stopped` is asked once per message, as the last act before the message is handed on,
+    /// the handshake's admission included. When it answers true the message is not handed on,
+    /// nothing is written back, and the connection ends with an error for which the listener
+    /// can tell the stop apart; the reservation is freed, or the admitted client leaves. A
+    /// message that passed the check before the stop runs to its end, reply included.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error of the stream, or the stop, while reading the handshake or serving the
+    /// connection.
+    pub fn serve_sync_with_handshake_until<R, W, S>(
+        self,
+        reader: R,
+        writer: W,
+        stopped: S,
+    ) -> io::Result<Admission>
+    where
+        R: io::Read,
+        W: io::Write,
+        S: Fn() -> bool,
+    {
         self.broker()
-            .handshake_then_serve_sync(Some(self), reader, writer)
+            .handshake_then_serve_sync(Some(self), reader, writer, &stopped)
     }
 
     fn broker(&self) -> Broker {
@@ -609,7 +634,7 @@ impl Broker {
         R: io::Read,
         W: io::Write,
     {
-        self.handshake_then_serve_sync(None, reader, writer)
+        self.handshake_then_serve_sync(None, reader, writer, &|| false)
     }
 
     async fn handshake_then_serve<R, W>(
@@ -638,6 +663,7 @@ impl Broker {
         reservation: Option<Reservation>,
         reader: R,
         mut writer: W,
+        stopped: &dyn Fn() -> bool,
     ) -> io::Result<Admission>
     where
         R: io::Read,
@@ -645,11 +671,17 @@ impl Broker {
     {
         let mut lines = self.handshake_reader(io::BufReader::with_capacity(READ_CHUNK, reader));
         let frame = lines.next_frame_blocking()?;
+        // The listener's stop, checked as the last act before the admission (D40). A reservation
+        // dropped here frees its place.
+        if stopped() {
+            return Err(server::stopped());
+        }
         let mut conn = match self.admit_frame(reservation, &mut lines, frame) {
             Ok(conn) => conn,
             Err(refusal) => return Ok(Admission::Refused(refusal)),
         };
-        let outcome = exchange_blocking(&mut conn.connection, &mut lines, &mut writer);
+        let outcome =
+            exchange_blocking_until(&mut conn.connection, &mut lines, &mut writer, stopped);
         conn.close();
         outcome.map(|()| Admission::Served)
     }

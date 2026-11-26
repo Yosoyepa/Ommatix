@@ -1,6 +1,7 @@
 //! The client end of the pipe (ADR-0043, decision 12): the one file of the product that opens a
 //! handle with `std::fs`, under the one exception to SEC-04's source check. That check pins this
-//! file by its SHA-256 and bounds what it may contain, so it holds one function and nothing
+//! file by its SHA-256: the exception covers exactly the bytes a reviewer read, and any change to
+//! them is a change to the pin in the same commit. So the file holds one function and nothing
 //! else. The function opens the existing pipe at identification level, so that whoever serves
 //! the name may learn who connected but cannot act as that user; overlapped, because the stream
 //! the handle is wrapped into assumes it. The retry of a busy pipe is the caller's
