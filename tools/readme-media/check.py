@@ -2,11 +2,13 @@
 
 Links and anchors, SVG safety, the manifest (digests, sizes, nothing unlisted), the rules of an
 animated SVG, the four variants of every picture, alt text, twins that agree, and the verbatim
-contract examples. It reads the repository and writes nothing.
+contract examples. It also counts the words of each README: its prose and the words drawn inside
+its pictures, which a reader reads too. It reads the repository and writes nothing.
 """
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import re
 import sys
@@ -235,6 +237,26 @@ def words(text: str) -> tuple[int, int]:
     return count, len(alt.split())
 
 
+def drawn(svg: str, once: bool = False) -> int:
+    """Words drawn in a picture: the tokens of its text that carry a letter or a digit. Its title and
+    description are not drawn. An animation shows a label in many frames, so `once` counts each
+    distinct label a single time."""
+    body = re.sub(r"(?s)<(title|desc|style)\b[^>]*>.*?</\1>", "", svg)
+    labels = [html.unescape(label) for label in re.findall(r"(?s)<text\b[^>]*>(.*?)</text>", body)]
+    if once:
+        labels = sorted(set(labels))
+    return sum(1 for label in labels for token in label.split() if re.search(r"\w", token))
+
+
+def pictures(text: str, manifest: dict) -> int:
+    """Words drawn in the pictures a README shows, in the variant a desktop reader gets."""
+    total = 0
+    for source in re.findall(r'<img src="docs/assets/readme/([\w.-]+-light\.svg)"', prose(text)):
+        animated = manifest["assets"][source]["kind"] == "animated-svg"
+        total += drawn((ASSETS / source).read_text(encoding="utf-8"), once=animated)
+    return total
+
+
 def main() -> int:
     docs = [ROOT / "README.md", ROOT / "README.es.md", ROOT / "docs/README.md"]
     docs += sorted((ROOT / "docs/guide").glob("*.md"))
@@ -265,8 +287,11 @@ def main() -> int:
     print(f"Checked {len(docs)} documents, {len(svgs)} SVGs, {len(manifest['assets'])} asset digests and "
           f"{len(TWINS)} pairs of twins; raster files {raster} bytes.")
     for file in docs[:2]:
-        seen, alt = words(file.read_text(encoding="utf-8"))
-        print(f"{file.name}: {seen} words a reader sees, {alt} words of alt text.")
+        text = file.read_text(encoding="utf-8")
+        seen, alt = words(text)
+        inside = pictures(text, manifest)
+        print(f"{file.name}: {seen} words of prose and {inside} drawn in its pictures, {seen + inside} a reader sees; "
+              f"{alt} words of alt text.")
     for error in errors:
         print(error, file=sys.stderr)
     return bool(errors)

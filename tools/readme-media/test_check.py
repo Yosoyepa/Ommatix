@@ -117,6 +117,15 @@ class WordCount(unittest.TestCase):
         text = 'Two words <img src="a.svg" alt="three alt words"> [a link](docs/long/path.md) `code`\n\n| a | b |\n|---|---|\n'
         self.assertEqual(check.words(text), (7, 3))
 
+    def test_words_drawn_in_a_picture_are_counted_and_its_description_is_not(self):
+        svg = ('<svg><title>not drawn</title><desc>nor this</desc><style>text{fill:red}</style>'
+               '<text x="1">Region plan</text><text>snapshot · target &amp; age</text><text>→</text></svg>')
+        self.assertEqual(check.drawn(svg), 5)
+
+    def test_an_animation_counts_each_distinct_label_once(self):
+        svg = "<svg><text>observe_screen</text><text>observe_screen</text><text>e7 · rev 3</text></svg>"
+        self.assertEqual((check.drawn(svg), check.drawn(svg, once=True)), (5, 4))
+
 
 class ManifestChecks(unittest.TestCase):
     def run_check(self, files: dict[str, bytes], edit=None) -> list[str]:
