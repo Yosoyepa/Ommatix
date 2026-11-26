@@ -965,7 +965,9 @@ fn only_planned_regions_reach_the_detector() {
     let calls = r.world().detect_calls.clone();
     assert_eq!(calls.len(), 2);
     let regions = &calls[1];
-    assert_eq!(regions, &vec![bx(400.0, 160.0, 640.0, 320.0)]);
+    // The planned region [400, 160, 640, 320] reaches the detector grown by the crop-edge
+    // margin and clipped to the frame (ADR-0045 rule R5, O3e).
+    assert_eq!(regions, &vec![bx(368.0, 128.0, 640.0, 320.0)]);
     let full = bx(0.0, 0.0, f64::from(W), f64::from(H));
     assert!(regions.iter().all(|reg| *reg != full));
     // The Save button overlaps the halo, so it was re-analysed too; the input was not, and
@@ -2298,7 +2300,9 @@ fn inc_07_two_regions_cost_one_whole_frame_inference_under_the_adaptive_rule() {
         (plan.work, plan.region_count, plan.full_refresh_reason),
         (WorkKind::Regions, 2, None)
     );
-    assert_eq!(r.world().detect_calls.last().map(Vec::len), Some(2));
+    // The two regions' crops, each grown by the crop-edge margin, overlap on this small
+    // fixture and are read as one crop (ADR-0045 rule R5, O3e); the plan still has two.
+    assert_eq!(r.world().detect_calls.last().map(Vec::len), Some(1));
 
     let adaptive = EngineConfig {
         plan: PlanParams {

@@ -47,7 +47,9 @@ whole_on_read, band_px }`, passed beside `Evidence` to `plan_regions_with` (the 
 - **R0, gate.** The engine passes the split only when the detector declares a band
   (`VisionDetector::surface_band_px`, default `None`). The flat-region detector declares
   `nested_inset + 1` = 4 and lists its surfaces of the last call (`VisionDetector::surfaces`).
-  The ONNX detector and every fake declare none: their plan is today's, bit for bit.
+  The ONNX detector and every fake declare none: their **plan** is today's, bit for bit. What
+  R0 promises is the plan; R5 below changes the **read** of every regional plan, for every
+  detector.
 - **R1.** Accessibility boxes are not closed over.
 - **R2.** A surface `s` is **spanned** (not closed over) iff (i) it does not touch the frame's
   edge (whether it is background depends on its mean colour then); (ii) no pixel of the band
@@ -66,18 +68,45 @@ whole_on_read, band_px }`, passed beside `Evidence` to `plan_regions_with` (the 
   closure over every support) is computed and runs. A support-aware regional plan's regions
   each lie inside a classic region, so its covered area is never larger, and its full
   refreshes are a subset of today's, with today's reasons.
+- **R5, the crop-edge defence (added by unit O3e, decision D59).** For **every** regional
+  observation, classic plans included, the detector and the recogniser read each region grown by
+  a margin `m` = 32 px, clipped to the frame (the *crop*; overlapping crops are read as their
+  union). The accessibility provider reads its regions as before, never grown: it returns every
+  element that meets them whole (R1). What the crop returns is judged against the region:
+  (a) a word, or a detection that is not a surface, that meets a region and crosses its edge was
+  seen whole: the region widens to contain it, and the widening goes to a fixed point that closes
+  again over the held words and non-surface detections (and the relations between them) and over
+  every fresh one the widened region meets, without reading again; (b) one that meets a final
+  region within a band `t` = 16 px of a crop edge that is not the frame's edge, or a final region
+  that left its crop, may have been clipped by the crop itself: the observation reads once more,
+  with crops grown from the widened regions. A second (b), or a closure out of rounds, makes the
+  observation a full refresh with the existing reason `closure_budget`, whose meaning widens: the
+  closure over the evidence did not settle within its bound, **at planning or at the read**. The
+  budgets (regions, area, the adaptive rule) are checked again on the final regions, with their
+  own reasons. The observation keeps the fresh words and non-surface detections that meet a final
+  region (each then lies inside one) and the surfaces a final region contains. The invariant it
+  ends with, when the observation stays regional: every committed fresh word or non-surface
+  detection lies wholly inside a final region and at least `t` from every edge of the crop it was
+  read from that is not the frame's edge, and no held word or non-surface detection is met and not
+  contained by a final region. `m` and `t` are constants (no configuration key): `t` is about one
+  glyph at 150 % scale, `m = 2t` so that a word lying on a region's edge is a band's width clear
+  of the crop's edge.
 - **Merge.** A held detector box is replaced when it lies **inside** a re-analysed region
   (before: when it overlapped one). For a classic plan the two are the same; under the
   support-aware closure the only controls a region overlaps without containing are spanned
   surfaces, which are kept. Words and accessibility elements keep the overlap rule.
 
-The plan trace (`demo --plan-trace`, schema `ommatix.plan-trace/2`) says which closure ran
+The plan trace (`demo --plan-trace`, schema `ommatix.plan-trace/3`) says which closure ran
 (`chosen`), what the support-aware closure did (surfaces declared and spanned, accessibility
-boxes a region cut, relations ignored, the attempt's reason and the classic plan R4 ran) and the
-class of each component's and region's largest support. `demo --plan-check` compares each
-regional observation with a full read of the same frame, after the commit, as counts. Neither
-reaches an MCP client; `_meta`, the schemas and chapter 07 do not change, and no configuration
-key is added.
+boxes a region cut, relations ignored, the attempt's reason and the classic plan R4 ran), the
+class of each component's and region's largest support, and what R5 did (`crop_edge`); its
+`decided_by` is the check that decided the work that ran (the classic plan's under R4, R5's when
+the read made a regional plan full). `demo --plan-check` (schema `ommatix.plan-check/3`) compares
+each regional observation with a full read of the same frame, after the commit, as counts, and
+places each differing word against the final regions and the crops. Neither reaches an MCP
+client; `_meta`'s fields and the schemas do not change and no configuration key is added, but
+**the meaning of one reported value widens**: `closure_budget` can now be decided at the read
+(chapter 04 and the guides say so).
 
 ## Alternatives considered
 
@@ -107,6 +136,41 @@ key is added.
   or option C.
 - The plan costs a band comparison per declared surface (its perimeter times `2b` pixels) and,
   when R4 fires, a second closure.
+- **R5 changes the read for every detector, the ONNX detector included.** R0 still promises the
+  plan, bit for bit; what changes for a detector that declares no surfaces is the pixels its
+  stages read (each region grown by 32 px a side), and a possible widening, second read or full
+  refresh. The ONNX adapter never magnifies a crop: a region of up to 1216 px a side still goes
+  through the fixed 1280×1280 input at scale 1 (the inference costs the same; with a model of
+  several input shapes, the grown crop may need a larger shape), and a larger one is reduced a
+  little more. The detector sees 32 px of context around every crop, and S0 showed that its
+  detections depend on that context (S0_RESULTADOS §9.5); S0's measured figures were taken on
+  exact crops and are not re-measured here. Two regions whose crops overlap are read as one crop
+  (one inference instead of two). Not measured with the ONNX detector.
+- **What R5 costs and what it bought, on the lab's S1e pixels** (offline replay of the lab's own
+  screenshot of the scene, placed so that the planner's region is the lab's to the pixel,
+  12 288 → 20 400 px², with the real Windows OCR; agent-run, exploratory): with no margin, every
+  regional observation has 2 other-text pairs (one word with a letter misread, one without its
+  first letter) and 2 same-text pairs 2 px apart, as the lab measured (L6c). With a margin of 16,
+  32 or 48 px, 0 differing words in 4 of 4 regional observations: a margin of pixels around
+  the words is the context the recogniser needed, not the whole line. With the design (32 and
+  16), on S1e and S1 (4 regional observations each) neither (a) nor (b) fired, and the pixels
+  each of the two stages reads per regional observation grew from 20 400 to 36 400 px² (S1e)
+  and from 45 312 to 76 800 px² (S1), about 1.7 to 1.8 times; S1's word beside the caret still
+  differs (one other-text pair per observation, as before).
+- **What a regional read does to text near a change** (lab, observation only, agent-run,
+  exploratory, commit `a014f1c`, before R5): in L6b, 70 regional observations, every differing
+  word inside a region (`never_l3` 0): one other-text pair at the caret per observation in S1 and
+  S4 (the caret read into the adjacent word), two same-text pairs within 2 px and two other-text
+  pairs in S1e. In L6c (accessibility off, so that the words reach the page), S1e's crop reading
+  was wrong and the full read right 6 of 6, and in S1 both readings of the number beside the caret
+  were wrong, differently, 3 of 3. Which reading is right is established only for those scenes:
+  in general it is not.
+- **What remains with R5.** A word that the change itself touches (S1's number beside the caret)
+  is read from pixels that include the change; a full read reads it in another context, so the
+  two can still differ, and both can be wrong. And **a regional reading of text persists until
+  the next full refresh**: every later regional observation keeps it (L6c: 19 of 19 and 17 of 17
+  observations), and a later plan check whose regions do not meet it counts it outside every
+  region (L6c: `never_l3` 8 on a clock tick, before R5).
 - **E, what the closure buys, as it stands.** With I1 (closure), I2 (merge) and I3 (every dirty
   tile inside a region), and perception that is local, the merged evidence of a regional
   observation equals a full read's of the same frame, except the age of kept accessibility
@@ -120,10 +184,10 @@ key is added.
     re-read and is dropped by the merge. Before, a closed region that contained it usually met
     the parent too.
   - **L3.** OCR locality is approximate (WinRT reads lines in context); pre-existing on every
-    regional plan.
-- Chapter 04 §4.2 says that "detecciones que toquen el borde del crop" trigger a widening; the
-  engine has no such widening (none found in `engine/observe.rs`). ADR-0045 does not change
-  that text; it is recorded here for whoever revises it.
+    regional plan. R5's margin gives each crop context; it does not make OCR local.
+  - **L4.** `t` = 16 px is about one glyph of a 9–10 pt font at 150 % scale. A recogniser that
+    drops a cut glyph wider than the band (a higher scale, a larger font) can still return a word
+    short of the band, so a cut is made unlikely, not impossible. Pinned as a limit, not solved.
 
 ## Required validation
 
@@ -131,19 +195,29 @@ key is added.
   the pixel, the lab's boxes at 1920×1200, a property over generated inputs), UT-84 (the
   merge), UT-85 (regional against full on generated scenes and on the lab's boxes, with fakes
   that cut every box but a surface at a crop's edge), UT-86 (the flat-region contract with the
-  real detector, L1 pinned), and the mutations listed in the unit's report.
+  real detector, L1 pinned), UT-89 (R5: a word held tighter than its pixels widens the region
+  instead of being cut, and a property: on generated scenes, with fakes that clip at the edge of
+  what they are asked to read and an OCR that reads every crop a pixel tight, no committed word or
+  detection is ever a clipped one), and the mutations listed in the units' reports (O3, O3e).
 - **Not validated:** the real screen. The lab's protocol (unit O3 §8): scenes S1 (caret,
   maximised Notepad), S2 (clock), S3 (Orca's terminals behind, two configurations) and S4
-  (default size, Orca minimised), with `--timings --plan-trace` and one `--plan-check` run;
-  `--plan-check`'s counts at spanned or accessibility boxes must be 0 on every regional
-  observation, and an independent UI Automation watcher must see no element lost or cut. The
-  ONNX detector is unchanged by R0 and was not run.
+  (default size, Orca minimised), with `--timings --plan-trace` and one `--plan-check` run.
+  **The criterion (accepted, decision D58):** on every regional observation, `--plan-check`'s
+  `controls` and `accessibility` counts that overlap a spanned surface or an R1 box are 0, and
+  `differing_words.never_l3` is 0 (no differing word crosses a region's edge or lies outside
+  every region); words that differ inside a region (the limit L3) are reported with their
+  pairing and are not a failure. An independent UI Automation watcher must see no element lost
+  or cut. With R5, on the lab's rerun: the regional share holds, `never_l3` stays 0, and S1e's
+  crop reading of the unchanged words equals the full read's. The ONNX detector's plan is
+  unchanged by R0; its read changes under R5, and it was not run.
 
 ## Reversibility
 
 Declare no band in the flat-region detector (one line) and the planner is today's everywhere;
-or revert the branch. A real-screen `--plan-check` count above 0 at a spanned or accessibility
-box, or an element the watcher finds lost or cut, is the trigger.
+or revert the branch. A real-screen `--plan-check` `controls` or `accessibility` count above 0 at
+a spanned or accessibility box, a `never_l3` above 0, or an element the watcher finds lost or cut,
+is the trigger. R5 alone is reverted by reading the regions ungrown (one constant), which brings
+back the cut UT-89 pins.
 
 ## Provenance
 
@@ -160,5 +234,8 @@ explican los 47 refrescos completos medidos en el laboratorio. Con un detector q
 banda, el planificador deja de cerrar sobre las cajas de accesibilidad (se releen enteras) y
 sobre las superficies cuyo borde no cambió (el detector las da enteras o no las da), ignora las
 relaciones cuyo control es una de ellas, y si el plan resultante es un refresco completo usa el
-plan de siempre. Quedan declarados los límites L1 a L3; falta la validación sobre la pantalla
-real.
+plan de siempre. En toda observación regional, el detector y el OCR leen cada región ampliada en
+32 px (R5): lo que cruza el borde de una región la amplía, lo que queda a menos de 16 px del borde
+del recorte obliga a una lectura más, y si vuelve a pasar hay refresco completo (`closure_budget`,
+cuyo sentido se amplía a la lectura). Quedan declarados los límites L1 a L4; falta la validación
+sobre la pantalla real.

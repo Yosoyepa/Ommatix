@@ -28,7 +28,7 @@
 | `--session-id ID` | 1–64 visible ASCII characters, for reproducible output; with live input a fixed ID is refused at start (chapter 08 §8.4) | derived from the start time and the process ID |
 | `--legacy` | also serve the legacy MCP profile 2025-11-25 (like `[mcp] legacy_enabled = true`) | off |
 | `--observations N` (`demo` only) | 1–20 | 3 |
-| `--plan-trace` (`demo` only) | also write one line per observation to stderr, a failed observation included: `ommatix-plan-trace` and a JSON object (schema `ommatix.plan-trace/2`) with why the planner chose that work, as counts, areas and class names only; every field is defined [below](#the---plan-trace-line). No pixel, text or coordinate; never on stdout, and no MCP client can ask for it | off |
+| `--plan-trace` (`demo` only) | also write one line per observation to stderr, a failed observation included: `ommatix-plan-trace` and a JSON object (schema `ommatix.plan-trace/3`) with why the planner chose that work and what the crop-edge defence did to it, as counts, areas and class names only; every field is defined [below](#the---plan-trace-line). No pixel, text or coordinate; never on stdout, and no MCP client can ask for it | off |
 | `--plan-check` (`demo` only) | also compare each regional observation with a full read of the same frame, run after the observation is committed, and write one line per observation to stderr: `ommatix-plan-check` and a JSON object (schema `ommatix.plan-check/2`) with how many boxes each read has and the other lacks, and where and how the differing words differ ([ADR-0045](../adr/0045-support-aware-closure.md)); every field is defined [below](#the---plan-check-line). A diagnostic of the operator's: it runs perception a second time, so a regional observation costs about twice as much, and its time is never reported as the observation's. Counts only; never on stdout, and no MCP client can ask for it | off |
 
 ### The `--plan-trace` line
@@ -41,12 +41,12 @@ did not get to measure the field (see "When it is `null` or empty").
 
 | Field | Unit | Meaning |
 |---|---|---|
-| `schema` | text | `ommatix.plan-trace/2` (schema 1, before [ADR-0045](../adr/0045-support-aware-closure.md), had no `chosen`, `spanning`, `component_support_classes` or `region_support_classes`) |
+| `schema` | text | `ommatix.plan-trace/3`. Schema 2 had no `crop_edge`, and its `decided_by` named the support-aware attempt's check when rule R4 gave way to the classic plan; schema 1, before [ADR-0045](../adr/0045-support-aware-closure.md), had no `chosen`, `spanning`, `component_support_classes` or `region_support_classes` |
 | `observation_id` | number | the observation's position in this `demo` run, from 1 (as in `--timings`) |
 | `outcome` | text | `ok`, or `error` when the observation failed (nothing was published) |
 | `error_code` | text | the contract's error code of a failed observation (for example `CAPTURE_UNAVAILABLE`); `null` when `outcome` is `ok` |
-| `work` | text | the plan's work: `full`, `regions` or `idle` (as in the observation record) |
-| `full_refresh_reason` | text | the reason of a `full` plan (`no_committed_base`, `geometry_changed`, `closure_budget`, `too_many_regions`, `area_budget`, `experimental_baseline`, `adaptive_cost`); `null` otherwise |
+| `work` | text | the work that ran: `full`, `regions` or `idle` (as in the observation record). A regional plan that the crop-edge defence made a full refresh says `full` |
+| `full_refresh_reason` | text | the reason of a `full` plan (`no_committed_base`, `geometry_changed`, `closure_budget`, `too_many_regions`, `area_budget`, `experimental_baseline`, `adaptive_cost`); `null` otherwise. `closure_budget` means that the closure over the evidence did not settle within its bound, at planning or at the read (the crop-edge defence: something still came near a crop's edge after its one further read) |
 | `frame_area_px` | pixels | the frame's area, width times height |
 | `tile_size` | pixels | the side of a tile (`[engine] tile_size`) |
 | `changed_tiles` | count | tiles that differ from the committed base; every tile when there was no base or its geometry differed |
@@ -66,10 +66,10 @@ did not get to measure the field (see "When it is `null` or empty").
 | `covered_area_px` | pixels, sum | the sum of the regions' areas, which the area budget compares; the regions do not overlap, so it is also their union |
 | `budget_area_px` | pixels | `full_refresh_area_ratio` of the frame (`[engine]`): a threshold, at most the frame |
 | `max_regions` | count | `[engine] max_regions`, the most regions a regional plan may have |
-| `decided_by` | text | the check that made the plan a full refresh (the same names as `full_refresh_reason`); `null` for an idle or regional plan |
-| `decisive_region` | index | for `area_budget`: the 0-based index in `regions` of the largest region (the first on a tie); `null` otherwise |
+| `decided_by` | text | the check that made the work that ran a full refresh (the same names as `full_refresh_reason`); `null` when it is idle or regional. When rule R4 gave way to the classic plan, the classic plan's check (the attempt's is `spanning.attempt_reason`); when the crop-edge defence made a regional plan a full refresh, that check (`closure_budget`, or the budget the widened regions broke) |
+| `decisive_region` | index | for `area_budget` decided by the planner on the regions listed: the 0-based index in `regions` of the largest region (the first on a tie); `null` otherwise, and when R4 ran or the crop-edge defence decided |
 | `chosen` | text | which closure made the plan that ran: `spanning` (the support-aware closure of [ADR-0045](../adr/0045-support-aware-closure.md)) or `classic` (no detector band declared, a plan decided before any region, or rule R4 gave way to the classic plan) |
-| `spanning` | object | what the support-aware closure did, when it ran; `null` when it did not (the detector declares no surfaces, or the plan was decided before any region). When it ran and R4 gave way to the classic plan, `components`, `regions`, `covered_area_px`, `decided_by` and `decisive_region` describe the support-aware attempt, and `spanning.classic` the plan that ran |
+| `spanning` | object | what the support-aware closure did, when it ran; `null` when it did not (the detector declares no surfaces, or the plan was decided before any region). When it ran and R4 gave way to the classic plan, `components`, `regions` and `covered_area_px` describe the support-aware attempt, and `spanning.classic` and `decided_by` the plan that ran |
 | `spanning.surfaces_declared` | count | distinct surfaces the detector declared in the last evidence |
 | `spanning.surfaces_spanned` | count | of those, the ones spanned (not closed over) |
 | `spanning.largest_spanned_px` | pixels, one box | the largest spanned surface; `0` when none |
@@ -84,13 +84,23 @@ did not get to measure the field (see "When it is `null` or empty").
 | `spanning.classic.covered_area_px` | pixels, sum | the sum of their areas (what the area budget compared) |
 | `component_support_classes` | list | for each entry of `components`, in order, the class of its `largest_support_px` box: `cut_prone` (a box a region must contain whole), `surface` (a detector surface) or `whole_on_read` (an accessibility box); `null` when it touches none or the closure was the classic one without a split of the evidence |
 | `region_support_classes` | list | the same for each entry of `regions` |
+| `crop_edge` | object | what the crop-edge defence ([ADR-0045](../adr/0045-support-aware-closure.md), rule R5) did to a regional plan; `null` when the plan was not regional. The detector and the recogniser read each region grown by a margin (the crop); a word or a non-surface detection that crosses a region's edge widens the region, and one that comes near a crop's edge that is not the frame's edge makes the observation read once more |
+| `crop_edge.margin_px`, `crop_edge.band_px` | pixels | the margin by which each crop grows, and the band along a crop's edge in which a word or a detection may have been clipped (constants) |
+| `crop_edge.planned_area_px` | pixels, sum | the planned regions |
+| `crop_edge.crop_area_px` | pixels, sum | what the detector and the recogniser each read, over every read of the observation (a full refresh adds the frame) |
+| `crop_edge.final_area_px` | pixels, sum | the final regions when the observation stayed regional; the frame otherwise |
+| `crop_edge.crossing.words`, `crop_edge.crossing.detections` | count | items of the first read that met a planned region and crossed its edge (the region widened over them) |
+| `crop_edge.near_crop_edge.words`, `crop_edge.near_crop_edge.detections` | count | items of the first read that met a final region inside the band of a crop edge that is not the frame's edge; a final region that left its crop counts as a detection |
+| `crop_edge.rereads` | count | reads after the first: `0` or `1` |
+| `crop_edge.outcome` | text | `none` (the planned regions held everything read), `widened`, `reread` (one more read, which settled), or `full_refresh` |
 
 **When it is `null` or empty.** A failed observation publishes nothing, so its line carries only
 `schema`, `observation_id`, `outcome` and `error_code`: every other field is `null`, and `components`
 and `regions` are `[]` (`component_support_classes` and `region_support_classes` are `null`). A full refresh decided before any region exists (`no_committed_base`,
 `geometry_changed`, `experimental_baseline`) has `components` and `regions` empty and
-`covered_area_px` `0`; so has `closure_budget`, whose component that ran out of rounds leaves no
-entry. `covered_area_px` and `regions` are filled once the regions are merged, so they are also filled
+`covered_area_px` `0`; so has `closure_budget` decided by the planner, whose component that ran out
+of rounds leaves no entry (one decided at the read by the crop-edge defence keeps the planner's regions,
+and `crop_edge` says what happened). `covered_area_px` and `regions` are filled once the regions are merged, so they are also filled
 for `too_many_regions`. An idle plan has both lists empty.
 
 To tell why a full refresh happened, compare a component's `padded_area_px` with its `closed_area_px`
@@ -107,8 +117,11 @@ Each line is `ommatix-plan-check ` and one JSON object (keys sorted), one per ob
 again on the whole frame, and the two sets of evidence are compared box by box, as multisets. A box
 "at a spanned or whole-on-read box" overlaps a surface the closure spanned (a region met it without
 containing it) or an accessibility box a region met: where [ADR-0045](../adr/0045-support-aware-closure.md)
-changed what a regional observation keeps. Its counts there must be `0`; counts elsewhere come from
-perception that is not local (OCR reads lines in context: limit L3).
+changed what a regional observation keeps. On every regional observation the `controls` and
+`accessibility` counts there must be `0`, and so must `differing_words.never_l3` (no differing word
+crosses a region's edge or lies outside every region). Words that differ inside a region (the limit L3:
+the recogniser read a crop) are reported with their pairing and are not a failure; counts elsewhere
+come from perception that is not local (OCR reads lines in context).
 
 | Field | Unit | Meaning |
 |---|---|---|

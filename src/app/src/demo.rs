@@ -8,7 +8,7 @@
 //! on the run, so they never reach stdout, and no label is written, only its signature.
 //!
 //! With `--plan-trace`, each observation also writes one line to stderr (`ommatix-plan-trace`
-//! followed by a JSON object, schema `ommatix.plan-trace/2`): the numbers behind the plan's
+//! followed by a JSON object, schema `ommatix.plan-trace/3`): the numbers behind the plan's
 //! choice of work, counts and areas only. An observation that failed gets its line too, with
 //! `outcome` `error`, its code and nothing else measured, as `--timings` does. It is the
 //! planner's own record of why an observation was a full refresh; it is off unless asked for
@@ -16,10 +16,12 @@
 //! Schema 2 (ADR-0045) adds which closure made the plan (`chosen`), what the support-aware
 //! closure did (`spanning`) and the class of each component's and region's largest support
 //! (`component_support_classes`, `region_support_classes`): counts, areas and class names.
+//! Schema 3 (O3e) adds what the crop-edge defence did (`crop_edge`), and its `decided_by` is
+//! the check that decided the work that ran (the classic plan's when R4 gave way to it).
 //!
 //! With `--plan-check`, each regional observation is also compared with a full read of the
 //! same frame, run after it is committed (its time is not the observation's), and one line
-//! goes to stderr (`ommatix-plan-check`, schema `ommatix.plan-check/2`): how many boxes of
+//! goes to stderr (`ommatix-plan-check`, schema `ommatix.plan-check/3`): how many boxes of
 //! each kind one read has and the other lacks, split by whether they overlap a box ADR-0045
 //! lets a region meet without containing. Schema 2 (O3d) adds `differing_words`: where the
 //! differing words lie against the regions, how they pair up and whether the unexplained ones
@@ -36,7 +38,9 @@ use ommatix_adapter_sim::{SimulatedDesktop, layout};
 use ommatix_application::contract::{
     ActionKind, ActionRequest, ElementView, ExpectedEffect, ObservePage, ObserveRequest, ToolError,
 };
-use ommatix_application::{CheckCount, CheckKinds, Engine, PlanCheck, WordDetail, WordPlaces};
+use ommatix_application::{
+    CheckCount, CheckKinds, CropEdgeKinds, CropEdgeTrace, Engine, PlanCheck, WordDetail, WordPlaces,
+};
 use ommatix_domain::fusion::Actionability;
 use ommatix_domain::incremental::{FullRefreshReason, PlanTrace, SpanningTrace, SupportClass};
 use ommatix_domain::{Action, MouseButton};
@@ -46,10 +50,10 @@ use serde_json::{Value, json};
 const OBSERVATION_SCHEMA: &str = "ommatix.observation/1";
 
 /// The schema of the per-observation line written by `--plan-trace`.
-const PLAN_TRACE_SCHEMA: &str = "ommatix.plan-trace/2";
+const PLAN_TRACE_SCHEMA: &str = "ommatix.plan-trace/3";
 
 /// The schema of the per-observation line written by `--plan-check`.
-const PLAN_CHECK_SCHEMA: &str = "ommatix.plan-check/2";
+const PLAN_CHECK_SCHEMA: &str = "ommatix.plan-check/3";
 
 /// `TextNode` → `text_node`: the contract's spelling of a variant name.
 fn snake(debug: impl std::fmt::Debug) -> String {
@@ -226,7 +230,28 @@ fn observation_record(n: u8, page: &ObservePage, elements: &[ElementView]) -> Va
 /// One observation of `--plan-trace`: the plan's work and reason (as in the observation
 /// record) beside the planner's numbers. Counts and areas in pixels of the frame; nothing
 /// that names a place on the screen. `null` is a check that did not decide.
-fn plan_trace_record(n: u8, page: &ObservePage, trace: &PlanTrace) -> Value {
+/// What the crop-edge defence did (ADR-0045 rule R5): counts and areas.
+fn crop_edge_record(c: &CropEdgeTrace) -> Value {
+    let kinds = |k: &CropEdgeKinds| json!({ "words": k.words, "detections": k.detections });
+    json!({
+        "margin_px": c.margin_px,
+        "band_px": c.band_px,
+        "planned_area_px": c.planned_area_px,
+        "crop_area_px": c.crop_area_px,
+        "final_area_px": c.final_area_px,
+        "crossing": kinds(&c.crossing),
+        "near_crop_edge": kinds(&c.near_crop_edge),
+        "rereads": c.rereads,
+        "outcome": c.outcome.as_str(),
+    })
+}
+
+fn plan_trace_record(
+    n: u8,
+    page: &ObservePage,
+    trace: &PlanTrace,
+    crop_edge: Option<&CropEdgeTrace>,
+) -> Value {
     let p = &page.plan;
     json!({
         "schema": PLAN_TRACE_SCHEMA,
@@ -270,6 +295,7 @@ fn plan_trace_record(n: u8, page: &ObservePage, trace: &PlanTrace) -> Value {
             .iter()
             .map(|r| r.largest_support_class.map(SupportClass::as_str))
             .collect::<Vec<_>>(),
+        "crop_edge": crop_edge.map(crop_edge_record),
     })
 }
 
@@ -395,6 +421,7 @@ fn plan_trace_error_record(n: u8, error: &ToolError) -> Value {
         "spanning": null,
         "component_support_classes": null,
         "region_support_classes": null,
+        "crop_edge": null,
     })
 }
 
@@ -452,7 +479,10 @@ pub fn run(
                     );
                 }
                 if let Some(trace) = engine.last_plan_trace() {
-                    eprintln!("ommatix-plan-trace {}", plan_trace_record(n, &page, trace));
+                    eprintln!(
+                        "ommatix-plan-trace {}",
+                        plan_trace_record(n, &page, trace, engine.last_crop_edge())
+                    );
                 }
                 if plan_check {
                     eprintln!(
@@ -584,7 +614,7 @@ mod tests {
 
     /// The keys of one `--plan-trace` line (JSON writes them sorted). Every one is a
     /// count, an area, a closed-list name or an index: none names a place on the screen.
-    const TRACE_KEYS: [&str; 22] = [
+    const TRACE_KEYS: [&str; 23] = [
         "schema",
         "observation_id",
         "outcome",
@@ -607,6 +637,7 @@ mod tests {
         "spanning",
         "component_support_classes",
         "region_support_classes",
+        "crop_edge",
     ];
 
     fn sorted_keys(value: &Value) -> Vec<String> {
@@ -645,7 +676,7 @@ mod tests {
                 .engine
                 .last_plan_trace()
                 .expect("a trace was asked for");
-            let record = plan_trace_record(n, &page, trace);
+            let record = plan_trace_record(n, &page, trace, wired.engine.last_crop_edge());
             // The line is one JSON object that parses back, with exactly the documented keys.
             let line = record.to_string();
             assert!(!line.contains('\n'));
@@ -961,8 +992,13 @@ mod tests {
             .engine
             .observe_screen(&ObserveRequest::default())
             .unwrap();
-        let record = plan_trace_record(1, &page, wired.engine.last_plan_trace().unwrap());
-        assert_eq!(record["schema"], "ommatix.plan-trace/2");
+        let record = plan_trace_record(
+            1,
+            &page,
+            wired.engine.last_plan_trace().unwrap(),
+            wired.engine.last_crop_edge(),
+        );
+        assert_eq!(record["schema"], "ommatix.plan-trace/3");
         assert_eq!(record["chosen"], "classic");
         assert!(record["spanning"].is_null());
         assert!(record["component_support_classes"].is_array());

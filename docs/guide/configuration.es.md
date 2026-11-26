@@ -28,7 +28,7 @@
 | `--session-id ID` | de 1 a 64 caracteres ASCII visibles, para una salida reproducible; con actuación viva, un ID fijo se rechaza al arrancar (capítulo 08 §8.4) | derivado de la hora de inicio y del ID del proceso |
 | `--legacy` | sirve además el perfil MCP legacy 2025-11-25 (como `[mcp] legacy_enabled = true`) | apagado |
 | `--observations N` (sólo `demo`) | 1–20 | 3 |
-| `--plan-trace` (sólo `demo`) | escribe además una línea por observación en stderr, también de la que falló: `ommatix-plan-trace` y un objeto JSON (esquema `ommatix.plan-trace/2`) con por qué el planificador eligió ese trabajo, sólo con conteos, áreas y nombres de clase; cada campo se define [abajo](#la-línea-de---plan-trace). Ningún píxel, texto ni coordenada; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
+| `--plan-trace` (sólo `demo`) | escribe además una línea por observación en stderr, también de la que falló: `ommatix-plan-trace` y un objeto JSON (esquema `ommatix.plan-trace/3`) con por qué el planificador eligió ese trabajo y qué le hizo la defensa del borde del recorte, sólo con conteos, áreas y nombres de clase; cada campo se define [abajo](#la-línea-de---plan-trace). Ningún píxel, texto ni coordenada; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
 | `--plan-check` (sólo `demo`) | compara además cada observación regional con una lectura completa del mismo fotograma, hecha después de confirmar la observación, y escribe una línea por observación en stderr: `ommatix-plan-check` y un objeto JSON (esquema `ommatix.plan-check/2`) con cuántas cajas tiene cada lectura que la otra no, y dónde y cómo difieren las palabras distintas ([ADR-0045](../adr/0045-support-aware-closure.md)); cada campo se define [abajo](#la-línea-de---plan-check). Es un diagnóstico del operador: ejecuta la percepción dos veces, así que una observación regional cuesta alrededor del doble, y su tiempo nunca se informa como el de la observación. Sólo conteos; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
 
 ### La línea de `--plan-trace`
@@ -41,12 +41,12 @@ que el planificador no llegó a medir el campo (véase «Cuándo es `null` o est
 
 | Campo | Unidad | Significado |
 |---|---|---|
-| `schema` | texto | `ommatix.plan-trace/2` (el esquema 1, anterior a [ADR-0045](../adr/0045-support-aware-closure.md), no tenía `chosen`, `spanning`, `component_support_classes` ni `region_support_classes`) |
+| `schema` | texto | `ommatix.plan-trace/3`. El esquema 2 no tenía `crop_edge`, y su `decided_by` nombraba la comprobación del intento consciente de los soportes cuando la regla R4 cedía al plan clásico; el esquema 1, anterior a [ADR-0045](../adr/0045-support-aware-closure.md), no tenía `chosen`, `spanning`, `component_support_classes` ni `region_support_classes` |
 | `observation_id` | número | la posición de la observación en esta corrida de `demo`, desde 1 (como en `--timings`) |
 | `outcome` | texto | `ok`, o `error` si la observación falló (no se publicó nada) |
 | `error_code` | texto | el código de error del contrato de una observación fallida (por ejemplo `CAPTURE_UNAVAILABLE`); `null` si `outcome` es `ok` |
-| `work` | texto | el trabajo del plan: `full`, `regions` o `idle` (como en el registro de la observación) |
-| `full_refresh_reason` | texto | la razón de un plan `full` (`no_committed_base`, `geometry_changed`, `closure_budget`, `too_many_regions`, `area_budget`, `experimental_baseline`, `adaptive_cost`); `null` en otro caso |
+| `work` | texto | el trabajo que se ejecutó: `full`, `regions` o `idle` (como en el registro de la observación). Un plan regional que la defensa del borde del recorte convirtió en refresco completo dice `full` |
+| `full_refresh_reason` | texto | la razón de un plan `full` (`no_committed_base`, `geometry_changed`, `closure_budget`, `too_many_regions`, `area_budget`, `experimental_baseline`, `adaptive_cost`); `null` en otro caso. `closure_budget` significa que el cierre sobre la evidencia no se asentó dentro de su cota, al planificar o al leer (la defensa del borde del recorte: algo seguía cerca del borde de un recorte tras su única lectura adicional) |
 | `frame_area_px` | píxeles | el área del frame, ancho por alto |
 | `tile_size` | píxeles | el lado de una tesela (`[engine] tile_size`) |
 | `changed_tiles` | conteo | teselas que difieren de la base confirmada; todas si no había base o su geometría cambió |
@@ -66,10 +66,10 @@ que el planificador no llegó a medir el campo (véase «Cuándo es `null` o est
 | `covered_area_px` | píxeles, suma | la suma de las áreas de las regiones, que es lo que compara el presupuesto de área; las regiones no se solapan, así que también es su unión |
 | `budget_area_px` | píxeles | `full_refresh_area_ratio` del frame (`[engine]`): un umbral, como máximo el frame |
 | `max_regions` | conteo | `[engine] max_regions`, el máximo de regiones de un plan regional |
-| `decided_by` | texto | la comprobación que hizo del plan un refresco completo (los mismos nombres que `full_refresh_reason`); `null` si el plan es de reposo o regional |
-| `decisive_region` | índice | con `area_budget`: el índice (desde 0) en `regions` de la mayor región (la primera si hay empate); `null` en otro caso |
+| `decided_by` | texto | la comprobación que hizo del trabajo ejecutado un refresco completo (los mismos nombres que `full_refresh_reason`); `null` si es de reposo o regional. Si la regla R4 cedió al plan clásico, la comprobación del plan clásico (la del intento está en `spanning.attempt_reason`); si la defensa del borde del recorte convirtió un plan regional en refresco completo, esa comprobación (`closure_budget`, o el presupuesto que rompieron las regiones ampliadas) |
+| `decisive_region` | índice | con `area_budget` decidido por el planificador sobre las regiones listadas: el índice (desde 0) en `regions` de la mayor región (la primera si hay empate); `null` en otro caso, y cuando se ejecutó R4 o decidió la defensa del borde del recorte |
 | `chosen` | texto | qué cierre hizo el plan que se ejecutó: `spanning` (el cierre consciente de los soportes de [ADR-0045](../adr/0045-support-aware-closure.md)) o `classic` (el detector no declara banda, el plan se decidió antes de toda región, o la regla R4 cedió al plan clásico) |
-| `spanning` | objeto | qué hizo el cierre consciente de los soportes, cuando se ejecutó; `null` si no (el detector no declara superficies, o el plan se decidió antes de toda región). Si se ejecutó y R4 cedió al plan clásico, `components`, `regions`, `covered_area_px`, `decided_by` y `decisive_region` describen el intento consciente de los soportes, y `spanning.classic` el plan que se ejecutó |
+| `spanning` | objeto | qué hizo el cierre consciente de los soportes, cuando se ejecutó; `null` si no (el detector no declara superficies, o el plan se decidió antes de toda región). Si se ejecutó y R4 cedió al plan clásico, `components`, `regions` y `covered_area_px` describen el intento consciente de los soportes, y `spanning.classic` y `decided_by` el plan que se ejecutó |
 | `spanning.surfaces_declared` | conteo | superficies distintas que el detector declaró en la última evidencia |
 | `spanning.surfaces_spanned` | conteo | de ellas, las abarcadas (sin cerrar sobre ellas) |
 | `spanning.largest_spanned_px` | píxeles, una caja | la mayor superficie abarcada; `0` si ninguna |
@@ -84,12 +84,23 @@ que el planificador no llegó a medir el campo (véase «Cuándo es `null` o est
 | `spanning.classic.covered_area_px` | píxeles, suma | la suma de sus áreas (lo que comparó el presupuesto de área) |
 | `component_support_classes` | lista | para cada entrada de `components`, en orden, la clase de su caja `largest_support_px`: `cut_prone` (una caja que una región debe contener entera), `surface` (una superficie del detector) o `whole_on_read` (una caja de accesibilidad); `null` si no toca ninguna o el cierre fue el clásico sin reparto de la evidencia |
 | `region_support_classes` | lista | lo mismo para cada entrada de `regions` |
+| `crop_edge` | objeto | qué hizo la defensa del borde del recorte ([ADR-0045](../adr/0045-support-aware-closure.md), regla R5) a un plan regional; `null` si el plan no fue regional. El detector y el reconocedor leen cada región ampliada por un margen (el recorte); una palabra o una detección que no es superficie y cruza el borde de una región amplía la región, y una que se acerca a un borde del recorte que no es el del fotograma hace que la observación lea una vez más |
+| `crop_edge.margin_px`, `crop_edge.band_px` | píxeles | el margen con que crece cada recorte, y la banda junto al borde de un recorte en la que una palabra o una detección pudo quedar recortada (constantes) |
+| `crop_edge.planned_area_px` | píxeles, suma | las regiones planificadas |
+| `crop_edge.crop_area_px` | píxeles, suma | lo que leen el detector y el reconocedor, cada uno, en todas las lecturas de la observación (un refresco completo suma el fotograma) |
+| `crop_edge.final_area_px` | píxeles, suma | las regiones finales si la observación siguió regional; el fotograma en otro caso |
+| `crop_edge.crossing.words`, `crop_edge.crossing.detections` | conteo | elementos de la primera lectura que tocaron una región planificada y cruzaron su borde (la región se amplió sobre ellos) |
+| `crop_edge.near_crop_edge.words`, `crop_edge.near_crop_edge.detections` | conteo | elementos de la primera lectura que tocaron una región final dentro de la banda de un borde del recorte que no es el del fotograma; una región final que salió de su recorte cuenta como detección |
+| `crop_edge.rereads` | conteo | lecturas después de la primera: `0` o `1` |
+| `crop_edge.outcome` | texto | `none` (las regiones planificadas contenían todo lo leído), `widened`, `reread` (una lectura más, que se asentó) o `full_refresh` |
 
 **Cuándo es `null` o está vacío.** Una observación fallida no publica nada, así que su línea sólo lleva
 `schema`, `observation_id`, `outcome` y `error_code`: todo lo demás es `null`, y `components` y
 `regions` son `[]` (`component_support_classes` y `region_support_classes` son `null`). Un refresco completo decidido antes de que exista una región (`no_committed_base`,
 `geometry_changed`, `experimental_baseline`) tiene `components` y `regions` vacíos y `covered_area_px`
-en `0`; también `closure_budget`, cuyo componente que agotó las rondas no deja entrada.
+en `0`; también `closure_budget` decidido por el planificador, cuyo componente que agotó las rondas no
+deja entrada (el decidido al leer por la defensa del borde del recorte conserva las regiones del
+planificador, y `crop_edge` dice qué pasó).
 `covered_area_px` y `regions` se llenan una vez fusionadas las regiones, así que también se llenan con
 `too_many_regions`. Un plan de reposo tiene las dos listas vacías.
 
@@ -108,9 +119,12 @@ de confirmar una observación **regional**, el detector, el reconocedor y el pro
 se ejecutan otra vez sobre el fotograma entero y las dos evidencias se comparan caja a caja, como
 multiconjuntos. Una caja «en una caja abarcada o releída entera» solapa una superficie que el cierre
 abarcó (una región la tocó sin contenerla) o una caja de accesibilidad que tocó una región: donde
-[ADR-0045](../adr/0045-support-aware-closure.md) cambió lo que conserva una observación regional. Sus
-conteos ahí deben ser `0`; los conteos en otra parte vienen de una percepción que no es local (el OCR
-lee renglones en contexto: límite L3).
+[ADR-0045](../adr/0045-support-aware-closure.md) cambió lo que conserva una observación regional. En
+cada observación regional, los conteos de `controls` y `accessibility` ahí deben ser `0`, y también
+`differing_words.never_l3` (ninguna palabra distinta cruza el borde de una región ni queda fuera de toda
+región). Las palabras distintas dentro de una región (el límite L3: el reconocedor leyó un recorte) se
+informan con su emparejamiento y no son un fallo; los conteos en otra parte vienen de una percepción que
+no es local (el OCR lee renglones en contexto).
 
 | Campo | Unidad | Significado |
 |---|---|---|

@@ -12,13 +12,18 @@
 //! The words that differ are also described ([`WordDetail`], O3d): where each lies against
 //! the regions the observation re-read, how the two reads' differing words pair up, and
 //! whether the words no pairing explains touch the dirty tiles. Counts, closed classes and
-//! one distance in pixels; never a text and never a coordinate. A word that differs and lies
-//! inside a region is the stated limit L3 of ADR-0045 (the same pixels recognised from a
-//! crop); one that crosses a region's edge or lies outside every region is never L3: the
-//! first would be a word a region cut, the second a word a regional observation missed.
+//! one distance in pixels; never a text and never a coordinate. A word that differs, meets a
+//! region and lies in the clear part of the crop it was read from is the stated limit L3 of
+//! ADR-0045 (the same pixels recognised from a crop, seen whole); one that meets a region and
+//! reaches a crop's edge band, or that lies outside every region, is never L3: the first is a
+//! word the crop may have cut, the second a word a regional observation held or missed. The
+//! crop is the region grown by the crop-edge margin (rule R5): a full-read word that crosses
+//! a region's edge but lies clear of the crop's edge was seen whole, not cut.
 
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::Word;
+
+use super::crop_edge::near_crop_edge;
 
 /// Boxes found by one read and not by the other, of one kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -51,13 +56,16 @@ pub struct PlanCheck {
     pub words: WordDetail,
 }
 
-/// Where differing words of one side lie against the regions the observation re-read.
+/// Where differing words of one side lie against the regions the observation re-read and
+/// the crops it read them from (rule R5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WordPlaces {
-    /// Inside one region: the recogniser read these pixels from a crop. A difference here is
-    /// the stated limit L3.
+    /// Meets a region and lies in a crop clear of its edge band (the edges that are not the
+    /// frame's): the recogniser read these pixels whole from a crop. A difference here is the
+    /// stated limit L3.
     pub inside_a_region: usize,
-    /// Meets a region without lying inside any: never L3 (a word a region cut).
+    /// Meets a region and lies in no crop's clear part: never L3 (a word the crop may have
+    /// cut).
     pub crossing_a_region_edge: usize,
     /// Meets no region: never L3 (a word the regional observation held from an earlier read
     /// and a full read sees otherwise).
@@ -115,14 +123,25 @@ impl WordDetail {
     }
 }
 
-/// Where `b` lies against `regions`.
-fn place(b: &BBox, regions: &[BBox], out: &mut WordPlaces) {
-    if regions.iter().any(|r| r.contains(b)) {
-        out.inside_a_region += 1;
-    } else if regions.iter().any(|r| r.overlaps(b)) {
-        out.crossing_a_region_edge += 1;
-    } else {
+/// The regions an observation re-read, the crops it read them from, and the frame.
+pub(super) struct Areas<'a> {
+    pub regions: &'a [BBox],
+    pub crops: &'a [BBox],
+    pub bounds: BBox,
+}
+
+/// Where `b` lies against the regions and the crops.
+fn place(b: &BBox, areas: &Areas<'_>, out: &mut WordPlaces) {
+    if !areas.regions.iter().any(|r| r.overlaps(b)) {
         out.outside_every_region += 1;
+    } else if areas
+        .crops
+        .iter()
+        .any(|c| c.contains(b) && !near_crop_edge(b, c, &areas.bounds))
+    {
+        out.inside_a_region += 1;
+    } else {
+        out.crossing_a_region_edge += 1;
     }
 }
 
@@ -139,21 +158,21 @@ fn edge_difference(a: &BBox, b: &BBox) -> f64 {
 }
 
 /// Describes the differing words: `only_full` (in the full read, not in the regional
-/// observation) and `only_regional` (the converse), against the plan's `regions` and the
-/// boxes of its `dirty` tiles. Pairing is greedy in the order of `only_full`; on a tie of
-/// overlap the first regional word wins.
+/// observation) and `only_regional` (the converse), against the observation's final regions
+/// and crops and the boxes of its plan's `dirty` tiles. Pairing is greedy in the order of
+/// `only_full`; on a tie of overlap the first regional word wins.
 pub(super) fn word_detail(
     only_full: &[&Word],
     only_regional: &[&Word],
-    regions: &[BBox],
+    areas: &Areas<'_>,
     dirty: &[BBox],
 ) -> WordDetail {
     let mut out = WordDetail::default();
     for w in only_full {
-        place(&w.bbox, regions, &mut out.only_full);
+        place(&w.bbox, areas, &mut out.only_full);
     }
     for w in only_regional {
-        place(&w.bbox, regions, &mut out.only_regional);
+        place(&w.bbox, areas, &mut out.only_regional);
     }
     let mut unexplained: Vec<&BBox> = Vec::new();
     let mut used = vec![false; only_regional.len()];
@@ -247,7 +266,16 @@ mod tests {
     fn detail(full: &[Word], regional: &[Word]) -> WordDetail {
         let f: Vec<&Word> = full.iter().collect();
         let r: Vec<&Word> = regional.iter().collect();
-        word_detail(&f, &r, &regions(), &dirty())
+        let bounds = bx(0.0, 0.0, 640.0, 320.0);
+        let regions = regions();
+        // The region's crop is [68, 68, 332, 232]; its clear part [84, 84, 316, 216].
+        let crops = super::super::crop_edge::crops(&regions, &bounds);
+        let areas = Areas {
+            regions: &regions,
+            crops: &crops,
+            bounds,
+        };
+        word_detail(&f, &r, &areas, &dirty())
     }
 
     /// Inside a region, the same text, another box: L3.
@@ -301,7 +329,7 @@ mod tests {
         assert_eq!(d.never_l3(), 0);
     }
 
-    /// A full read's word crossing the region's edge, read clipped by the crop: a cut.
+    /// A full read's word reaching the crop's edge band, read clipped: a cut.
     #[test]
     fn o3d_a_word_crossing_a_region_edge_is_never_l3() {
         let d = detail(
@@ -370,6 +398,19 @@ mod tests {
             (d.pairs.unpaired_only_full, d.pairs.unpaired_only_regional),
             (0, 0)
         );
+    }
+
+    /// O3e: a full read's word that crosses the region's edge but lies clear of the crop's
+    /// edge band was seen whole by the crop: L3, not a cut.
+    #[test]
+    fn o3e_a_word_past_the_region_but_clear_of_the_crops_edge_is_l3() {
+        let d = detail(
+            &[Word::new("Linea", bx(280.0, 110.0, 302.0, 130.0))],
+            &[Word::new("Linea", bx(280.0, 110.0, 300.0, 130.0))],
+        );
+        assert_eq!(d.only_full.inside_a_region, 1);
+        assert_eq!(d.only_regional.inside_a_region, 1);
+        assert_eq!(d.never_l3(), 0);
     }
 
     #[test]

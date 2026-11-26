@@ -38,13 +38,14 @@ use ommatix_domain::fusion::{
 };
 use ommatix_domain::identity::{Changes, Observation, Registry, TargetId};
 use ommatix_domain::incremental::{
-    BgraFrame, Evidence, PlanTrace, RegionPlan, Spanning, Work, plan_regions_with,
-    plan_regions_with_traced,
+    BgraFrame, Evidence, FullRefreshReason, PlanTrace, RegionPlan, Spanning, Work, budget_reason,
+    plan_regions_with, plan_regions_with_traced,
 };
 
 use super::accessibility::accessible_control;
+use super::crop_edge::{self, CropEdgeOutcome, CropEdgeTrace, ReadItems, Settled};
 use super::icons::{self, IconLabel, Scope};
-use super::plan_check::{CheckKinds, PlanCheck, count, missing, word_detail};
+use super::plan_check::{Areas, CheckKinds, PlanCheck, count, missing, word_detail};
 use super::{Engine, Ports, aged_out};
 use crate::PortError;
 use crate::contract::{ErrorCode, LabelSource, ObservationPlan, StageTimings, ToolError, WorkKind};
@@ -325,6 +326,9 @@ pub(super) struct Measured {
     /// The comparison with a full read of the frame, only when the operator asked for it
     /// ([`Engine::set_plan_check`]) and the observation was regional.
     pub plan_check: Option<PlanCheck>,
+    /// What the crop-edge defence did (ADR-0045 rule R5), when the plan was regional. Kept
+    /// whether or not the operator asked for the trace; never part of the MCP contract.
+    pub crop_edge: Option<CropEdgeTrace>,
 }
 
 /// What `--plan-check` needs from a regional observation, kept aside until it is committed.
@@ -334,8 +338,10 @@ struct CheckInput {
     /// The boxes a region met without the closure taking them: the held surfaces a region
     /// overlaps without containing, and every accessibility box a region overlaps.
     met: Vec<BBox>,
-    /// The plan's regions: where the recogniser read from a crop (O3d).
+    /// The final regions: where the recogniser's reading was kept (O3d).
     regions: Vec<BBox>,
+    /// The crops it read them from (rule R5, O3e).
+    crops: Vec<BBox>,
     /// The boxes of the plan's dirty tiles (O3d).
     dirty: Vec<BBox>,
 }
@@ -590,6 +596,44 @@ struct Inferred {
     inference_shapes: Option<Vec<InputShape>>,
 }
 
+impl Inferred {
+    /// `next`, a later read of the same observation, with the time and the inferences of
+    /// both: every read is the observation's cost.
+    fn followed_by(self, next: Self) -> Self {
+        Self {
+            detect: self.detect + next.detect,
+            recognize: self.recognize + next.recognize,
+            accessibility: self.accessibility + next.accessibility,
+            inference_shapes: match (self.inference_shapes, next.inference_shapes) {
+                (Some(mut a), Some(b)) => {
+                    a.extend(b);
+                    Some(a)
+                }
+                (a, b) => a.or(b),
+            },
+            ..next
+        }
+    }
+}
+
+/// What [`Engine::read`] settled on: the work that ran, its regions, what the accessibility
+/// provider read, the evidence, and what the crop-edge defence did.
+struct Read {
+    work: Work,
+    regions: Vec<BBox>,
+    /// The crops of the read that was kept, when the observation stayed regional.
+    crops: Vec<BBox>,
+    /// What the accessibility provider read.
+    accessed: Vec<BBox>,
+    inferred: Inferred,
+    crop_edge: Option<CropEdgeTrace>,
+}
+
+/// The sum of the areas of boxes that do not overlap.
+fn area(boxes: &[BBox]) -> f64 {
+    boxes.iter().fold(0.0, |total, b| total + b.area())
+}
+
 /// What a perception stage returned, when it started and how long it ran on the injected
 /// clock.
 struct Timed<T> {
@@ -719,29 +763,40 @@ impl Engine {
         };
         let t_plan = clock.now();
 
-        let regions: Vec<BBox> = match &plan.work {
-            Work::Nothing => Vec::new(),
-            Work::Regions(rs) => rs.clone(),
-            Work::FullRefresh(_) => vec![frame.bounds()],
-        };
         let bounds = frame.bounds();
-        let read_regions = self.accessibility_regions(&plan.work, &regions, &bounds, t0);
-        let Ok(Inferred {
-            evidence: fresh,
-            detect,
-            recognize,
-            accessibility,
-            truncated,
-            inference_shapes,
-        }) = self.infer(&frame, &regions, &read_regions)
+        let mut plan_trace = plan_trace;
+        let Some(Read {
+            work,
+            regions,
+            crops,
+            accessed: read_regions,
+            inferred:
+                Inferred {
+                    evidence: fresh,
+                    detect,
+                    recognize,
+                    accessibility,
+                    truncated,
+                    inference_shapes,
+                },
+            crop_edge,
+        }) = self.read(&frame, &plan.work, t0)
         else {
             self.record_planned_failure(&plan.dirty, &frame);
             return Err(inference_failed());
         };
+        if let (Some(trace), Work::FullRefresh(reason)) = (plan_trace.as_mut(), &work)
+            && !matches!(plan.work, Work::FullRefresh(_))
+        {
+            // The read widened a regional plan into a full refresh: that check decided the
+            // work that ran (the planner's own regions stay in the trace).
+            trace.decided_by = Some(*reason);
+            trace.decisive_region = None;
+        }
         let t_access = clock.now();
 
         let previous = self.store.published();
-        let evidence = match (&plan.work, previous) {
+        let evidence = match (&work, previous) {
             (Work::FullRefresh(_), _) | (_, None) => fresh,
             (_, Some(p)) => p.evidence.merged(&regions, &read_regions, fresh, truncated),
         }
@@ -751,7 +806,7 @@ impl Engine {
             &evidence,
             &accessibility_gaps,
             &frame,
-            &plan.work,
+            &work,
             previous,
             self,
             clock.as_ref(),
@@ -765,7 +820,7 @@ impl Engine {
         let span = |a: Duration, b: Duration| b.saturating_sub(a);
         // Counted while the evidence is still here: it moves into the candidate snapshot.
         let observed_plan = plan_record(
-            &plan.work,
+            &work,
             &regions,
             inference_shapes,
             truncated,
@@ -776,7 +831,7 @@ impl Engine {
         let dimensions = (frame.width(), frame.height());
         // `--plan-check` (ADR-0045): kept aside and run after the commit, so that its time is
         // never the observation's.
-        let check_input = match (&plan.work, self.check_plan) {
+        let check_input = match (&work, self.check_plan) {
             (Work::Regions(rs), true) => {
                 let grid = ommatix_domain::incremental::TileGrid::for_frame(
                     &frame,
@@ -788,6 +843,7 @@ impl Engine {
                     met: met_boxes(rs, previous, &evidence),
                     evidence: evidence.clone(),
                     regions: rs.clone(),
+                    crops: crops.clone(),
                     dirty: plan.dirty.iter().map(|&t| grid.tile_box(t)).collect(),
                 })
             }
@@ -838,6 +894,7 @@ impl Engine {
             plan: observed_plan,
             plan_trace,
             plan_check: None,
+            crop_edge,
         });
         if let Some(input) = check_input {
             let check = self.plan_check(&input);
@@ -846,6 +903,138 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    /// The reads of one observation. A regional plan is read through the crop-edge defence
+    /// (ADR-0045 rule R5, [`crop_edge`]): the detector and the recogniser read each region
+    /// grown by its margin, the regions widen over what crosses their edges, one more read
+    /// follows when something came near a crop's edge, and a second such read, a closure out
+    /// of rounds or widened regions over a budget make the observation a full refresh. The
+    /// accessibility provider reads the regions it read before, never grown (R1: whole on
+    /// read). `None` when a read failed.
+    // One function, so that the reads, their order and the one second read stay in one place.
+    #[allow(clippy::too_many_lines)]
+    fn read(&mut self, frame: &BgraFrame, planned: &Work, t0: Duration) -> Option<Read> {
+        let bounds = frame.bounds();
+        let regions: Vec<BBox> = match planned {
+            Work::Nothing => Vec::new(),
+            Work::Regions(rs) => rs.clone(),
+            Work::FullRefresh(_) => vec![bounds],
+        };
+        let read_regions = self.accessibility_regions(planned, &regions, &bounds, t0);
+        let Work::Regions(planned_regions) = planned else {
+            let inferred = self.infer(frame, &regions, &read_regions).ok()?;
+            return Some(Read {
+                work: planned.clone(),
+                regions,
+                crops: Vec::new(),
+                accessed: read_regions,
+                inferred,
+                crop_edge: None,
+            });
+        };
+        // What the last snapshot holds that a region must not cut: its words and non-surface
+        // detections, and the relations between them. Owned: the reads borrow the engine.
+        let (held_cut_prone, held_relations) = self.store.published().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |p| {
+                let cut_prone = p.evidence.spanning_lists().cut_prone;
+                let relations: Vec<(BBox, BBox)> = p
+                    .relations
+                    .iter()
+                    .filter(|(a, b)| cut_prone.contains(a) && cut_prone.contains(b))
+                    .copied()
+                    .collect();
+                (cut_prone, relations)
+            },
+        );
+        let max_rounds = self.config.plan.max_closure_rounds;
+        let mut trace = CropEdgeTrace::new(planned_regions);
+        let mut regions = regions;
+        let mut read_regions = read_regions;
+        let mut crops = crop_edge::crops(&regions, &bounds);
+        let mut inferred = self.infer(frame, &crops, &read_regions).ok()?;
+        trace.crop_area_px = area(&crops);
+        let settled: Result<Vec<BBox>, FullRefreshReason> = loop {
+            let e = &inferred.evidence;
+            let items = ReadItems {
+                words: &e.words,
+                controls: &e.controls,
+                surfaces: &e.surfaces,
+                held_cut_prone: &held_cut_prone,
+                held_relations: &held_relations,
+            };
+            let first = trace.rereads == 0;
+            let counted = if first { Some(&mut trace) } else { None };
+            match crop_edge::settle(&regions, &crops, &items, &bounds, max_rounds, counted) {
+                Settled::Regions(finals) => break Ok(finals),
+                Settled::Exhausted => break Err(FullRefreshReason::ClosureBudget),
+                Settled::ReadAgain(_) if !first => break Err(FullRefreshReason::ClosureBudget),
+                Settled::ReadAgain(widened) => {
+                    trace.rereads = 1;
+                    regions = widened;
+                    crops = crop_edge::crops(&regions, &bounds);
+                    read_regions = self.accessibility_regions(
+                        &Work::Regions(regions.clone()),
+                        &regions,
+                        &bounds,
+                        t0,
+                    );
+                    let again = self.infer(frame, &crops, &read_regions).ok()?;
+                    trace.crop_area_px += area(&crops);
+                    inferred = inferred.followed_by(again);
+                }
+            }
+        };
+        let settled = settled.and_then(|finals| {
+            budget_reason(&finals, &bounds, &self.config.plan).map_or(Ok(finals), Err)
+        });
+        match settled {
+            Ok(finals) => {
+                trace.outcome = if trace.rereads > 0 {
+                    CropEdgeOutcome::Reread
+                } else if finals == *planned_regions {
+                    CropEdgeOutcome::None
+                } else {
+                    CropEdgeOutcome::Widened
+                };
+                trace.final_area_px = area(&finals);
+                let e = std::mem::take(&mut inferred.evidence);
+                let (words, controls, surfaces) =
+                    crop_edge::kept(e.words, e.controls, e.surfaces, &finals);
+                inferred.evidence = EvidenceSet {
+                    controls,
+                    words,
+                    accessible: e.accessible,
+                    surfaces,
+                };
+                Some(Read {
+                    work: Work::Regions(finals.clone()),
+                    regions: finals,
+                    crops,
+                    accessed: read_regions,
+                    inferred,
+                    crop_edge: Some(trace),
+                })
+            }
+            Err(reason) => {
+                let work = Work::FullRefresh(reason);
+                let regions = vec![bounds];
+                let read_regions = self.accessibility_regions(&work, &regions, &bounds, t0);
+                let full = self.infer(frame, &regions, &read_regions).ok()?;
+                trace.crop_area_px += bounds.area();
+                trace.final_area_px = bounds.area();
+                trace.outcome = CropEdgeOutcome::FullRefresh;
+                Some(Read {
+                    work,
+                    regions,
+                    crops: Vec::new(),
+                    accessed: read_regions,
+                    inferred: inferred.followed_by(full),
+                    crop_edge: Some(trace),
+                })
+            }
+        }
     }
 
     /// Runs the three stages again on the whole frame of a committed regional observation and
@@ -874,10 +1063,15 @@ impl Engine {
                 accessibility: count(missing(&ea, &eb).into_iter().map(|x| x.control.bbox), met),
             }
         };
+        let areas = Areas {
+            regions: &input.regions,
+            crops: &input.crops,
+            bounds,
+        };
         let words = word_detail(
             &missing(&full.words, &regional.words),
             &missing(&regional.words, &full.words),
-            &input.regions,
+            &areas,
             &input.dirty,
         );
         Some(PlanCheck {

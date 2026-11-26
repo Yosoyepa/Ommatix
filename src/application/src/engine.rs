@@ -14,6 +14,7 @@
 
 mod accessibility;
 mod act;
+mod crop_edge;
 mod freshness;
 mod icons;
 mod journal;
@@ -42,6 +43,7 @@ use crate::ports::{
     VisionDetector,
 };
 
+pub use crop_edge::{CropEdgeKinds, CropEdgeOutcome, CropEdgeTrace};
 pub use freshness::{
     ActionFreshness, FreshnessProbeCounts, FreshnessProbeGroup, OccluderFallback,
     OccluderProbeCounts,
@@ -327,6 +329,13 @@ impl Engine {
     /// when the full read failed. Not part of the MCP contract.
     pub fn last_plan_check(&self) -> Option<&PlanCheck> {
         self.measured.as_ref().and_then(|m| m.plan_check.as_ref())
+    }
+
+    /// What the crop-edge defence did to the last committed observation (ADR-0045 rule R5):
+    /// counts and areas. `None` before the first observation, after a purge, and when that
+    /// observation was not regional. Not part of the MCP contract.
+    pub fn last_crop_edge(&self) -> Option<&CropEdgeTrace> {
+        self.measured.as_ref().and_then(|m| m.crop_edge.as_ref())
     }
 
     /// Whether the accessibility evidence of the published snapshot is complete: `false`

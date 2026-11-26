@@ -154,7 +154,8 @@ pub struct DemoArgs {
     /// Also write one line per observation to stderr (`ommatix-plan-trace` and a JSON object):
     /// why the planner chose that work, as counts and areas only (changed tiles, components,
     /// each region before and after the closure over the last evidence, the sum the budget
-    /// compared, the check that decided). No pixel, label or coordinate; never on stdout.
+    /// compared, the check that decided the work that ran, and what the crop-edge defence did).
+    /// No pixel, label or coordinate; never on stdout.
     #[arg(long)]
     pub plan_trace: bool,
     /// Also compare each regional observation with a full read of the same frame and write
@@ -164,10 +165,11 @@ pub struct DemoArgs {
     /// it runs perception a second time after the observation is committed, so it doubles
     /// the cost of a regional observation, and its time is never reported as the
     /// observation's. For the words that differ it also says where each lies against the
-    /// regions read and how the two reads' words pair up: a differing word inside a region is
-    /// the stated limit L3 (the recogniser read a crop); one crossing a region's edge (cut)
-    /// or outside every region (missed, or held from an earlier read) is never L3, and
-    /// `never_l3` counts those. Counts and one distance in pixels; no text, no coordinate;
+    /// regions and the crops read and how the two reads' words pair up: a differing word
+    /// that meets a region and lies clear of its crop's edge band is the stated limit L3 (the
+    /// recogniser read it whole from a crop); one that meets a region and reaches the band
+    /// (it may have been cut) or that lies outside every region (missed, or held from an
+    /// earlier read) is never L3, and `never_l3` counts those. Counts and one distance in pixels; no text, no coordinate;
     /// never on stdout.
     #[arg(long)]
     pub plan_check: bool,

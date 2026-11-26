@@ -640,17 +640,16 @@ pub fn plan_regions_with_traced(
         Some(&mut trace),
     )?;
     trace.dirty_tiles = plan.dirty.len();
-    // The reason of the plan the trace describes: the plan that ran, or the support-aware
-    // attempt when R4 gave way to the classic plan (whose own reason is in `spanning`).
-    let traced_reason = match plan.work {
+    // The check that decided the plan that ran. When R4 gave way to the classic plan, the
+    // support-aware attempt's reason stays in `spanning.attempt_reason`.
+    trace.decided_by = match plan.work {
         Work::FullRefresh(reason) => Some(reason),
         Work::Nothing | Work::Regions(_) => None,
     };
-    trace.decided_by = match trace.spanning.as_ref() {
-        Some(s) if s.classic.is_some() => s.attempt_reason,
-        _ => traced_reason,
-    };
-    if trace.decided_by == Some(FullRefreshReason::AreaBudget) {
+    // `regions` lists the attempt's regions when R4 ran, not the classic plan's: no index
+    // into them can name the region that decided the classic plan.
+    let r4 = trace.spanning.as_ref().is_some_and(|s| s.classic.is_some());
+    if trace.decided_by == Some(FullRefreshReason::AreaBudget) && !r4 {
         // The first of the largest: the region most of the sum came from.
         let mut largest: Option<(usize, f64)> = None;
         for (i, region) in trace.regions.iter().enumerate() {
@@ -700,19 +699,22 @@ pub struct PlanTrace {
     pub budget_area_px: f64,
     /// `max_regions` of the parameters.
     pub max_regions: usize,
-    /// The check that made the plan a full refresh (its reason), or `None` when the plan is
-    /// idle or regional.
+    /// The check that made the plan that ran a full refresh (its reason), or `None` when it is
+    /// idle or regional. When R4 gave way to the classic plan this is the classic plan's
+    /// reason; the support-aware attempt's is [`SpanningTrace::attempt_reason`]. The engine
+    /// sets it again when the read widened the regions into a full refresh (the crop-edge
+    /// defence, ADR-0045 rule R5).
     pub decided_by: Option<FullRefreshReason>,
     /// For `area_budget`: the index in `regions` of the largest region (the first on a tie).
+    /// `None` when R4 ran, since `regions` then lists the attempt's regions.
     pub decisive_region: Option<usize>,
     /// Which closure made the plan that ran (ADR-0045): `Classic` when no [`Spanning`] was
     /// given, when the plan was decided before any region (no base, a geometry change, the
     /// baseline, nothing to do), or when rule R4 gave way to the classic plan.
     pub chosen: PlanChoice,
     /// What the support-aware closure did, when it ran. When it ran and R4 gave way to the
-    /// classic plan, `components`, `regions`, `covered_area_px`, `decided_by` and
-    /// `decisive_region` describe the support-aware attempt, and
-    /// [`SpanningTrace::classic`] the plan that ran.
+    /// classic plan, `components`, `regions` and `covered_area_px` describe the support-aware
+    /// attempt, and [`SpanningTrace::classic`] and `decided_by` the plan that ran.
     pub spanning: Option<SpanningTrace>,
 }
 
@@ -1104,20 +1106,35 @@ fn close_and_decide(
             .collect();
         t.covered_area_px = regions.iter().map(BBox::area).sum();
     }
-    if regions.len() > params.max_regions {
-        return Ok(full(FullRefreshReason::TooManyRegions, regions));
-    }
-    let covered: f64 = regions.iter().map(BBox::area).sum();
-    if covered > params.max_area_fraction * bounds.area() {
-        return Ok(full(FullRefreshReason::AreaBudget, regions));
-    }
-    if params.adaptive_min_regions > 0 && regions.len() >= params.adaptive_min_regions {
-        return Ok(full(FullRefreshReason::AdaptiveCost, regions));
+    if let Some(reason) = budget_reason(&regions, &bounds, params) {
+        return Ok(full(reason, regions));
     }
     Ok(Decided {
         work: Work::Regions(regions.clone()),
         closed: regions,
     })
+}
+
+/// The budgets a set of closed, merged regions must keep, in the planner's order: the number
+/// of regions, the area they cover, then the adaptive rule (ADR-0030). `None` when all hold.
+/// The planner applies it to its regions, and the engine applies it again to the regions a
+/// read widened (the crop-edge defence, ADR-0045 rule R5), so both use one definition.
+pub fn budget_reason(
+    regions: &[BBox],
+    bounds: &BBox,
+    params: &PlanParams,
+) -> Option<FullRefreshReason> {
+    if regions.len() > params.max_regions {
+        return Some(FullRefreshReason::TooManyRegions);
+    }
+    let covered: f64 = regions.iter().map(BBox::area).sum();
+    if covered > params.max_area_fraction * bounds.area() {
+        return Some(FullRefreshReason::AreaBudget);
+    }
+    if params.adaptive_min_regions > 0 && regions.len() >= params.adaptive_min_regions {
+        return Some(FullRefreshReason::AdaptiveCost);
+    }
+    None
 }
 
 /// A coordinate of a box that lies inside a validated frame, as whole pixels.
@@ -3483,7 +3500,9 @@ mod support_aware_tests {
         assert_eq!(trace.chosen, PlanChoice::Classic);
         let s = trace.spanning.unwrap();
         assert_eq!(s.attempt_reason, Some(FullRefreshReason::TooManyRegions));
-        assert_eq!(trace.decided_by, Some(FullRefreshReason::TooManyRegions));
+        // The check that decided the plan that ran (O3e, point 4).
+        assert_eq!(trace.decided_by, Some(FullRefreshReason::AreaBudget));
+        assert_eq!(trace.decisive_region, None);
         let c = s.classic.unwrap();
         assert_eq!(c.full_refresh_reason, Some(FullRefreshReason::AreaBudget));
         assert_eq!(c.region_count, 1);
