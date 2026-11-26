@@ -129,6 +129,39 @@ without regions or gaps). It refines ADR-0006 (transactional snapshots), ADR-000
 actuation), ADR-0017 (accessibility evidence) and ADR-0018 (two-phase `type`). It supersedes
 none of them.
 
+## Amendment (2026-11-26, Proposed): the re-read is judged at the end of the observation
+
+Status of the amendment: **Proposed**. It is not accepted until the project owner merges the
+pull request that carries it. No decision above is rewritten; it refines how point 2 selects
+"the regions whose evidence has expired".
+
+The lab's measurement with the ONNX detector on CPU (an observation of 3 to 8 s) refused 3 of 24
+clicks for the age of the accessibility evidence. The rule worked as written: an observation
+judged the evidence at the instant it started, kept evidence that was still young then, and
+published it seconds later older than `max_snapshot_age_ms`. The bound was sized for an
+observation that takes milliseconds.
+
+1. **The horizon.** An observation re-reads the evidence that will have expired when it ends,
+   not only the evidence that has expired when it starts. With `t0` the instant the observation
+   starts and `h` the estimate of its duration, evidence read at `read_at` is read again when
+   `t0 + h - read_at > max_snapshot_age_ms`, or when `h >= max_snapshot_age_ms` (then every
+   read is read again, which is the full read of that evidence).
+2. **The estimate.** `h` is the duration (`StageTimings::total`, on the injected clock) of the
+   last committed observation. It is zero when none exists: the first observation of a session
+   and the first after a purge judge at their start, as before. The estimate is deterministic
+   given the clock and the history, and it is not a prediction: an observation that turns out
+   longer than the last one still publishes evidence that is older than the bound at its end
+   only by the difference, which the gate refuses as before.
+3. **Nothing else changes.** The bound, its inclusive comparison, the gate and the checks
+   before every real input, and "a publication never renews a read" stand. The horizon only
+   moves the instant at which reuse is judged, so the set read is never smaller than before:
+   with a fast observation it differs only for evidence within `h` of its expiry.
+4. **Cost.** More accessibility reads, only for evidence that would have expired before the
+   observation ended. No safeguard is relaxed; the refusal an agent saw for age becomes a read
+   made by the observation that would have published expired evidence.
+
+Required validation: UT-87 in `src/application/src/engine/tests/snapshot_age.rs`.
+
 ## Resumen (ES)
 
 Cada autorización de una acción se acota por dos instantes medidos en el reloj inyectado: la
@@ -140,3 +173,10 @@ y las teclas de `type`. Una publicación nueva no renueva una lectura de accesib
 siguiente observación relee sólo las regiones cuya evidencia ha caducado. Se elige 10 000 ms y
 no 250 ms porque un agente actúa segundos después de observar, y la captura de frescura antes de
 cada entrega sigue protegiendo la pantalla.
+
+**Enmienda (26 de noviembre de 2026, propuesta):** una observación relee también la evidencia
+que habrá caducado cuando ella misma termine, juzgándola en el instante en que empieza más la
+duración de la observación anterior (cero la primera de una sesión y la primera tras una
+purga); con un detector lento, la evidencia joven al empezar quedaba, al publicarse, más vieja
+que el plazo. El plazo, su comparación inclusiva, la puerta y «una publicación nunca renueva
+una lectura» no cambian.

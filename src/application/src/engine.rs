@@ -87,6 +87,14 @@ fn aged_out(now: Duration, since: Duration, max: Duration) -> bool {
     now.saturating_sub(since) > max
 }
 
+/// Whether evidence read at `read_at` is out of its window `horizon` after `now`: the age it
+/// will have when an observation that starts at `now` and lasts `horizon` publishes it
+/// (ADR-0025, point 2). A horizon of zero is [`aged_out`] at `now`; a horizon of `max` or more
+/// expires every read, which is the full read of that evidence.
+fn expires_within(now: Duration, read_at: Duration, horizon: Duration, max: Duration) -> bool {
+    horizon >= max || aged_out(now.saturating_add(horizon), read_at, max)
+}
+
 /// Engine parameters; the defaults are the thesis's initial values
 /// (`plantillas/configuracion_mvp.toml`).
 #[derive(Debug, Clone, PartialEq)]
