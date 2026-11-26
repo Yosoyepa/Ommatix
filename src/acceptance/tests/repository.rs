@@ -185,16 +185,21 @@ const PIPE_CLIENT: &str = "src/adapters/mcp/src/pipe/client.rs";
 /// of the broker's named pipe opens its handle with `std::fs::OpenOptions`, because that is the
 /// only safe way to ask for an identification-level quality of service. It is the pair of one
 /// file and one forbidden substring, and nothing wider: every other file keeps failing on
-/// `OpenOptions`, and this file keeps failing on every other forbidden substring. Within the
-/// file the exception holds only for the bytes that were reviewed ([`PIPE_CLIENT_SHA256`]), and
-/// [`sec_04_pipe_client_text_findings`] states, as the reason for the pin, what those bytes may
-/// do. Removing the transport removes this entry.
+/// `OpenOptions`, and this file keeps failing on every other forbidden substring.
+///
+/// **The digest pin is the guarantee** ([`PIPE_CLIENT_SHA256`], D40): the exception covers
+/// exactly the bytes a reviewer read. The lexical rules of [`sec_04_pipe_client_text_findings`]
+/// are a second, best-effort tripwire that records what the reviewed file may contain; they are
+/// not claimed to be independent of formatting, nor to tie each setter to the open when the file
+/// and the pin change together. A change to the file, the pin or the rules shows in the diff of
+/// this test file and of the client file, and that review is the control. Removing the transport
+/// removes this entry.
 const SEC_04_EXCEPTIONS: [(&str, &str); 1] = [(PIPE_CLIENT, "OpenOptions")];
 
-/// The SHA-256 of [`PIPE_CLIENT`] as reviewed, its line ends read as `\n`. The exception holds
-/// only while the file's digest is this one: any change to the client shows as a change to this
-/// line in the same commit, for a reviewer to read both (D39).
-const PIPE_CLIENT_SHA256: &str = "14aaca7f73e2111eb751372d1ed4a7f6291adc4d5fef40f5b7d0127b8c1114c9";
+/// The SHA-256 of [`PIPE_CLIENT`] as reviewed, its line ends read as `\n`: the guarantee of the
+/// exception. It holds only while the file's digest is this one: any change to the client shows
+/// as a change to this line in the same commit, for a reviewer to read both (D39, D40).
+const PIPE_CLIENT_SHA256: &str = "feac80cf40f0e83753bb1ab7dccf00e983fe0e3b7b9677390a6fbb84f9c820df";
 
 /// SEC-04's source check over `sources` (path, production text): each code line that holds a
 /// forbidden substring, except where [`SEC_04_EXCEPTIONS`] allows it and its bounds hold.
@@ -318,12 +323,14 @@ fn macro_invocations(code: &str) -> Vec<String> {
     found
 }
 
-/// The rules the reviewed client file keeps, which are the reason for its pin (ADR-0043,
-/// decision 12). They read the file without its whitespace, so a space or a line break inside a
-/// method chain changes nothing:
+/// The lexical rules the reviewed client file keeps (ADR-0043, decision 12): a best-effort
+/// tripwire beside the pin, which is the guarantee (see [`SEC_04_EXCEPTIONS`]). Most of them read
+/// the code without its `//` comments and its whitespace, so a space or a line break inside a
+/// method chain or between an attribute's tokens changes nothing for them:
 ///
-/// - no `"`, no block comment, no attribute (`#[` or `#!`), no macro but
-///   [`PIPE_CLIENT_MACROS`], and none of [`PIPE_CLIENT_NEVER`] as a word anywhere;
+/// - no `"` and no block comment (in the raw text); no attribute (`#[` or `#!`, in the code
+///   without whitespace); no macro but [`PIPE_CLIENT_MACROS`]; none of [`PIPE_CLIENT_NEVER`] as a
+///   word anywhere;
 /// - `OpenOptions` stands exactly three times: on its two `use` lines, exactly as written here
 ///   (so neither renames it), and in one `OpenOptions::new()`;
 /// - one `.open(`, of `name.path()`;
@@ -333,7 +340,7 @@ fn macro_invocations(code: &str) -> Vec<String> {
 fn sec_04_pipe_client_text_findings(text: &str) -> Vec<String> {
     let text = text.replace("\r\n", "\n");
     let mut found = Vec::new();
-    for never in ["\"", "/*", "#[", "#!"] {
+    for never in ["\"", "/*"] {
         if text.contains(never) {
             found.push(format!("`{never}` in the pipe client"));
         }
@@ -350,6 +357,11 @@ fn sec_04_pipe_client_text_findings(text: &str) -> Vec<String> {
         }
     }
     let flat: String = code.chars().filter(|c| !c.is_whitespace()).collect();
+    for never in ["#[", "#!"] {
+        if flat.contains(never) {
+            found.push(format!("an attribute (`{never}`) in the pipe client"));
+        }
+    }
     let exactly = |piece: &str, times: usize, found: &mut Vec<String>| {
         let n = flat.matches(piece).count();
         if n != times {
@@ -568,6 +580,66 @@ fn sec_04_the_source_check_refuses_the_pipe_client_with_anything_more() {
     // Line ends are not a change: the pin reads `\r\n` as `\n`.
     let crlf = text.replace('\n', "\r\n");
     assert_eq!(sec_04_findings(&[(path, crlf)]), Vec::<String>::new());
+}
+
+/// The lexical rules on their own, without the digest (D40 G5): each mutant of the client file
+/// is refused by the rule it breaks, whatever the pin says. The attribute introducers are split
+/// by legal whitespace, so only the rule that reads the code without whitespace sees them.
+#[test]
+fn sec_04_the_lexical_rules_refuse_mutants_of_the_client_on_their_own() {
+    let (_, text) = pipe_client();
+    assert_eq!(
+        sec_04_pipe_client_text_findings(&text),
+        Vec::<String>::new()
+    );
+    let open = "pub(super) fn open(";
+    assert!(text.contains(open));
+    let before = |added: &str| text.replacen(open, &format!("{added}\n{open}"), 1);
+    let cases = [
+        ("an attribute", before("#[inline]"), "attribute"),
+        (
+            "an attribute split by a space",
+            before("# [inline]"),
+            "attribute",
+        ),
+        (
+            "an attribute split by a line break",
+            before("#\n[inline]"),
+            "attribute",
+        ),
+        (
+            "an inner attribute split by spaces",
+            text.replacen("use std::io;", "# ! [allow(unused)]\nuse std::io;", 1),
+            "attribute",
+        ),
+        ("a string", before("const NAME: &str = \"x\";"), "`\"`"),
+        ("a block comment", before("/* x */"), "`/*`"),
+        (
+            "a macro split by spaces",
+            before("const N: usize = line ! ();"),
+            "macro",
+        ),
+        (
+            "a forbidden word in a comment",
+            before("// it may append"),
+            "`append`",
+        ),
+        (
+            "a second open spelled with spaces",
+            format!(
+                "{text}\nfn more(n: &PipeName) {{ let _ = OpenOptions :: new () . open (n.path()); }}\n"
+            ),
+            "stands",
+        ),
+    ];
+    for (case, changed, rule) in cases {
+        assert_ne!(changed, text, "{case}: the change applies");
+        let found = sec_04_pipe_client_text_findings(&changed);
+        assert!(
+            found.iter().any(|f| f.contains(rule)),
+            "{case}: not refused by its rule ({rule}): {found:?}"
+        );
+    }
 }
 
 /// A test-module marker in the client file does not hide what follows it from the check: the

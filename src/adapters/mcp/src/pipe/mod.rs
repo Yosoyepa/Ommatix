@@ -3,17 +3,21 @@
 //! operating-system parts only on Windows. The executable's `serve` and `attach` use it when
 //! built with the feature `broker-pipe` and configured with `[mcp] transport = "pipe"`.
 //!
-//! - [`PipeServer`] binds a pipe name and serves each connection on its own blocking thread
-//!   with [`Broker::serve_sync_with_handshake`](crate::Broker::serve_sync_with_handshake):
+//! - [`PipeServer`] binds a pipe name and serves each connection on a worker thread of its own
+//!   with [`Reservation::serve_sync_with_handshake_until`](crate::Reservation::serve_sync_with_handshake_until):
 //!   first instance only (decision 4), remote clients refused (decision 3), a descriptor that
 //!   grants the owner only (decision 5), the broker's bound on clients taken at accept and a
-//!   refusal that never blocks it (decision 7), one thread per connection (decision 2).
+//!   refusal that never blocks it (decision 7), one thread per connection (decision 2), and one
+//!   reaper that joins every worker before its place is free. What it guarantees about its
+//!   threads and its stop, and the limits of both, are stated in its own documentation.
 //! - [`connect`] opens the pipe at identification level, overlapped, and retries a busy pipe a
 //!   bounded number of times (decision 12). Its open is the one place in the product that opens
 //!   a handle with `std::fs`, under the one exception to SEC-04's source check, which pins that
-//!   file (`client.rs`) by its digest. It is also the only way this crate opens the pipe: the
-//!   server's own wake-up connection at shutdown goes through it, and no production source
-//!   names the pipe crate's own connecting functions (a repository test checks both).
+//!   file (`client.rs`) by its digest: the pin is the guarantee, so the exception covers exactly
+//!   the bytes a reviewer read (its lexical rules are a best-effort tripwire beside it). It is
+//!   also the only way this crate opens the pipe: the server's own wake-up connection at
+//!   shutdown goes through it, and no production source names the pipe crate's own connecting
+//!   functions (a repository test checks both).
 //! - [`relay`] writes the handshake line (decision 9) and then copies two byte streams to and
 //!   from the pipe at once, without reading what it copies.
 //!

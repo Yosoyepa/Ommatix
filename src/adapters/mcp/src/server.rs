@@ -15,6 +15,31 @@ use crate::transport::{Frame, LineReader};
 /// Read buffer per connection; an oversized line is discarded in chunks of this size.
 pub(crate) const READ_CHUNK: usize = 8 * 1024;
 
+/// The marker of a connection ended by its listener's stop: a distinct outcome of a read or of
+/// the dispatch check, never an end of input, so that whatever a reader has accumulated is
+/// discarded with the connection and nothing more is handed on or written back.
+#[derive(Debug)]
+struct Stopped;
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the listener stopped")
+    }
+}
+
+impl std::error::Error for Stopped {}
+
+/// The error that ends a connection at its listener's stop.
+pub(crate) fn stopped() -> io::Error {
+    io::Error::other(Stopped)
+}
+
+/// Whether `error` is [`stopped`]. Only the pipe's listener tells the stop apart.
+#[cfg(all(windows, feature = "broker-pipe"))]
+pub(crate) fn is_stopped(error: &io::Error) -> bool {
+    matches!(error.get_ref(), Some(inner) if inner.is::<Stopped>())
+}
+
 /// Serves the Ommatix tools over MCP.
 ///
 /// Cheap to clone: clones share the engine (single writer behind a mutex) and the tool
@@ -163,8 +188,29 @@ where
     R: io::BufRead,
     W: io::Write,
 {
+    exchange_blocking_until(connection, lines, writer, &|| false)
+}
+
+/// [`exchange_blocking`] with its listener's stop (D40): `stopped` is asked once per frame, as
+/// the last act before the frame is handed to the connection (a message, or an oversized line's
+/// reply). When it answers true, nothing is handed on or written back and the loop ends with
+/// [`stopped`]. A frame that passed the check before the stop runs to its end.
+pub(crate) fn exchange_blocking_until<R, W>(
+    connection: &mut Connection,
+    lines: &mut LineReader<R>,
+    writer: &mut W,
+    stopped: &dyn Fn() -> bool,
+) -> io::Result<()>
+where
+    R: io::BufRead,
+    W: io::Write,
+{
     loop {
-        match step(connection, lines.next_frame_blocking()?) {
+        let frame = lines.next_frame_blocking()?;
+        if frame != Frame::Eof && stopped() {
+            return Err(self::stopped());
+        }
+        match step(connection, frame) {
             Step::End => break,
             Step::Silent => {}
             Step::Write(line) => {

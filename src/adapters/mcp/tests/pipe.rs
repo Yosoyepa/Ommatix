@@ -75,8 +75,9 @@ impl ommatix_application::PolicyStore for Operator {
     }
 }
 
-/// The desktop's actuator made live; what it is handed is recorded by the simulated desktop.
-struct Live(FixtureActuator);
+/// The desktop's actuator made live; what it is handed is recorded by the simulated desktop,
+/// and each delivery passes the world's delivery gate first.
+struct Live(FixtureActuator, Arc<Gate>);
 
 impl OsActuator for Live {
     fn name(&self) -> &'static str {
@@ -108,6 +109,7 @@ impl OsActuator for Live {
     }
 
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
+        self.1.enter();
         self.0.deliver(action)?;
         Ok(DeliveryReceipt {
             submitted: 1,
@@ -151,13 +153,73 @@ fn ticket(n: u64) -> String {
     format!("Pp7-Tkt_{n:035}")
 }
 
-/// A gate on the simulated desktop's capturer: every capture is counted as it begins, and waits
-/// while the gate is closed. A tool call that captures holds the broker's lock meanwhile.
+/// A gate on a port of the simulated desktop (the capturer, or the actuator's deliveries):
+/// every call is counted as it begins, and waits while the gate is closed. A tool call that
+/// reaches it holds the broker's lock meanwhile. It can also be armed with an [`ExitHold`], which
+/// the next call registers on its own thread.
 #[derive(Default)]
 struct Gate {
-    /// Whether the gate is closed, and how many captures began.
+    /// Whether the gate is closed, and how many calls began.
     state: Mutex<(bool, usize)>,
     changed: Condvar,
+    armed: Mutex<Option<ExitHold>>,
+}
+
+/// A release a test opens; a thread that waits on it goes on by itself after [`PATIENCE`] and
+/// records that, so that a defect that would hang the test fails it instead.
+#[derive(Default)]
+struct Release {
+    open: Mutex<bool>,
+    changed: Condvar,
+    failsafe: std::sync::atomic::AtomicBool,
+}
+
+impl Release {
+    fn open(&self) {
+        *self.open.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        self.changed.notify_all();
+    }
+
+    fn pass(&self) {
+        let deadline = Instant::now() + PATIENCE;
+        let mut open = self.open.lock().unwrap_or_else(PoisonError::into_inner);
+        while !*open {
+            let Some(left) = deadline.checked_duration_since(Instant::now()) else {
+                self.failsafe.store(true, Ordering::SeqCst);
+                return;
+            };
+            open = self
+                .changed
+                .wait_timeout(open, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    fn failsafe_fired(&self) -> bool {
+        self.failsafe.load(Ordering::SeqCst)
+    }
+}
+
+/// Held by a thread-local of the thread that registers it: its destructor runs after that
+/// thread's closure has returned and before the thread has exited, so a join of the thread waits
+/// on it. It says when it began, then waits for its release. Registered by a listener's worker
+/// through the simulated desktop, it holds the worker after its connection is closed and before
+/// its thread is joined.
+struct ExitHold {
+    began: mpsc::Sender<()>,
+    release: Arc<Release>,
+}
+
+impl Drop for ExitHold {
+    fn drop(&mut self) {
+        let _ = self.began.send(());
+        self.release.pass();
+    }
+}
+
+thread_local! {
+    static EXIT_HOLD: std::cell::RefCell<Option<ExitHold>> = const { std::cell::RefCell::new(None) };
 }
 
 impl Gate {
@@ -191,7 +253,19 @@ impl Gate {
         state.1
     }
 
+    fn arm(&self, hold: ExitHold) {
+        *self.armed.lock().unwrap_or_else(PoisonError::into_inner) = Some(hold);
+    }
+
     fn enter(&self) {
+        if let Some(hold) = self
+            .armed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            EXIT_HOLD.with(|slot| *slot.borrow_mut() = Some(hold));
+        }
         let mut state = self.state();
         state.1 += 1;
         self.changed.notify_all();
@@ -234,6 +308,7 @@ struct World {
     clock: Arc<ManualClock>,
     grants: Arc<Grants>,
     gate: Arc<Gate>,
+    delivery: Arc<Gate>,
 }
 
 impl World {
@@ -246,6 +321,7 @@ impl World {
             clock,
             grants,
             gate: Arc::default(),
+            delivery: Arc::default(),
         }
     }
 
@@ -258,7 +334,7 @@ impl World {
             detector: Box::new(self.desktop.detector()),
             recognizer: Box::new(self.desktop.recognizer()),
             accessibility: Box::new(NoAccessibility),
-            actuator: Box::new(Live(self.desktop.actuator())),
+            actuator: Box::new(Live(self.desktop.actuator(), Arc::clone(&self.delivery))),
             policy: Arc::new(Operator),
             clock: self.clock.clone(),
         };
@@ -311,6 +387,28 @@ fn bind(broker: &Broker, tag: &str) -> PipeServer {
 #[allow(clippy::needless_pass_by_value)] // it takes the stream to close it
 fn close(stream: PipeStream) {
     stream.assume_flushed();
+}
+
+/// How long [`watchdog`] waits for a test's body: generous against the body's own waits (at most
+/// a few [`PATIENCE`]s, and the unmutated pipe target runs all its tests in about 40 s). Its only
+/// possible effect is to fail a test.
+const WATCHDOG: Duration = Duration::from_secs(120);
+
+/// Runs a test's body on a thread of its own and waits for it at most [`WATCHDOG`], failing the
+/// test with a message that names what was awaited when it has not finished. Nothing of the
+/// listener runs on the waiting thread, so a defect that blocks the listener's lock or a join
+/// cannot block this wait; a body stuck past it is leaked by the failing test. A panic of the
+/// body is the test's failure, as if the body had run on the test's thread.
+fn watchdog(what: &str, body: fn()) {
+    let (done, finished) = mpsc::channel();
+    let runner = thread::spawn(move || {
+        let _ = done.send(std::panic::catch_unwind(body));
+    });
+    match finished.recv_timeout(WATCHDOG) {
+        Ok(Ok(())) => runner.join().expect("the body's thread"),
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(waited) => panic!("watchdog: {what} did not finish within {WATCHDOG:?} ({waited})"),
+    }
 }
 
 /// Waits until `until` holds for the server's counts; fails the test after [`PATIENCE`].
@@ -739,8 +837,12 @@ fn it_24_a_peer_that_streams_a_handshake_without_end_is_dropped_after_a_bounded_
         written <= 4 * bound,
         "{written} bytes taken for a bound of {bound}"
     );
-    let stats = wait(&server, "the endless peer is refused", |s| s.refused == 1);
-    assert_eq!(stats.connections, 0);
+    // Its place comes back once the reaper has joined its worker, after the refusal is counted.
+    wait(
+        &server,
+        "the endless peer is refused and its place is back",
+        |s| s.refused == 1 && s.connections == 0,
+    );
     drop(endless);
     // Its place, the only one, is free again.
     let mut next = Peer::attach(&name, &ticket(1));
@@ -1403,11 +1505,11 @@ fn it_30_shutdown_stops_accepting_at_once_and_connections_end_when_their_clients
 
 // ---- 13. the review of the pipe (D39): bounds and shutdown held to what they say ----
 
-/// R-T2-2: a connection's place is held until its thread has ended, so connect-and-leave churn
-/// never runs more connection threads than the bound on clients, as the threads count
-/// themselves.
+/// R-T2-2 / D40 G1: under connect-and-leave churn, the places held, sampled from the listener
+/// all along and recorded by it at each charge, never pass the bound, and the threads not yet
+/// joined never pass `2 + places`; at the end every worker is joined.
 #[test]
-fn it_29_churn_never_runs_more_connection_threads_than_the_bound_on_clients() {
+fn it_29_churn_never_holds_more_places_than_the_bound_on_clients() {
     const BOUND: usize = 2;
     const CHURNERS: usize = 8;
     const CYCLES: usize = 500;
@@ -1415,44 +1517,77 @@ fn it_29_churn_never_runs_more_connection_threads_than_the_bound_on_clients() {
     let broker = world.bounded(BOUND);
     let mut server = bind(&broker, "churn");
     let name = server.name().clone();
-    let churners: Vec<_> = (0..CHURNERS)
-        .map(|_| {
-            let name = name.clone();
-            thread::spawn(move || {
-                let mut connected = 0_usize;
-                for _ in 0..CYCLES {
-                    if let Ok(stream) = connect(&name, CONNECT_ATTEMPTS, CONNECT_PAUSE) {
-                        // An empty handshake, then the client leaves at once.
-                        let _ = (&stream).write_all(b"\n");
-                        close(stream);
-                        connected += 1;
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let (connected, samples) = thread::scope(|scope| {
+        let sampler = scope.spawn(|| {
+            let mut samples = 0_usize;
+            while !done.load(Ordering::SeqCst) {
+                let s = server.stats();
+                assert!(s.connections <= BOUND, "places over the bound: {s:?}");
+                assert!(s.refusing <= MAX_REFUSING, "{s:?}");
+                assert!(
+                    s.threads <= 2 + s.connections + s.refusing,
+                    "threads over 2 + places: {s:?}"
+                );
+                samples += 1;
+                thread::yield_now();
+            }
+            samples
+        });
+        let churners: Vec<_> = (0..CHURNERS)
+            .map(|_| {
+                let name = name.clone();
+                scope.spawn(move || {
+                    let mut connected = 0_usize;
+                    for _ in 0..CYCLES {
+                        if let Ok(stream) = connect(&name, CONNECT_ATTEMPTS, CONNECT_PAUSE) {
+                            // An empty handshake, then the client leaves at once.
+                            let _ = (&stream).write_all(
+                                b"
+",
+                            );
+                            close(stream);
+                            connected += 1;
+                        }
                     }
-                }
-                connected
+                    connected
+                })
             })
-        })
-        .collect();
-    let connected: usize = churners.into_iter().map(|t| t.join().unwrap()).sum();
-    let stats = wait(&server, "every thread ends", |s| {
-        s.connections == 0 && s.refusing == 0 && s.threads == 0
+            .collect();
+        let connected: usize = churners.into_iter().map(|t| t.join().unwrap()).sum();
+        done.store(true, Ordering::SeqCst);
+        (connected, sampler.join().unwrap())
     });
-    eprintln!("churn: {connected} connections made; {stats:?}");
+    let stats = wait(&server, "every worker is joined", |s| {
+        s.connections == 0 && s.refusing == 0 && s.threads == 2
+    });
+    eprintln!("churn: {connected} connections made, {samples} samples; {stats:?}");
     assert!(
-        stats.peak_threads <= BOUND,
-        "{} connection threads at once for a bound of {BOUND}",
-        stats.peak_threads
+        stats.peak_connections <= BOUND,
+        "{} places at once for a bound of {BOUND}",
+        stats.peak_connections
     );
-    assert_eq!(stats.peak_threads, BOUND, "the run reached the bound");
+    assert_eq!(stats.peak_connections, BOUND, "the run reached the bound");
     assert!(
-        connected >= CHURNERS * CYCLES / 2 && stats.accepted >= 500,
+        connected >= CHURNERS * CYCLES / 2 && stats.accepted >= 500 && samples > 0,
         "the run says too little: {connected} connected, {stats:?}"
     );
     assert!(
         stats.told_full + stats.closed_full > 0,
         "the run went past the bound: {stats:?}"
     );
+    assert_eq!(
+        stats.joined,
+        stats.accepted + stats.told_full,
+        "every worker joined once"
+    );
     assert_eq!(clients(&broker), 0);
-    assert!(server.shutdown(PATIENCE).complete());
+    let report = server.shutdown(PATIENCE);
+    assert!(report.complete(), "{report:?}");
+    assert_eq!(
+        report.stats.threads, 0,
+        "the accept thread and the reaper joined too"
+    );
 }
 
 /// R-T2-3: while one client's tool call holds the broker's lock (its capture waits at a gate the
@@ -1625,4 +1760,258 @@ fn it_30_requests_already_received_are_not_served_after_shutdown() {
     drop(peer);
     assert!(server.shutdown(PATIENCE).complete());
     assert_eq!(clients(&broker), 0);
+}
+
+// ---- 14. the second review of the pipe (D40) ----
+
+/// D40 G1: a worker held after its connection is closed and before its thread is joined keeps
+/// its place: a client over the bound is refused, and shutdown says `Remaining`; the hold does
+/// not block admission's refusal or another worker's end. Once the hold is released and the
+/// reaper has joined it, the place is back, and a second shutdown says `Complete`, with every
+/// worker joined once and no thread of the listener left.
+#[test]
+fn it_29_a_worker_s_place_is_free_only_after_its_thread_is_joined_and_shutdown_says_so() {
+    watchdog(
+        "the held worker's places, refusal and shutdowns",
+        a_worker_s_place_is_free_only_after_its_thread_is_joined_and_shutdown_says_so_body,
+    );
+}
+
+fn a_worker_s_place_is_free_only_after_its_thread_is_joined_and_shutdown_says_so_body() {
+    let world = World::new();
+    let broker = world.bounded(2);
+    let mut server = bind(&broker, "joined");
+    let name = server.name().clone();
+    let release = Arc::new(Release::default());
+    let (began, exiting) = mpsc::channel();
+    world.gate.arm(ExitHold {
+        began,
+        release: Arc::clone(&release),
+    });
+    // A observes, so its worker thread registers the hold; then A leaves.
+    let mut a = Peer::attach(&name, &ticket(1));
+    assert!(a.call("observe_screen", &json!({}))["result"].is_object());
+    let mut c = Peer::attach(&name, "");
+    assert!(c.list()["result"].is_object());
+    drop(a);
+    exiting
+        .recv_timeout(PATIENCE)
+        .expect("A's worker thread is exiting, held");
+    let held = wait(&server, "A's connection is closed", |s| s.serving == 1);
+    assert_eq!(
+        (held.connections, held.joined),
+        (2, 0),
+        "A's place stays until its join returns"
+    );
+    // The bound is full: a client over it is refused while the join is held.
+    let mut over = Peer::connect(&name);
+    assert_eq!(over.line().as_deref(), Some(FULL_LINE));
+    assert_eq!(over.line(), None);
+    // Another worker ends its connection while the join is held.
+    drop(c);
+    let ended = wait(&server, "C's worker closed its connection", |s| {
+        s.serving == 0
+    });
+    assert_eq!(
+        (ended.connections, ended.refusing),
+        (2, 1),
+        "the places wait behind A's join: one reaper, one join at a time"
+    );
+    let report = server.shutdown(Duration::ZERO);
+    assert_eq!(
+        report.state,
+        ShutdownState::Remaining {
+            connections: 2,
+            refusing: 1
+        },
+        "{report:?}"
+    );
+    assert!(report.accept_stopped() && !report.complete());
+    assert_eq!(
+        report.stats.threads, 4,
+        "the reaper and three workers, none joined"
+    );
+    release.open();
+    let report = server.shutdown(PATIENCE);
+    assert!(report.complete(), "{report:?}");
+    assert_eq!(
+        (
+            report.stats.connections,
+            report.stats.refusing,
+            report.stats.threads
+        ),
+        (0, 0, 0)
+    );
+    assert_eq!(
+        report.stats.joined, 3,
+        "A, C and the refusal, each joined once"
+    );
+    assert!(
+        !release.failsafe_fired(),
+        "nothing waited on the held join: the hold was released by the test"
+    );
+}
+
+/// D40 G1: the caller's predicate runs outside the listener's lock, so one that blocks does not
+/// stop a new client from being accepted and served.
+#[test]
+fn it_29_a_blocking_predicate_of_wait_until_does_not_stop_admission() {
+    watchdog(
+        "a client served while a predicate of wait_until blocks",
+        a_blocking_predicate_of_wait_until_does_not_stop_admission_body,
+    );
+}
+
+fn a_blocking_predicate_of_wait_until_does_not_stop_admission_body() {
+    let world = World::new();
+    let broker = world.broker();
+    let mut server = bind(&broker, "predicate");
+    let name = server.name().clone();
+    let release = Release::default();
+    let (entered, is_entered) = mpsc::channel();
+    thread::scope(|scope| {
+        let waiting = scope.spawn(|| {
+            server.wait_until(PATIENCE, |_| {
+                let _ = entered.send(());
+                release.pass();
+                true
+            })
+        });
+        is_entered
+            .recv_timeout(PATIENCE)
+            .expect("the predicate is running");
+        let mut peer = Peer::attach(&name, "");
+        assert!(peer.list()["result"].is_object(), "served meanwhile");
+        assert_eq!(server.stats().accepted, 1);
+        release.open();
+        assert!(waiting.join().unwrap().is_some());
+        drop(peer);
+    });
+    assert!(
+        !release.failsafe_fired(),
+        "the client was served while the predicate blocked"
+    );
+    assert!(server.shutdown(PATIENCE).complete());
+}
+
+/// D40 G1: a change made after `wait_until` took its copy and before it waits is not missed.
+/// The predicate, on its first call, has a silent client connect and waits until the listener
+/// has made its last change for it (the worker counted among the threads); then it answers
+/// false. Nothing changes after that, so a wait for a notification would wait out its time. The
+/// predicate watches the counts through a helper thread and a channel with a deadline, never by
+/// taking the listener's lock on its own thread: called under that lock (a defect), it fails
+/// by assertion instead of deadlocking.
+#[test]
+fn a_change_between_the_copy_and_the_wait_is_not_missed() {
+    watchdog(
+        "wait_until seeing a change made between its copy and its wait",
+        a_change_between_the_copy_and_the_wait_is_not_missed_body,
+    );
+}
+
+fn a_change_between_the_copy_and_the_wait_is_not_missed_body() {
+    let world = World::new();
+    let broker = world.broker();
+    let mut server = bind(&broker, "missed");
+    let name = server.name().clone();
+    let calls = AtomicUsize::new(0);
+    let silent: Mutex<Option<Peer>> = Mutex::new(None);
+    let got = thread::scope(|scope| {
+        server.wait_until(PATIENCE, |s| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                *silent.lock().unwrap() = Some(Peer::connect(&name));
+                let (counted, is_counted) = mpsc::channel();
+                let server = &server;
+                scope.spawn(move || {
+                    let _ = counted.send(server.wait_until(PATIENCE, |s| s.threads == 3));
+                });
+                let counted = is_counted.recv_timeout(PATIENCE);
+                assert!(
+                    matches!(counted, Ok(Some(_))),
+                    "the client was not counted within the deadline: is the predicate called                      under the listener's lock? {counted:?}"
+                );
+                return false;
+            }
+            s.accepted == 1 && s.threads == 3
+        })
+    });
+    assert!(got.is_some(), "the change after the copy was seen");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    drop(silent);
+    assert!(server.shutdown(PATIENCE).complete());
+}
+
+/// D40 G2: a request begun before the stop and ended after it is discarded: the stop reaches
+/// the reader as the stop, not as an end of input that would complete the line.
+#[test]
+fn it_30_a_request_begun_before_the_stop_is_discarded_not_dispatched() {
+    let world = World::new();
+    let broker = world.broker();
+    let mut server = bind(&broker, "begun");
+    let name = server.name().clone();
+    let mut peer = Peer::attach(&name, &ticket(1));
+    assert!(peer.list()["result"].is_object());
+    let captures = world.gate.captures();
+    let before = server.stats().bytes_in;
+    let message = tool_line(9, "observe_screen", &json!({}));
+    peer.send(message.as_bytes());
+    wait(&server, "the message's bytes entered the framer", |s| {
+        s.bytes_in == before + message.len() as u64
+    });
+    let report = server.shutdown(Duration::ZERO);
+    assert!(report.accept_stopped(), "{report:?}");
+    // The line's end arrives after the stop. The worker may already have ended at the stop (it
+    // asked for more bytes after the stop was set) and closed the pipe, so the write may fail:
+    // either way the request is not dispatched.
+    let _ = (&*peer.stream).write_all(b"\n");
+    assert_eq!(peer.line(), None, "nothing written back");
+    assert_eq!(world.gate.captures(), captures, "the engine was not called");
+    let stats = wait(&server, "the connection ended at the stop", |s| {
+        s.stopped == 1
+    });
+    assert_eq!(stats.failed, 0);
+    drop(peer);
+    assert!(server.shutdown(PATIENCE).complete());
+}
+
+/// D40 G2: a request that passed the stop check before the stop runs to its end: it delivers
+/// and replies after the stop, and its connection is `Remaining` meanwhile.
+#[test]
+fn it_30_a_request_that_passed_the_check_before_the_stop_runs_to_its_end() {
+    let world = World::new();
+    let broker = world.broker();
+    let mut server = bind(&broker, "passed");
+    let name = server.name().clone();
+    let mut peer = Peer::attach(&name, &ticket(1));
+    let page = peer.call("observe_screen", &json!({}))["result"]["structuredContent"].clone();
+    world.delivery.set_closed(true);
+    let opens = Opens(Arc::clone(&world.delivery));
+    peer.next_id += 1;
+    peer.send(
+        format!(
+            "{}\n",
+            tool_line(peer.next_id, "execute_action", &click(&page, "late", true))
+        )
+        .as_bytes(),
+    );
+    world.delivery.wait_captures(1);
+    let report = server.shutdown(Duration::ZERO);
+    assert_eq!(
+        report.state,
+        ShutdownState::Remaining {
+            connections: 1,
+            refusing: 0
+        },
+        "{report:?}"
+    );
+    drop(opens);
+    let reply: Value = serde_json::from_str(&peer.line().expect("its reply")).unwrap();
+    assert_eq!(
+        reply["result"]["structuredContent"]["input_delivered"], true,
+        "{reply}"
+    );
+    assert_eq!(world.events(), 1, "delivered after the stop");
+    assert_eq!(peer.line(), None, "and nothing after it");
+    drop(peer);
+    assert!(server.shutdown(PATIENCE).complete());
 }
