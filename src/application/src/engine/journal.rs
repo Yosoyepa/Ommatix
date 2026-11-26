@@ -8,7 +8,13 @@
 //! A result that reported input, or may have (`indeterminate`), is kept until the session
 //! ends: a repeated `request_id` of an operation with effects returns the stored result
 //! (SDD §2.9, BDD-30), and a replay under the operator's stop must report what was delivered
-//! (SEC-02), so no bound may forget it.
+//! (SEC-02), so no bound may forget it (ADR-0034 documents these bounds).
+//!
+//! An action executed on behalf of a client (ADR-0039, decision 11) is journaled under the
+//! pair of that client and its `request_id`, in a journal of the client's own: two clients
+//! may use the same `request_id`, and the bound forgets only the client's own results that
+//! reported no input, at most [`JOURNAL_CAPACITY_PER_CLIENT`] of them. The journal of the
+//! actions executed on behalf of no client is the one described above, unchanged.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -16,8 +22,20 @@ use ommatix_domain::identity::ActionStatus;
 
 use crate::contract::{ActionKind, ActionRequest, ActionResult, ExpectedEffect, ScrollDirection};
 
-/// Request IDs remembered per session whose results reported no input (see the module docs).
+/// Request IDs remembered per session whose results reported no input, for the actions
+/// executed on behalf of no client (see the module docs).
 pub const JOURNAL_CAPACITY: usize = 1024;
+
+/// The clients among which [`JOURNAL_CAPACITY`] is shared: the bound on clients connected to
+/// one engine (ADR-0039, decision 7).
+pub const JOURNAL_CLIENTS: usize = 8;
+
+/// Request IDs remembered per client whose results reported no input: an equal share of
+/// [`JOURNAL_CAPACITY`] (ADR-0039, decision 11). A caller that admits at most
+/// [`JOURNAL_CLIENTS`] clients at once and forgets each one that leaves
+/// ([`Engine::forget_client`](crate::Engine::forget_client)) keeps the clients' evictable
+/// results within [`JOURNAL_CAPACITY`] together.
+pub const JOURNAL_CAPACITY_PER_CLIENT: usize = JOURNAL_CAPACITY / JOURNAL_CLIENTS;
 
 /// Whether `result` reported input, or may have: such a result is kept for the session.
 fn reported_input(result: &ActionResult) -> bool {
@@ -126,6 +144,12 @@ impl Journal {
             .sum::<usize>()
             + self.order.capacity() * std::mem::size_of::<String>()
             + self.order.iter().map(String::capacity).sum::<usize>()
+    }
+
+    /// The request IDs this journal remembers, in order.
+    #[cfg(test)]
+    pub fn request_ids(&self) -> Vec<String> {
+        self.entries.keys().cloned().collect()
     }
 
     pub fn lookup(&self, request_id: &str, hash: u64) -> Lookup {
@@ -305,6 +329,43 @@ mod tests {
         );
         assert_eq!(j.lookup("b", 1), Lookup::New);
         assert_eq!(j.lookup("d", 1), Lookup::Replay(result("d")));
+    }
+
+    #[test]
+    fn the_clients_share_the_capacity_equally() {
+        assert_eq!(
+            JOURNAL_CAPACITY_PER_CLIENT * JOURNAL_CLIENTS,
+            JOURNAL_CAPACITY
+        );
+        assert_eq!(JOURNAL_CAPACITY_PER_CLIENT, 128);
+    }
+
+    #[test]
+    fn a_client_journal_forgets_only_beyond_its_share_and_keeps_what_reported_input() {
+        let mut j = Journal::new(JOURNAL_CAPACITY_PER_CLIENT);
+        let mut kept = Vec::new();
+        for i in 0..1_000 {
+            let id = format!("r{i}");
+            let mut receipt = result(&id);
+            if i % 7 == 0 {
+                receipt.status = ActionStatus::Indeterminate;
+                kept.push(id.clone());
+            } else if i % 7 == 1 {
+                receipt.status = ActionStatus::InputDelivered;
+                receipt.delivered = true;
+                kept.push(id.clone());
+            }
+            j.record(&id, 0, receipt);
+        }
+        let mut expected: Vec<String> = (0..1_000)
+            .filter(|i| i % 7 > 1)
+            .map(|i| format!("r{i}"))
+            .rev()
+            .take(JOURNAL_CAPACITY_PER_CLIENT)
+            .chain(kept)
+            .collect();
+        expected.sort();
+        assert_eq!(j.request_ids(), expected);
     }
 
     #[test]

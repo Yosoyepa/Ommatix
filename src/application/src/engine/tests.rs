@@ -2816,6 +2816,7 @@ mod icons {
 
 mod accessibility;
 mod candidates;
+mod clients;
 mod concurrency;
 mod freshness;
 mod identity;
