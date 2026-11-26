@@ -28,7 +28,8 @@ pub enum RelayEnd {
     OutputFailed(io::ErrorKind),
 }
 
-/// Why [`relay`] wrote nothing.
+/// Why [`relay`] wrote nothing: in each case nothing was written to the pipe and nothing was
+/// read from the caller's input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayError {
     /// The handshake line contains `\n` or `\r`, so it would put a second line on the pipe.
@@ -56,13 +57,15 @@ impl std::error::Error for RelayError {}
 
 /// Relays between the engine's pipe and the caller's two byte streams (ADR-0043, decision 8).
 ///
-/// First it writes `handshake` and a `\n` to the pipe (decision 9). The caller has already
-/// validated the line (an empty line, or a ticket); this function adds only the line end, and
-/// refuses, before anything is written, a line that contains `\n` or `\r` or is longer than
-/// [`TICKET_MAX_LEN`]. Then it copies `input` to the pipe and the pipe to `output`, each in
-/// its own thread with a buffer of [`RELAY_CHUNK`] bytes, flushing `output` after every chunk,
-/// until either direction stops; it returns which one and why. It never reads, keeps or logs
-/// what it copies.
+/// It refuses, before anything is written, a handshake line that contains `\n` or `\r` or is
+/// longer than [`TICKET_MAX_LEN`]; the caller has already validated the line (an empty line, or
+/// a ticket). Then it starts its two threads, which wait. Only once both exist does it write
+/// `handshake` and a `\n` to the pipe (decision 9) and let them run: one copies `input` to the
+/// pipe and the other the pipe to `output`, each with a buffer of [`RELAY_CHUNK`] bytes,
+/// flushing `output` after every chunk, until either direction stops; it returns which one and
+/// why. When a thread cannot start, or the handshake cannot be written, the threads that
+/// started end without reading or writing anything. It never reads, keeps or logs what it
+/// copies.
 ///
 /// The direction still running is not waited for: a read cannot be interrupted, so its thread
 /// ends when its own source ends or fails (the pipe when the engine closes it; the input when
@@ -72,12 +75,38 @@ impl std::error::Error for RelayError {}
 /// # Errors
 ///
 /// [`RelayError`] when the handshake line is refused or a thread cannot be started; nothing is
-/// then relayed.
+/// then written to the pipe or read from `input`.
 pub fn relay<P, R, W>(
     pipe: Arc<P>,
     handshake: &[u8],
     input: R,
     output: W,
+) -> Result<RelayEnd, RelayError>
+where
+    P: Send + Sync + 'static,
+    for<'a> &'a P: Read + Write,
+    R: Read + Send + 'static,
+    W: Write + Send + 'static,
+{
+    relay_with(pipe, handshake, input, output, |name, work| {
+        thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(work)
+            .map(drop)
+    })
+}
+
+/// The work of one direction of the relay, handed to a thread.
+type Work = Box<dyn FnOnce() + Send + 'static>;
+
+/// [`relay`] with the way its threads are started given by the caller, so that a test can
+/// refuse one.
+fn relay_with<P, R, W>(
+    pipe: Arc<P>,
+    handshake: &[u8],
+    input: R,
+    output: W,
+    mut spawn: impl FnMut(&str, Work) -> io::Result<()>,
 ) -> Result<RelayEnd, RelayError>
 where
     P: Send + Sync + 'static,
@@ -91,28 +120,43 @@ where
     if handshake.len() > TICKET_MAX_LEN {
         return Err(RelayError::TooLong);
     }
+    let (ended, first) = mpsc::channel();
+    // Each thread waits for its go; a go sender dropped unsent ends it before it touches its
+    // side.
+    let (go_up, up_waits) = mpsc::channel::<()>();
+    let (go_down, down_waits) = mpsc::channel::<()>();
+    let up = Arc::clone(&pipe);
+    let handshake_pipe = Arc::clone(&pipe);
+    let up_ended = ended.clone();
+    spawn(
+        "ommatix-relay-to-engine",
+        Box::new(move || {
+            if up_waits.recv().is_ok() {
+                let _ = up_ended.send(to_pipe(input, &up));
+            }
+        }),
+    )
+    .map_err(|e| RelayError::Thread(e.kind()))?;
+    let down = pipe;
+    spawn(
+        "ommatix-relay-from-engine",
+        Box::new(move || {
+            if down_waits.recv().is_ok() {
+                let _ = ended.send(from_pipe(&down, output));
+            }
+        }),
+    )
+    .map_err(|e| RelayError::Thread(e.kind()))?;
+    // Both threads exist: only now is anything written.
     let mut line = Vec::with_capacity(handshake.len() + 1);
     line.extend_from_slice(handshake);
     line.push(b'\n');
-    let mut writer: &P = &pipe;
+    let mut writer: &P = &handshake_pipe;
     if let Err(error) = writer.write_all(&line) {
         return Ok(RelayEnd::PipeWriteFailed(error.kind()));
     }
-    let (ended, first) = mpsc::channel();
-    let up = Arc::clone(&pipe);
-    let up_ended = ended.clone();
-    thread::Builder::new()
-        .name("ommatix-relay-to-engine".to_owned())
-        .spawn(move || {
-            let _ = up_ended.send(to_pipe(input, &up));
-        })
-        .map_err(|e| RelayError::Thread(e.kind()))?;
-    thread::Builder::new()
-        .name("ommatix-relay-from-engine".to_owned())
-        .spawn(move || {
-            let _ = ended.send(from_pipe(&pipe, output));
-        })
-        .map_err(|e| RelayError::Thread(e.kind()))?;
+    let _ = go_up.send(());
+    let _ = go_down.send(());
     // Both senders live in the threads, and each sends before it ends: a receive error is not
     // possible, and would mean that both ended without a word, as if the pipe had.
     Ok(first.recv().unwrap_or(RelayEnd::PipeEnded))
@@ -365,6 +409,46 @@ mod tests {
         pipe.to_engine.close();
         assert_eq!(engine.join().unwrap(), 500);
         input.close();
+    }
+
+    #[test]
+    fn a_thread_that_cannot_start_leaves_the_pipe_unwritten_and_the_input_unread() {
+        for refused in [1_u32, 2] {
+            let pipe = Arc::new(Duplex::default());
+            let input = Arc::new(Lane::default());
+            input.push(b"request\n").unwrap();
+            input.close();
+            let mut started = Vec::new();
+            let mut calls = 0_u32;
+            let ended = relay_with(
+                Arc::clone(&pipe),
+                b"",
+                LaneReader(Arc::clone(&input)),
+                LaneWriter(Arc::new(Lane::default())),
+                |name, work| {
+                    calls += 1;
+                    if calls == refused {
+                        return Err(io::ErrorKind::OutOfMemory.into());
+                    }
+                    started.push(thread::Builder::new().name(name.to_owned()).spawn(work)?);
+                    Ok(())
+                },
+            );
+            assert_eq!(ended, Err(RelayError::Thread(io::ErrorKind::OutOfMemory)));
+            for thread in started {
+                thread.join().unwrap();
+            }
+            pipe.to_engine.close();
+            assert!(
+                read_exactly(&pipe.to_engine, 1).is_empty(),
+                "refusal of thread {refused}: nothing written, not even the handshake"
+            );
+            assert_eq!(
+                read_exactly(&input, 8),
+                b"request\n",
+                "refusal of thread {refused}: the input unread"
+            );
+        }
     }
 
     #[test]

@@ -8,8 +8,11 @@
 //!   grants the owner only (decision 5), the broker's bound on clients taken at accept and a
 //!   refusal that never blocks it (decision 7), one thread per connection (decision 2).
 //! - [`connect`] opens the pipe at identification level, overlapped, and retries a busy pipe a
-//!   bounded number of times (decision 12). It is the one place in the product that opens a
-//!   handle with `std::fs`, under the one bounded exception to SEC-04's source check.
+//!   bounded number of times (decision 12). Its open is the one place in the product that opens
+//!   a handle with `std::fs`, under the one exception to SEC-04's source check, which pins that
+//!   file (`client.rs`) by its digest. It is also the only way this crate opens the pipe: the
+//!   server's own wake-up connection at shutdown goes through it, and no production source
+//!   names the pipe crate's own connecting functions (a repository test checks both).
 //! - [`relay`] writes the handshake line (decision 9) and then copies two byte streams to and
 //!   from the pipe at once, without reading what it copies.
 //!
@@ -26,11 +29,11 @@ use std::fmt;
 use std::io;
 use std::time::Duration;
 
-#[cfg(all(windows, feature = "broker-pipe"))]
-pub use client::connect;
 pub use relay::{RELAY_CHUNK, RelayEnd, RelayError, relay};
 #[cfg(all(windows, feature = "broker-pipe"))]
-pub use server::{OWNER_ONLY_SDDL, PipeServer, PipeStats, ShutdownReport};
+pub use server::{
+    ACCEPT_TRANSIENT_ERRORS, OWNER_ONLY_SDDL, PipeServer, PipeStats, ShutdownReport, ShutdownState,
+};
 
 /// The client and server end of the pipe: a duplex byte stream. `&PipeStream` reads and
 /// writes, so one thread can read while another writes.
@@ -38,6 +41,53 @@ pub use server::{OWNER_ONLY_SDDL, PipeServer, PipeStats, ShutdownReport};
 pub type PipeStream = interprocess::os::windows::named_pipe::DuplexPipeStream<
     interprocess::os::windows::named_pipe::pipe_mode::Bytes,
 >;
+
+/// Connects to the engine's pipe `name` (ADR-0043, decision 12), as [`connect_with`] does,
+/// without watching the tries.
+///
+/// # Errors
+///
+/// As [`connect_with`].
+#[cfg(all(windows, feature = "broker-pipe"))]
+pub fn connect(
+    name: &PipeName,
+    attempts: u32,
+    pause: Duration,
+) -> Result<PipeStream, ConnectError> {
+    connect_with(name, attempts, pause, |_| ())
+}
+
+/// Connects to the engine's pipe `name` (ADR-0043, decision 12) with the identification-level
+/// client. A pipe whose every instance is busy (os error 231, also seen for a moment while the
+/// server re-creates its waiting instance) is opened again after `pause`, at most `attempts`
+/// times in all; `busy` is told the number of each try that found it busy and is followed by
+/// another, before the pause. Any other failure ends at once. [`CONNECT_ATTEMPTS`] and
+/// [`CONNECT_PAUSE`] are the defaults.
+///
+/// # Errors
+///
+/// [`ConnectError::NoEngine`] when no pipe of that name exists, [`ConnectError::Busy`] when
+/// every try found it busy, [`ConnectError::Os`] otherwise.
+#[cfg(all(windows, feature = "broker-pipe"))]
+pub fn connect_with(
+    name: &PipeName,
+    attempts: u32,
+    pause: Duration,
+    mut busy: impl FnMut(u32),
+) -> Result<PipeStream, ConnectError> {
+    let mut tries: u32 = 0;
+    loop {
+        tries = tries.saturating_add(1);
+        match client::open(name) {
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY) && tries < attempts => {
+                busy(tries);
+                std::thread::sleep(pause);
+            }
+            Err(error) => return Err(ConnectError::of_open(&error)),
+        }
+    }
+}
 
 /// The prefix of every local pipe path.
 pub const PIPE_PREFIX: &str = r"\\.\pipe\";
