@@ -19,9 +19,12 @@
 //!
 //! With `--plan-check`, each regional observation is also compared with a full read of the
 //! same frame, run after it is committed (its time is not the observation's), and one line
-//! goes to stderr (`ommatix-plan-check`, schema `ommatix.plan-check/1`): how many boxes of
+//! goes to stderr (`ommatix-plan-check`, schema `ommatix.plan-check/2`): how many boxes of
 //! each kind one read has and the other lacks, split by whether they overlap a box ADR-0045
-//! lets a region meet without containing. Counts only.
+//! lets a region meet without containing. Schema 2 (O3d) adds `differing_words`: where the
+//! differing words lie against the regions, how they pair up and whether the unexplained ones
+//! touch the dirty tiles. Counts, closed classes and one distance in pixels; no text and no
+//! coordinate.
 
 // `demo` is the one command whose output is meant for a human on stdout.
 #![allow(clippy::print_stdout)]
@@ -33,7 +36,7 @@ use ommatix_adapter_sim::{SimulatedDesktop, layout};
 use ommatix_application::contract::{
     ActionKind, ActionRequest, ElementView, ExpectedEffect, ObservePage, ObserveRequest, ToolError,
 };
-use ommatix_application::{CheckCount, CheckKinds, Engine, PlanCheck};
+use ommatix_application::{CheckCount, CheckKinds, Engine, PlanCheck, WordDetail, WordPlaces};
 use ommatix_domain::fusion::Actionability;
 use ommatix_domain::incremental::{FullRefreshReason, PlanTrace, SpanningTrace, SupportClass};
 use ommatix_domain::{Action, MouseButton};
@@ -46,7 +49,7 @@ const OBSERVATION_SCHEMA: &str = "ommatix.observation/1";
 const PLAN_TRACE_SCHEMA: &str = "ommatix.plan-trace/2";
 
 /// The schema of the per-observation line written by `--plan-check`.
-const PLAN_CHECK_SCHEMA: &str = "ommatix.plan-check/1";
+const PLAN_CHECK_SCHEMA: &str = "ommatix.plan-check/2";
 
 /// `TextNode` → `text_node`: the contract's spelling of a variant name.
 fn snake(debug: impl std::fmt::Debug) -> String {
@@ -303,6 +306,35 @@ fn check_kinds(k: &CheckKinds) -> Value {
     })
 }
 
+/// The differing words of a check, described (O3d). A word `inside_a_region` that differs is
+/// the stated limit L3 of ADR-0045; `crossing_a_region_edge` and `outside_every_region` are
+/// never L3, and `never_l3` adds them up over both sides.
+fn word_detail_record(d: &WordDetail) -> Value {
+    let places = |p: &WordPlaces| {
+        json!({
+            "inside_a_region": p.inside_a_region,
+            "crossing_a_region_edge": p.crossing_a_region_edge,
+            "outside_every_region": p.outside_every_region,
+        })
+    };
+    json!({
+        "only_full": places(&d.only_full),
+        "only_regional": places(&d.only_regional),
+        "pairs": {
+            "same_text_other_box": d.pairs.same_text_other_box,
+            "largest_edge_difference_px": d.pairs.largest_edge_difference_px,
+            "other_text": d.pairs.other_text,
+            "unpaired_only_full": d.pairs.unpaired_only_full,
+            "unpaired_only_regional": d.pairs.unpaired_only_regional,
+        },
+        "unpaired_or_other_text": {
+            "at_dirty_tiles": d.unexplained.at_dirty_tiles,
+            "away_from_dirty_tiles": d.unexplained.away_from_dirty_tiles,
+        },
+        "never_l3": d.never_l3(),
+    })
+}
+
 /// One observation of `--plan-check`. `checked` is `false` (and the counts `null`) when no
 /// comparison ran: the observation was not regional, or the full read failed.
 fn plan_check_record(n: u8, page: &ObservePage, check: Option<&PlanCheck>) -> Value {
@@ -316,6 +348,7 @@ fn plan_check_record(n: u8, page: &ObservePage, check: Option<&PlanCheck>) -> Va
         "full_truncated": check.map(|c| c.full_truncated),
         "only_regional": check.map(|c| check_kinds(&c.only_regional)),
         "only_full": check.map(|c| check_kinds(&c.only_full)),
+        "differing_words": check.map(|c| word_detail_record(&c.words)),
     })
 }
 
@@ -331,6 +364,7 @@ fn plan_check_error_record(n: u8, error: &ToolError) -> Value {
         "full_truncated": null,
         "only_regional": null,
         "only_full": null,
+        "differing_words": null,
     })
 }
 
@@ -757,8 +791,9 @@ mod tests {
     }
 
     /// The keys of one `--plan-check` line (ADR-0045).
-    const CHECK_KEYS: [&str; 9] = [
+    const CHECK_KEYS: [&str; 10] = [
         "checked",
+        "differing_words",
         "error_code",
         "full_truncated",
         "observation_id",
@@ -839,6 +874,81 @@ mod tests {
         assert_eq!(record["outcome"], "error");
         assert_eq!(record["checked"], false);
         assert!(record["only_regional"].is_null() && record["only_full"].is_null());
+        assert!(record["differing_words"].is_null());
+    }
+
+    /// Every leaf of `value` is a number, and every key is one of the closed names.
+    fn numbers_only(value: &Value, path: &str) {
+        match value {
+            Value::Object(map) => {
+                for (k, v) in map {
+                    numbers_only(v, &format!("{path}.{k}"));
+                }
+            }
+            Value::Number(_) => {}
+            other => panic!("{path} is {other:?}, not a number"),
+        }
+    }
+
+    /// Schema 2 of the check (O3d): the differing words described by place, pairing and the
+    /// dirty tiles, numbers only under closed keys; `never_l3` adds the places that are never
+    /// the limit L3.
+    #[test]
+    fn a_plan_check_line_describes_the_differing_words_with_numbers_only() {
+        let mut words = WordDetail::default();
+        words.only_full.crossing_a_region_edge = 1;
+        words.only_full.inside_a_region = 2;
+        words.only_regional.inside_a_region = 3;
+        words.only_regional.outside_every_region = 1;
+        words.pairs.same_text_other_box = 2;
+        words.pairs.largest_edge_difference_px = 1.5;
+        words.pairs.other_text = 1;
+        words.pairs.unpaired_only_regional = 1;
+        words.unexplained.at_dirty_tiles = 2;
+        words.unexplained.away_from_dirty_tiles = 1;
+        let check = PlanCheck {
+            words,
+            ..PlanCheck::default()
+        };
+        let mut wired = sim_wired("check-words");
+        let page = wired
+            .engine
+            .observe_screen(&ObserveRequest::default())
+            .unwrap();
+        let record = plan_check_record(4, &page, Some(&check));
+        let detail = &record["differing_words"];
+        numbers_only(detail, "differing_words");
+        assert_eq!(
+            sorted_keys(detail),
+            [
+                "never_l3",
+                "only_full",
+                "only_regional",
+                "pairs",
+                "unpaired_or_other_text"
+            ]
+        );
+        assert_eq!(
+            sorted_keys(&detail["only_full"]),
+            [
+                "crossing_a_region_edge",
+                "inside_a_region",
+                "outside_every_region"
+            ]
+        );
+        assert_eq!(
+            sorted_keys(&detail["pairs"]),
+            [
+                "largest_edge_difference_px",
+                "other_text",
+                "same_text_other_box",
+                "unpaired_only_full",
+                "unpaired_only_regional"
+            ]
+        );
+        assert_eq!(detail["never_l3"], 2);
+        assert_eq!(detail["pairs"]["largest_edge_difference_px"], 1.5);
+        assert_eq!(detail["unpaired_or_other_text"]["at_dirty_tiles"], 2);
     }
 
     /// Schema 2 of the trace (ADR-0045): on the simulated desktop the detector declares no

@@ -48,7 +48,9 @@ pub use freshness::{
 };
 pub use icons::{IconResolverConfig, grey_grid};
 pub use journal::JOURNAL_CAPACITY;
-pub use plan_check::{CheckCount, CheckKinds, PlanCheck};
+pub use plan_check::{
+    CheckCount, CheckKinds, PlanCheck, Unexplained, WordDetail, WordPairs, WordPlaces,
+};
 
 use journal::Journal;
 use observe::{Measured, Published};

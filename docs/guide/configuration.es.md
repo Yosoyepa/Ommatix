@@ -29,7 +29,7 @@
 | `--legacy` | sirve además el perfil MCP legacy 2025-11-25 (como `[mcp] legacy_enabled = true`) | apagado |
 | `--observations N` (sólo `demo`) | 1–20 | 3 |
 | `--plan-trace` (sólo `demo`) | escribe además una línea por observación en stderr, también de la que falló: `ommatix-plan-trace` y un objeto JSON (esquema `ommatix.plan-trace/2`) con por qué el planificador eligió ese trabajo, sólo con conteos, áreas y nombres de clase; cada campo se define [abajo](#la-línea-de---plan-trace). Ningún píxel, texto ni coordenada; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
-| `--plan-check` (sólo `demo`) | compara además cada observación regional con una lectura completa del mismo fotograma, hecha después de confirmar la observación, y escribe una línea por observación en stderr: `ommatix-plan-check` y un objeto JSON (esquema `ommatix.plan-check/1`) con cuántas cajas tiene cada lectura que la otra no ([ADR-0045](../adr/0045-support-aware-closure.md)); cada campo se define [abajo](#la-línea-de---plan-check). Es un diagnóstico del operador: ejecuta la percepción dos veces, así que una observación regional cuesta alrededor del doble, y su tiempo nunca se informa como el de la observación. Sólo conteos; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
+| `--plan-check` (sólo `demo`) | compara además cada observación regional con una lectura completa del mismo fotograma, hecha después de confirmar la observación, y escribe una línea por observación en stderr: `ommatix-plan-check` y un objeto JSON (esquema `ommatix.plan-check/2`) con cuántas cajas tiene cada lectura que la otra no, y dónde y cómo difieren las palabras distintas ([ADR-0045](../adr/0045-support-aware-closure.md)); cada campo se define [abajo](#la-línea-de---plan-check). Es un diagnóstico del operador: ejecuta la percepción dos veces, así que una observación regional cuesta alrededor del doble, y su tiempo nunca se informa como el de la observación. Sólo conteos; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
 
 ### La línea de `--plan-trace`
 
@@ -114,7 +114,7 @@ lee renglones en contexto: límite L3).
 
 | Campo | Unidad | Significado |
 |---|---|---|
-| `schema` | texto | `ommatix.plan-check/1` |
+| `schema` | texto | `ommatix.plan-check/2` (la versión 2 añade `differing_words`) |
 | `observation_id`, `outcome`, `error_code`, `work` | | como en la línea de `--plan-trace` |
 | `checked` | booleano | `true` si la comparación se hizo: la observación fue regional y la lectura completa tuvo éxito |
 | `full_truncated` | booleano | el recorrido de accesibilidad de la lectura completa acabó en su presupuesto, así que sus ausencias no prueban nada; `null` si no se comparó |
@@ -123,6 +123,20 @@ lee renglones en contexto: límite L3).
 | `….controls`, `….words`, `….accessibility` | objeto | por tipo de evidencia |
 | `….at_spanned_or_whole_on_read` | conteo | de esas cajas, las que solapan una superficie abarcada o una caja de accesibilidad que tocó una región |
 | `….elsewhere` | conteo | las demás |
+| `differing_words` | objeto | las palabras de `only_full` y `only_regional`, descritas; `null` si no se comparó. Conteos, nombres de clase cerrados y una distancia en píxeles; ningún texto ni coordenada |
+| `differing_words.only_full`, `differing_words.only_regional` | objeto | esas palabras según dónde queda cada caja respecto de las regiones de la observación (donde el reconocedor leyó un recorte) |
+| `….inside_a_region` | conteo | dentro de una región. Una diferencia aquí es el límite declarado L3 de la ADR-0045: los mismos píxeles reconocidos desde un recorte |
+| `….crossing_a_region_edge` | conteo | toca una región sin quedar dentro de ninguna. Nunca es L3: una palabra que una región cortó |
+| `….outside_every_region` | conteo | no toca ninguna región. Nunca es L3: una palabra que la observación regional conserva de una lectura anterior y que una lectura completa ve de otro modo (un cambio que el plan no vio, o la diferencia de un recorte anterior que sigue retenida) |
+| `differing_words.pairs` | objeto | cada palabra de `only_full` emparejada con la palabra aún sin pareja de `only_regional` cuya caja más la solapa |
+| `….same_text_other_box` | conteo | parejas con el mismo texto y otra caja |
+| `….largest_edge_difference_px` | píxeles | la mayor diferencia entre bordes correspondientes de una pareja con el mismo texto; `0` si no hay ninguna. Una distancia, no una coordenada |
+| `….other_text` | conteo | parejas con otro texto |
+| `….unpaired_only_full`, `….unpaired_only_regional` | conteo | palabras de cada lado que quedaron sin pareja |
+| `differing_words.unpaired_or_other_text` | objeto | las palabras de las parejas con otro texto y las palabras sin pareja, de los dos lados |
+| `….at_dirty_tiles` | conteo | de ésas, las que solapan una tesela sucia del plan (una tesela cuyos píxeles cambiaron desde la base confirmada, o una pendiente): donde cambió la pantalla, por ejemplo el caret |
+| `….away_from_dirty_tiles` | conteo | las demás |
+| `differing_words.never_l3` | conteo | `crossing_a_region_edge` más `outside_every_region`, de los dos lados: las palabras distintas que nunca son el límite L3 |
 
 ## Archivo de configuración
 

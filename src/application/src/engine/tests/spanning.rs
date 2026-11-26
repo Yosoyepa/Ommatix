@@ -1,11 +1,12 @@
 //! The support-aware closure in the engine (ADR-0045): what the merge keeps (UT-84) and the
 //! differential test of a regional observation against a full read of the same frames
-//! (UT-85).
+//! (UT-85), and what `--plan-check` says of the words that differ (O3d).
 
 use super::*;
 
 use crate::contract::ElementView;
 use crate::engine::observe::EvidenceSet;
+use crate::engine::plan_check::{Unexplained, WordDetail, WordPlaces};
 use crate::ports::FrameCapturer;
 use ommatix_domain::fusion::AccessibleControl;
 use ommatix_domain::incremental::{PlanChoice, PlanTrace};
@@ -376,6 +377,20 @@ fn scene_engine(scene: &SharedScene, params: PlanParams) -> Engine {
 }
 
 fn scene_engine_with_band(scene: &SharedScene, params: PlanParams, band: Option<u32>) -> Engine {
+    scene_engine_reading(
+        scene,
+        params,
+        band,
+        Box::new(SceneRecognizer(scene.clone())),
+    )
+}
+
+fn scene_engine_reading(
+    scene: &SharedScene,
+    params: PlanParams,
+    band: Option<u32>,
+    recognizer: Box<dyn TextRecognizer>,
+) -> Engine {
     let world = Arc::new(Mutex::new(World::default()));
     let clock = Arc::new(ManualClock::new());
     let operator_stop = lock(&world).operator_stop.clone();
@@ -386,7 +401,7 @@ fn scene_engine_with_band(scene: &SharedScene, params: PlanParams, band: Option<
         Ports {
             capturer: Box::new(SceneCapturer(scene.clone(), clock.clone(), 0)),
             detector: Box::new(SceneDetector(scene.clone(), Vec::new(), band)),
-            recognizer: Box::new(SceneRecognizer(scene.clone())),
+            recognizer,
             accessibility: Box::new(SceneAccess(scene.clone())),
             actuator: Box::new(Actuator(world)),
             policy: Arc::new(Policy(
@@ -748,4 +763,280 @@ fn ut_85_a_detector_without_a_band_plans_todays_plan() {
     let (aware, chosen) = plans(Some(4));
     assert_eq!(aware.work, WorkKind::Regions);
     assert_eq!(chosen, PlanChoice::Spanning);
+}
+
+// ---- O3d: what `--plan-check` says of a differing word ----
+
+/// How a recogniser reads a crop differently from the whole frame: the stated limit L3 of
+/// ADR-0045, in three shapes. On the whole frame every shape reads the scene's words exactly.
+#[derive(Debug, Clone, Copy)]
+enum CropReading {
+    /// One pixel lower.
+    Lower,
+    /// A caret within 6 pixels right of a word read as part of it.
+    CaretGlued,
+    /// One pixel short on the right (a tighter box than the whole frame's).
+    Tighter,
+}
+
+/// [`SceneRecognizer`] on the whole frame; on a crop, the word read per [`CropReading`] and
+/// clipped to the region, as the Windows recogniser clips.
+struct CropRecognizer(SharedScene, CropReading);
+
+impl TextRecognizer for CropRecognizer {
+    fn name(&self) -> &'static str {
+        "scene-ocr-crop"
+    }
+
+    fn recognize(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Vec<Word>, PortError> {
+        let s = scene_of(&self.0);
+        let whole = frame.bounds();
+        let mut out = Vec::new();
+        for r in regions {
+            for (b, text, _) in &s.words {
+                let (mut b, mut text) = (*b, text.clone());
+                if *r != whole {
+                    match self.1 {
+                        CropReading::Lower => {
+                            b = bx(b.x0(), b.y0() + 1.0, b.x1(), b.y1() + 1.0);
+                        }
+                        CropReading::CaretGlued => {
+                            let glued = s.carets.iter().find(|&&(x, y)| {
+                                let (x, y) = (f64::from(x), f64::from(y));
+                                x >= b.x1() && x < b.x1() + 6.0 && y >= b.y0() && y < b.y1()
+                            });
+                            if let Some(&(x, _)) = glued {
+                                b = bx(b.x0(), b.y0(), f64::from(x) + 1.0, b.y1());
+                                text.push('|');
+                            }
+                        }
+                        CropReading::Tighter => b = bx(b.x0(), b.y0(), b.x1() - 1.0, b.y1()),
+                    }
+                }
+                if let Some(bbox) = b.clip(r) {
+                    out.push(Word { bbox, text });
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+/// The shape of the lab's caret scene (L6, S1) on a 640x320 frame: two words on a line of
+/// a document whose four nested accessibility boxes contain every region.
+fn document_scene() -> Scene {
+    let element = |b: BBox, name: &str| SceneElement {
+        bbox: b,
+        name: name.into(),
+        enabled: true,
+    };
+    Scene {
+        w: 640,
+        h: 320,
+        surfaces: Vec::new(),
+        controls: Vec::new(),
+        words: vec![
+            (bx(200.0, 150.0, 260.0, 166.0), "dos,".into(), [20, 20, 20]),
+            (bx(400.0, 150.0, 450.0, 166.0), "tres:".into(), [21, 20, 20]),
+        ],
+        elements: vec![
+            element(bx(0.0, 0.0, 640.0, 320.0), "Window"),
+            element(bx(0.0, 20.0, 640.0, 320.0), "Pane"),
+            element(bx(0.0, 40.0, 640.0, 310.0), "Document"),
+            element(bx(10.0, 50.0, 630.0, 300.0), "Text"),
+        ],
+        carets: Vec::new(),
+    }
+}
+
+/// Observes once (a full refresh), applies each change and observes again; returns the check
+/// of each regional observation after the first, with its trace's count of accessibility
+/// boxes cut.
+fn checks(
+    reading: CropReading,
+    changes: &[&dyn Fn(&mut Scene)],
+) -> Vec<(PlanCheck, usize, String)> {
+    let shared = Arc::new(Mutex::new(document_scene()));
+    let mut engine = scene_engine_reading(
+        &shared,
+        PlanParams::default(),
+        Some(4),
+        Box::new(CropRecognizer(shared.clone(), reading)),
+    );
+    engine.set_plan_trace(true);
+    engine.set_plan_check(true);
+    engine.observe_screen(&ObserveRequest::default()).unwrap();
+    let mut out = Vec::new();
+    for change in changes {
+        change(&mut scene_of(&shared));
+        engine.observe_screen(&ObserveRequest::default()).unwrap();
+        let trace = engine.last_plan_trace().unwrap();
+        assert_eq!(trace.chosen, PlanChoice::Spanning, "{trace:?}");
+        let cut = trace.spanning.unwrap().whole_on_read_cut;
+        let check = *engine.last_plan_check().expect("a regional observation");
+        out.push((check, cut, format!("{check:?} {trace:?}")));
+    }
+    out
+}
+
+/// The lab's line: one word differs on each side, both over the boxes R1 leaves out of the
+/// closure, nothing else.
+fn assert_lab_line(check: &PlanCheck, line: &str) {
+    let words = CheckCount {
+        at_spanned_or_whole_on_read: 1,
+        elsewhere: 0,
+    };
+    let only = CheckKinds {
+        words,
+        ..CheckKinds::default()
+    };
+    assert_eq!(check.only_full, only, "{line}");
+    assert_eq!(check.only_regional, only, "{line}");
+    assert!(!check.full_truncated, "{line}");
+}
+
+fn caret_left_of_the_word(s: &mut Scene) {
+    s.carets.push((150, 150));
+}
+
+/// The lab's line built with the fakes and the crop read one pixel lower: the word is inside
+/// the region on both sides, the same text, another box. The limit L3.
+#[test]
+fn o3d_the_lab_line_with_a_word_read_lower_from_the_crop_is_l3() {
+    let out = checks(CropReading::Lower, &[&caret_left_of_the_word]);
+    let (check, cut, line) = &out[0];
+    assert_eq!(*cut, 4, "{line}");
+    assert_lab_line(check, line);
+    let inside = WordPlaces {
+        inside_a_region: 1,
+        ..WordPlaces::default()
+    };
+    assert_eq!(check.words.only_full, inside, "{line}");
+    assert_eq!(check.words.only_regional, inside, "{line}");
+    assert_eq!(check.words.pairs.same_text_other_box, 1, "{line}");
+    assert!(
+        (check.words.pairs.largest_edge_difference_px - 1.0).abs() < 1e-9,
+        "{line}"
+    );
+    assert_eq!(check.words.unexplained, Unexplained::default(), "{line}");
+    assert_eq!(check.words.never_l3(), 0, "{line}");
+}
+
+/// The caret drawn right after the word, read as part of it from the crop: another text over
+/// the dirty tile. The limit L3, at the place the screen changed.
+#[test]
+fn o3d_a_caret_read_into_the_word_from_the_crop_is_l3_at_the_dirty_tiles() {
+    let out = checks(
+        CropReading::CaretGlued,
+        &[&|s: &mut Scene| {
+            s.carets.push((263, 150));
+        }],
+    );
+    let (check, cut, line) = &out[0];
+    assert_eq!(*cut, 4, "{line}");
+    assert_lab_line(check, line);
+    assert_eq!(check.words.only_full.inside_a_region, 1, "{line}");
+    assert_eq!(check.words.only_regional.inside_a_region, 1, "{line}");
+    assert_eq!(check.words.pairs.other_text, 1, "{line}");
+    assert_eq!(
+        check.words.unexplained,
+        Unexplained {
+            at_dirty_tiles: 2,
+            away_from_dirty_tiles: 0
+        },
+        "{line}"
+    );
+    assert_eq!(check.words.never_l3(), 0, "{line}");
+}
+
+/// A cut the closure lets through: the crop reads a box one pixel tighter than the whole
+/// frame's, the snapshot holds it, and the next region closes over the held box, so its
+/// edge passes through the word's last column of pixels. The full read's word crosses the
+/// region's edge: never L3. The closure is not changed here (O3d is a diagnostic).
+#[test]
+fn o3d_a_word_held_tighter_than_its_pixels_is_cut_by_the_next_region() {
+    let out = checks(
+        CropReading::Tighter,
+        &[&caret_left_of_the_word, &|s: &mut Scene| s.carets.clear()],
+    );
+    let (first, _, line) = &out[0];
+    assert_eq!(first.words.only_full.inside_a_region, 1, "{line}");
+    assert_eq!(first.words.never_l3(), 0, "{line}");
+    let (check, cut, line) = &out[1];
+    assert_eq!(*cut, 4, "{line}");
+    assert_lab_line(check, line);
+    assert_eq!(
+        check.words.only_full,
+        WordPlaces {
+            crossing_a_region_edge: 1,
+            ..WordPlaces::default()
+        },
+        "{line}"
+    );
+    assert_eq!(check.words.only_regional.inside_a_region, 1, "{line}");
+    assert_eq!(check.words.pairs.same_text_other_box, 1, "{line}");
+    // The crop clips the word at the region's edge, one pixel short of its last column.
+    assert!(
+        (check.words.pairs.largest_edge_difference_px - 1.0).abs() < 1e-9,
+        "{line}"
+    );
+    assert_eq!(check.words.never_l3(), 1, "{line}");
+}
+
+/// A word held from an earlier crop and read otherwise by the full read, away from every
+/// region of this observation: outside, never L3 of this observation.
+#[test]
+fn o3d_a_word_held_from_an_earlier_crop_is_outside_every_region() {
+    let out = checks(
+        CropReading::Tighter,
+        &[&caret_left_of_the_word, &|s: &mut Scene| {
+            s.carets.push((560, 260));
+        }],
+    );
+    let (check, _, line) = &out[1];
+    let outside = WordPlaces {
+        outside_every_region: 1,
+        ..WordPlaces::default()
+    };
+    assert_eq!(check.words.only_full, outside, "{line}");
+    assert_eq!(check.words.only_regional, outside, "{line}");
+    assert_eq!(check.words.pairs.same_text_other_box, 1, "{line}");
+    assert_eq!(check.words.never_l3(), 2, "{line}");
+    assert_eq!(check.only_full.words.elsewhere, 0, "{line}");
+}
+
+/// The check holds counts, closed classes and one distance: no text of the screen and no
+/// coordinate, whatever the words were.
+#[test]
+fn o3d_the_word_detail_holds_no_text_and_no_coordinate() {
+    let mut seen: Vec<WordDetail> = Vec::new();
+    for reading in [
+        CropReading::Lower,
+        CropReading::CaretGlued,
+        CropReading::Tighter,
+    ] {
+        let out = checks(
+            reading,
+            &[
+                &caret_left_of_the_word,
+                &|s: &mut Scene| s.carets.clear(),
+                &|s: &mut Scene| s.carets.push((263, 150)),
+            ],
+        );
+        seen.extend(out.iter().map(|(c, _, _)| c.words));
+    }
+    let scene = document_scene();
+    for detail in &seen {
+        let text = format!("{detail:?}");
+        for (b, word, _) in &scene.words {
+            assert!(!text.contains(word.trim_end_matches([',', ':'])), "{text}");
+            for v in [b.x0(), b.y0(), b.x1(), b.y1()] {
+                assert!(!text.contains(&format!("{v:?}")), "{v} in {text}");
+            }
+        }
+        // The one number that is not a count is a distance of a few pixels.
+        assert!(detail.pairs.largest_edge_difference_px <= 8.0, "{text}");
+    }
+    assert!(seen.iter().any(|d| d.never_l3() > 0));
+    assert!(seen.iter().any(|d| d.pairs.other_text > 0));
 }

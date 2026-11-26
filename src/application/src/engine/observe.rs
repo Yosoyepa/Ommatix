@@ -44,7 +44,7 @@ use ommatix_domain::incremental::{
 
 use super::accessibility::accessible_control;
 use super::icons::{self, IconLabel, Scope};
-use super::plan_check::{CheckKinds, PlanCheck, count, missing};
+use super::plan_check::{CheckKinds, PlanCheck, count, missing, word_detail};
 use super::{Engine, Ports, aged_out};
 use crate::PortError;
 use crate::contract::{ErrorCode, LabelSource, ObservationPlan, StageTimings, ToolError, WorkKind};
@@ -334,6 +334,10 @@ struct CheckInput {
     /// The boxes a region met without the closure taking them: the held surfaces a region
     /// overlaps without containing, and every accessibility box a region overlaps.
     met: Vec<BBox>,
+    /// The plan's regions: where the recogniser read from a crop (O3d).
+    regions: Vec<BBox>,
+    /// The boxes of the plan's dirty tiles (O3d).
+    dirty: Vec<BBox>,
 }
 
 /// The boxes of the last and the new evidence that ADR-0045 lets a region meet without
@@ -773,11 +777,20 @@ impl Engine {
         // `--plan-check` (ADR-0045): kept aside and run after the commit, so that its time is
         // never the observation's.
         let check_input = match (&plan.work, self.check_plan) {
-            (Work::Regions(rs), true) => Some(CheckInput {
-                frame: frame.clone(),
-                met: met_boxes(rs, previous, &evidence),
-                evidence: evidence.clone(),
-            }),
+            (Work::Regions(rs), true) => {
+                let grid = ommatix_domain::incremental::TileGrid::for_frame(
+                    &frame,
+                    self.config.plan.tile_size,
+                )
+                .expect("a successful plan has validated this frame grid");
+                Some(CheckInput {
+                    frame: frame.clone(),
+                    met: met_boxes(rs, previous, &evidence),
+                    evidence: evidence.clone(),
+                    regions: rs.clone(),
+                    dirty: plan.dirty.iter().map(|&t| grid.tile_box(t)).collect(),
+                })
+            }
             _ => None,
         };
         let staged = self.store.stage(
@@ -861,10 +874,17 @@ impl Engine {
                 accessibility: count(missing(&ea, &eb).into_iter().map(|x| x.control.bbox), met),
             }
         };
+        let words = word_detail(
+            &missing(&full.words, &regional.words),
+            &missing(&regional.words, &full.words),
+            &input.regions,
+            &input.dirty,
+        );
         Some(PlanCheck {
             only_regional: kinds(regional, &full),
             only_full: kinds(&full, regional),
             full_truncated,
+            words,
         })
     }
 

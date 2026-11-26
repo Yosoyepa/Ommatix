@@ -26,7 +26,8 @@ pub use clock::ManualClock;
 pub use engine::{
     ActionFreshness, CheckCount, CheckKinds, Engine, EngineConfig, FreshnessProbeCounts,
     FreshnessProbeGroup, IconResolverConfig, JOURNAL_CAPACITY, OccluderFallback,
-    OccluderProbeCounts, PlanCheck, Ports, VerifyParams, grey_grid,
+    OccluderProbeCounts, PlanCheck, Ports, Unexplained, VerifyParams, WordDetail, WordPairs,
+    WordPlaces, grey_grid,
 };
 pub use error::{PortError, error_chain};
 pub use ports::{

@@ -163,7 +163,12 @@ pub struct DemoArgs {
     /// support-aware closure let a region meet without containing (ADR-0045). A diagnostic:
     /// it runs perception a second time after the observation is committed, so it doubles
     /// the cost of a regional observation, and its time is never reported as the
-    /// observation's. Counts only; never on stdout.
+    /// observation's. For the words that differ it also says where each lies against the
+    /// regions read and how the two reads' words pair up: a differing word inside a region is
+    /// the stated limit L3 (the recogniser read a crop); one crossing a region's edge (cut)
+    /// or outside every region (missed, or held from an earlier read) is never L3, and
+    /// `never_l3` counts those. Counts and one distance in pixels; no text, no coordinate;
+    /// never on stdout.
     #[arg(long)]
     pub plan_check: bool,
 }
