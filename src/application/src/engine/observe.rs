@@ -41,7 +41,7 @@ use ommatix_domain::incremental::{BgraFrame, Evidence, RegionPlan, Work, plan_re
 
 use super::accessibility::accessible_control;
 use super::icons::{self, IconLabel, Scope};
-use super::{Engine, Ports, aged_out};
+use super::{Engine, Ports, expires_within};
 use crate::PortError;
 use crate::contract::{ErrorCode, LabelSource, ObservationPlan, StageTimings, ToolError, WorkKind};
 use crate::ports::{AccessibilityProvider, Clock, InputShape, TextRecognizer, VisionDetector};
@@ -723,10 +723,18 @@ impl Engine {
     }
 
     /// The regions the accessibility provider reads: the plan, the gaps where an earlier read
-    /// was cut short, and the regions whose evidence has expired by `now` (ADR-0025), whether
-    /// or not pixels changed there. A publication never renews an old read, so this is how a
-    /// new observation does. The detector and the recogniser see the plan only. A full
-    /// refresh reads everything anyway.
+    /// was cut short, and the regions whose evidence will have expired when this observation
+    /// publishes (ADR-0025), whether or not pixels changed there. A publication never renews
+    /// an old read, so this is how a new observation does. The detector and the recogniser
+    /// see the plan only. A full refresh reads everything anyway.
+    ///
+    /// Evidence is judged at the horizon `now + h`, not at `now`, where `h` is how long the
+    /// last committed observation took (`StageTimings::total`, on the injected clock): the
+    /// first one of a session, and the first after a purge, have no estimate and `h` is zero.
+    /// With a slow detector an observation lasts seconds, and evidence that is young when it
+    /// starts would be older than the bound when it ends. The bound itself and the gate's
+    /// comparison do not change; `h` only moves the instant at which reuse is judged, so the
+    /// set re-read is never smaller than at `now`.
     fn accessibility_regions(
         &self,
         work: &Work,
@@ -738,6 +746,10 @@ impl Engine {
             return planned.to_vec();
         }
         let max = self.config.max_snapshot_age;
+        let horizon = self
+            .measured
+            .as_ref()
+            .map_or(Duration::ZERO, |m| m.timings.total);
         let (gaps, expired) = self.store.published().map_or_else(
             || (Vec::new(), Vec::new()),
             |p| {
@@ -750,7 +762,7 @@ impl Engine {
                     .evidence
                     .accessible
                     .iter()
-                    .filter(|a| aged_out(now, a.read_at, max))
+                    .filter(|a| expires_within(now, a.read_at, horizon, max))
                     .filter_map(|a| a.element.control.bbox.clip(bounds))
                     .collect();
                 (gaps, expired)

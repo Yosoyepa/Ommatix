@@ -341,3 +341,194 @@ fn ut_54_the_default_window_is_ten_seconds() {
         .execute_action(&Rig::action(&page, "Save", "eleven", ActionKind::Click));
     assert_observe_again(&after, "snapshot is older");
 }
+
+// UT-88: the horizon of the re-read (ADR-0025, amendment). An observation re-reads the
+// evidence that will have expired when it ends: at its start plus the duration of the last
+// committed observation. The window of these tests is 100 ms and the accessibility read of
+// `slow_save` takes 30 ms, so the estimate after the first observation is 30 ms.
+
+/// The Save evidence of [`accessible_save`], read by a read that takes `read_ms` on the clock.
+fn slow_save(read_ms: u64) -> World {
+    World {
+        access_delay: Duration::from_millis(read_ms),
+        ..accessible_save()
+    }
+}
+
+/// Whether the last accessibility read asked for the region of the Save button.
+fn read_save(r: &Rig) -> bool {
+    r.world()
+        .access_calls
+        .last()
+        .is_some_and(|regions| regions.iter().any(|region| region.overlaps(&save_box())))
+}
+
+/// UT-88: evidence that is young when the observation starts, and over the limit when it
+/// ends, is read again by that observation, so the action at its end is not refused for age.
+/// Read at 0 ms, observed again at 80 ms (age 80, within 100 ms) by an observation of 30 ms: at
+/// the horizon, 110 ms, the old evidence would be 110 ms old.
+#[test]
+fn ut_88_evidence_that_expires_before_the_observation_ends_is_read_again() {
+    let mut r = rig_aged(slow_save(30), WINDOW_MS);
+    r.observe();
+    r.clock.advance(Duration::from_millis(50)); // 30 ms of the read, then 50: now 80 ms.
+    let reads = r.world().access_calls.len();
+    let page = r.observe();
+    assert_eq!(
+        r.world().access_calls.len(),
+        reads + 1,
+        "the evidence that expires at 110 ms is read at 80 ms"
+    );
+    assert!(read_save(&r), "the region of the expired evidence");
+
+    // The observation ended at 110 ms. The evidence is the new read, 30 ms old.
+    let result = r
+        .engine
+        .execute_action(&Rig::action(&page, "Save", "horizon", ActionKind::Click));
+    assert_eq!(result.status, ActionStatus::Simulated, "{result:?}");
+}
+
+/// UT-88: evidence that is still within the limit at the horizon is not read again: no extra
+/// read. Read at 0 ms, observed again at 50 ms by an observation of 30 ms: 80 ms at the horizon.
+#[test]
+fn ut_88_evidence_that_stays_within_the_limit_at_the_horizon_is_not_read_again() {
+    let mut r = rig_aged(slow_save(30), WINDOW_MS);
+    r.observe();
+    r.clock.advance(Duration::from_millis(20)); // now 50 ms.
+    let reads = r.world().access_calls.len();
+    r.observe();
+    assert_eq!(
+        r.world().access_calls.len(),
+        reads,
+        "no pixel changed and nothing expires by 80 ms: no read"
+    );
+}
+
+/// UT-88: the horizon only decides what is read. A publication that reads nothing keeps the
+/// evidence's own age, and the gate still compares it with the bound at the action's own
+/// instant, with no horizon: the evidence read at 0 ms is refused at 101 ms.
+#[test]
+fn ut_88_the_horizon_never_renews_evidence_that_was_not_read() {
+    let mut r = rig_aged(slow_save(30), WINDOW_MS);
+    r.observe();
+    r.clock.advance(Duration::from_millis(20)); // now 50 ms.
+    let page = r.observe(); // nothing is read: 80 ms at the horizon.
+    r.clock.advance(Duration::from_millis(51)); // now 101 ms: the snapshot is 51 ms old.
+    let result = r
+        .engine
+        .execute_action(&Rig::action(&page, "Save", "old", ActionKind::Click));
+    assert_observe_again(&result, "accessibility evidence");
+}
+
+/// UT-88: the gate takes no part in the horizon. After an observation of 30 ms the bound is
+/// still inclusive at the action's own instant: both instants, the capture and the read, are
+/// 100 ms old at 100 ms and over the bound at 101 ms.
+#[test]
+fn ut_88_the_gate_compares_at_the_actions_own_instant_whatever_the_estimate() {
+    let mut r = rig_aged(slow_save(30), WINDOW_MS);
+    let page = r.observe();
+    r.clock.advance(Duration::from_millis(70)); // now 100 ms.
+    let at = r
+        .engine
+        .execute_action(&Rig::action(&page, "Save", "at", ActionKind::Click));
+    assert_eq!(at.status, ActionStatus::Simulated, "{at:?}");
+    r.clock.advance(Duration::from_millis(1));
+    let after = r
+        .engine
+        .execute_action(&Rig::action(&page, "Save", "after", ActionKind::Click));
+    assert_observe_again(&after, "snapshot is older");
+}
+
+/// UT-88: an estimate of the whole window or more re-reads all the evidence, even evidence
+/// that is only 100 ms old, which is still within the bound by itself; that is the full read.
+#[test]
+fn ut_88_an_estimate_of_the_window_or_more_reads_everything_again() {
+    for read_ms in [WINDOW_MS, WINDOW_MS + 50] {
+        let mut r = rig_aged(slow_save(read_ms), WINDOW_MS);
+        r.observe(); // read at 0 ms, the observation lasted `read_ms`.
+        let reads = r.world().access_calls.len();
+        r.observe(); // the evidence is `read_ms` old at the start.
+        assert_eq!(r.world().access_calls.len(), reads + 1, "{read_ms} ms");
+        assert!(read_save(&r), "{read_ms} ms: the evidence is read again");
+    }
+}
+
+/// UT-88: an estimate of zero is the rule of ADR-0025 as it was. After observations that take
+/// no time on the clock, evidence is read again exactly when it is older than the window at the
+/// observation's start: not at 99 or 100 ms, yes at 101 ms.
+#[test]
+fn ut_88_a_zero_estimate_judges_the_evidence_at_the_start_of_the_observation() {
+    for (elapsed_ms, again) in [(99, false), (100, false), (101, true)] {
+        let mut r = rig_aged(accessible_save(), WINDOW_MS);
+        r.observe();
+        r.clock.advance(Duration::from_millis(elapsed_ms));
+        let reads = r.world().access_calls.len();
+        r.observe();
+        let read = r.world().access_calls.len() - reads;
+        assert_eq!(read, usize::from(again), "{elapsed_ms} ms");
+    }
+}
+
+/// UT-88: with a zero estimate, the set read is the one of `aged_out` at the start; with any
+/// estimate it is never smaller. Generated over a grid of windows, ages and estimates, with
+/// the old selection as the oracle.
+#[test]
+fn ut_88_a_zero_estimate_selects_what_the_old_rule_selected_and_any_estimate_never_less() {
+    use super::super::{aged_out, expires_within};
+    let ms = Duration::from_millis;
+    for max in [1_u64, 2, 5, 100, 10_000] {
+        for read_at in [0_u64, 1, 7, 100, 5_000] {
+            for age in [
+                0_u64, 1, 2, 4, 5, 6, 99, 100, 101, 9_999, 10_000, 10_001, 20_000,
+            ] {
+                let now = ms(read_at + age);
+                let old = aged_out(now, ms(read_at), ms(max));
+                assert_eq!(
+                    expires_within(now, ms(read_at), Duration::ZERO, ms(max)),
+                    old,
+                    "max {max} read_at {read_at} age {age}"
+                );
+                for horizon in [0_u64, 1, 30, 99, 100, 101, 5_000, 20_000] {
+                    let widened = expires_within(now, ms(read_at), ms(horizon), ms(max));
+                    assert!(
+                        widened || !old,
+                        "max {max} read_at {read_at} age {age} horizon {horizon}: evidence \
+                         expired at the start is read whatever the estimate"
+                    );
+                    if horizon >= max {
+                        assert!(
+                            widened,
+                            "an estimate of the window or more reads everything"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// UT-88: `now + h` is checked arithmetic. A horizon that does not fit in the clock's range is at
+/// the limit and reads everything again; saturating it into `Duration::MAX` would judge evidence
+/// read at that very instant as still within the bound.
+#[test]
+fn ut_88_a_horizon_that_overflows_the_clock_reads_everything_again() {
+    use super::super::expires_within;
+    let ms = Duration::from_millis;
+    let (max, small) = (ms(10_000), ms(1));
+    // Evidence read at the last representable instant, judged at that instant: no overflow, and
+    // an estimate of zero is the old rule: not expired.
+    assert!(!expires_within(
+        Duration::MAX,
+        Duration::MAX,
+        Duration::ZERO,
+        max
+    ));
+    // One millisecond more overflows `now + h`: the horizon is at the limit.
+    assert!(expires_within(Duration::MAX, Duration::MAX, small, max));
+    let nearly_max = Duration::MAX
+        .checked_sub(small)
+        .expect("the maximum duration is longer than a millisecond");
+    assert!(expires_within(nearly_max, Duration::MAX, ms(2), max));
+    // An addition that fits is judged as before: 1 ms after a read made 9 s earlier.
+    assert!(!expires_within(ms(9_000), Duration::ZERO, small, max));
+}
