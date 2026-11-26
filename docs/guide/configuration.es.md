@@ -28,6 +28,7 @@
 | `--session-id ID` | de 1 a 64 caracteres ASCII visibles, para una salida reproducible; con actuación viva, un ID fijo se rechaza al arrancar (capítulo 08 §8.4) | derivado de la hora de inicio y del ID del proceso |
 | `--legacy` | sirve además el perfil MCP legacy 2025-11-25 (como `[mcp] legacy_enabled = true`) | apagado |
 | `--observations N` (sólo `demo`) | 1–20 | 3 |
+| `--plan-trace` (sólo `demo`) | escribe además una línea por observación en stderr, `ommatix-plan-trace` y un objeto JSON (esquema `ommatix.plan-trace/1`): por qué el planificador eligió ese trabajo, sólo con conteos y áreas (teselas cambiadas y sucias, cada componente y región antes y después del cierre sobre la última evidencia, la mayor caja de evidencia que tocó, la suma que comparó el presupuesto de área, la comprobación que decidió). Ningún píxel, texto ni coordenada; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
 
 
 

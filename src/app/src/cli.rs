@@ -151,4 +151,10 @@ pub struct DemoArgs {
     /// depend on the run, so they never reach stdout.
     #[arg(long)]
     pub timings: bool,
+    /// Also write one line per observation to stderr (`ommatix-plan-trace` and a JSON object):
+    /// why the planner chose that work, as counts and areas only (changed tiles, components,
+    /// each region before and after the closure over the last evidence, the sum the budget
+    /// compared, the check that decided). No pixel, label or coordinate; never on stdout.
+    #[arg(long)]
+    pub plan_trace: bool,
 }

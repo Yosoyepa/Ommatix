@@ -37,7 +37,9 @@ use ommatix_domain::fusion::{
     TextKind, Word, fuse, reconcile_accessibility,
 };
 use ommatix_domain::identity::{Changes, Observation, Registry, TargetId};
-use ommatix_domain::incremental::{BgraFrame, Evidence, RegionPlan, Work, plan_regions};
+use ommatix_domain::incremental::{
+    BgraFrame, Evidence, PlanTrace, RegionPlan, Work, plan_regions, plan_regions_traced,
+};
 
 use super::accessibility::accessible_control;
 use super::icons::{self, IconLabel, Scope};
@@ -249,6 +251,9 @@ impl Published {
 pub(super) struct Measured {
     pub timings: StageTimings,
     pub plan: ObservationPlan,
+    /// What the planner saw (counts and areas), only when the operator asked for it
+    /// ([`Engine::set_plan_trace`]); never part of the MCP contract.
+    pub plan_trace: Option<PlanTrace>,
 }
 
 /// An observation before identity: what the registry sees, plus the view's extras.
@@ -599,8 +604,8 @@ impl Engine {
                 "the monitor's scaling is outside the supported profile (100, 125 or 150 %)",
             ));
         }
-        let plan = match self.plan(&frame) {
-            Ok(plan) => plan,
+        let (plan, plan_trace) = match self.plan(&frame) {
+            Ok(planned) => planned,
             Err(error) => {
                 self.store.record_failure(&BTreeSet::new());
                 return Err(error);
@@ -706,6 +711,7 @@ impl Engine {
                 response_build: None,
             },
             plan: observed_plan,
+            plan_trace,
         });
         Ok(())
     }
@@ -760,21 +766,37 @@ impl Engine {
     }
 
     /// Algorithm 1 against the committed base, the pending tiles and the last evidence.
-    fn plan(&self, frame: &BgraFrame) -> Result<RegionPlan, ToolError> {
+    ///
+    /// With [`Engine::set_plan_trace`] on, the plan comes with the numbers behind it. The plan
+    /// is the same either way.
+    fn plan(&self, frame: &BgraFrame) -> Result<(RegionPlan, Option<PlanTrace>), ToolError> {
         let previous = self.store.published();
         let supports = previous.map(|p| p.evidence.supports()).unwrap_or_default();
         let relations = previous.map_or(&[][..], |p| &p.relations[..]);
-        plan_regions(
-            self.store.base(),
-            frame,
-            self.store.pending_dirty(),
-            Evidence {
-                supports: &supports,
-                relations,
-            },
-            &self.config.plan,
-        )
-        .map_err(|_| {
+        let evidence = Evidence {
+            supports: &supports,
+            relations,
+        };
+        let planned = if self.trace_plan {
+            plan_regions_traced(
+                self.store.base(),
+                frame,
+                self.store.pending_dirty(),
+                evidence,
+                &self.config.plan,
+            )
+            .map(|(plan, trace)| (plan, Some(trace)))
+        } else {
+            plan_regions(
+                self.store.base(),
+                frame,
+                self.store.pending_dirty(),
+                evidence,
+                &self.config.plan,
+            )
+            .map(|plan| (plan, None))
+        };
+        planned.map_err(|_| {
             ToolError::new(
                 ErrorCode::UnsupportedGeometry,
                 "the frame cannot be planned with the configured tiles",

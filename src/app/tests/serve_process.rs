@@ -280,6 +280,59 @@ fn it_06_demo_timings_on_stderr_are_numbers_only() {
     assert!(entries(&sandbox.cwd()).is_empty() && entries(&sandbox.tmp()).is_empty());
 }
 
+/// `demo --plan-trace` puts one line per observation on stderr: the planner's counts and areas,
+/// never a label or any other text of the screen. Without the option there is no such line,
+/// and with it stdout is the demo's report, byte for byte what it is without.
+#[test]
+fn demo_plan_trace_is_on_stderr_only_when_asked_and_changes_nothing_on_stdout() {
+    let sandbox = Sandbox::new("demo-plan-trace");
+    let plain = sandbox.run(&["demo", "--session-id", "demo", "--timings"], "");
+    assert!(plain.status.success());
+    let plain_err = String::from_utf8(plain.stderr.clone()).unwrap();
+    assert!(!plain_err.contains("ommatix-plan-trace"), "{plain_err}");
+
+    let traced = sandbox.run(
+        &[
+            "demo",
+            "--session-id",
+            "demo",
+            "--plan-trace",
+            "--observations",
+            "3",
+        ],
+        "",
+    );
+    assert!(traced.status.success());
+    let stderr = String::from_utf8(traced.stderr).unwrap();
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("ommatix-plan-trace "))
+        .collect();
+    assert_eq!(lines.len(), 3, "{stderr}");
+    for (i, line) in lines.iter().enumerate() {
+        let record: Value = serde_json::from_str(line).expect("a JSON line");
+        assert_eq!(record["schema"], "ommatix.plan-trace/1", "{line}");
+        assert_eq!(record["observation_id"], i + 1, "{line}");
+        for key in ["dirty_tiles", "frame_area_px", "covered_area_px"] {
+            assert!(record[key].is_number(), "{key} in {line}");
+        }
+        assert!(record["components"].is_array() && record["regions"].is_array());
+        for secret in SCREEN_TEXT {
+            assert!(!line.contains(secret), "{line:?}");
+        }
+    }
+    // The first observation has no committed base: it is decided before any region.
+    let first: Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(first["decided_by"], "no_committed_base");
+
+    // stdout is the demo's report with or without the option.
+    let without = sandbox.run(&["demo", "--session-id", "demo"], "");
+    assert_eq!(plain.stdout, without.stdout);
+    let with = sandbox.run(&["demo", "--session-id", "demo", "--plan-trace"], "");
+    assert_eq!(with.stdout, without.stdout);
+    assert!(entries(&sandbox.cwd()).is_empty() && entries(&sandbox.tmp()).is_empty());
+}
+
 /// SEC-06 at the process boundary: a curated-icon file that no longer matches the digest
 /// the operator pinned stops `serve` before it answers anything: non-zero exit, nothing
 /// on stdout, the reason on stderr.

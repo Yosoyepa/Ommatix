@@ -28,6 +28,7 @@
 | `--session-id ID` | 1–64 visible ASCII characters, for reproducible output; with live input a fixed ID is refused at start (chapter 08 §8.4) | derived from the start time and the process ID |
 | `--legacy` | also serve the legacy MCP profile 2025-11-25 (like `[mcp] legacy_enabled = true`) | off |
 | `--observations N` (`demo` only) | 1–20 | 3 |
+| `--plan-trace` (`demo` only) | also write one line per observation to stderr, `ommatix-plan-trace` and a JSON object (schema `ommatix.plan-trace/1`): why the planner chose that work, as counts and areas only (changed and dirty tiles, each component and region before and after the closure over the last evidence, the largest evidence box it touched, the sum the area budget compared, the check that decided). No pixel, text or coordinate; never on stdout, and no MCP client can ask for it | off |
 
 
 
