@@ -17,7 +17,7 @@
 use std::time::Duration;
 
 use ommatix_application::contract::{ActionKind, ScrollDirection};
-use ommatix_application::{PortError, WindowOpacity};
+use ommatix_application::{KeysStopCheck, KeysStopped, PortError, WindowOpacity};
 
 #[cfg(windows)]
 #[allow(
@@ -367,10 +367,39 @@ pub(crate) enum KeyRun {
     Sent { submitted: u32, inserted: u32 },
     /// A check failed between two characters: nothing more was sent.
     Stopped {
+        check: KeysStopCheck,
         sent_chars: usize,
         of_chars: usize,
         why: String,
     },
+}
+
+/// A check that ends a paced delivery: which one, for the engine's closed text, and why in the
+/// adapter's own words, for the error's message (stderr), never for the agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Stop {
+    pub check: KeysStopCheck,
+    pub why: String,
+}
+
+/// The error of a paced delivery that a check ended. It carries [`KeysStopped`] as its source,
+/// which the engine reads to tell the agent the check and the count of characters sent, and
+/// its own message (the adapter's reason and the same count; never the text) for stderr.
+pub(crate) fn stopped_error(
+    check: KeysStopCheck,
+    why: &str,
+    sent_chars: usize,
+    of_chars: usize,
+) -> PortError {
+    PortError::new(
+        ADAPTER,
+        format!("{why}; {sent_chars} of {of_chars} characters were sent, the rest were not"),
+    )
+    .with_source(KeysStopped {
+        check,
+        sent_chars,
+        of_chars,
+    })
 }
 
 /// Sends the key events `keys` of `text`. With pacing off it is today's single call with every
@@ -386,7 +415,7 @@ pub(crate) fn send_text_keys(
     pacing: TypePacing,
     mut send: impl FnMut(&[Event]) -> u32,
     mut sleep: impl FnMut(Duration),
-    mut guard: impl FnMut() -> Option<String>,
+    mut guard: impl FnMut() -> Option<Stop>,
 ) -> KeyRun {
     let submitted = u32::try_from(keys.len()).unwrap_or(u32::MAX);
     if pacing.is_off() {
@@ -402,9 +431,10 @@ pub(crate) fn send_text_keys(
     let mut sent_chars = 0usize;
     while let Some(c) = chars.next() {
         if sent_chars > 0
-            && let Some(why) = guard()
+            && let Some(Stop { check, why }) = guard()
         {
             return KeyRun::Stopped {
+                check,
                 sent_chars,
                 of_chars,
                 why,
@@ -414,6 +444,7 @@ pub(crate) fn send_text_keys(
         let end = offset + c.len_utf16() * 2;
         let Some(group) = keys.get(offset..end) else {
             return KeyRun::Stopped {
+                check: KeysStopCheck::Pacing,
                 sent_chars,
                 of_chars,
                 why: "the key events do not match the text".to_owned(),
@@ -434,6 +465,7 @@ pub(crate) fn send_text_keys(
             // timer tick that can overshoot.
             let Some(pause) = pacing.pause_after(c) else {
                 return KeyRun::Stopped {
+                    check: KeysStopCheck::Pacing,
                     sent_chars,
                     of_chars,
                     why: "the configured pauses overflow".to_owned(),
@@ -471,18 +503,34 @@ pub(crate) struct MidText {
 pub(crate) fn mid_text_problem(
     facts: MidText,
     focus_check: fn(FocusFacts) -> Option<&'static str>,
-) -> Option<String> {
+) -> Option<Stop> {
+    let stop = |check, why: &str| {
+        Some(Stop {
+            check,
+            why: why.to_owned(),
+        })
+    };
     if facts.stopped {
-        return Some("the operator stopped live input".to_owned());
+        return stop(
+            KeysStopCheck::OperatorStop,
+            "the operator stopped live input",
+        );
     }
     match (facts.window_cleared, facts.window_now) {
         (Some(cleared), Some(now)) if cleared == now => {}
-        _ => return Some("the foreground window changed".to_owned()),
+        _ => {
+            return stop(
+                KeysStopCheck::ForegroundWindow,
+                "the foreground window changed",
+            );
+        }
     }
     if let Some(problem) = focus_check(facts.focus) {
-        return Some(problem.to_owned());
+        return stop(KeysStopCheck::Focus, problem);
     }
-    facts.held.map(|key| format!("{key} is held down"))
+    facts
+        .held
+        .and_then(|key| stop(KeysStopCheck::HeldKey, &format!("{key} is held down")))
 }
 
 /// What the adapter reads about keyboard focus after the click that focuses a `type`
@@ -891,7 +939,7 @@ mod tests {
         text: &str,
         pacing: TypePacing,
         accept: impl Fn(usize, &[Event]) -> u32,
-        problem: impl Fn(usize) -> Option<String>,
+        problem: impl Fn(usize) -> Option<Stop>,
     ) -> (KeyRun, Vec<Step>) {
         let keys = split_keys(batch(&ActionKind::Type { text: text.into() }, (0, 0))).1;
         let log = RefCell::new(Vec::new());
@@ -920,8 +968,20 @@ mod tests {
         u32::try_from(events.len()).unwrap()
     }
 
-    fn never(_: usize) -> Option<String> {
+    fn never(_: usize) -> Option<Stop> {
         None
+    }
+
+    fn stop(check: KeysStopCheck, why: &str) -> Stop {
+        Stop {
+            check,
+            why: why.to_owned(),
+        }
+    }
+
+    /// The adapter's reason of a stop, for the tests that read the words.
+    fn why(stop: Option<Stop>) -> String {
+        stop.map(|s| s.why).unwrap_or_default()
     }
 
     fn pair(unit: u16) -> [Event; 2] {
@@ -1059,11 +1119,19 @@ mod tests {
 
     #[test]
     fn the_stop_raised_after_the_third_character_ends_the_delivery_there() {
-        let stop = |call: usize| (call == 3).then(|| "the operator stopped live input".to_owned());
-        let (result, steps) = run("abcdef", pacing(1, 0), all, stop);
+        let raised = |call: usize| {
+            (call == 3).then(|| {
+                stop(
+                    KeysStopCheck::OperatorStop,
+                    "the operator stopped live input",
+                )
+            })
+        };
+        let (result, steps) = run("abcdef", pacing(1, 0), all, raised);
         assert_eq!(
             result,
             KeyRun::Stopped {
+                check: KeysStopCheck::OperatorStop,
                 sent_chars: 3,
                 of_chars: 6,
                 why: "the operator stopped live input".to_owned()
@@ -1097,6 +1165,7 @@ mod tests {
         assert_eq!(
             result,
             KeyRun::Stopped {
+                check: KeysStopCheck::ForegroundWindow,
                 sent_chars: 3,
                 of_chars: 6,
                 why: "the foreground window changed".to_owned()
@@ -1117,7 +1186,8 @@ mod tests {
         });
         assert!(matches!(
             result,
-            KeyRun::Stopped { sent_chars: 2, ref why, .. } if why.contains("another application")
+            KeyRun::Stopped { check: KeysStopCheck::Focus, sent_chars: 2, ref why, .. }
+                if why.contains("another application")
         ));
     }
 
@@ -1139,10 +1209,7 @@ mod tests {
         };
         assert_eq!(mid_text_problem(ok, keys_problem), None);
         // The one-shot path also asks that the focused window holds the target.
-        assert!(
-            mid_text_problem(ok, focus_problem)
-                .is_some_and(|p| p.contains("not on the target field"))
-        );
+        assert!(why(mid_text_problem(ok, focus_problem)).contains("not on the target field"));
         let cases = [
             (
                 MidText {
@@ -1191,7 +1258,7 @@ mod tests {
             ),
         ];
         for (facts, expected) in cases {
-            let problem = mid_text_problem(facts, keys_problem).unwrap_or_default();
+            let problem = why(mid_text_problem(facts, keys_problem));
             assert!(problem.contains(expected), "{facts:?}: {problem}");
         }
         // The operator's stop is named first.
@@ -1201,9 +1268,122 @@ mod tests {
             window_now: Some(5),
             ..ok
         };
-        assert!(
-            mid_text_problem(both, keys_problem).is_some_and(|p| p.contains("stopped live input"))
+        assert!(why(mid_text_problem(both, keys_problem)).contains("stopped live input"));
+    }
+
+    /// The check the engine names to the agent, one per kind of stop.
+    #[test]
+    fn each_stop_between_characters_names_its_check() {
+        const APP: u32 = 41;
+        let ok = MidText {
+            stopped: false,
+            window_now: Some(100),
+            window_cleared: Some(100),
+            focus: FocusFacts {
+                attested: APP,
+                foreground: Some(APP),
+                focus_owner: Some(APP),
+                focus_holds_target: false,
+            },
+            held: None,
+        };
+        let check_of = |facts| mid_text_problem(facts, keys_problem).map(|s| s.check);
+        assert_eq!(
+            check_of(MidText {
+                stopped: true,
+                ..ok
+            }),
+            Some(KeysStopCheck::OperatorStop)
         );
+        for window_now in [Some(5), None] {
+            assert_eq!(
+                check_of(MidText { window_now, ..ok }),
+                Some(KeysStopCheck::ForegroundWindow)
+            );
+        }
+        let elsewhere = FocusFacts {
+            focus_owner: Some(7),
+            ..ok.focus
+        };
+        assert_eq!(
+            check_of(MidText {
+                focus: elsewhere,
+                ..ok
+            }),
+            Some(KeysStopCheck::Focus)
+        );
+        assert_eq!(
+            check_of(MidText {
+                held: Some("Shift"),
+                ..ok
+            }),
+            Some(KeysStopCheck::HeldKey)
+        );
+    }
+
+    /// The error of a delivery that a check ended: the engine reads the check and the count from
+    /// its source; neither it nor the engine's sentence holds a character of the text.
+    #[test]
+    fn a_stopped_delivery_reports_the_check_and_how_far_it_got_and_never_the_text() {
+        for (check, why) in [
+            (
+                KeysStopCheck::OperatorStop,
+                "the operator stopped live input",
+            ),
+            (
+                KeysStopCheck::ForegroundWindow,
+                "the foreground window changed",
+            ),
+        ] {
+            stopped_after_three_of_twelve(check, why);
+        }
+    }
+
+    fn stopped_after_three_of_twelve(check: KeysStopCheck, why: &str) {
+        // No lowercase letter and no digit: none of the closed sentences can contain a character
+        // of it by accident.
+        let text = "QXJZ#@~|QXJZ";
+        let raised = |call: usize| (call == 3).then(|| stop(check, why));
+        let (result, steps) = run(text, pacing(1, 0), all, raised);
+        let KeyRun::Stopped {
+            check: ended_by,
+            sent_chars,
+            of_chars,
+            why: reason,
+        } = result
+        else {
+            panic!("the delivery was not stopped: {result:?}");
+        };
+        let sends = steps.iter().filter(|s| matches!(s, Step::Send(_))).count();
+        assert_eq!(sends, 3);
+        let error = stopped_error(ended_by, &reason, sent_chars, of_chars);
+        let carried = error
+            .source
+            .as_deref()
+            .and_then(|source| source.downcast_ref::<KeysStopped>())
+            .copied();
+        let expected = KeysStopped {
+            check,
+            sent_chars: 3,
+            of_chars: 12,
+        };
+        assert_eq!(carried, Some(expected));
+        assert!(
+            error.message.contains("3 of 12 characters"),
+            "{}",
+            error.message
+        );
+        let told = expected.told();
+        assert!(
+            told.contains(check.describe()) && told.contains("3 of 12"),
+            "{told}"
+        );
+        for message in [error.message.as_str(), told.as_str()] {
+            assert!(
+                !message.chars().any(|c| text.contains(c)),
+                "the text is in {message:?}"
+            );
+        }
     }
 
     #[test]
@@ -1278,7 +1458,8 @@ mod tests {
         let (result, steps) = run("a b", both, all, never);
         assert!(matches!(
             result,
-            KeyRun::Stopped { sent_chars: 2, ref why, .. } if why.contains("overflow")
+            KeyRun::Stopped { check: KeysStopCheck::Pacing, sent_chars: 2, ref why, .. }
+                if why.contains("overflow")
         ));
         assert_eq!(
             steps.iter().filter(|s| matches!(s, Step::Send(_))).count(),

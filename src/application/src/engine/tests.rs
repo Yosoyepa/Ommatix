@@ -19,7 +19,7 @@ use crate::contract::{
 };
 use crate::ports::{
     AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame, Clock, DeliveryReceipt,
-    LocalPolicy, TopLevelWindow, WindowOpacity,
+    KeysStopped, LocalPolicy, TopLevelWindow, WindowOpacity,
 };
 use crate::{ManualClock, PortError};
 
@@ -86,6 +86,9 @@ struct World {
     reads_focus: bool,
     /// Why the actuator refuses every `type` before sending anything (`delivery_refusal`).
     delivery_refusal: Option<String>,
+    /// A check ended a paced delivery of keys: the actuator fails with this as its error's
+    /// source, and a message that carries the agent's text, which the engine must not copy.
+    keys_stopped: Option<KeysStopped>,
     /// The element with keyboard focus once `focus_script` is used up.
     focused: Option<AccessibleElement>,
     /// Answers to the next keyboard-focus reads: focus that arrives after the click.
@@ -156,6 +159,7 @@ impl Default for World {
             access_limit: None,
             reads_focus: false,
             delivery_refusal: None,
+            keys_stopped: None,
             focused: None,
             focus_script: VecDeque::new(),
             fail_focus: false,
@@ -447,6 +451,9 @@ impl OsActuator for Actuator {
     fn deliver(&mut self, action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
         let mut w = lock(&self.0);
         w.note("deliver");
+        if let Some(stop) = w.keys_stopped {
+            return Err(stopped_with_the_text(stop, action));
+        }
         w.delivered.push(action.clone());
         w.repaint_after_input();
         w.receipt
@@ -477,11 +484,25 @@ impl OsActuator for Actuator {
         if w.fail_keys {
             return Err(PortError::new("test-actuator", "injection failed"));
         }
+        if let Some(stop) = w.keys_stopped {
+            return Err(stopped_with_the_text(stop, action));
+        }
         w.keys.push(action.clone());
         w.repaint_after_input();
         w.receipt
             .map_err(|()| PortError::new("test-actuator", "injection failed"))
     }
+}
+
+/// The error of an actuator whose paced delivery a check ended. Its free-form message holds
+/// the text of the action, as a careless adapter's could: the engine tells the agent from the
+/// typed source and must not copy this.
+fn stopped_with_the_text(stop: KeysStopped, action: &ValidatedAction) -> PortError {
+    let text = match action.kind() {
+        ActionKind::Type { text } => text.clone(),
+        _ => String::new(),
+    };
+    PortError::new("test-actuator", format!("stopped while typing {text}")).with_source(stop)
 }
 
 /// The operator's policy; the queue answers the next reads before the base policy takes

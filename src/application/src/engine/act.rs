@@ -45,11 +45,12 @@ use ommatix_domain::incremental::{BgraFrame, dirty_tiles};
 use super::accessibility::focus_is_on;
 use super::journal::{Lookup, arguments_hash};
 use super::{ActionFreshness, Engine, aged_out};
+use crate::PortError;
 use crate::contract::{
     ActionKind, ActionRequest, ActionResult, ActionTimings, ErrorCode, ExpectedEffect,
     ObservedEffect, ToolError, ValidatedAction, limits,
 };
-use crate::ports::LocalPolicy;
+use crate::ports::{KeysStopped, LocalPolicy};
 use crate::window_scope::{window_scope_applies, window_scope_problem};
 
 /// Parses `s<n>` (`n >= 1`, no leading zeros) as the registry's snapshot number.
@@ -161,6 +162,13 @@ fn check_arguments(request: &ActionRequest) -> Result<(), ToolError> {
         }
         _ => Ok(()),
     }
+}
+
+/// What a paced delivery of keys reports when a check ends it (the source of the actuator's
+/// error): the engine tells the agent the check and the count from this, never the error's
+/// free-form message.
+fn keys_stopped(error: &PortError) -> Option<&KeysStopped> {
+    error.source.as_deref()?.downcast_ref::<KeysStopped>()
 }
 
 /// The stages of an action that [`ActionTimings`] tells apart.
@@ -496,11 +504,23 @@ impl Engine {
         let since = self.ports.clock.now();
         let delivered = self.ports.actuator.deliver(action);
         self.spend(since, Stage::Delivery);
-        let Ok(receipt) = delivered else {
-            return Outcome::uncertain(
-                false,
-                "the actuator failed; input may or may not have reached the OS; do not retry",
-            );
+        let receipt = match delivered {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                return match keys_stopped(&error) {
+                    Some(stop) => Outcome::uncertain(
+                        true,
+                        &format!(
+                            "the click and some keys were delivered, then {}",
+                            stop.told()
+                        ),
+                    ),
+                    None => Outcome::uncertain(
+                        false,
+                        "the actuator failed; input may or may not have reached the OS; do not retry",
+                    ),
+                };
+            }
         };
         if receipt.submitted == 0 || receipt.inserted != receipt.submitted {
             return Outcome::uncertain(
@@ -626,12 +646,18 @@ impl Engine {
         let since = self.ports.clock.now();
         let sent = self.ports.actuator.deliver_keys(action);
         self.spend(since, Stage::Delivery);
-        let Ok(keys) = sent else {
-            return Outcome::uncertain(
-                true,
-                "the click was delivered but the actuator failed on the keys; some may have \
-                 reached the OS; do not retry",
-            );
+        let keys = match sent {
+            Ok(keys) => keys,
+            Err(error) => {
+                // A paced delivery ended by a check says which and how far, in closed text.
+                let message = match keys_stopped(&error) {
+                    Some(stop) => format!("the click was delivered, then {}", stop.told()),
+                    None => "the click was delivered but the actuator failed on the keys; some \
+                             may have reached the OS; do not retry"
+                        .to_owned(),
+                };
+                return Outcome::uncertain(true, &message);
+            }
         };
         if keys.submitted == 0 || keys.inserted != keys.submitted {
             return Outcome::uncertain(

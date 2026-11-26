@@ -86,6 +86,30 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
   Windows has no call that reads the foreground window and sends input atomically, so the
   foreground can change between any check and the send after it, as before the first key
   (chapter 08 §8.3).
+  **A measured profile: one laptop, one application, not a validation.** In an agent-run
+  exploratory measurement on one laptop, with one build of one application (Notepad 11.2609,
+  whose text box is WinUI), a `type` sent as one burst (both keys at `0`) was corrupted after a
+  word boundary. `type_boundary_pause_ms = 100` alone was clean for texts of about 30 characters
+  or fewer (12 of 12 runs). `type_key_pause_ms = 20` with `type_boundary_pause_ms = 100` was
+  clean for every text tried, 200 characters included (12 of 12 and 3 of 3 runs), at about
+  41–43 ms per character against about 4. Pauses of 1–10 ms between characters, or of 5–20 ms
+  after a boundary, did not cure it. The project's own test application needed none. These
+  numbers are not a validation of the dossier and say nothing about any other application or
+  build; the defaults stay `0`, and the operator chooses the values for the applications of a
+  deployment.
+  **When a check stops a paced `type`**, the action is `indeterminate` (some keys were sent) and
+  its message names the check (the operator's stop; the foreground window; keyboard focus or
+  the foreground application; a held modifier key or mouse button) and says how many characters
+  of the text were sent of how many: a count, never the text.
+  **What a paced `type` does not check again between characters.** The foreground window is
+  compared by handle with the window the engine cleared just before the keys; the same window
+  satisfies the application allowlist, the window-class scope and the window pin as it did then,
+  so those are implied, as they stood when the text began. Not repeated: UI Automation focus on
+  the target element (only the foreground application and the window that has keyboard focus
+  are checked, so focus moving to another control of the same window is not caught); the window
+  pin file (it is read once: re-pointing it during a text does not stop that text, use the
+  stop); the window under the target point; and the snapshot's age (`max_snapshot_age_ms` is
+  checked before the first key, and a paced `type` of up to 30 s can outlast it).
 - **Accepted with no effect** (a note on stderr at startup): `actuation_enabled = true` with
   an input adapter that is not live.
 

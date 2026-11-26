@@ -47,7 +47,7 @@ use super::{
     TopLevel, TypePacing, VirtualScreen, batch, exe_name_utf16, extended_style_of, first_held,
     focus_problem, frame_bounds, integrity_allows, is_frame_host, keys_problem, mid_text_problem,
     normalise, point_application, send_text_keys, shown_application, sibling, split_keys,
-    walk_windows, window_opacity_of,
+    stopped_error, walk_windows, window_opacity_of,
 };
 use crate::aim::frame_pixel;
 
@@ -789,13 +789,11 @@ impl SendInputActuator {
                 inserted,
             } => Ok((submitted, inserted)),
             KeyRun::Stopped {
+                check,
                 sent_chars,
                 of_chars,
                 why,
-            } => Err(refuse(format!(
-                "{why}; {sent_chars} of {of_chars} characters were sent, the rest were not; do \
-                 not retry"
-            ))),
+            } => Err(stopped_error(check, &why, sent_chars, of_chars)),
         }
     }
 

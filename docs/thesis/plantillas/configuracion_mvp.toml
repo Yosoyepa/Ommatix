@@ -72,7 +72,11 @@ purge_file = ""
 # durante toda la entrega, como mucho unos 63 s en el peor caso (30 s de pausas, los envíos y
 # el exceso del temporizador, unos 15,6 ms por espera con un temporizador grueso); la parada se
 # lee antes de cada carácter y entre una lectura y el envío que la sigue queda una ventana de
-# decenas a cientos de microsegundos que no puede ser cero.
+# decenas a cientos de microsegundos que no puede ser cero. Entre caracteres no se repiten el
+# foco de UI Automation en el elemento, el archivo de la ventana registrada ni la edad del
+# snapshot (docs/guide/configuration.md). Un perfil medido, de un agente, en un portátil y una
+# aplicación (Bloc de notas 11.2609), no una validación, está en la misma guía; el valor por
+# defecto sigue siendo 0.
 type_key_pause_ms = 0
 type_boundary_pause_ms = 0
 

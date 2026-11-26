@@ -88,6 +88,32 @@ opción de la línea de órdenes relaja `[safety]`. El archivo se comprueba de f
   la ventana de primer plano y envíe entrada de forma atómica, así que el primer plano puede
   cambiar entre cualquier comprobación y el envío siguiente, como antes de la primera tecla
   (capítulo 08 §8.3).
+  **Un perfil medido: un portátil, una aplicación, no una validación.** En una medición
+  exploratoria ejecutada por un agente, en un portátil, con una compilación de una aplicación
+  (el Bloc de notas 11.2609, cuyo cuadro de texto es WinUI), un `type` enviado de golpe (ambas
+  claves en `0`) se corrompía después de un límite de palabra. `type_boundary_pause_ms = 100`
+  solo estuvo limpio con textos de unos 30 caracteres o menos (12 de 12 corridas).
+  `type_key_pause_ms = 20` con `type_boundary_pause_ms = 100` estuvo limpio con todos los textos
+  probados, incluido uno de 200 caracteres (12 de 12 y 3 de 3 corridas), a unos 41–43 ms por
+  carácter frente a unos 4. Pausas de 1–10 ms entre caracteres o de 5–20 ms tras un límite no
+  lo curaron. La aplicación de pruebas del proyecto no necesitó ninguna. Estos números no son
+  una validación del dossier y no dicen nada de otra aplicación o compilación; los valores por
+  defecto siguen en `0` y el operador elige los valores para las aplicaciones de un despliegue.
+  **Cuando una comprobación detiene un `type` espaciado**, la acción queda `indeterminate`
+  (se enviaron algunas teclas) y su mensaje nombra la comprobación (la parada del operador; la
+  ventana de primer plano; el foco de teclado o la aplicación en primer plano; una tecla
+  modificadora o un botón del ratón pulsados) y dice cuántos caracteres del texto se enviaron
+  de cuántos: un recuento, nunca el texto.
+  **Lo que un `type` espaciado no vuelve a comprobar entre caracteres.** La ventana de primer
+  plano se compara por identificador con la que el motor autorizó justo antes de las teclas; la
+  misma ventana cumple la lista de aplicaciones, el alcance por clase de ventana y la ventana
+  registrada como las cumplía entonces, así que quedan implícitas, tal como estaban al empezar
+  el texto. No se repiten: el foco de UI Automation en el elemento objetivo (sólo se comprueban
+  la aplicación en primer plano y la ventana con el foco de teclado, así que no se detecta que
+  el foco pase a otro control de la misma ventana); el archivo de la ventana registrada (se lee
+  una vez: cambiarlo durante un texto no detiene ese texto, use la parada); la ventana bajo el
+  punto objetivo; y la edad del snapshot (`max_snapshot_age_ms` se comprueba antes de la primera
+  tecla y un `type` espaciado de hasta 30 s puede superarla).
 - **Se acepta sin efecto** (una nota en stderr al arrancar): `actuation_enabled = true` con un
   adaptador de entrada que no es real.
 

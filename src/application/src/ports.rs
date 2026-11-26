@@ -234,6 +234,66 @@ pub struct DeliveryReceipt {
     pub inserted: u32,
 }
 
+/// The check that ended a paced delivery of the keys of a `type` between two characters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeysStopCheck {
+    /// The operator's stop was engaged.
+    OperatorStop,
+    /// The foreground window is no longer the one the engine cleared.
+    ForegroundWindow,
+    /// The foreground application or keyboard focus left the target.
+    Focus,
+    /// A modifier key or a mouse button was held down.
+    HeldKey,
+    /// The configured pauses could not be applied.
+    Pacing,
+}
+
+impl KeysStopCheck {
+    /// The closed text that names the check to the agent: no window, application or key.
+    pub const fn describe(self) -> &'static str {
+        match self {
+            Self::OperatorStop => "the operator's stop was engaged",
+            Self::ForegroundWindow => "the foreground window changed",
+            Self::Focus => "keyboard focus or the foreground application changed",
+            Self::HeldKey => "a modifier key or a mouse button was held down",
+            Self::Pacing => "the pacing of the keys could not continue",
+        }
+    }
+}
+
+/// What an actuator reports, as the source of the [`PortError`] of its `deliver_keys` (or
+/// `deliver`), when a check ends a paced delivery of keys: which check, and how many characters
+/// of the agent's own text had been sent of how many. A count, never the text. The engine builds
+/// the agent's message from these facts and its own closed texts, and never copies the error's
+/// free-form message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeysStopped {
+    pub check: KeysStopCheck,
+    pub sent_chars: usize,
+    pub of_chars: usize,
+}
+
+impl KeysStopped {
+    /// The closed sentence for the agent, without a lead-in.
+    pub fn told(&self) -> String {
+        format!(
+            "{}; {} of {} characters were sent, the rest were not; do not retry",
+            self.check.describe(),
+            self.sent_chars,
+            self.of_chars
+        )
+    }
+}
+
+impl std::fmt::Display for KeysStopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.told())
+    }
+}
+
+impl std::error::Error for KeysStopped {}
+
 /// A top-level window as the actuator can attest it (ADR-0020): the class its owner
 /// registered and its handle. Never its title or any text it shows.
 #[derive(Debug, Clone, PartialEq)]

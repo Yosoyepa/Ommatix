@@ -6,6 +6,7 @@
 
 use super::typing::{name_field, typing, typing_rig};
 use super::*;
+use crate::ports::{KeysStopCheck, KeysStopped};
 
 /// What the pacing of the real actuator says when the pauses are too long for the text.
 const REFUSAL: &str = "a paced type may take at most 30 s with the pauses the operator \
@@ -172,5 +173,190 @@ fn a_type_stopped_after_some_keys_is_indeterminate_with_input_delivered() {
         error_code(&next),
         Some(ErrorCode::StaleSnapshot),
         "{next:?}"
+    );
+}
+
+/// A text with no lowercase letter and no digit: none of the engine's closed sentences can hold
+/// a character of it by accident.
+const ASKED: &str = "QXJZ#@~|QXJZ";
+
+fn typing_asked(page: &ObservePage, id: &str) -> ActionRequest {
+    ActionRequest {
+        action: ActionKind::Type { text: ASKED.into() },
+        ..typing(page, id, ExpectedEffect::None)
+    }
+}
+
+/// A live rig whose paced delivery a check ends after three of the twelve characters.
+fn stopped_rig(check: KeysStopCheck) -> Rig {
+    let r = typing_rig();
+    {
+        let mut w = r.world();
+        w.focused = Some(name_field());
+        w.keys_stopped = Some(KeysStopped {
+            check,
+            sent_chars: 3,
+            of_chars: 12,
+        });
+    }
+    r
+}
+
+fn error_message(result: &ActionResult) -> String {
+    result
+        .error
+        .as_ref()
+        .map(|e| e.message.clone())
+        .unwrap_or_default()
+}
+
+/// UT-87 (review O4s): a stop raised after three characters is still `indeterminate`, now with
+/// the check and the count in the closed text.
+#[test]
+fn ut_87_a_paced_delivery_stopped_by_the_stop_says_which_check_and_3_of_12() {
+    let mut r = stopped_rig(KeysStopCheck::OperatorStop);
+    let page = r.observe();
+
+    let result = r.engine.execute_action(&typing_asked(&page, "t1"));
+
+    assert_eq!(result.status, ActionStatus::Indeterminate, "{result:?}");
+    assert!(
+        result.input_delivered(),
+        "the click and three characters went"
+    );
+    assert_eq!(error_code(&result), Some(ErrorCode::IndeterminateEffect));
+    let message = error_message(&result);
+    assert!(
+        message.contains("the operator's stop was engaged"),
+        "{message}"
+    );
+    assert!(
+        message.contains("3 of 12 characters were sent"),
+        "{message}"
+    );
+    assert!(message.contains("do not retry"), "{message}");
+    assert!(
+        !message.contains("failed on the keys"),
+        "not the generic text: {message}"
+    );
+}
+
+#[test]
+fn ut_87_a_paced_delivery_stopped_by_a_foreground_change_says_so() {
+    let mut r = stopped_rig(KeysStopCheck::ForegroundWindow);
+    let page = r.observe();
+
+    let result = r.engine.execute_action(&typing_asked(&page, "t1"));
+
+    assert_eq!(result.status, ActionStatus::Indeterminate, "{result:?}");
+    let message = error_message(&result);
+    assert!(
+        message.contains("the foreground window changed"),
+        "{message}"
+    );
+    assert!(
+        message.contains("3 of 12 characters were sent"),
+        "{message}"
+    );
+}
+
+/// The agent can tell the five checks apart; each has its own closed text.
+#[test]
+fn ut_87_each_check_that_can_stop_a_paced_delivery_is_named_apart() {
+    let checks = [
+        KeysStopCheck::OperatorStop,
+        KeysStopCheck::ForegroundWindow,
+        KeysStopCheck::Focus,
+        KeysStopCheck::HeldKey,
+        KeysStopCheck::Pacing,
+    ];
+    let mut told = Vec::new();
+    for check in checks {
+        let mut r = stopped_rig(check);
+        let page = r.observe();
+        let result = r.engine.execute_action(&typing_asked(&page, "t1"));
+        assert_eq!(result.status, ActionStatus::Indeterminate, "{check:?}");
+        let message = error_message(&result);
+        assert!(message.contains(check.describe()), "{check:?}: {message}");
+        told.push(message);
+    }
+    told.sort();
+    told.dedup();
+    assert_eq!(told.len(), checks.len(), "five distinct messages");
+}
+
+/// The message is the engine's closed text and a count: no character of the text asked, even
+/// when the adapter's own error message carries it.
+#[test]
+fn ut_87_the_message_of_a_stopped_delivery_holds_no_character_of_the_text() {
+    for check in [KeysStopCheck::OperatorStop, KeysStopCheck::ForegroundWindow] {
+        let mut r = stopped_rig(check);
+        let page = r.observe();
+        let result = r.engine.execute_action(&typing_asked(&page, "t1"));
+        let message = error_message(&result);
+        assert_ne!(message.len(), 0, "an error message");
+        assert!(
+            !message.chars().any(|c| ASKED.contains(c)),
+            "the text is in {message:?}"
+        );
+        assert!(!message.contains("stopped while typing"), "{message}");
+    }
+}
+
+/// An error that carries no stop keeps the generic words, and a type that is not stopped is
+/// delivered as before.
+#[test]
+fn ut_87_a_failure_without_a_stop_and_an_unstopped_type_are_unchanged() {
+    let mut r = typing_rig();
+    {
+        let mut w = r.world();
+        w.focused = Some(name_field());
+        w.fail_keys = true;
+    }
+    let page = r.observe();
+    let failed = r.engine.execute_action(&typing_asked(&page, "t1"));
+    assert_eq!(failed.status, ActionStatus::Indeterminate);
+    let message = error_message(&failed);
+    assert!(message.contains("failed on the keys"), "{message}");
+    assert!(
+        message.contains("some may have reached the OS"),
+        "{message}"
+    );
+
+    let mut r = typing_rig();
+    r.world().focused = Some(name_field());
+    let page = r.observe();
+    let delivered = r.engine.execute_action(&typing_asked(&page, "t2"));
+    assert_eq!(
+        delivered.status,
+        ActionStatus::InputDelivered,
+        "{delivered:?}"
+    );
+    assert!(delivered.error.is_none());
+}
+
+/// The same on the one-shot path: some keys went, so the input was delivered.
+#[test]
+fn ut_87_the_one_shot_path_says_which_check_stopped_a_paced_delivery_too() {
+    let mut r = stopped_rig(KeysStopCheck::Focus);
+    {
+        let mut w = r.world();
+        w.phased = false;
+        w.reads_focus = false;
+    }
+    let page = r.observe();
+
+    let result = r.engine.execute_action(&typing_asked(&page, "t1"));
+
+    assert_eq!(result.status, ActionStatus::Indeterminate, "{result:?}");
+    assert!(result.input_delivered(), "{result:?}");
+    let message = error_message(&result);
+    assert!(
+        message.contains(KeysStopCheck::Focus.describe()),
+        "{message}"
+    );
+    assert!(
+        message.contains("3 of 12 characters were sent"),
+        "{message}"
     );
 }
