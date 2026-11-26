@@ -6,15 +6,20 @@
 mod common;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::task::{Context, Poll};
+use std::thread;
 use std::time::Duration;
 
 use common::{call, call_ok, error_code, modern_meta};
 use ommatix_adapter_mcp::{
-    Broker, BrokerConnection, BrokerError, Connection, DEFAULT_MAX_MESSAGE_BYTES, LEASE_META_KEY,
-    McpConfig, McpServer,
+    Admission, Broker, BrokerConnection, BrokerError, BrokerState, Connection,
+    DEFAULT_MAX_MESSAGE_BYTES, LEASE_META_KEY, MAX_SPENT_TICKETS, McpConfig, McpServer,
+    Reservation, TICKET_MAX_LEN, TICKET_MIN_LEN,
 };
 use ommatix_adapter_sim::fixture::{FixtureActuator, FixtureCapturer};
 use ommatix_adapter_sim::{FixtureDesktop, FixtureScene, confirmed};
@@ -23,13 +28,15 @@ use ommatix_application::lease::{
     Acquired, ClientId, LeaseChange, LeaseRefusal, Released, Standing,
 };
 use ommatix_application::{
-    CapturedFrame, Clock, DeliveryReceipt, Engine, EngineConfig, FrameCapturer, Grant, LeaseTable,
-    LocalPolicy, ManualClock, NoAccessibility, OsActuator, PolicyStore, PortError, Ports,
-    TopLevelWindow, WindowOpacity,
+    CapturedFrame, Clock, DeliveryReceipt, Engine, EngineConfig, FrameCapturer, Grant, GrantStore,
+    LeaseTable, LocalPolicy, ManualClock, NoAccessibility, OsActuator, PolicyStore, PortError,
+    Ports, TopLevelWindow, WindowOpacity,
 };
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::Role;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 const SESSION: &str = "broker-session";
 /// The application the live test actuator attests and the operator allows.
@@ -232,6 +239,28 @@ impl World {
         .expect("a valid broker")
     }
 
+    /// A broker that asks `grants` for the grant of every client admitted by a ticket.
+    fn ticket_broker(&self, grants: Arc<dyn GrantStore>, max_clients: usize) -> Broker {
+        self.ticket_broker_with(McpConfig::default(), grants, max_clients)
+    }
+
+    fn ticket_broker_with(
+        &self,
+        config: McpConfig,
+        grants: Arc<dyn GrantStore>,
+        max_clients: usize,
+    ) -> Broker {
+        Broker::with_grant_store(
+            EngineConfig::new(SESSION),
+            self.ports(),
+            config,
+            TERM,
+            max_clients,
+            grants,
+        )
+        .expect("a valid broker")
+    }
+
     /// The stdio server over the same kind of desktop.
     fn server(&self, config: McpConfig) -> McpServer {
         McpServer::new(
@@ -311,6 +340,62 @@ fn elsewhere() -> Grant {
         deliver_input: true,
         read_values: true,
         ..Grant::default()
+    }
+}
+
+// ---- tickets and the operator's grants by ticket ----
+
+/// A ticket of the exact form (ADR-0043, decision 9): 43 base64url characters, distinct for
+/// each `n`, with a distinctive prefix that the leak checks search for.
+fn ticket(n: u64) -> String {
+    format!("Qv7-Tkt_{n:035}")
+}
+
+fn sha256(ticket: &str) -> [u8; 32] {
+    Sha256::digest(ticket.as_bytes()).into()
+}
+
+/// The operator's grants by ticket hash, changed by the test between calls. It counts every
+/// question and can be made to panic.
+#[derive(Default)]
+struct Grants {
+    listed: Mutex<BTreeMap<[u8; 32], Grant>>,
+    asks: AtomicUsize,
+    panics: AtomicBool,
+    /// Every hash it was asked about.
+    asked: Mutex<Vec<[u8; 32]>>,
+}
+
+impl Grants {
+    fn listed(&self) -> MutexGuard<'_, BTreeMap<[u8; 32], Grant>> {
+        self.listed.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Lists `grant` for `ticket`, or withdraws what is listed for it.
+    fn set(&self, ticket: &str, grant: Option<Grant>) {
+        match grant {
+            Some(grant) => self.listed().insert(sha256(ticket), grant),
+            None => self.listed().remove(&sha256(ticket)),
+        };
+    }
+
+    fn asks(&self) -> usize {
+        self.asks.load(Ordering::SeqCst)
+    }
+}
+
+impl GrantStore for Grants {
+    fn grant(&self, ticket_sha256: &[u8; 32]) -> Option<Grant> {
+        self.asks.fetch_add(1, Ordering::SeqCst);
+        self.asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(*ticket_sha256);
+        assert!(
+            !self.panics.load(Ordering::SeqCst),
+            "the test's grant store fails"
+        );
+        self.listed().get(ticket_sha256).cloned()
     }
 }
 
@@ -1470,6 +1555,8 @@ struct Slot {
     kind: Kind,
     page: Option<Value>,
     last: Option<Value>,
+    /// The ticket the client attached with, when it did ([`Drive::Tickets`]).
+    ticket: Option<String>,
 }
 
 /// Every action response must be free of screen text.
@@ -1488,6 +1575,10 @@ enum Drive {
     /// Only through the `lease` argument of `observe_screen` (ADR-0039, decision 5), with every
     /// `io.ommatix/lease` `_meta` compared with the sequential run's prediction.
     Wire,
+    /// Through the methods, with about half the clients admitted by a ticket whose grant the
+    /// operator's store changes between calls (ADR-0040, decision 5): the kind of a ticket's
+    /// client is the grant the store lists at that call.
+    Tickets,
 }
 
 /// The `io.ommatix/lease` `_meta` a response must carry, built here from the sequential run's
@@ -1587,18 +1678,35 @@ fn it_21_generated_interleavings_that_ask_for_the_lease_only_on_the_wire_keep_ev
     generated_run(Drive::Wire);
 }
 
+#[test]
+fn generated_interleavings_with_clients_admitted_by_ticket_and_grants_changed_between_calls_keep_every_invariant()
+ {
+    generated_run(Drive::Tickets);
+}
+
 #[allow(clippy::too_many_lines)] // one generated run: each kind of step beside its model
 fn generated_run(drive: Drive) {
     const STEPS: usize = 5_000;
     const SLOTS: usize = 5;
     const MAX_CLIENTS: usize = 4;
     let world = World::new();
-    let broker = world.broker(McpConfig::default(), MAX_CLIENTS);
+    let grants = Arc::new(Grants::default());
+    let broker = match drive {
+        Drive::Tickets => world.ticket_broker(grants.clone(), MAX_CLIENTS),
+        Drive::Methods | Drive::Wire => world.broker(McpConfig::default(), MAX_CLIENTS),
+    };
     let mut model = Model::new(MAX_CLIENTS);
     let mut rng = Rng(match drive {
         Drive::Methods => 0x0B40_4E55,
         Drive::Wire => 0x5EED_0006,
+        Drive::Tickets => 0x71C4_E709,
     });
+    // Tickets issued, grants changed in the store, and tool calls by clients with a ticket.
+    let (mut issued, mut changes, mut ticket_calls) = (0_u64, 0_usize, 0_usize);
+    // Places held for connections whose handshake is not read yet, and what happened to them:
+    // taken, refused at the bound, given to an admitted client.
+    let mut reservations: Vec<Reservation> = Vec::new();
+    let (mut reserved, mut reserve_refused, mut reserved_admitted) = (0_usize, 0_usize, 0_usize);
     let mut slots: Vec<Option<Slot>> = (0..SLOTS).map(|_| None).collect();
     let mut next_request = 0_u64;
     // The witness: every delivery, in the order the broker's lock was taken (one thread).
@@ -1606,6 +1714,39 @@ fn generated_run(drive: Drive) {
     let mut per_snapshot: BTreeMap<String, usize> = BTreeMap::new();
 
     for step in 0..STEPS {
+        // The operator changes the grant of a client with a ticket, between two calls.
+        if drive == Drive::Tickets && rng.chance(8) {
+            let ticketed: Vec<usize> = (0..SLOTS)
+                .filter(|i| slots[*i].as_ref().is_some_and(|s| s.ticket.is_some()))
+                .collect();
+            if !ticketed.is_empty() {
+                let slot = slots[ticketed[rng.below(ticketed.len())]].as_mut().unwrap();
+                let kind = Kind::ALL[rng.below(Kind::ALL.len())];
+                grants.set(slot.ticket.as_deref().unwrap(), kind.grant());
+                slot.kind = kind;
+                changes += 1;
+            }
+        }
+        // A listener takes a place for a connection it accepted, or one is dropped unused.
+        if drive == Drive::Tickets && rng.chance(4) {
+            if !reservations.is_empty() && rng.chance(60) {
+                reservations.swap_remove(rng.below(reservations.len()));
+            } else {
+                let room = model.connected.len() + reservations.len() < MAX_CLIENTS;
+                match broker.reserve() {
+                    Ok(reservation) => {
+                        assert!(room, "step {step}: a place beyond the bound");
+                        reservations.push(reservation);
+                        reserved += 1;
+                    }
+                    Err(error) => {
+                        assert!(!room, "step {step}: refused with room: {error:?}");
+                        assert_eq!(error, BrokerError::Lease(LeaseRefusal::TooManyClients));
+                        reserve_refused += 1;
+                    }
+                }
+            }
+        }
         let now = world.clock.now();
         // Half the steps go to the holder, if any, so that deliveries are frequent.
         let holder = model.holders(now).first().copied();
@@ -1618,10 +1759,38 @@ fn generated_run(drive: Drive) {
         match (dice, slots[index].is_some()) {
             (0..=9, false) => {
                 let kind = Kind::ALL[rng.below(Kind::ALL.len())];
+                let ticket = (drive == Drive::Tickets && rng.chance(50)).then(|| {
+                    issued += 1;
+                    let ticket = ticket(issued);
+                    grants.set(&ticket, kind.grant());
+                    ticket
+                });
+                // A ticket's connection admitted in a place reserved for it, half the time.
+                let reservation = (ticket.is_some() && !reservations.is_empty() && rng.chance(50))
+                    .then(|| reservations.pop())
+                    .flatten();
                 model.enter();
-                let expected = model.leases.connect(now);
-                model.apply(&expected.change);
-                match (expected.result, broker.connect(kind.grant())) {
+                // Without a place of its own, a connection finds the bound filled by clients and
+                // the others' reservations; the lease table alone would let it in.
+                let crowded = reservation.is_none()
+                    && !reservations.is_empty()
+                    && model.connected.len() + reservations.len() >= MAX_CLIENTS;
+                let expected = if crowded {
+                    Err(LeaseRefusal::TooManyClients)
+                } else {
+                    let expected = model.leases.connect(now);
+                    model.apply(&expected.change);
+                    expected.result
+                };
+                reserved_admitted += usize::from(reservation.is_some());
+                let actual = match (&ticket, reservation) {
+                    (Some(ticket), Some(reservation)) => {
+                        reservation.admit(ticket.clone().into_bytes())
+                    }
+                    (Some(ticket), None) => broker.admit(ticket.clone().into_bytes()),
+                    (None, _) => broker.connect(kind.grant()),
+                };
+                match (expected, actual) {
                     (Ok(id), Ok(conn)) => {
                         assert_eq!(conn.client(), id);
                         model.connected.insert(id);
@@ -1630,6 +1799,7 @@ fn generated_run(drive: Drive) {
                             kind,
                             page: None,
                             last: None,
+                            ticket,
                         });
                         model.saw(Seen::Connected);
                     }
@@ -1659,7 +1829,7 @@ fn generated_run(drive: Drive) {
                 }
             }
             (_, false) => {}
-            (10..=19, true) if drive == Drive::Methods => {
+            (10..=19, true) if drive != Drive::Wire => {
                 let slot = slots[index].as_ref().unwrap();
                 let id = slot.conn.client();
                 model.enter();
@@ -1679,7 +1849,7 @@ fn generated_run(drive: Drive) {
                     Err(_) => Seen::RenewalRefused,
                 });
             }
-            (20..=25, true) if drive == Drive::Methods => {
+            (20..=25, true) if drive != Drive::Wire => {
                 let slot = slots[index].as_ref().unwrap();
                 let id = slot.conn.client();
                 model.enter();
@@ -1762,6 +1932,7 @@ fn generated_run(drive: Drive) {
                 let id = slot.conn.client();
                 let values = rng.chance(50);
                 let publishes = model.tool(id, now, true);
+                ticket_calls += usize::from(slot.ticket.is_some());
                 let result = observe_with(&mut slot.conn, json!({ "include_values": values }));
                 let shared_age = observed(&mut model, slot, &result, publishes, values, now, step);
                 if drive == Drive::Wire {
@@ -1788,6 +1959,7 @@ fn generated_run(drive: Drive) {
                 let live = arguments["dry_run"] == false;
                 let request_id = arguments["request_id"].as_str().unwrap().to_owned();
                 let holds = model.tool(id, now, false);
+                ticket_calls += usize::from(slot.ticket.is_some());
                 let whole = act_result(&mut slot.conn, arguments.clone());
                 if drive == Drive::Wire {
                     check_lease_meta(&model, id, &whole, false, None, step);
@@ -1881,6 +2053,7 @@ fn generated_run(drive: Drive) {
                 let slot = slots[index].as_mut().unwrap();
                 let id = slot.conn.client();
                 model.tool(id, now, false);
+                ticket_calls += usize::from(slot.ticket.is_some());
                 let result = call_ok(slot.conn.connection(), 1, "get_engine_metrics", json!({}));
                 if drive == Drive::Wire {
                     assert!(result["_meta"].get(LEASE_META_KEY).is_none(), "step {step}");
@@ -1905,6 +2078,18 @@ fn generated_run(drive: Drive) {
         let retained = broker.retained().unwrap();
         assert_eq!(retained.clients, model.connected, "step {step}");
         assert!(!retained.grant_installed, "step {step}");
+        // The store is asked once per call of a client with a ticket, and for nobody else.
+        assert_eq!(grants.asks(), ticket_calls, "step {step}");
+    }
+    if drive == Drive::Tickets {
+        assert!(
+            issued >= 20 && changes >= 50 && ticket_calls >= 500,
+            "{issued} tickets, {changes} changes, {ticket_calls} calls"
+        );
+        assert!(
+            reserved >= 20 && reserve_refused >= 1 && reserved_admitted >= 5,
+            "{reserved} places taken, {reserve_refused} refused, {reserved_admitted} admitted"
+        );
     }
 
     let missing: Vec<_> = EVERY_OUTCOME
@@ -2529,5 +2714,1244 @@ fn ct_13_the_stdio_server_accepts_lease_and_answers_byte_for_byte_as_without_it(
         let mut bad = with_world.server(config).connect();
         let refused = call(&mut bad, 1, "observe_screen", json!({ "lease": "x" }));
         assert_eq!(error_code(&refused), -32602, "{refused}");
+    }
+}
+
+// ---- the blocking loop agrees with the asynchronous one (ADR-0015, ADR-0043) ----
+
+/// A reader that hands out at most `chunk` bytes per read and fails once it reaches `fails_at`.
+struct Trickle {
+    data: Vec<u8>,
+    at: usize,
+    chunk: usize,
+    fails_at: Option<usize>,
+}
+
+impl Trickle {
+    fn new(data: &[u8], chunk: usize, fails_at: Option<usize>) -> Self {
+        Self {
+            data: data.to_vec(),
+            at: 0,
+            chunk,
+            fails_at,
+        }
+    }
+
+    /// The range of `data` the next read hands out, at most `room` bytes.
+    fn take(&mut self, room: usize) -> io::Result<std::ops::Range<usize>> {
+        if self.fails_at.is_some_and(|end| self.at >= end) {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionReset,
+                "the test reader fails",
+            ));
+        }
+        let end = self.fails_at.unwrap_or(usize::MAX).min(self.data.len());
+        let n = self.chunk.min(room).min(end - self.at);
+        let range = self.at..self.at + n;
+        self.at += n;
+        Ok(range)
+    }
+}
+
+impl io::Read for Trickle {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let range = self.take(buf.len())?;
+        let n = range.len();
+        buf[..n].copy_from_slice(&self.data[range]);
+        Ok(n)
+    }
+}
+
+impl AsyncRead for Trickle {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        Poll::Ready(
+            this.take(buf.remaining())
+                .map(|range| buf.put_slice(&this.data[range])),
+        )
+    }
+}
+
+/// A writer that keeps what it is given and fails once it holds `budget` bytes.
+struct Sink {
+    out: Vec<u8>,
+    budget: Option<usize>,
+}
+
+impl Sink {
+    fn new(budget: Option<usize>) -> Self {
+        Self {
+            out: Vec::new(),
+            budget,
+        }
+    }
+
+    fn accept(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let room = self
+            .budget
+            .map_or(usize::MAX, |budget| budget.saturating_sub(self.out.len()));
+        if room == 0 && !buf.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "the test writer fails",
+            ));
+        }
+        let n = buf.len().min(room);
+        self.out.extend_from_slice(&buf[..n]);
+        Ok(n)
+    }
+}
+
+impl io::Write for Sink {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.accept(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl AsyncWrite for Sink {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Poll::Ready(self.get_mut().accept(buf))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+fn runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Loop {
+    Asynchronous,
+    Blocking,
+}
+
+/// One stream and how its two ends behave.
+#[derive(Debug, Clone)]
+struct Stream {
+    input: Vec<u8>,
+    chunk: usize,
+    read_fails_at: Option<usize>,
+    write_budget: Option<usize>,
+}
+
+impl Stream {
+    fn plain(input: Vec<u8>, chunk: usize) -> Self {
+        Self {
+            input,
+            chunk,
+            read_fails_at: None,
+            write_budget: None,
+        }
+    }
+}
+
+/// What one loop did with a stream, on a fresh broker: what it wrote, how it ended, what the
+/// broker retains afterwards, what reached the desktop, and whether the handshake's ticket is
+/// spent.
+#[derive(Debug, PartialEq, Eq)]
+struct Run {
+    output: Vec<u8>,
+    ended: Result<Option<Admission>, io::ErrorKind>,
+    retained: BrokerState,
+    events: usize,
+    captures: usize,
+    spent: bool,
+}
+
+/// The ticket the loop runs' store lists with [`full`].
+fn listed_ticket() -> String {
+    ticket(1)
+}
+
+/// Serves `stream` with one loop on a fresh broker: a client connected with [`full`], or, with
+/// `handshake`, a client admitted by the stream's first line.
+fn run_loop(which: Loop, handshake: bool, config: McpConfig, stream: &Stream) -> Run {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    grants.set(&listed_ticket(), Some(full()));
+    let broker = world.ticket_broker_with(config, grants, 8);
+    let reader = Trickle::new(&stream.input, stream.chunk, stream.read_fails_at);
+    let mut sink = Sink::new(stream.write_budget);
+    let ended = match (which, handshake) {
+        (Loop::Blocking, false) => broker
+            .connect(Some(full()))
+            .unwrap()
+            .serve_sync(reader, &mut sink)
+            .map(|()| None),
+        (Loop::Blocking, true) => broker
+            .serve_sync_with_handshake(reader, &mut sink)
+            .map(Some),
+        (Loop::Asynchronous, false) => runtime()
+            .block_on(
+                broker
+                    .connect(Some(full()))
+                    .unwrap()
+                    .serve(reader, &mut sink),
+            )
+            .map(|()| None),
+        (Loop::Asynchronous, true) => runtime()
+            .block_on(broker.serve_with_handshake(reader, &mut sink))
+            .map(Some),
+    }
+    .map_err(|error| error.kind());
+    let retained = broker.retained().expect("the broker is available");
+    let spent = broker.admit(listed_ticket().into_bytes()).err() == Some(BrokerError::Refused);
+    Run {
+        output: sink.out,
+        ended,
+        retained,
+        events: world.events(),
+        captures: world.captures(),
+        spent,
+    }
+}
+
+/// Runs both loops and checks that they agree, byte for byte and in the state they leave.
+fn both_loops(handshake: bool, config: McpConfig, stream: &Stream) -> Run {
+    let blocking = run_loop(Loop::Blocking, handshake, config, stream);
+    let asynchronous = run_loop(Loop::Asynchronous, handshake, config, stream);
+    assert_eq!(blocking, asynchronous, "{stream:?}");
+    blocking
+}
+
+/// A session of every kind of line, with a delivery, its replay and the stdio server's bounds,
+/// ended alternately by `\r\n` and `\n`. The page the actions cite is learnt on a probe world,
+/// which publishes the same identifiers as every fresh world.
+fn scripted_stream() -> Vec<u8> {
+    let prefix = [
+        padded_request(1, 300),
+        tool_line(2, "observe_screen", &json!({ "limit": 2 })),
+        tool_line(3, "observe_screen", &json!({ "include_values": true })),
+    ];
+    let world = World::new();
+    let broker = world.broker(McpConfig::default(), 8);
+    let mut probe = broker.connect(Some(full())).unwrap();
+    let mut last = None;
+    for line in &prefix {
+        last = probe.connection().handle_message(line.as_bytes());
+    }
+    let page =
+        serde_json::from_str::<Value>(&last.unwrap()).unwrap()["result"]["structuredContent"]
+            .clone();
+    let mut lines = prefix.to_vec();
+    lines.extend([
+        tool_line(4, "execute_action", &click(&page, "dry", false)),
+        tool_line(5, "execute_action", &click(&page, "live", true)),
+        tool_line(6, "execute_action", &click(&page, "live", true)),
+        tool_line(7, "get_engine_metrics", &json!({})),
+        tool_line(8, "execute_action", &json!({ "x": 1 })),
+        "not json".to_owned(),
+        r#"{"jsonrpc":"2.0","method":"notifications/cancelled"}"#.to_owned(),
+        "   ".to_owned(),
+        "x".repeat(DEFAULT_MAX_MESSAGE_BYTES + 10),
+        format!("\u{feff}{}", padded_request(9, 300)),
+    ]);
+    let mut input = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        input.extend_from_slice(line.as_bytes());
+        input.extend_from_slice(if i % 2 == 0 { b"\r\n" } else { b"\n" });
+    }
+    input
+}
+
+#[test]
+fn the_blocking_loop_serves_a_scripted_session_byte_for_byte_as_the_asynchronous_loop() {
+    let script = scripted_stream();
+    for handshake in [false, true] {
+        for chunk in [1, 7, 8192] {
+            let mut input = Vec::new();
+            if handshake {
+                input.extend_from_slice(listed_ticket().as_bytes());
+                input.push(b'\n');
+            }
+            input.extend_from_slice(&script);
+            let run = both_loops(
+                handshake,
+                McpConfig::default(),
+                &Stream::plain(input, chunk),
+            );
+            assert_eq!(run.ended, Ok(handshake.then_some(Admission::Served)));
+            let lines = served_lines(run.output);
+            assert_eq!(lines.len(), 11, "{lines:?}");
+            let responses: Vec<Value> = lines
+                .iter()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect();
+            assert_eq!(
+                value_of(&responses[2]["result"]["structuredContent"]),
+                Some(FIELD_VALUE)
+            );
+            assert!(delivered(&responses[4]["result"]["structuredContent"]));
+            assert_eq!(
+                responses[5]["result"]["structuredContent"],
+                responses[4]["result"]["structuredContent"],
+                "the retry replays"
+            );
+            assert_eq!(error_code(&responses[7]), -32602);
+            assert_eq!(error_code(&responses[8]), -32700);
+            assert_eq!(error_code(&responses[9]), -32600, "oversized");
+            assert_eq!(responses[10]["id"], 9, "the stream recovers");
+            assert_eq!(run.events, 1, "one delivery");
+            assert!(run.retained.clients.is_empty(), "the client left");
+            assert_eq!(run.retained.engine["snapshots"], 0, "the last one purged");
+            assert_eq!(run.spent, handshake, "the handshake spent its ticket");
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // one generator: each kind of line beside the others
+fn the_blocking_and_asynchronous_loops_agree_on_generated_byte_streams() {
+    const CASES: usize = 160;
+    // The smallest limit, so that oversized lines stay cheap.
+    let config = McpConfig {
+        legacy_enabled: false,
+        max_message_bytes: 4096,
+    };
+    let limit = config.message_limit();
+    let mut rng = Rng(0x0B10_C4ED);
+    let mut endings: BTreeMap<String, usize> = BTreeMap::new();
+    for case in 0..CASES {
+        let handshake = rng.chance(50);
+        let mut input = Vec::new();
+        if handshake {
+            let line = match rng.below(5) {
+                0 | 1 => listed_ticket(),
+                2 => String::new(),
+                3 => ticket(2),
+                _ => "not a ticket".to_owned(),
+            };
+            input.extend_from_slice(line.as_bytes());
+            input.extend_from_slice(if rng.chance(30) { b"\r\n" } else { b"\n" });
+        }
+        let mut id = 0_u64;
+        for _ in 0..rng.below(8) {
+            id += 1;
+            let line: Vec<u8> = match rng.below(10) {
+                0 | 1 => tool_line(
+                    id,
+                    "observe_screen",
+                    &json!({ "include_values": rng.chance(50) }),
+                )
+                .into_bytes(),
+                2 => tool_line(id, "get_engine_metrics", &json!({})).into_bytes(),
+                3 => padded_request(id, 300).into_bytes(),
+                4 => padded_request(id, limit).into_bytes(),
+                5 => vec![b'x'; limit + 1 + rng.below(3 * limit)],
+                6 => b"{not json".to_vec(),
+                7 => tool_line(id, "execute_action", &json!({ "x": 1 })).into_bytes(),
+                8 => br#"{"jsonrpc":"2.0","method":"notifications/cancelled"}"#.to_vec(),
+                _ => b"   ".to_vec(),
+            };
+            input.extend_from_slice(&line);
+            input.extend_from_slice(if rng.chance(30) { b"\r\n" } else { b"\n" });
+        }
+        match rng.below(4) {
+            // A final line without its terminator.
+            0 => input.extend_from_slice(padded_request(99, 300).as_bytes()),
+            // An oversized tail at the end of input.
+            1 => input.extend_from_slice(&vec![b'y'; limit + 5]),
+            _ => {}
+        }
+        // An early end of input, anywhere, mid-line included.
+        if rng.chance(25) && !input.is_empty() {
+            let at = rng.below(input.len());
+            input.truncate(at);
+        }
+        let length = input.len();
+        let stream = Stream {
+            input,
+            chunk: [1, 3, 64, 8192][rng.below(4)],
+            read_fails_at: rng.chance(15).then(|| rng.below(length + 1)),
+            write_budget: rng.chance(20).then(|| rng.below(3_000)),
+        };
+        let run = both_loops(handshake, config, &stream);
+        let ending = match &run.ended {
+            Ok(None) => "served".to_owned(),
+            Ok(Some(admission)) => format!("{admission:?}"),
+            Err(kind) => format!("{kind:?}"),
+        };
+        *endings.entry(ending).or_default() += 1;
+        assert!(run.retained.clients.is_empty(), "case {case}");
+        assert_eq!(run.retained.engine["snapshots"], 0, "case {case}");
+        assert!(!run.retained.grant_installed, "case {case}");
+    }
+    for ending in [
+        "served",
+        "Served",
+        "Refused(Refused)",
+        "BrokenPipe",
+        "ConnectionReset",
+    ] {
+        assert!(endings.contains_key(ending), "{ending} never: {endings:?}");
+    }
+}
+
+// ---- grants asked on every call (ADR-0040, decision 5) ----
+
+/// An observation with values asked for: its page.
+fn see(conn: &mut BrokerConnection) -> Value {
+    observe_with(conn, json!({ "include_values": true }))["structuredContent"].clone()
+}
+
+#[test]
+fn a_grant_withdrawn_or_changed_in_the_store_takes_effect_at_the_clients_next_call() {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    let broker = world.ticket_broker(grants.clone(), 8);
+    let presented = ticket(1);
+    grants.set(&presented, Some(full()));
+    let mut conn = broker.admit(presented.clone().into_bytes()).unwrap();
+    assert_eq!(grants.asks(), 0, "the handshake asks nothing");
+
+    let page = see(&mut conn);
+    assert_eq!(value_of(&page), Some(FIELD_VALUE));
+    assert!(delivered(&act(&mut conn, click(&page, "g1", true))));
+    assert_eq!(grants.asks(), 2, "once per call");
+
+    // Withdrawn: the next observation hides values and the next live action is refused.
+    grants.set(&presented, None);
+    let page = see(&mut conn);
+    assert_eq!(value_of(&page), None);
+    let refused = act(&mut conn, click(&page, "g2", true));
+    assert_eq!(code(&refused), Some("POLICY_DENIED"), "{refused}");
+    assert!(!refused_without_lease(&refused), "the gate's refusal");
+    assert_eq!(world.events(), 1);
+
+    // Restored: the call after that passes.
+    grants.set(&presented, Some(full()));
+    let page = see(&mut conn);
+    assert_eq!(value_of(&page), Some(FIELD_VALUE));
+    assert!(delivered(&act(&mut conn, click(&page, "g3", true))));
+    assert_eq!(world.events(), 2);
+
+    // Changed: the application removed from the grant.
+    grants.set(
+        &presented,
+        Some(Grant {
+            applications: BTreeSet::new(),
+            ..full()
+        }),
+    );
+    let page = see(&mut conn);
+    let refused = act(&mut conn, click(&page, "g4", true));
+    assert_eq!(code(&refused), Some("POLICY_DENIED"), "{refused}");
+    assert_eq!(world.events(), 2);
+    grants.set(&presented, Some(full()));
+    let page = see(&mut conn);
+    assert!(delivered(&act(&mut conn, click(&page, "g5", true))));
+    assert_eq!(world.events(), 3);
+
+    // Every tool call asks once; a request that never reaches a tool asks nothing.
+    metrics(&mut conn);
+    let invalid = call(conn.connection(), 9, "execute_action", json!({ "x": 1 }));
+    assert_eq!(error_code(&invalid), -32602);
+    common::modern(conn.connection(), 10, "tools/list", json!({}));
+    assert_eq!(grants.asks(), 11);
+    let asked = grants.asked.lock().unwrap().clone();
+    assert!(asked.iter().all(|hash| *hash == sha256(&presented)));
+    assert!(!broker.retained().unwrap().grant_installed);
+}
+
+/// A store that checks, at every question, that the broker's lock is held: the broker's
+/// non-blocking [`Broker::try_retained`] must find the lock taken. No thread, no wait.
+#[derive(Default)]
+struct Probing {
+    broker: Mutex<Option<Broker>>,
+    held: Mutex<Vec<bool>>,
+}
+
+impl GrantStore for Probing {
+    fn grant(&self, _: &[u8; 32]) -> Option<Grant> {
+        let broker = self
+            .broker
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("the broker is set");
+        self.held
+            .lock()
+            .unwrap()
+            .push(broker.try_retained().is_none());
+        Some(full())
+    }
+}
+
+#[test]
+fn the_store_is_asked_once_per_call_inside_the_brokers_one_lock() {
+    let world = World::new();
+    let probing = Arc::new(Probing::default());
+    let broker = world.ticket_broker(probing.clone(), 8);
+    *probing.broker.lock().unwrap() = Some(broker.clone());
+    let mut conn = broker.admit(ticket(1).into_bytes()).unwrap();
+    assert!(broker.try_retained().is_some(), "free between calls");
+    let page = observe(&mut conn);
+    act(&mut conn, click(&page, "l1", false));
+    metrics(&mut conn);
+    assert_eq!(*probing.held.lock().unwrap(), vec![true, true, true]);
+    assert!(
+        broker.try_retained().is_some(),
+        "free again, and not poisoned"
+    );
+    // The store holds the broker: break the cycle.
+    probing.broker.lock().unwrap().take();
+}
+
+#[test]
+fn a_client_connected_with_a_grant_handed_in_is_never_looked_up_in_the_store() {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    grants.set(&ticket(1), Some(full()));
+    let broker = world.ticket_broker(grants.clone(), 8);
+    let mut handed = broker.connect(Some(full())).unwrap();
+    let page = see(&mut handed);
+    assert_eq!(value_of(&page), Some(FIELD_VALUE));
+    assert!(delivered(&act(&mut handed, click(&page, "h1", true))));
+    metrics(&mut handed);
+    handed.close();
+    // An empty handshake: no ticket, no grant, nothing asked.
+    let mut empty = broker.admit(Vec::new()).unwrap();
+    let page = see(&mut empty);
+    assert_eq!(value_of(&page), None);
+    let refused = act(&mut empty, click(&page, "h2", true));
+    assert_eq!(code(&refused), Some("POLICY_DENIED"), "{refused}");
+    assert_eq!(grants.asks(), 0);
+    assert_eq!(world.events(), 1);
+}
+
+#[test]
+fn a_store_that_lists_nothing_or_panics_grants_nothing_and_the_broker_keeps_serving() {
+    for panics in [false, true] {
+        let world = World::new();
+        let grants = Arc::new(Grants::default());
+        grants.panics.store(panics, Ordering::SeqCst);
+        let broker = world.ticket_broker(grants.clone(), 8);
+        let mut ticketed = broker.admit(ticket(1).into_bytes()).unwrap();
+        let page = see(&mut ticketed);
+        assert_eq!(value_of(&page), None, "panics {panics}");
+        let refused = act(&mut ticketed, click(&page, "p1", true));
+        assert_eq!(code(&refused), Some("POLICY_DENIED"), "{refused}");
+        assert!(!refused_without_lease(&refused));
+        assert_eq!(grants.asks(), 2);
+        let retained = broker.retained().expect("the broker is still available");
+        assert!(!retained.grant_installed);
+
+        // Another client goes on, while the first stays connected.
+        let mut other = broker.connect(Some(full())).unwrap();
+        assert_eq!(ticketed.acquire(), Ok(Acquired::Renewed { number: 1 }));
+        ticketed.release().unwrap();
+        assert!(matches!(other.acquire(), Ok(Acquired::Granted { .. })));
+        let page = see(&mut other);
+        assert_eq!(value_of(&page), Some(FIELD_VALUE));
+        assert!(delivered(&act(&mut other, click(&page, "p2", true))));
+        let served = see(&mut ticketed);
+        assert_eq!(served["snapshot_id"], page["snapshot_id"]);
+        assert_eq!(value_of(&served), None);
+        assert_eq!(world.events(), 1);
+        assert_eq!(grants.asks(), 3);
+        assert!(broker.retained().is_some());
+    }
+}
+
+// ---- the ticket handshake (ADR-0040 decision 3, ADR-0043 decision 9) ----
+
+/// Serves `input` with a handshake on one loop of `broker`: how it ended and what was written.
+fn shake(broker: &Broker, input: &[u8], which: Loop) -> (Admission, Vec<u8>) {
+    let mut sink = Sink::new(None);
+    let reader = Trickle::new(input, 5, None);
+    let admission = match which {
+        Loop::Blocking => broker.serve_sync_with_handshake(reader, &mut sink),
+        Loop::Asynchronous => runtime().block_on(broker.serve_with_handshake(reader, &mut sink)),
+    }
+    .expect("no I/O error");
+    (admission, sink.out)
+}
+
+/// A handshake line followed by an observation that asks for values.
+fn handshake_then_observe(line: &[u8]) -> Vec<u8> {
+    let mut input = line.to_vec();
+    input.push(b'\n');
+    input.extend_from_slice(
+        tool_line(1, "observe_screen", &json!({ "include_values": true })).as_bytes(),
+    );
+    input.push(b'\n');
+    input
+}
+
+/// A fresh broker with a bound of one client and a store that lists [`listed_ticket`].
+fn one_client_broker() -> (World, Arc<Grants>, Broker) {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    grants.set(&listed_ticket(), Some(full()));
+    let broker = world.ticket_broker(grants.clone(), 1);
+    (world, grants, broker)
+}
+
+#[test]
+fn a_handshake_admits_a_listed_ticket_an_unlisted_one_and_an_empty_line() {
+    let (listed, unlisted) = (listed_ticket(), ticket(2));
+    let at_most = "Z".repeat(TICKET_MAX_LEN);
+    let at_least = "-".repeat(TICKET_MIN_LEN);
+    let mut crlf = listed.clone().into_bytes();
+    crlf.push(b'\r');
+    let admitted: [(&[u8], bool); 6] = [
+        (listed.as_bytes(), true),
+        (unlisted.as_bytes(), false),
+        (b"", false),
+        (at_most.as_bytes(), true),
+        (at_least.as_bytes(), true),
+        (&crlf, true),
+    ];
+    for (line, values) in admitted {
+        for which in [Loop::Asynchronous, Loop::Blocking] {
+            let (_world, grants, broker) = one_client_broker();
+            grants.set(&at_most, Some(full()));
+            grants.set(&at_least, Some(full()));
+            let (admission, output) = shake(&broker, &handshake_then_observe(line), which);
+            assert_eq!(admission, Admission::Served, "{line:?}");
+            let lines = served_lines(output);
+            assert_eq!(lines.len(), 1);
+            let page =
+                serde_json::from_str::<Value>(&lines[0]).unwrap()["result"]["structuredContent"]
+                    .clone();
+            assert_eq!(value_of(&page).is_some(), values, "{line:?} {which:?}");
+            assert_eq!(grants.asks(), usize::from(!line.is_empty()));
+            assert!(broker.retained().unwrap().clients.is_empty(), "it left");
+        }
+    }
+}
+
+#[test]
+fn a_handshake_of_any_other_form_ends_the_connection_and_grants_nothing() {
+    let (_world, _grants, probe) = one_client_broker();
+    let limit = probe.config().message_limit();
+    let a = "A".repeat(20);
+    let listed = listed_ticket();
+    let mut refused: Vec<(&str, Vec<u8>)> = vec![
+        ("too short", "A".repeat(TICKET_MIN_LEN - 1).into_bytes()),
+        ("too long", "A".repeat(TICKET_MAX_LEN + 1).into_bytes()),
+        ("a space only", b" ".to_vec()),
+        ("a trailing space", format!("{listed} ").into_bytes()),
+        (
+            "a byte-order mark",
+            format!("\u{feff}{listed}").into_bytes(),
+        ),
+        ("a JSON-RPC message", padded_request(1, 300).into_bytes()),
+    ];
+    for forbidden in [" ", "+", "/", "=", ".", "\r", "\t", "\0", "\u{e9}"] {
+        refused.push((
+            "a forbidden character",
+            format!("{a}{forbidden}{a}").into_bytes(),
+        ));
+    }
+    let mut non_utf8 = a.clone().into_bytes();
+    non_utf8.push(0xFF);
+    non_utf8.extend_from_slice(a.as_bytes());
+    refused.push(("a byte that is not UTF-8", non_utf8));
+    let mut inputs: Vec<(&str, Vec<u8>)> = refused
+        .into_iter()
+        .map(|(what, line)| (what, handshake_then_observe(&line)))
+        .collect();
+    inputs.push((
+        "over the bound",
+        handshake_then_observe(&vec![b'A'; limit + 1]),
+    ));
+    inputs.push((
+        "a listed ticket the input cuts short",
+        listed.clone().into_bytes(),
+    ));
+    inputs.push(("no input", Vec::new()));
+
+    let mut written: BTreeSet<Vec<u8>> = BTreeSet::new();
+    for (what, input) in &inputs {
+        for which in [Loop::Asynchronous, Loop::Blocking] {
+            let (world, grants, broker) = one_client_broker();
+            let (admission, output) = shake(&broker, input, which);
+            assert_eq!(
+                admission,
+                Admission::Refused(BrokerError::Refused),
+                "{what} {which:?}"
+            );
+            written.insert(output);
+            let retained = broker.retained().unwrap();
+            assert!(retained.clients.is_empty(), "{what}: no client entry");
+            assert_eq!(grants.asks(), 0, "{what}");
+            assert_eq!(world.captures(), 0, "{what}: no MCP message was read");
+            // The bound on clients was not consumed, and nothing was spent.
+            let admitted = broker
+                .admit(listed.clone().into_bytes())
+                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            admitted.close();
+        }
+    }
+    assert_eq!(
+        written,
+        BTreeSet::from([Vec::new()]),
+        "nothing is written back"
+    );
+
+    // The same lines handed to `admit` directly, where they are lines.
+    for line in [
+        "A".repeat(TICKET_MIN_LEN - 1),
+        "A".repeat(TICKET_MAX_LEN + 1),
+        format!("{a}+{a}"),
+        format!("{a}\r{a}"),
+        format!("{a}\0{a}"),
+        format!("{listed}\0"),
+        // A trailing `\r` is the stream's framing; given directly, it is a character.
+        format!("{listed}\r"),
+        " ".to_owned(),
+    ] {
+        assert_eq!(
+            probe.admit(line.into_bytes()).err(),
+            Some(BrokerError::Refused)
+        );
+    }
+    assert!(probe.retained().unwrap().clients.is_empty());
+}
+
+#[test]
+fn a_spent_ticket_is_refused_while_its_first_connection_lasts_and_after_it_left() {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    let listed = listed_ticket();
+    let unlisted = ticket(2);
+    grants.set(&listed, Some(full()));
+    let broker = world.ticket_broker(grants.clone(), 8);
+    let invalid = handshake_then_observe(b"not a ticket");
+    let (_, invalid_bytes) = shake(&broker, &invalid, Loop::Blocking);
+
+    let refused_again = |round: &str| {
+        assert_eq!(
+            broker.admit(listed.clone().into_bytes()).err(),
+            Some(BrokerError::Refused),
+            "{round}"
+        );
+        for which in [Loop::Asynchronous, Loop::Blocking] {
+            let (admission, output) =
+                shake(&broker, &handshake_then_observe(listed.as_bytes()), which);
+            assert_eq!(admission, Admission::Refused(BrokerError::Refused));
+            assert_eq!(
+                output, invalid_bytes,
+                "{round}: the same bytes as an invalid line"
+            );
+        }
+    };
+    let first = broker.admit(listed.clone().into_bytes()).unwrap();
+    refused_again("while the first is connected");
+    assert_eq!(broker.retained().unwrap().clients.len(), 1);
+    first.close();
+    refused_again("after it left");
+    // An unlisted ticket is spent alike, and listing it afterwards does not revive it.
+    broker.admit(unlisted.clone().into_bytes()).unwrap().close();
+    grants.set(&unlisted, Some(full()));
+    assert_eq!(
+        broker.admit(unlisted.into_bytes()).err(),
+        Some(BrokerError::Refused)
+    );
+    // A purge deletes perception state, not the spent tickets.
+    world.operator.request_purge();
+    broker.admit(Vec::new()).unwrap().close();
+    assert!(!world.operator.purge_pending());
+    assert_eq!(
+        broker.admit(listed.into_bytes()).err(),
+        Some(BrokerError::Refused)
+    );
+    assert!(broker.retained().unwrap().clients.is_empty());
+}
+
+#[test]
+fn the_spent_set_is_bounded_and_a_full_set_admits_nobody_new_by_ticket() {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    let broker = world.ticket_broker(grants.clone(), 8);
+    let invalid = handshake_then_observe(b"not a ticket");
+    let (_, invalid_bytes) = shake(&broker, &invalid, Loop::Asynchronous);
+    let flood = u64::try_from(MAX_SPENT_TICKETS).unwrap();
+    for n in 0..flood {
+        broker
+            .admit(ticket(1_000 + n).into_bytes())
+            .unwrap_or_else(|e| panic!("ticket {n}: {e:?}"))
+            .close();
+    }
+    let fresh = ticket(1_000 + flood);
+    grants.set(&fresh, Some(full()));
+    assert_eq!(
+        broker.admit(fresh.clone().into_bytes()).err(),
+        Some(BrokerError::Refused),
+        "a full set admits nobody new by ticket"
+    );
+    for which in [Loop::Asynchronous, Loop::Blocking] {
+        let (admission, output) = shake(&broker, &handshake_then_observe(fresh.as_bytes()), which);
+        assert_eq!(admission, Admission::Refused(BrokerError::Refused));
+        assert_eq!(output, invalid_bytes);
+    }
+    assert_eq!(
+        broker.admit(ticket(1_000).into_bytes()).err(),
+        Some(BrokerError::Refused),
+        "a spent one is still refused"
+    );
+    // An empty handshake is still admitted, without a grant.
+    let mut empty = broker.admit(Vec::new()).unwrap();
+    assert_eq!(value_of(&see(&mut empty)), None);
+    empty.close();
+    assert_eq!(grants.asks(), 0);
+    assert!(broker.retained().unwrap().clients.is_empty());
+}
+
+#[test]
+fn a_ticket_never_appears_in_what_the_broker_writes_returns_or_formats() {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    let broker = world.ticket_broker(grants.clone(), 8);
+    let mut seen: Vec<String> = Vec::new();
+    let tickets = [ticket(71), ticket(72)];
+    for (presented, which) in tickets.iter().zip([Loop::Asynchronous, Loop::Blocking]) {
+        grants.set(presented, Some(full()));
+        let mut input = handshake_then_observe(presented.as_bytes());
+        for line in [
+            tool_line(2, "get_engine_metrics", &json!({})),
+            tool_line(3, "execute_action", &json!({ "x": 1 })),
+            "not json".to_owned(),
+            "x".repeat(DEFAULT_MAX_MESSAGE_BYTES + 1),
+        ] {
+            input.extend_from_slice(line.as_bytes());
+            input.push(b'\n');
+        }
+        let (admission, output) = shake(&broker, &input, which);
+        assert_eq!(admission, Admission::Served);
+        seen.push(String::from_utf8(output).unwrap());
+        seen.push(format!("{admission:?}"));
+        // Presented again, spent: the refusal, what `admit` returns, and their formats.
+        let (refusal, output) = shake(
+            &broker,
+            &handshake_then_observe(presented.as_bytes()),
+            which,
+        );
+        seen.push(String::from_utf8(output).unwrap());
+        seen.push(format!("{refusal:?}"));
+        let error = broker
+            .admit(presented.clone().into_bytes())
+            .err()
+            .expect("spent");
+        seen.push(format!("{error:?} {error}"));
+        // A connection still open, by the same ticket's twin, while the broker is formatted.
+        let mut open = broker.admit(format!("{presented}x").into_bytes()).unwrap();
+        observe(&mut open);
+        seen.push(format!("{:?}", broker.retained()));
+        open.close();
+    }
+    for error in [
+        BrokerError::Refused,
+        BrokerError::Lease(LeaseRefusal::TooManyClients),
+        BrokerError::Unavailable,
+    ] {
+        seen.push(format!("{error:?} {error} {:?}", Admission::Refused(error)));
+    }
+    let seen = seen.join("\n");
+    assert!(
+        seen.contains("Refused") && seen.contains("jsonrpc"),
+        "{seen}"
+    );
+    for presented in &tickets {
+        assert!(!seen.contains(presented.as_str()), "{presented} leaked");
+    }
+    assert!(!seen.contains("Qv7-Tkt_"), "a ticket's prefix leaked");
+    // The store is given the hashes of the tickets presented, never a ticket.
+    let hashes: BTreeSet<[u8; 32]> = tickets
+        .iter()
+        .flat_map(|t| [sha256(t), sha256(&format!("{t}x"))])
+        .collect();
+    let asked = grants.asked.lock().unwrap().clone();
+    assert_ne!(asked.len(), 0);
+    assert!(asked.iter().all(|hash| hashes.contains(hash)));
+}
+
+#[test]
+fn a_handshake_beyond_the_bound_on_clients_is_refused_and_leaves_no_trace() {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    let (first, second) = (ticket(1), ticket(2));
+    grants.set(&first, Some(full()));
+    grants.set(&second, Some(full()));
+    let broker = world.ticket_broker(grants.clone(), 2);
+    let a = broker.admit(first.into_bytes()).unwrap();
+    let b = broker.connect(Some(full())).unwrap();
+    let before = broker.retained().unwrap();
+    let full_house = BrokerError::Lease(LeaseRefusal::TooManyClients);
+    assert_eq!(
+        broker.admit(second.clone().into_bytes()).err(),
+        Some(full_house)
+    );
+    assert_eq!(broker.admit(Vec::new()).err(), Some(full_house));
+    for which in [Loop::Asynchronous, Loop::Blocking] {
+        let (admission, output) = shake(&broker, &handshake_then_observe(second.as_bytes()), which);
+        assert_eq!(admission, Admission::Refused(full_house));
+        assert_eq!(output, Vec::<u8>::new());
+    }
+    assert_eq!(broker.retained().unwrap(), before);
+    assert_eq!(grants.asks(), 0);
+    a.close();
+    let c = broker
+        .admit(second.into_bytes())
+        .expect("the refusals spent nothing");
+    assert_eq!(
+        broker.retained().unwrap().clients,
+        BTreeSet::from([b.client(), c.client()])
+    );
+}
+
+// ---- a handshake does bounded work (R-T1-1, D36) ----
+
+/// A peer that sends `byte` for ever and never a line end, counting what is read from it. Past
+/// `cap` bytes it fails, so a handshake that reads on ends the test with an error rather than
+/// hanging it.
+struct Endless {
+    byte: u8,
+    read: usize,
+    cap: usize,
+}
+
+impl Endless {
+    fn new(cap: usize) -> Self {
+        Self {
+            byte: b'A',
+            read: 0,
+            cap,
+        }
+    }
+
+    fn take(&mut self, room: usize) -> io::Result<usize> {
+        if self.read >= self.cap {
+            return Err(io::Error::other("the handshake read past the test's cap"));
+        }
+        let n = room.min(self.cap - self.read);
+        self.read += n;
+        Ok(n)
+    }
+}
+
+impl io::Read for Endless {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.take(buf.len())?;
+        buf[..n].fill(self.byte);
+        Ok(n)
+    }
+}
+
+impl AsyncRead for Endless {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        Poll::Ready(
+            this.take(buf.remaining())
+                .map(|n| buf.put_slice(&vec![this.byte; n])),
+        )
+    }
+}
+
+/// How a handshake is served: by the broker alone, or in a place reserved for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    Unreserved,
+    Reserved,
+}
+
+/// Serves a handshake from `reader` on one loop, in a reserved place or not.
+fn shake_from<R>(broker: &Broker, reader: R, which: Loop, place: Place) -> (Admission, Vec<u8>)
+where
+    R: io::Read + AsyncRead + Unpin,
+{
+    let mut sink = Sink::new(None);
+    let reservation = match place {
+        Place::Reserved => Some(broker.reserve().expect("a place")),
+        Place::Unreserved => None,
+    };
+    let admission = match (which, reservation) {
+        (Loop::Blocking, None) => broker.serve_sync_with_handshake(reader, &mut sink),
+        (Loop::Blocking, Some(r)) => r.serve_sync_with_handshake(reader, &mut sink),
+        (Loop::Asynchronous, None) => {
+            runtime().block_on(broker.serve_with_handshake(reader, &mut sink))
+        }
+        (Loop::Asynchronous, Some(r)) => {
+            runtime().block_on(r.serve_with_handshake(reader, &mut sink))
+        }
+    }
+    .expect("no I/O error");
+    (admission, sink.out)
+}
+
+#[test]
+fn an_endless_handshake_without_a_line_end_is_refused_after_a_bounded_read() {
+    for which in [Loop::Asynchronous, Loop::Blocking] {
+        for place in [Place::Unreserved, Place::Reserved] {
+            let (_world, grants, broker) = one_client_broker();
+            let bound = broker.handshake_read_bound();
+            let limit = broker.config().message_limit();
+            assert_eq!(bound, limit + 1 + 8 * 1024);
+            let mut peer = Endless::new(16 * bound);
+            let (admission, output) = shake_from(&broker, &mut peer, which, place);
+            assert_eq!(
+                admission,
+                Admission::Refused(BrokerError::Refused),
+                "{which:?} {place:?}"
+            );
+            assert!(
+                peer.read > limit && peer.read <= bound,
+                "{which:?} {place:?}: {} bytes read, bound {bound}",
+                peer.read
+            );
+            assert_eq!(output, Vec::<u8>::new());
+            assert_eq!(grants.asks(), 0);
+            assert!(broker.retained().unwrap().clients.is_empty());
+            // Nothing was spent and the one place is free again.
+            broker
+                .reserve()
+                .expect("the place is free")
+                .admit(listed_ticket().into_bytes())
+                .expect("nothing was spent")
+                .close();
+        }
+    }
+}
+
+#[test]
+fn an_oversized_handshake_that_ends_with_a_line_end_is_refused_without_reading_the_rest() {
+    for which in [Loop::Asynchronous, Loop::Blocking] {
+        let (_world, _grants, broker) = one_client_broker();
+        let bound = broker.handshake_read_bound();
+        let limit = broker.config().message_limit();
+        let mut input = vec![b'A'; 3 * limit];
+        input.push(b'\n');
+        input.extend_from_slice(&handshake_then_observe(listed_ticket().as_bytes()));
+        let mut peer = Trickle::new(&input, usize::MAX, None);
+        let (admission, output) = shake_from(&broker, &mut peer, which, Place::Unreserved);
+        assert_eq!(admission, Admission::Refused(BrokerError::Refused));
+        assert!(
+            peer.at <= bound,
+            "{which:?}: {} of {} bytes read, bound {bound}",
+            peer.at,
+            input.len()
+        );
+        assert_eq!(output, Vec::<u8>::new());
+        assert!(broker.retained().unwrap().clients.is_empty());
+    }
+}
+
+#[test]
+fn an_established_connection_still_survives_an_oversized_message_after_its_handshake() {
+    for which in [Loop::Asynchronous, Loop::Blocking] {
+        let (_world, _grants, broker) = one_client_broker();
+        let limit = broker.config().message_limit();
+        let mut input = format!("{}\n", listed_ticket()).into_bytes();
+        input.extend_from_slice(&vec![b'x'; 3 * limit]);
+        input.push(b'\n');
+        input.extend_from_slice(padded_request(2, 300).as_bytes());
+        input.push(b'\n');
+        let (admission, output) = shake_from(&broker, &input[..], which, Place::Reserved);
+        assert_eq!(admission, Admission::Served);
+        let lines = served_lines(output);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(
+            error_code(&serde_json::from_str(&lines[0]).unwrap()),
+            -32600
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&lines[1]).unwrap()["id"],
+            2,
+            "the connection survived"
+        );
+    }
+}
+
+// ---- reservations: a connection counts from the start (R-T1-1, D36) ----
+
+#[test]
+fn a_reservation_whose_handshake_is_refused_frees_its_place() {
+    let (_world, _grants, broker) = one_client_broker();
+    let bad = handshake_then_observe(b"not a ticket");
+    for which in [Loop::Asynchronous, Loop::Blocking] {
+        let (admission, _) = shake_from(&broker, &bad[..], which, Place::Reserved);
+        assert_eq!(admission, Admission::Refused(BrokerError::Refused));
+        broker.reserve().expect("the place is free again");
+    }
+    // Refused by `admit`: a malformed line, then a spent ticket.
+    let reservation = broker.reserve().unwrap();
+    assert_eq!(
+        broker.reserve().err(),
+        Some(BrokerError::Lease(LeaseRefusal::TooManyClients))
+    );
+    assert_eq!(
+        reservation.admit(b"bad".to_vec()).err(),
+        Some(BrokerError::Refused)
+    );
+    broker.admit(listed_ticket().into_bytes()).unwrap().close();
+    let reservation = broker.reserve().unwrap();
+    assert_eq!(
+        reservation.admit(listed_ticket().into_bytes()).err(),
+        Some(BrokerError::Refused),
+        "spent"
+    );
+    broker.reserve().expect("the place is free again");
+}
+
+#[test]
+fn reservations_fill_the_bound_and_one_more_is_refused_before_anything_is_read() {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    let broker = world.ticket_broker(grants.clone(), 3);
+    let client = broker.connect(Some(full())).unwrap();
+    let first = broker.reserve().unwrap();
+    let second = broker.reserve().unwrap();
+    let full_house = Some(BrokerError::Lease(LeaseRefusal::TooManyClients));
+    // No reader exists yet: a listener closes the connection unread.
+    assert_eq!(broker.reserve().err(), full_house);
+    assert_eq!(broker.connect(Some(full())).err(), full_house);
+    assert_eq!(broker.admit(ticket(9).into_bytes()).err(), full_house);
+    let empty = handshake_then_observe(b"");
+    let (admission, _) = shake_from(&broker, &empty[..], Loop::Blocking, Place::Unreserved);
+    assert_eq!(
+        admission,
+        Admission::Refused(BrokerError::Lease(LeaseRefusal::TooManyClients)),
+        "without a reservation the handshake is read, then refused"
+    );
+    assert_eq!(broker.retained().unwrap().clients.len(), 1);
+    drop(first);
+    let third = broker
+        .reserve()
+        .expect("a place freed by a dropped reservation");
+    drop((second, third, client));
+    let all: Vec<Reservation> = (0..3)
+        .map(|_| broker.reserve().expect("all three places are free"))
+        .collect();
+    assert_eq!(broker.reserve().err(), full_house);
+    drop(all);
+    broker.reserve().expect("free again");
+}
+
+#[test]
+fn a_reservation_dropped_without_a_handshake_frees_its_place() {
+    let (_world, _grants, broker) = one_client_broker();
+    let reservation = broker.reserve().unwrap();
+    assert!(format!("{reservation:?}").starts_with("Reservation"));
+    assert_eq!(
+        broker.connect(None).err(),
+        Some(BrokerError::Lease(LeaseRefusal::TooManyClients))
+    );
+    drop(reservation);
+    broker.connect(None).expect("the place is free").close();
+    broker.reserve().expect("the place is free");
+}
+
+#[test]
+fn a_reserved_place_goes_to_the_admitted_client_and_is_freed_when_it_leaves() {
+    let (_world, grants, broker) = one_client_broker();
+    let mut conn = broker
+        .reserve()
+        .unwrap()
+        .admit(listed_ticket().into_bytes())
+        .unwrap();
+    assert_eq!(value_of(&see(&mut conn)), Some(FIELD_VALUE));
+    assert_eq!(grants.asks(), 1);
+    assert_eq!(
+        broker.reserve().err(),
+        Some(BrokerError::Lease(LeaseRefusal::TooManyClients))
+    );
+    conn.close();
+    broker.reserve().expect("freed when the client left");
+}
+
+// ---- coverage the QA of T1 asked for ----
+
+#[test]
+fn two_connections_that_present_one_ticket_at_the_same_moment_admit_exactly_one() {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    let broker = world.ticket_broker(grants, 8);
+    for n in 0..200 {
+        let presented = ticket(5_000 + n);
+        let start = std::sync::Barrier::new(2);
+        let outcomes: Vec<Result<ClientId, BrokerError>> = thread::scope(|scope| {
+            let racers: Vec<_> = (0..2)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        broker
+                            .admit(presented.clone().into_bytes())
+                            .map(|conn| conn.client())
+                    })
+                })
+                .collect();
+            racers.into_iter().map(|r| r.join().unwrap()).collect()
+        });
+        let admitted = outcomes.iter().filter(|o| o.is_ok()).count();
+        assert_eq!(admitted, 1, "round {n}: {outcomes:?}");
+        assert!(
+            outcomes.contains(&Err(BrokerError::Refused)),
+            "round {n}: {outcomes:?}"
+        );
+        assert!(broker.retained().unwrap().clients.is_empty());
+    }
+}
+
+/// A change that narrows the operator's policy.
+type Narrowing = fn(&mut LocalPolicy);
+
+#[test]
+fn a_grant_wider_than_the_operators_policy_is_still_bounded_by_the_policy() {
+    let wider = Grant {
+        applications: BTreeSet::from([APP.to_owned(), "another-app".to_owned()]),
+        deliver_input: true,
+        read_values: true,
+        ..Grant::default()
+    };
+    let narrow: [(&str, Narrowing); 3] = [
+        ("values off", |p| p.include_values = false),
+        ("actuation off", |p| p.actuation_enabled = false),
+        ("another application", |p| {
+            p.allowed_applications = vec!["another-app".to_owned()];
+        }),
+    ];
+    for (what, narrow) in narrow {
+        let world = World::new();
+        narrow(&mut world.operator.policy());
+        let grants = Arc::new(Grants::default());
+        grants.set(&listed_ticket(), Some(wider.clone()));
+        let broker = world.ticket_broker(grants, 8);
+        let mut conn = broker.admit(listed_ticket().into_bytes()).unwrap();
+        let page = see(&mut conn);
+        let values = world.operator.policy().include_values;
+        assert_eq!(value_of(&page).is_some(), values, "{what}");
+        let live = act(&mut conn, click(&page, "w1", true));
+        if what == "values off" {
+            assert!(delivered(&live), "{what}: {live}");
+        } else {
+            assert_eq!(code(&live), Some("POLICY_DENIED"), "{what}: {live}");
+            assert_eq!(world.events(), 0, "{what}");
+        }
     }
 }

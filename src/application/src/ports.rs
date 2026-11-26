@@ -14,6 +14,7 @@ use ommatix_domain::incremental::BgraFrame;
 
 use crate::PortError;
 use crate::contract::ValidatedAction;
+use crate::grant::Grant;
 
 /// Monotonic time and waiting. Injected so that stage timings and settle waits are
 /// reproducible under test (see [`ManualClock`](crate::ManualClock)).
@@ -392,4 +393,25 @@ pub trait PolicyStore: Send + Sync {
     /// The engine has deleted its state and cache for the request that
     /// [`PolicyStore::purge_requested`] reported.
     fn purge_done(&self) {}
+}
+
+/// Reads the operator's grants, each listed under the SHA-256 of the one-use ticket that
+/// selects it (ADR-0040, decisions 3 and 5; proposed). The agent has no port to write a grant.
+///
+/// The broker of the MCP adapter asks it on every tool call of a client that attached with a
+/// ticket, so that a grant the operator changes or withdraws takes effect at that client's next
+/// call, as the stop does. An implementation therefore:
+///
+/// - reads the operator's side afresh on each call, keeping nothing between calls that could
+///   outlive a change;
+/// - fails closed: when it cannot read or parse what the operator wrote, it answers `None`
+///   for every ticket, so that no client holds a grant (ADR-0040, decision 7);
+/// - never writes: that a ticket was spent is kept by the broker, in memory, for the life of
+///   the engine process (ADR-0040, decision 4).
+///
+/// It is given the ticket's hash, never the ticket itself.
+pub trait GrantStore: Send + Sync {
+    /// The grant listed for the ticket whose SHA-256 is `ticket_sha256`, or `None` when none
+    /// is, or when the grants cannot be read.
+    fn grant(&self, ticket_sha256: &[u8; 32]) -> Option<Grant>;
 }

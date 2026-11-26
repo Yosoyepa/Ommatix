@@ -26,8 +26,17 @@
 //!   client's grant (ADR-0039 and ADR-0040, proposed); each [`BrokerConnection`] speaks the
 //!   same protocol through a [`Connection`]. A client asks for the lease with the `lease`
 //!   argument of `observe_screen` and learns where it stands under [`LEASE_META_KEY`].
-//!   Nothing in the executable constructs one yet; only tests do (this crate's and the
-//!   acceptance suite's scenarios): the binary serves stdio only.
+//!   A connection is served over asynchronous streams ([`BrokerConnection::serve`]) or blocking
+//!   ones ([`BrokerConnection::serve_sync`]) with the same loop. A client is admitted with a
+//!   grant handed in by the caller ([`Broker::connect`]), or by a one-use ticket on the first
+//!   line of its connection ([`Broker::admit`], [`Broker::serve_with_handshake`],
+//!   [`Broker::serve_sync_with_handshake`]), whose grant is asked of an
+//!   [`ommatix_application::GrantStore`] on every call (ADR-0040, ADR-0043, proposed). A
+//!   handshake reads a bounded number of bytes, and a listener counts a connection whose
+//!   handshake is not settled against the bound on clients with a [`Reservation`]
+//!   ([`Broker::reserve`]). Nothing in the executable constructs one yet; only tests do (this crate's and the
+//!   acceptance suite's scenarios): the binary serves stdio only, and no transport serves a
+//!   broker yet.
 //! - [`McpConfig`] is the `[mcp]` configuration section.
 //! - [`dto`] holds the wire DTOs and their mapping to the application contract types.
 //! - [`schemas`] embeds the contract's JSON schemas from `docs/thesis/contratos/esquemas/`.
@@ -80,7 +89,10 @@ mod server;
 mod tools;
 mod transport;
 
-pub use broker::{Broker, BrokerConnection, BrokerError, BrokerState};
+pub use broker::{
+    Admission, Broker, BrokerConnection, BrokerError, BrokerState, MAX_SPENT_TICKETS, Reservation,
+    TICKET_MAX_LEN, TICKET_MIN_LEN,
+};
 pub use config::{DEFAULT_MAX_MESSAGE_BYTES, McpConfig};
 pub use protocol::{
     Connection, LEGACY_PROTOCOL_VERSION, MODERN_PROTOCOL_VERSION, Profile, SERVER_NAME,

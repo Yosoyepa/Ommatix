@@ -35,8 +35,8 @@ pub use grant::{Grant, GrantedPolicy, InstalledGrant};
 pub use lease::LeaseTable;
 pub use ports::{
     AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame,
-    Clock, DeliveryReceipt, FrameCapturer, LocalPolicy, NativeIdentity, NoAccessibility,
-    OsActuator, PolicyStore, TextRecognizer, TopLevelWindow, VisionDetector, WindowOpacity,
-    WindowPin,
+    Clock, DeliveryReceipt, FrameCapturer, GrantStore, LocalPolicy, NativeIdentity,
+    NoAccessibility, OsActuator, PolicyStore, TextRecognizer, TopLevelWindow, VisionDetector,
+    WindowOpacity, WindowPin,
 };
 pub use window_scope::{window_scope_applies, window_scope_problem};

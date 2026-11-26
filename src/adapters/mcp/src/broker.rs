@@ -22,9 +22,14 @@
 //! 3. The lease is settled for the caller at that instant; when it passed to another client,
 //!    the published snapshot is spent, so that the new holder observes before it acts.
 //! 4. The caller's grant is installed for the length of the call: the gate and the view
-//!    decide under the meet of the operator's policy and that grant. A client without a valid
-//!    grant is served under [`Grant::default`], which permits no live input and no values
-//!    (ADR-0040, decision 7).
+//!    decide under the meet of the operator's policy and that grant. A client admitted with a
+//!    grant handed in by its caller ([`Broker::connect`]) keeps that grant for its whole
+//!    connection; a client admitted by a ticket ([`Broker::admit`]) has its grant asked of the
+//!    [`GrantStore`] at this step, on every call, so that a grant the operator changes or
+//!    withdraws takes effect at that client's next call (ADR-0040, decision 5). A client without
+//!    a valid grant (none handed in, an empty handshake, a ticket the store does not list, a
+//!    store that cannot answer) is served under [`Grant::default`], which permits no live input
+//!    and no values (ADR-0040, decision 7).
 //! 5. `observe_screen` publishes a new snapshot only for the holder, or for any client while
 //!    nobody holds the lease; any other client gets the published page served again for it,
 //!    or `STALE_SNAPSHOT` when nothing is published. `execute_action` runs a dry run for any
@@ -49,31 +54,84 @@
 //! with it; the last one to leave purges the engine, as the end of the stdio server's
 //! connection does (ADR-0039, decision 10).
 //!
+//! ## Tickets (ADR-0040 decision 3, ADR-0043 decision 9; proposed)
+//!
+//! A transport that cannot be handed a grant by its caller admits a client from the first line
+//! of its connection, before any MCP message ([`Broker::admit`], or the serving functions
+//! [`Broker::serve_with_handshake`] and [`Broker::serve_sync_with_handshake`]):
+//!
+//! - an empty line admits a client without a grant;
+//! - a ticket, [`TICKET_MIN_LEN`] to [`TICKET_MAX_LEN`] characters of the base64url alphabet
+//!   (`A`–`Z`, `a`–`z`, `0`–`9`, `-`, `_`) and nothing else, is hashed with SHA-256 at once;
+//!   the line is wiped, and the hash is all the broker keeps and all it asks the store with;
+//! - a ticket is spent by its first use, for the life of the broker (ADR-0040, decision 4): a
+//!   later connection that presents it is refused, whether or not the first is still
+//!   connected and whether or not the store lists it;
+//! - anything else (a line over the message bound, a line of another form, an input that ends
+//!   before the line's `\n`, a spent ticket, a ticket when the spent set is full) is refused
+//!   with [`BrokerError::Refused`]: the connection ends, nothing is written back, no client
+//!   entry stays and no MCP message is read.
+//!
+//! A ticket the store does not list is admitted, without a grant, and spent, exactly as a
+//! listed one is: the handshake never asks the store, so its outcome and its timing are the
+//! same for a listed and an unlisted ticket, and a peer cannot use it to learn which tickets the
+//! operator wrote. The store is asked at each tool call instead, so the client holds whatever
+//! the operator lists for its ticket at that call, and nothing while it lists nothing.
+//!
+//! A handshake does bounded work. Its line is read by the bounded reader of every other line,
+//! but a line longer than the message limit is refused as soon as it passes the limit, without
+//! reading on to its end: a handshake reads at most [`Broker::handshake_read_bound`] bytes (the
+//! limit, one byte, and one 8 KiB buffer), whatever the peer sends. After admission the reader
+//! reads an oversized message on to its end again, so an established connection survives one.
+//! A connection whose handshake is not settled counts against the bound on clients when its
+//! listener holds a [`Reservation`] for it ([`Broker::reserve`]), taken before the first read:
+//! peers that connect and send nothing cannot hold more places, or threads, than the bound.
+//!
+//! The spent set is bounded by [`MAX_SPENT_TICKETS`] hashes (32 bytes each), so a peer that
+//! presents ticket after ticket cannot exhaust memory. When it is full the broker fails closed:
+//! it admits nobody new by ticket, with the same refusal as a spent ticket, until the engine
+//! process restarts; an empty handshake is still admitted, without a grant.
+//!
 //! Nothing in the executable constructs a broker; only tests do (this crate's and the acceptance
-//! suite's scenarios): the executable serves stdio only.
+//! suite's scenarios): the executable serves stdio only, and no transport (pipe or socket)
+//! serves a broker yet.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::num::NonZeroUsize;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use ommatix_application::contract::{ActionRequest, ActionResult, ErrorCode, ToolError};
 use ommatix_application::lease::{Acquired, ClientId, LeaseChange, LeaseRefusal, Released};
 use ommatix_application::{
-    Clock, Engine, EngineConfig, Grant, GrantedPolicy, JOURNAL_CLIENTS, LeaseTable, PolicyStore,
-    Ports,
+    Clock, Engine, EngineConfig, Grant, GrantStore, GrantedPolicy, JOURNAL_CLIENTS, LeaseTable,
+    PolicyStore, Ports,
 };
 use ommatix_domain::identity::ActionStatus;
 use rmcp::model::Tool;
 use serde_json::Value;
-use tokio::io::{AsyncRead, AsyncWrite};
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 
 use crate::config::McpConfig;
 use crate::dto::LeaseArgument;
 use crate::protocol::{Backend, Connection};
-use crate::server::exchange;
+use crate::server::{READ_CHUNK, exchange, exchange_blocking};
 use crate::tools::{self, CallError, LeaseReport, ToolCall, ToolOutput};
+use crate::transport::{Frame, LineReader};
+
+/// The fewest characters of a ticket (ADR-0043 decision 9; D33): 32 base64url characters carry
+/// 192 bits.
+pub const TICKET_MIN_LEN: usize = 32;
+
+/// The most characters of a ticket.
+pub const TICKET_MAX_LEN: usize = 128;
+
+/// The most tickets a broker remembers as spent: 4096 hashes of 32 bytes, 128 KiB. A full set
+/// admits nobody new by ticket until the engine process restarts (fail closed).
+pub const MAX_SPENT_TICKETS: usize = 4096;
 
 /// The refusal of a live action from a client that does not hold the lease and whose journal
 /// does not know its request identifier (ADR-0039, decisions 4 and 6). It names the limit and
@@ -100,6 +158,21 @@ pub enum BrokerError {
     /// client and serves no tool call, so nothing is delivered (fail closed); a connection
     /// that leaves still deletes its state, and the last one purges the engine.
     Unavailable,
+    /// A handshake admitted nobody: its line was over the bound, of another form than an empty
+    /// line or a ticket, or ended with the input; or it named a ticket already spent, or the
+    /// set of spent tickets is full. One refusal for all of these, which carries nothing of the
+    /// line (ADR-0043, decision 9).
+    Refused,
+}
+
+/// How a connection served with a handshake ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admission {
+    /// The handshake admitted a client, whose connection was served until its input ended;
+    /// the client then left.
+    Served,
+    /// The handshake admitted nobody: nothing was written back and no MCP message was read.
+    Refused(BrokerError),
 }
 
 impl std::fmt::Display for BrokerError {
@@ -112,6 +185,7 @@ impl std::fmt::Display for BrokerError {
             Self::ZeroTerm => f.write_str("the lease term must not be zero"),
             Self::Lease(refusal) => refusal.fmt(f),
             Self::Unavailable => f.write_str("the broker is unavailable after a failed call"),
+            Self::Refused => f.write_str("the handshake admitted nobody"),
         }
     }
 }
@@ -121,7 +195,7 @@ impl std::error::Error for BrokerError {}
 /// What a broker retains, for research and tests: counts only, never screen content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrokerState {
-    /// The clients connected, each with the grant it was admitted with.
+    /// The clients connected.
     pub clients: BTreeSet<ClientId>,
     /// Whether the policy the engine reads outside a call differs from the operator's: true
     /// only if a client's grant stayed installed after its call.
@@ -144,6 +218,49 @@ struct Shared {
     state: Mutex<State>,
     config: McpConfig,
     tools: Arc<[Tool]>,
+    /// The operator's grants by ticket hash, asked on every call of a client admitted by
+    /// ticket; `None` when the broker was built without one, and then no ticket grants anything.
+    grant_store: Option<Arc<dyn GrantStore>>,
+}
+
+/// Where a connected client's grant comes from.
+enum Authority {
+    /// Handed in by the caller at connect (or none, for an empty handshake), and kept for the
+    /// whole connection.
+    Handed(Option<Grant>),
+    /// The SHA-256 of the ticket the client attached with: its grant is asked of the
+    /// [`GrantStore`] on each call. The ticket itself is not kept.
+    Ticket([u8; 32]),
+}
+
+/// What a well-formed handshake line presents.
+enum Presented {
+    /// An empty line: no ticket.
+    Nothing,
+    /// A ticket, by its SHA-256.
+    Ticket([u8; 32]),
+}
+
+impl Presented {
+    /// Reads a handshake line without its terminator: empty, or a ticket of the exact form;
+    /// `None` for anything else.
+    fn parse(line: &[u8]) -> Option<Self> {
+        if line.is_empty() {
+            return Some(Self::Nothing);
+        }
+        let form = (TICKET_MIN_LEN..=TICKET_MAX_LEN).contains(&line.len())
+            && line
+                .iter()
+                .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        form.then(|| Self::Ticket(Sha256::digest(line).into()))
+    }
+}
+
+/// Overwrites a handshake line before its buffer is freed, so that the broker keeps no copy of
+/// a ticket once it is hashed. `black_box` keeps the writes from being dropped as dead stores.
+fn wipe(mut line: Vec<u8>) {
+    line.fill(0);
+    std::hint::black_box(&line);
 }
 
 /// Everything a check and the action it guards read or change, behind the broker's one lock.
@@ -156,8 +273,105 @@ struct State {
     granted: Arc<GrantedPolicy>,
     /// The operator's store itself, for the stop and the purge request.
     operator: Arc<dyn PolicyStore>,
-    /// The grant of each connected client; `None` for a client without a valid grant.
-    grants: BTreeMap<ClientId, Option<Grant>>,
+    /// Each connected client, with where its grant comes from.
+    clients: BTreeMap<ClientId, Authority>,
+    /// The hashes of the tickets spent so far, at most [`MAX_SPENT_TICKETS`]. Kept for the
+    /// life of the broker: a purge deletes perception state, not this.
+    spent: BTreeSet<[u8; 32]>,
+    /// The bound on clients given to [`Broker::new`].
+    max_clients: usize,
+    /// Places held by [`Reservation`]s: connections accepted whose handshake is not settled.
+    /// Connected clients plus reservations never exceed `max_clients`.
+    reserved: usize,
+}
+
+/// A place among a broker's clients, held for a connection whose handshake has not been read yet
+/// (ADR-0043, decision 7; D36). A listener takes one with [`Broker::reserve`] when it accepts a
+/// connection, before it gives the connection a thread or reads a byte from it, and closes the
+/// connection unread when the broker refuses. The reservation counts against the bound on
+/// clients from that moment, so peers that connect and send nothing cannot hold more threads
+/// than the bound allows.
+///
+/// Serving the connection consumes it ([`Reservation::serve_sync_with_handshake`],
+/// [`Reservation::serve_with_handshake`], [`Reservation::admit`]): an admitted client takes the
+/// place over, and leaving frees it as for any client; a refused handshake frees it at once.
+/// Dropping an unused reservation frees its place.
+pub struct Reservation {
+    shared: Arc<Shared>,
+    held: bool,
+}
+
+impl std::fmt::Debug for Reservation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reservation")
+            .field("held", &self.held)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Reservation {
+    /// Admits a client by its handshake line in this reserved place, as [`Broker::admit`] does.
+    /// The place goes to the client, or is freed when the handshake is refused.
+    ///
+    /// # Errors
+    ///
+    /// As [`Broker::admit`].
+    pub fn admit(self, handshake: Vec<u8>) -> Result<BrokerConnection, BrokerError> {
+        self.broker().admit_with(Some(self), handshake)
+    }
+
+    /// [`Broker::serve_with_handshake`] in this reserved place.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error of the stream, while reading the handshake or serving the connection.
+    pub async fn serve_with_handshake<R, W>(self, reader: R, writer: W) -> io::Result<Admission>
+    where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        self.broker()
+            .handshake_then_serve(Some(self), reader, writer)
+            .await
+    }
+
+    /// [`Broker::serve_sync_with_handshake`] in this reserved place: what a listener that gives
+    /// each connection a thread runs on that thread.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error of the stream, while reading the handshake or serving the connection.
+    pub fn serve_sync_with_handshake<R, W>(self, reader: R, writer: W) -> io::Result<Admission>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
+        self.broker()
+            .handshake_then_serve_sync(Some(self), reader, writer)
+    }
+
+    fn broker(&self) -> Broker {
+        Broker {
+            shared: Arc::clone(&self.shared),
+        }
+    }
+
+    /// Gives the place back inside the lock the caller holds, so that nothing else takes it in
+    /// between.
+    fn settle(mut self, state: &mut State) {
+        if std::mem::replace(&mut self.held, false) {
+            state.reserved = state.reserved.saturating_sub(1);
+        }
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if std::mem::replace(&mut self.held, false) {
+            let mut state = self.shared.lock_to_delete();
+            state.reserved = state.reserved.saturating_sub(1);
+        }
+    }
 }
 
 impl Broker {
@@ -172,10 +386,41 @@ impl Broker {
     /// [`BrokerError::ZeroTerm`] when `term` is zero.
     pub fn new(
         engine: EngineConfig,
+        ports: Ports,
+        config: McpConfig,
+        term: Duration,
+        max_clients: usize,
+    ) -> Result<Self, BrokerError> {
+        Self::build(engine, ports, config, term, max_clients, None)
+    }
+
+    /// [`Broker::new`], with the operator's grants by ticket (ADR-0040, decisions 3 and 5): a
+    /// client admitted by a ticket ([`Broker::admit`]) has its grant asked of `grants` on every
+    /// tool call, inside the broker's lock. A store that panics answers no grant for that call
+    /// and leaves the broker serving (fail closed). Clients connected with a grant handed in
+    /// ([`Broker::connect`]) are never looked up.
+    ///
+    /// # Errors
+    ///
+    /// As [`Broker::new`].
+    pub fn with_grant_store(
+        engine: EngineConfig,
+        ports: Ports,
+        config: McpConfig,
+        term: Duration,
+        max_clients: usize,
+        grants: Arc<dyn GrantStore>,
+    ) -> Result<Self, BrokerError> {
+        Self::build(engine, ports, config, term, max_clients, Some(grants))
+    }
+
+    fn build(
+        engine: EngineConfig,
         mut ports: Ports,
         config: McpConfig,
         term: Duration,
         max_clients: usize,
+        grant_store: Option<Arc<dyn GrantStore>>,
     ) -> Result<Self, BrokerError> {
         let bound = NonZeroUsize::new(max_clients)
             .filter(|bound| bound.get() <= JOURNAL_CLIENTS)
@@ -191,13 +436,17 @@ impl Broker {
             clock,
             granted,
             operator,
-            grants: BTreeMap::new(),
+            clients: BTreeMap::new(),
+            spent: BTreeSet::new(),
+            max_clients,
+            reserved: 0,
         };
         Ok(Self {
             shared: Arc::new(Shared {
                 state: Mutex::new(state),
                 config,
                 tools: tools::descriptors().into(),
+                grant_store,
             }),
         })
     }
@@ -212,24 +461,228 @@ impl Broker {
     ///
     /// # Errors
     ///
-    /// [`BrokerError::Lease`] with [`LeaseRefusal::TooManyClients`] at the bound,
-    /// [`BrokerError::Unavailable`] after a failed call.
+    /// [`BrokerError::Lease`] with [`LeaseRefusal::TooManyClients`] at the bound (connected
+    /// clients and [`Reservation`]s together), [`BrokerError::Unavailable`] after a failed call.
     pub fn connect(&self, grant: Option<Grant>) -> Result<BrokerConnection, BrokerError> {
         let client = {
             let mut state = self.shared.lock()?;
             let now = state.clock.now();
             state.enter();
+            state.room()?;
             let outcome = state.leases.connect(now);
             state.apply(&outcome.change);
             let client = outcome.result.map_err(BrokerError::Lease)?;
-            state.grants.insert(client, grant);
+            state.clients.insert(client, Authority::Handed(grant));
             client
         };
+        Ok(self.connection_for(client))
+    }
+
+    /// Admits a client from the first line of its connection, before any MCP message (ADR-0040
+    /// decision 3, ADR-0043 decision 9; proposed). `handshake` is that line without its
+    /// terminator; the broker takes it, hashes a ticket at once and wipes the line.
+    ///
+    /// An empty line admits a client without a grant. A ticket admits a client bound to the
+    /// ticket's hash, whose grant is asked of the [`GrantStore`] on each of its calls, and is
+    /// spent: no later connection can present it while this broker lives. A ticket the store
+    /// does not list is admitted and spent alike (see the module's documentation for why).
+    ///
+    /// # Errors
+    ///
+    /// [`BrokerError::Refused`] for a line of any other form, a spent ticket or a full spent
+    /// set; [`BrokerError::Lease`] with [`LeaseRefusal::TooManyClients`] at the bound on
+    /// clients (connected clients and [`Reservation`]s together), which spends no ticket;
+    /// [`BrokerError::Unavailable`] after a failed call. A refused handshake leaves no client
+    /// entry and consumes nothing of the bound.
+    pub fn admit(&self, handshake: Vec<u8>) -> Result<BrokerConnection, BrokerError> {
+        self.admit_with(None, handshake)
+    }
+
+    /// Holds a place among the clients for a connection just accepted, before its handshake is
+    /// read (ADR-0043, decision 7; D36). A listener calls it before it reads a byte from the
+    /// connection or gives it a thread, and closes the connection unread when it is refused; see
+    /// [`Reservation`].
+    ///
+    /// # Errors
+    ///
+    /// [`BrokerError::Lease`] with [`LeaseRefusal::TooManyClients`] when connected clients and
+    /// reservations already fill the bound; [`BrokerError::Unavailable`] after a failed call.
+    pub fn reserve(&self) -> Result<Reservation, BrokerError> {
+        let mut state = self.shared.lock()?;
+        state.room()?;
+        state.reserved += 1;
+        Ok(Reservation {
+            shared: Arc::clone(&self.shared),
+            held: true,
+        })
+    }
+
+    /// The most bytes a handshake reads from its stream before it admits or refuses: the
+    /// message limit, one byte for a `\r`, and one buffer of the reader (8 KiB). A handshake line
+    /// longer than the limit is refused as soon as it passes the limit, whether or not a line end
+    /// follows, so a peer that sends bytes without end costs a bounded read (ADR-0043, decision
+    /// 9; D36).
+    pub fn handshake_read_bound(&self) -> usize {
+        self.shared
+            .config
+            .message_limit()
+            .saturating_add(1)
+            .saturating_add(READ_CHUNK)
+    }
+
+    fn admit_with(
+        &self,
+        reservation: Option<Reservation>,
+        handshake: Vec<u8>,
+    ) -> Result<BrokerConnection, BrokerError> {
+        let presented = Presented::parse(&handshake);
+        wipe(handshake);
+        // A refusal here drops the reservation, which frees its place.
+        let presented = presented.ok_or(BrokerError::Refused)?;
+        let client = {
+            let mut state = self.shared.lock()?;
+            // The place is given back under this lock: the admitted client takes it over below,
+            // or it stays free when the handshake is refused.
+            if let Some(reservation) = reservation {
+                reservation.settle(&mut state);
+            }
+            if let Presented::Ticket(hash) = &presented
+                && (state.spent.contains(hash) || state.spent.len() >= MAX_SPENT_TICKETS)
+            {
+                return Err(BrokerError::Refused);
+            }
+            let now = state.clock.now();
+            state.enter();
+            state.room()?;
+            let outcome = state.leases.connect(now);
+            state.apply(&outcome.change);
+            let client = outcome.result.map_err(BrokerError::Lease)?;
+            let authority = match presented {
+                Presented::Nothing => Authority::Handed(None),
+                Presented::Ticket(hash) => {
+                    state.spent.insert(hash);
+                    Authority::Ticket(hash)
+                }
+            };
+            state.clients.insert(client, authority);
+            client
+        };
+        Ok(self.connection_for(client))
+    }
+
+    /// Reads the handshake line from `reader` with the bounded reader of every other line,
+    /// admits a client by it ([`Broker::admit`]) and serves that client's connection with
+    /// [`BrokerConnection::serve`]'s loop, on the same reader, until its input ends; the client
+    /// then leaves. A refused handshake writes nothing back and reads no MCP message. The
+    /// handshake reads at most [`Broker::handshake_read_bound`] bytes: a line longer than the
+    /// message limit is refused as soon as it passes it. A listener that must count the
+    /// connection against the bound before the handshake uses [`Reservation`] instead.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error of the stream, while reading the handshake or serving the connection.
+    pub async fn serve_with_handshake<R, W>(&self, reader: R, writer: W) -> io::Result<Admission>
+    where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        self.handshake_then_serve(None, reader, writer).await
+    }
+
+    /// [`Broker::serve_with_handshake`] over a blocking reader and writer, for a transport
+    /// that gives each connection a thread (ADR-0043): the same handshake, then
+    /// [`BrokerConnection::serve_sync`]'s loop on the same reader.
+    ///
+    /// # Errors
+    ///
+    /// An I/O error of the stream, while reading the handshake or serving the connection.
+    pub fn serve_sync_with_handshake<R, W>(&self, reader: R, writer: W) -> io::Result<Admission>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
+        self.handshake_then_serve_sync(None, reader, writer)
+    }
+
+    async fn handshake_then_serve<R, W>(
+        &self,
+        reservation: Option<Reservation>,
+        reader: R,
+        mut writer: W,
+    ) -> io::Result<Admission>
+    where
+        R: AsyncRead + Unpin,
+        W: AsyncWrite + Unpin,
+    {
+        let mut lines = self.handshake_reader(BufReader::with_capacity(READ_CHUNK, reader));
+        let frame = lines.next_frame().await?;
+        let mut conn = match self.admit_frame(reservation, &mut lines, frame) {
+            Ok(conn) => conn,
+            Err(refusal) => return Ok(Admission::Refused(refusal)),
+        };
+        let outcome = exchange(&mut conn.connection, &mut lines, &mut writer).await;
+        conn.close();
+        outcome.map(|()| Admission::Served)
+    }
+
+    fn handshake_then_serve_sync<R, W>(
+        &self,
+        reservation: Option<Reservation>,
+        reader: R,
+        mut writer: W,
+    ) -> io::Result<Admission>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
+        let mut lines = self.handshake_reader(io::BufReader::with_capacity(READ_CHUNK, reader));
+        let frame = lines.next_frame_blocking()?;
+        let mut conn = match self.admit_frame(reservation, &mut lines, frame) {
+            Ok(conn) => conn,
+            Err(refusal) => return Ok(Admission::Refused(refusal)),
+        };
+        let outcome = exchange_blocking(&mut conn.connection, &mut lines, &mut writer);
+        conn.close();
+        outcome.map(|()| Admission::Served)
+    }
+
+    /// The reader of a connection, set to read its handshake: a line over the message limit
+    /// ends the read as soon as it passes the limit.
+    fn handshake_reader<R>(&self, inner: R) -> LineReader<R> {
+        let mut lines = LineReader::new(inner, self.shared.config.message_limit());
+        lines.cut_oversized(true);
+        lines
+    }
+
+    /// The handshake's frame: a line that ended at its `\n` is admitted or refused by
+    /// [`Broker::admit`]; an oversized line, the end of input, or a line the input cut short is
+    /// refused. Once a client is admitted, the reader goes back to reading an oversized message
+    /// on to its end, so that an established connection survives one.
+    fn admit_frame<R>(
+        &self,
+        reservation: Option<Reservation>,
+        lines: &mut LineReader<R>,
+        frame: Frame,
+    ) -> Result<BrokerConnection, BrokerError> {
+        let admitted = match frame {
+            Frame::Message(line) if lines.terminated() => self.admit_with(reservation, line),
+            Frame::Message(line) => {
+                wipe(line);
+                Err(BrokerError::Refused)
+            }
+            Frame::Oversized | Frame::Eof => Err(BrokerError::Refused),
+        };
+        lines.cut_oversized(false);
+        admitted
+    }
+
+    /// The connection of a client just admitted.
+    fn connection_for(&self, client: ClientId) -> BrokerConnection {
         let member = Member {
             shared: Arc::clone(&self.shared),
             client,
         };
-        Ok(BrokerConnection {
+        BrokerConnection {
             connection: Connection::with_backend(
                 Box::new(member.clone()),
                 self.shared.config,
@@ -237,17 +690,19 @@ impl Broker {
             ),
             member,
             open: true,
-        })
+        }
     }
 
     /// What the broker retains now, `None` after a failed call.
     pub fn retained(&self) -> Option<BrokerState> {
-        let state = self.shared.lock().ok()?;
-        Some(BrokerState {
-            clients: state.grants.keys().copied().collect(),
-            grant_installed: state.granted.current() != state.operator.current(),
-            engine: state.engine.retained_state_sizes(),
-        })
+        Some(self.shared.lock().ok()?.retained())
+    }
+
+    /// [`Broker::retained`] without waiting: `None` while the broker's lock is held, by a call
+    /// being served on any thread (this one included), or after a failed call. It never blocks,
+    /// so a status report, or a [`GrantStore`] asked inside a call, can use it.
+    pub fn try_retained(&self) -> Option<BrokerState> {
+        Some(self.shared.state.try_lock().ok()?.retained())
     }
 }
 
@@ -262,9 +717,45 @@ impl Shared {
     fn lock_to_delete(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// The grant a client holds for the call being served, read under the broker's lock: the
+    /// one handed in at connect, or what the store lists for the client's ticket at this
+    /// instant (ADR-0040, decision 5). `None`, which installs the default grant, when the store
+    /// lists nothing, when there is no store, or when the store panics: its panic is contained
+    /// here, so that it neither grants anything nor poisons the broker's lock.
+    fn grant_of(&self, client: Option<&Authority>) -> Option<Grant> {
+        match client? {
+            Authority::Handed(grant) => grant.clone(),
+            Authority::Ticket(hash) => {
+                let store = self.grant_store.as_ref()?;
+                catch_unwind(AssertUnwindSafe(|| store.grant(hash)))
+                    .ok()
+                    .flatten()
+            }
+        }
+    }
 }
 
 impl State {
+    /// [`BrokerState`] now.
+    fn retained(&self) -> BrokerState {
+        BrokerState {
+            clients: self.clients.keys().copied().collect(),
+            grant_installed: self.granted.current() != self.operator.current(),
+            engine: self.engine.retained_state_sizes(),
+        }
+    }
+
+    /// Whether one more client or reservation fits within the bound: connected clients and
+    /// reservations together never exceed it.
+    fn room(&self) -> Result<(), BrokerError> {
+        if self.clients.len().saturating_add(self.reserved) >= self.max_clients {
+            Err(BrokerError::Lease(LeaseRefusal::TooManyClients))
+        } else {
+            Ok(())
+        }
+    }
+
     /// The operator's side, at every entry into the broker: the purge request is honoured as
     /// the stdio server honours it at a request boundary, and a purge or the operator's stop
     /// revokes the lease (ADR-0039, decision 7). The stop itself is enforced by the gate.
@@ -330,9 +821,10 @@ impl Backend for Member {
         state.apply(&settled.change);
         // A client the table does not know neither publishes nor delivers.
         let holds = settled.result.unwrap_or(false);
-        let reports = asked || state.grants.len() > 1;
+        let reports = asked || state.clients.len() > 1;
+        let grant = self.shared.grant_of(state.clients.get(&self.client));
         let granted = Arc::clone(&state.granted);
-        let _installed = granted.install(state.grants.get(&self.client).cloned().flatten());
+        let _installed = granted.install(grant);
         let engine = &mut state.engine;
         // The age of the published page when this response serves it again.
         let mut shared_age = None;
@@ -452,8 +944,30 @@ impl BrokerConnection {
         R: AsyncRead + Unpin,
         W: AsyncWrite + Unpin,
     {
-        let limit = self.member.shared.config.message_limit();
-        let outcome = exchange(&mut self.connection, limit, reader, &mut writer).await;
+        let mut lines = LineReader::new(
+            BufReader::with_capacity(READ_CHUNK, reader),
+            self.member.shared.config.message_limit(),
+        );
+        let outcome = exchange(&mut self.connection, &mut lines, &mut writer).await;
+        self.close();
+        outcome
+    }
+
+    /// [`BrokerConnection::serve`] over a blocking reader and writer, for a transport that
+    /// gives each connection a thread (ADR-0043). The loop is the same: the same framing and
+    /// bounds, the same answer to every frame, one reply written and flushed at a time; at the
+    /// end of input, or when the reader or the writer fails, the client leaves, and the last
+    /// one purges the engine. Returns at end of input or on an I/O error.
+    pub fn serve_sync<R, W>(mut self, reader: R, mut writer: W) -> io::Result<()>
+    where
+        R: io::Read,
+        W: io::Write,
+    {
+        let mut lines = LineReader::new(
+            io::BufReader::with_capacity(READ_CHUNK, reader),
+            self.member.shared.config.message_limit(),
+        );
+        let outcome = exchange_blocking(&mut self.connection, &mut lines, &mut writer);
         self.close();
         outcome
     }
@@ -475,8 +989,8 @@ impl BrokerConnection {
         let outcome = state.leases.disconnect(client, now);
         state.apply(&outcome.change);
         state.engine.forget_client(client);
-        state.grants.remove(&client);
-        if state.grants.is_empty() {
+        state.clients.remove(&client);
+        if state.clients.is_empty() {
             state.engine.purge();
         }
     }
