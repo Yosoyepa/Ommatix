@@ -12,12 +12,14 @@
 
 🇬🇧 [Read in English](README.md)
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-mobile-dark.svg">
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/hero-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.svg">
-  <img src="docs/assets/readme/hero-light.svg" alt="Una interfaz estable ante un escritorio cambiante: los cambios locales se convierten en un ID de elemento y su revisión." width="1200">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-mobile-dark.svg">
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/hero-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.svg">
+    <img src="docs/assets/readme/hero-light.svg" alt="Una interfaz estable ante un escritorio cambiante: los cambios quedan en local; el agente recibe IDs y revisiones, nunca coordenadas." width="1200">
+  </picture>
+</p>
 
 Ommatix es un prototipo de investigación de tesis que permite a un agente LLM dirigirse a
 elementos del escritorio por **IDs de sesión y revisiones en lugar de coordenadas**. Su motor
@@ -27,11 +29,16 @@ acciones son dry run por defecto; la entrada real requiere la política del oper
 observación vigente. [Diseño y límites de confianza →](docs/architecture/overview.es.md)
 
 <p align="center">
-  <a href="docs/assets/readme/protocol-demo.mp4"><img src="docs/assets/readme/protocol-demo.gif" alt="Ilustración animada del protocolo: sólo se vuelven a analizar las teselas que cambian en una ventana sintética; los controles reciben IDs y revisiones (e7, revisión 3); el agente llama a observe_screen y execute_action; una acción en dry run sobre el snapshot s16, con más de 10 segundos de antigüedad, se rechaza con STALE_SNAPSHOT y sin entrada; una nueva observación publica s17 y la acción en dry run sobre él devuelve simulated, input_delivered false, verified false." width="800"></a>
+  <picture>
+    <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/protocol-demo-mobile-dark.svg">
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/protocol-demo-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/protocol-demo-dark.svg">
+    <img src="docs/assets/readme/protocol-demo-light.svg" alt="Ilustración animada del protocolo: sólo se vuelven a analizar las teselas que cambian en una ventana simulada; los controles reciben IDs y revisiones (e7, revisión 3); el agente llama a observe_screen y execute_action; una acción en dry run sobre el snapshot s16, con más de 10 segundos de antigüedad, se rechaza con STALE_SNAPSHOT y sin entrada; una nueva observación publica s17 y su dry run devuelve simulated, input_delivered false." width="1200">
+  </picture>
 </p>
 
 <p align="center"><sub>Ilustración sobre un escritorio simulado, generada a partir de los <a href="docs/thesis/contratos/ejemplos">ejemplos del contrato</a>; no es una grabación de pantalla.
-<a href="docs/assets/readme/protocol-demo.mp4">Ver el vídeo de 44 segundos</a> (MP4 sin audio, subtítulos en inglés) ·
+<a href="docs/assets/readme/protocol-demo.gif">GIF</a> ·
 <a href="tools/readme-media/README.md">cómo se hace</a></sub></p>
 
 ## Por qué Ommatix
@@ -50,12 +57,14 @@ y mantiene la percepción separada del razonamiento del agente.
 
 ## Cómo funciona
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/pipeline-mobile-dark.svg">
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/pipeline-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/pipeline-dark.svg">
-  <img src="docs/assets/readme/pipeline-light.svg" alt="Pipeline numerado desde captura y planificación, percepción, fusión, identidad y snapshot atómico hasta agente, compuerta, actuador y verificador de efecto." width="1200">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/pipeline-mobile-dark.svg">
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/pipeline-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/pipeline-dark.svg">
+    <img src="docs/assets/readme/pipeline-light.svg" alt="Pipeline numerado desde captura y planificación, percepción, fusión, identidad y snapshot atómico hasta agente, compuerta, actuador y verificador de efecto." width="1200">
+  </picture>
+</p>
 
 Cada observación publica juntos el frame base, el registro de identidad y el snapshot. Si
 una etapa falla no publica nada, conserva las regiones pendientes y bloquea las acciones
@@ -148,12 +157,14 @@ Respuesta estructurada de [simulated_output.json](docs/thesis/contratos/ejemplos
 > `allowed_applications` no vacía del operador, y `dry_run: false` del agente. El operador
 > controla la parada y cualquier ventana fijada. [Lea la guía antes de habilitarla.](docs/guide/live-input.es.md)
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-mobile-dark.svg">
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/gate-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-dark.svg">
-  <img src="docs/assets/readme/gate-light.svg" alt="El dry run devuelve simulated; la entrada real requiere política, primer plano atestiguado, frescura y una comprobación final antes de entregar y verificar." width="1200">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-mobile-dark.svg">
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/gate-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-dark.svg">
+    <img src="docs/assets/readme/gate-light.svg" alt="El dry run devuelve simulated; la entrada real requiere política, primer plano atestiguado, frescura y una comprobación final antes de entregar y verificar." width="1200">
+  </picture>
+</p>
 
 `simulated` no afirma entrega; `input_delivered` no afirma efecto; `indeterminate` nunca
 provoca un reintento automático. Con UI Automation, la escritura espera el foco de teclado
@@ -170,12 +181,14 @@ en el elemento objetivo entre su clic de enfoque y sus teclas.
 
 ## Resultados de un vistazo
 
-<picture>
-  <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/results-mobile-dark.svg">
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/results-mobile-light.svg">
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/results-dark.svg">
-  <img src="docs/assets/readme/results-light.svg" alt="Puntuaciones preliminares AG-02 sobre 11: Haiku 10 en dry run y 6 en vivo, DeepSeek 11 y 7, MiMo 10 y 7. Incluyen abstenciones correctas; fase 1 exime el veredicto del señuelo." width="1200">
-</picture>
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/results-mobile-dark.svg">
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/results-mobile-light.svg">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/results-dark.svg">
+    <img src="docs/assets/readme/results-light.svg" alt="Puntuaciones preliminares AG-02 sobre 11: Haiku 10 en dry run y 6 en vivo, DeepSeek 11 y 7, MiMo 10 y 7. Incluyen abstenciones correctas; fase 1 exime el veredicto del señuelo." width="1200">
+  </picture>
+</p>
 
 *Fuente: [capítulo 09 §9.11.1–3](docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911-ag-02-un-agente-sólo-llm-con-ommatix-por-mcp),
 18–19 de octubre de 2026. La fase 1 puntúa elecciones en dry run; la fase 2 combina el
