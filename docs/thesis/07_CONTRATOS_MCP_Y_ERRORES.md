@@ -34,17 +34,19 @@ La precondición de snapshot es estricta en el MVP. Una petición vieja no se re
 
 Nota sobre `type` (ADR-0018). Con la evidencia de UI Automation activada, el motor entrega `type` en dos fases: el clic de enfoque y, sólo cuando el foco de teclado está en el elemento objetivo dentro del plazo de verificación, las teclas. Si el foco no se confirma a tiempo no se envía ninguna tecla y el resultado es `indeterminate` con `INDETERMINATE_EFFECT`, `retryable: false` y `next_step: reconcile_effect`; `input_delivered` es `true` porque el clic de enfoque sí se entregó, y la entrega de las teclas no se afirma. Si tras el clic cambian la parada del operador, el consentimiento o la aplicación en primer plano, el resultado es el mismo y tampoco se deshace nada. Lo mismo ocurre si vence la vigencia de la observación (ADR-0025) entre el clic y las teclas: no se envía ninguna tecla, `input_delivered` es `true` y el resultado es `indeterminate`. Con `expected_effect: visual_change`, el cambio se mide contra un fotograma capturado después del clic de enfoque y antes de las teclas, no contra el anterior al clic, así que el redibujado del clic no cuenta como efecto de escribir. El contrato y los schemas no cambian, y el valor del campo no se lee. Sin evidencia de accesibilidad, `type` conserva la comprobación de foco a nivel de ventana del actuador.
 
+Lo que dice un resultado de `type` (ADR-0044, propuesta). Tras `type`, el motor sabe que entregó las teclas al sistema y si la pantalla cambió; no sabe cuántos caracteres llegaron ni cuáles. Por eso un `type` cuya única evidencia es un cambio visual termina en `input_delivered`, con `verified: false` y `observed_effect: visual_change`, nunca en `effect_observed`, por cualquiera de sus dos rutas de entrega. Sin cambio dentro del plazo sigue siendo `indeterminate`, y con `value_updated` también. Un agente que necesita el texto debe observar de nuevo y leer lo que la aplicación expone. La forma del esquema no cambia: `status`, `input_delivered`, `verified` y `observed_effect` ganan sólo una `description`, que dice lo mismo, y la descripción de la herramienta `execute_action` también lo dice. Los clics y los desplazamientos no cambian: su cambio visual sigue siendo su verificación.
+
 ## 7.5 Estados de respuesta
 
 | Estado Ommatix | Significado | Lo que no afirma |
 |---|---|---|
 | simulated | Validación/preparación sin entrada real | No acredita efecto en el SO |
 | rejected | No se envió entrada por precondición/política | No es un éxito de tarea |
-| input_delivered | El actuador reportó entrega | No prueba que la UI obedeciera |
-| effect_observed | Se verificó la postcondición declarada | No prueba objetivos no verificados |
+| input_delivered | El actuador reportó entrega | No prueba que la UI obedeciera ni, tras `type`, cuántos caracteres llegaron |
+| effect_observed | Se verificó la postcondición declarada; nunca tras `type` (ADR-0044) | No prueba objetivos no verificados |
 | indeterminate | No hay certeza suficiente del efecto/entrega | No autoriza retry automático |
 
-Los resultados incluyen `input_delivered` y `verified` para evitar el ambiguo `status: ok` original. Las coordenadas ejecutadas no se exportan por defecto; pueden existir en diagnóstico local protegido. El modo simulado tiene prohibido marcar input_delivered=true. En `indeterminate`, `input_delivered` dice si el actuador reportó la entrega completa de los eventos: `true` cuando sólo falta verificar el efecto declarado, `false` cuando la propia entrega es incierta (fallo del actuador o eventos no aceptados por el SO); `verified` es siempre `false`. En los demás estados ambos campos se deducen del estado.
+Los resultados incluyen `input_delivered` y `verified` para evitar el ambiguo `status: ok` original. Las coordenadas ejecutadas no se exportan por defecto; pueden existir en diagnóstico local protegido. El modo simulado tiene prohibido marcar input_delivered=true. En `indeterminate`, `input_delivered` dice si el actuador reportó la entrega completa de los eventos: `true` cuando sólo falta verificar el efecto declarado, `false` cuando la propia entrega es incierta (fallo del actuador o eventos no aceptados por el SO); `verified` es siempre `false`. En los demás estados ambos campos se deducen del estado. `observed_effect` dice lo que el motor vio, también con `input_delivered`: tras `type`, `visual_change` sólo significa que algo cambió en la pantalla después de las teclas.
 
 ## 7.6 get_engine_metrics y recortes
 

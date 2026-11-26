@@ -2925,8 +2925,10 @@ class Protocol:
                 # Both ask for a visual change. Since ADR-0018 the engine measures a typing's
                 # change against a frame captured after its focusing click and before its keys,
                 # so the click's own redraw is not counted (it was in the pilot, S4 report
-                # §4.6). The OS-side check (the window title) still decides; the engine's
-                # effect_observed is only evidence that something changed after the keys.
+                # §4.6). The OS-side check (the window title) still decides. Since ADR-0044
+                # (thesis CHANGELOG 1.0.123) a typing's visual change is reported
+                # input_delivered with verified false, never effect_observed: it counts under
+                # delivered and typed_delivered, and no status counter or false success.
                 effect = "visual_change"
                 args = {"request_id": f"s4r2-{self.args.app}-{res['run']}-{res['steps']}-{attempt + 1}",
                         "session_id": snap["session_id"], "snapshot_id": snap["snapshot_id"],

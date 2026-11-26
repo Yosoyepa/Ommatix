@@ -45,7 +45,10 @@ pub(crate) fn descriptors() -> Vec<Tool> {
             EXECUTE_ACTION,
             "Act on one element of the last observation by target ID and revision: click, \
              type or scroll. No coordinates. A dry run unless dry_run is false and the local \
-             policy allows live input; the status never claims more than what happened.",
+             policy allows live input; the status never claims more than what happened. \
+             After type the engine knows that the keys were handed to the system and whether \
+             the screen changed, not how many characters arrived or which, so verified is \
+             never true: observe again and read what the application exposes.",
             schemas::EXECUTE_ACTION_INPUT,
             schemas::EXECUTE_ACTION_OUTPUT,
         ),

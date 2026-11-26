@@ -51,6 +51,12 @@ Característica: Actuación y verificación honestas
     Cuando el agente escribe y el foco del teclado no llega al campo antes del plazo
     Entonces no se envía ninguna tecla y se informa indeterminate con el clic entregado
 
+  @BDD-73 @RF-13 @UT-82
+  Escenario: BDD-73 Escritura con cambio visual sin verificar el texto
+    Dado un campo de texto accesible de una ventana permitida
+    Cuando el agente escribe esperando un cambio visual y la pantalla cambia después de las teclas
+    Entonces se informa input_delivered sin verificar y el cambio visto, nunca effect_observed
+
   @BDD-36 @RF-11 @UT-45
   Escenario: BDD-36 Ventana fuera del alcance
     Dado una aplicación permitida cuya política local sólo admite ventanas de una clase

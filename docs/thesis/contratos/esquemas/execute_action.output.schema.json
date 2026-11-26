@@ -12,6 +12,7 @@
       "maxLength": 64
     },
     "status": {
+      "description": "What is known about the action, and no more. simulated: validated, nothing sent. rejected: nothing sent. input_delivered: the actuator reported every input event handed to the system; no effect is verified. effect_observed: the declared expected_effect was checked; never after type. indeterminate: the delivery or its effect is uncertain; never retry automatically.",
       "enum": [
         "simulated",
         "rejected",
@@ -31,9 +32,11 @@
       "maxLength": 64
     },
     "input_delivered": {
+      "description": "Whether the actuator reported every input event handed to the system. It does not say that the application obeyed, nor how many typed characters arrived.",
       "type": "boolean"
     },
     "verified": {
+      "description": "True only with effect_observed. After type it is never true: the engine knows that the keys were handed to the system and whether the screen changed, not how many characters arrived or which. An agent that needs the text must observe again and read what the application exposes.",
       "type": "boolean"
     },
     "error": {
@@ -86,6 +89,7 @@
       "additionalProperties": false
     },
     "observed_effect": {
+      "description": "What the engine saw after the input. After type, visual_change only means that something on the screen changed after the keys.",
       "enum": [
         "none",
         "focus_changed",

@@ -62,7 +62,8 @@ flowchart TD
   RCPT -->|yes| EFF{expected_effect}
   EFF -->|none| DLV[input_delivered]
   EFF -->|visual_change| RECAP[FrameCapturer.capture<br/>compare with the pre-delivery frame]
-  RECAP -->|changed| EO[effect_observed]
+  RECAP -->|changed: click, scroll| EO[effect_observed]
+  RECAP -->|changed: type, ADR-0044| DLV
   RECAP -->|unchanged| IND
   EFF -->|focus, value, scroll| IND
 ```

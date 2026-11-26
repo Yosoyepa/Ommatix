@@ -255,24 +255,161 @@ fn type_visual_change_is_measured_after_the_focusing_click() {
     assert_eq!(&seen[..4], ["capture", "click", "capture", "keys"]);
 }
 
-#[test]
-fn type_visual_change_after_the_keys_is_an_observed_effect() {
-    let mut r = typing_rig();
+// ---- what a visual change says after `type` (ADR-0044, UT-82) ----
+
+/// The rig with the target field focused once the click lands, and a UI that repaints after
+/// the keys: the screen changes within the verification window.
+fn repainting_typing_rig() -> Rig {
+    let r = typing_rig();
     {
         let mut w = r.world();
         w.focused = Some(name_field());
         w.react_to_click = true;
         w.react_to_input = true;
     }
+    r
+}
+
+/// UT-82. After `type` a visual change says that something on the screen changed after the
+/// keys, not how many characters arrived or which: the result is `input_delivered`, never
+/// verified, and the change seen stays in `observed_effect`. It used to be `effect_observed`,
+/// and the live lab saw that answer with 5 of 29 characters in the field.
+#[test]
+fn ut_82_type_visual_change_after_the_keys_is_delivered_not_verified() {
+    let mut r = repainting_typing_rig();
+    let page = r.observe();
+    r.world().events.clear();
+
+    let result = r
+        .engine
+        .execute_action(&typing(&page, "t1", ExpectedEffect::VisualChange));
+
+    assert_eq!(result.status, ActionStatus::InputDelivered, "{result:?}");
+    assert!(result.input_delivered(), "the keys were handed to the OS");
+    assert!(!result.verified(), "a change does not verify the text");
+    assert_eq!(
+        result.error, None,
+        "nothing went wrong: nothing to reconcile"
+    );
+    assert_eq!(
+        result.observed_effect,
+        Some(ObservedEffect::VisualChange),
+        "what was seen is still said"
+    );
+    assert_eq!(r.world().keys.len(), 1, "the keys went out once");
+    // The change was looked for, after the keys, against the frame taken before them.
+    let seen = phases(&r, &["capture", "click", "keys"]);
+    assert_eq!(
+        &seen[..5],
+        ["capture", "click", "capture", "keys", "capture"]
+    );
+}
+
+/// UT-82, the single-call path (no accessibility evidence, or an actuator that cannot
+/// split `type`): the same answer, whatever the frame the change is measured against.
+#[test]
+fn ut_82_type_in_one_call_with_a_visual_change_is_delivered_not_verified() {
+    let mut r = repainting_typing_rig();
+    r.world().reads_focus = false;
     let page = r.observe();
 
     let result = r
         .engine
         .execute_action(&typing(&page, "t1", ExpectedEffect::VisualChange));
 
-    assert_eq!(result.status, ActionStatus::EffectObserved, "{result:?}");
+    assert_eq!(result.status, ActionStatus::InputDelivered, "{result:?}");
+    assert!(result.input_delivered() && !result.verified());
+    assert_eq!(result.error, None);
     assert_eq!(result.observed_effect, Some(ObservedEffect::VisualChange));
+    let w = r.world();
+    assert_eq!(w.delivered.len(), 1, "one call, not the phases");
+    assert!(w.clicks.is_empty() && w.keys.is_empty());
+}
+
+/// UT-82. With no change after the keys the answer is what it was before ADR-0044:
+/// `indeterminate`, the keys reported delivered, nothing retried.
+#[test]
+fn ut_82_type_visual_change_without_a_change_stays_indeterminate() {
+    let mut r = typing_rig();
+    r.world().focused = Some(name_field());
+    let page = r.observe();
+
+    let result = r
+        .engine
+        .execute_action(&typing(&page, "t1", ExpectedEffect::VisualChange));
+
+    assert_eq!(result.status, ActionStatus::Indeterminate, "{result:?}");
+    let error = result.error.as_ref().expect("an error");
+    assert_eq!(
+        (error.code, error.retryable, error.next_step),
+        (
+            ErrorCode::IndeterminateEffect,
+            false,
+            NextStep::ReconcileEffect
+        )
+    );
+    assert!(
+        error.message.contains("no visual change"),
+        "{}",
+        error.message
+    );
+    assert!(result.input_delivered() && !result.verified());
+    assert_eq!(result.observed_effect, Some(ObservedEffect::Unknown));
+    assert_eq!(r.world().keys.len(), 1);
+}
+
+/// UT-82. `value_updated` stays `indeterminate`, even when the screen changes: the engine
+/// cannot check a value yet.
+#[test]
+fn ut_82_type_value_updated_stays_indeterminate() {
+    let mut r = repainting_typing_rig();
+    let page = r.observe();
+
+    let result = r
+        .engine
+        .execute_action(&typing(&page, "t1", ExpectedEffect::ValueUpdated));
+
+    assert_eq!(result.status, ActionStatus::Indeterminate, "{result:?}");
+    assert_eq!(error_code(&result), Some(ErrorCode::IndeterminateEffect));
+    assert!(result.input_delivered() && !result.verified());
+    assert_eq!(result.observed_effect, Some(ObservedEffect::Unknown));
+}
+
+/// UT-82. A click is untouched: its visual change is still its verification.
+#[test]
+fn ut_82_a_click_visual_change_is_still_its_verification() {
+    let mut r = repainting_typing_rig();
+    let page = r.observe();
+    let mut click = Rig::action(&page, "Save", "c1", ActionKind::Click);
+    click.dry_run = false;
+    click.expected_effect = ExpectedEffect::VisualChange;
+
+    let result = r.engine.execute_action(&click);
+
+    assert_eq!(result.status, ActionStatus::EffectObserved, "{result:?}");
     assert!(result.input_delivered() && result.verified());
+    assert_eq!(result.observed_effect, Some(ObservedEffect::VisualChange));
+}
+
+/// UT-82. A repeated `request_id` replays the stored `input_delivered` result unchanged and
+/// sends nothing again, even after the screen moved on.
+#[test]
+fn ut_82_a_delivered_unverified_type_replays_unchanged() {
+    let mut r = repainting_typing_rig();
+    let page = r.observe();
+    let request = typing(&page, "t1", ExpectedEffect::VisualChange);
+    let first = r.engine.execute_action(&request);
+    assert_eq!(first.status, ActionStatus::InputDelivered, "{first:?}");
+    let delivered = r.engine.engine_metrics().delivered_actions;
+
+    r.observe();
+    let again = r.engine.execute_action(&request);
+
+    assert_eq!(again, first);
+    let w = r.world();
+    assert_eq!((w.clicks.len(), w.keys.len()), (1, 1), "nothing sent again");
+    drop(w);
+    assert_eq!(r.engine.engine_metrics().delivered_actions, delivered);
 }
 
 #[test]

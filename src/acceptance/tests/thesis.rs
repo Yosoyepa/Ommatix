@@ -68,7 +68,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-28", "BDD-29", "BDD-30", "BDD-31", "BDD-32", "BDD-33", "BDD-34", "BDD-35", "BDD-36",
     "BDD-37", "BDD-38", "BDD-39", "BDD-40", "BDD-41", "BDD-42", "BDD-43", "BDD-44", "BDD-45",
     "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52", "BDD-53", "BDD-54",
-    "BDD-55", "BDD-56", "BDD-57", "BDD-58", "BDD-59", "BDD-60", "BDD-61", "BDD-62",
+    "BDD-55", "BDD-56", "BDD-57", "BDD-58", "BDD-59", "BDD-60", "BDD-61", "BDD-62", "BDD-73",
 ];
 
 #[derive(Debug, Default, World)]
@@ -977,6 +977,9 @@ struct Typing {
     reads: usize,
     /// `click`, `focus` (one per read) and `keys`, in order.
     log: Vec<&'static str>,
+    /// The desktop on which the keys paint a mark in the field (BDD-73): the screen changes
+    /// after the keys. `None`: the keys change nothing on the screen.
+    repaint_after_keys: Option<FixtureDesktop>,
 }
 
 fn lock_typing(typing: &Mutex<Typing>) -> std::sync::MutexGuard<'_, Typing> {
@@ -988,7 +991,8 @@ fn lock_typing(typing: &Mutex<Typing>) -> std::sync::MutexGuard<'_, Typing> {
 /// hands the foreground to another application) and reports every event of a click
 /// (button down and up) as inserted, but it records what it is handed through the
 /// fixture desktop and sends nothing to the OS. It never changes the screen, so no action
-/// has a visible effect.
+/// has a visible effect, except keys whose scenario asks them to paint a mark in the field
+/// (`Typing::repaint_after_keys`).
 struct LiveDouble(
     Box<dyn OsActuator>,
     Arc<Mutex<Foreground>>,
@@ -1089,6 +1093,10 @@ impl OsActuator for LiveDouble {
         let mut typing = lock_typing(&self.2);
         assert!(typing.clicked, "keys need the focusing click first");
         typing.log.push("keys");
+        if let Some(desktop) = &typing.repaint_after_keys {
+            // A mark inside the field of `an_accessible_field_of_an_allowed_window`.
+            desktop.update(|scene| scene.add_word("h", bx(115.0, 48.0, 125.0, 62.0)));
+        }
         // "hola": a press and a release per character.
         Ok(DeliveryReceipt {
             submitted: 8,
@@ -2615,6 +2623,50 @@ fn the_keys_follow_the_click_and_the_confirmed_focus(e: &mut Engine) {
     // The engine waited the two polls on its clock, nothing more.
     assert_eq!(agent.clock.now(), std::time::Duration::from_millis(100));
     assert_eq!(agent.desktop.handed_actions().len(), 1, "one click");
+    assert_eq!(agent.metric("delivered_actions"), 1);
+}
+
+#[when("el agente escribe esperando un cambio visual y la pantalla cambia después de las teclas")]
+fn the_agent_types_and_the_screen_changes_after_the_keys(e: &mut Engine) {
+    let agent = e.agent();
+    {
+        let mut typing = lock_typing(&agent.typing);
+        typing.focus = Some((name_field(), Some(0)));
+        typing.repaint_after_keys = Some(agent.desktop.clone());
+    }
+    let mut args = agent.live_type_args(agent.target(), "bdd73-type", "hola");
+    args["expected_effect"] = json!("visual_change");
+    agent.recorded_args = Some(args.clone());
+    agent.tool_result("execute_action", args);
+}
+
+#[then("se informa input_delivered sin verificar y el cambio visto, nunca effect_observed")]
+fn a_typed_visual_change_is_delivered_not_verified(e: &mut Engine) {
+    let agent = e.agent();
+    // `tool_result` already checked it against the dossier's output schema.
+    let outcome = agent.last_response()["result"]["structuredContent"].clone();
+    assert_eq!(outcome["status"], "input_delivered", "{outcome}");
+    assert_eq!(outcome["input_delivered"], true);
+    assert_eq!(
+        outcome["verified"], false,
+        "a change does not verify the text"
+    );
+    assert_eq!(
+        outcome["observed_effect"], "visual_change",
+        "what was seen is said"
+    );
+    assert!(outcome.get("error").is_none(), "{outcome}");
+    assert_eq!(
+        lock_typing(&agent.typing).log,
+        ["click", "focus", "keys"],
+        "the click, the focus confirmed, the keys once"
+    );
+    assert_eq!(agent.metric("delivered_actions"), 1);
+    // The same request again: the stored answer, and nothing sent again.
+    let args = agent.recorded_args.clone().expect("the request was kept");
+    let again = agent.tool_result("execute_action", args);
+    assert_eq!(again["structuredContent"], outcome);
+    assert_eq!(lock_typing(&agent.typing).log.len(), 3, "no new event");
     assert_eq!(agent.metric("delivered_actions"), 1);
 }
 

@@ -76,6 +76,10 @@ permite, y `serve` avisa si `explorer.exe` está permitido sin ninguna de las do
 `simulated` no afirma entrega; `input_delivered` no afirma efecto; `indeterminate` nunca
 inicia un reintento automático. La verificación actual comprueba `visual_change` dentro de
 `verify_timeout_ms`, con sondeos cada `verify_poll_ms`; los demás efectos no comprobables
-conservan la incertidumbre. Toda entrega agota el snapshot; una acción nueva necesita una
+conservan la incertidumbre. Tras `type`, el motor sabe que entregó las teclas al sistema y si
+la pantalla cambió; no sabe cuántos caracteres llegaron ni cuáles: un cambio visual tras
+`type` es `input_delivered` con `verified: false`, nunca `effect_observed`
+([ADR-0044](../adr/0044-a-visual-change-does-not-verify-typed-text.md), propuesta). Un agente
+que necesita el texto debe observar de nuevo y leer lo que la aplicación expone. Toda entrega agota el snapshot; una acción nueva necesita una
 nueva observación. Fuentes: [ADR-0007](../adr/0007-fail-closed-actuation-and-honest-simulation.md),
 [arquitectura](../architecture/overview.es.md) y [contrato](../thesis/07_CONTRATOS_MCP_Y_ERRORES.md).
