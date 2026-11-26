@@ -2,6 +2,9 @@ name: Feature request
 description: Explain a problem and propose behaviour consistent with the thesis.
 labels: [enhancement]
 body:
+  - type: markdown
+    attributes:
+      value: Use synthetic examples. Do not include personal data, real screenshots or secrets.
   - type: textarea
     id: problem
     attributes:

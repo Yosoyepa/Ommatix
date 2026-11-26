@@ -4,7 +4,10 @@ labels: [documentation]
 body:
   - type: markdown
     attributes:
-      value: English or Spanish is welcome. Do not include personal data, real screenshots or secrets.
+      value: |
+        English or Spanish is welcome. Do not include personal data, real screenshots or secrets.
+
+        Se aceptan inglés y español. No incluya datos personales, capturas reales ni secretos.
   - type: dropdown
     id: area
     attributes:
