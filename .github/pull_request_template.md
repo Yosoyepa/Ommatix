@@ -1,4 +1,4 @@
-<!-- Read AGENTS.md and .github/CONTRIBUTING.md first. Tick only what you ran; write "n/a" beside a box that does not apply. -->
+<!-- Read AGENTS.md and .github/CONTRIBUTING.md first. Tick a box only when it is true: a check you ran, a rule you verified. Write "n/a" beside one that does not apply. -->
 
 ## Summary / Resumen
 
