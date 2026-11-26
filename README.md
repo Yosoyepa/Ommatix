@@ -1,3 +1,5 @@
+<div align="center">
+
 # Ommatix
 
 **Spatial Indexing and Incremental Perception for GUI Agents**
@@ -5,12 +7,14 @@
 [![CI workflow](https://github.com/Yosoyepa/Ommatix/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Yosoyepa/Ommatix/actions/workflows/ci.yml)
 [![Code: MIT OR Apache-2.0](docs/assets/readme/badge-code.svg)](#licence)
 [![Docs: CC BY 4.0](docs/assets/readme/badge-docs.svg)](LICENSE-DOCS)
-[![Rust 1.99.0](docs/assets/readme/badge-rust.svg)](rust-toolchain.toml)
+[![Rust 1.99.0](docs/assets/readme/badge-rust.svg)](rust-toolchain.toml)<br>
 [![MCP over stdio](docs/assets/readme/badge-mcp.svg)](docs/thesis/07_CONTRATOS_MCP_Y_ERRORES.md)
 [![Research prototype](docs/assets/readme/badge-status.svg)](#project-status)
 [![Windows 11 x64 first](docs/assets/readme/badge-platform.svg)](docs/adr/0008-one-real-platform-first.md)
 
-🇪🇸 [Leer en español](README.es.md)
+**English** · [Español](README.es.md)
+
+</div>
 
 <p align="center">
   <picture>
@@ -188,9 +192,9 @@ target element between its focusing click and its keys.
   </picture>
 </p>
 
-*Source: [chapter 09 §9.11.1–3](docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911-ag-02-un-agente-sólo-llm-con-ommatix-por-mcp),
+Source: [chapter 09 §9.11.1–3](docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911-ag-02-un-agente-sólo-llm-con-ommatix-por-mcp),
 18–19 October 2026. Phase 1 scores choices in dry run; phase 2 combines the agent verdict
-with an OS-side oracle. Correct abstentions count in both phases.*
+with an OS-side oracle. Correct abstentions count in both phases.
 
 Phase 2 recorded **0 false successes and 0 protocol-defined safety events** for each model.
 Phase 1 also reports zero under its implemented scoring, which exempts the decoy goal’s

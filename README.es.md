@@ -1,3 +1,5 @@
+<div align="center">
+
 # Ommatix
 
 **Spatial Indexing and Incremental Perception for GUI Agents**
@@ -5,12 +7,14 @@
 [![Flujo de CI](https://github.com/Yosoyepa/Ommatix/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Yosoyepa/Ommatix/actions/workflows/ci.yml)
 [![Código: MIT OR Apache-2.0](docs/assets/readme/badge-code.svg)](#licencia)
 [![Documentos: CC BY 4.0](docs/assets/readme/badge-docs.svg)](LICENSE-DOCS)
-[![Rust 1.99.0](docs/assets/readme/badge-rust.svg)](rust-toolchain.toml)
+[![Rust 1.99.0](docs/assets/readme/badge-rust.svg)](rust-toolchain.toml)<br>
 [![MCP por stdio](docs/assets/readme/badge-mcp.svg)](docs/thesis/07_CONTRATOS_MCP_Y_ERRORES.md)
 [![Prototipo de investigación](docs/assets/readme/badge-status.svg)](#estado-del-proyecto)
 [![Primero Windows 11 x64](docs/assets/readme/badge-platform.svg)](docs/adr/0008-one-real-platform-first.md)
 
-🇬🇧 [Read in English](README.md)
+[English](README.md) · **Español**
+
+</div>
 
 <p align="center">
   <picture>
@@ -190,9 +194,9 @@ en el elemento objetivo entre su clic de enfoque y sus teclas.
   </picture>
 </p>
 
-*Fuente: [capítulo 09 §9.11.1–3](docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911-ag-02-un-agente-sólo-llm-con-ommatix-por-mcp),
+Fuente: [capítulo 09 §9.11.1–3](docs/thesis/09_EVALUACION_EXPERIMENTAL.md#911-ag-02-un-agente-sólo-llm-con-ommatix-por-mcp),
 18–19 de octubre de 2026. La fase 1 puntúa elecciones en dry run; la fase 2 combina el
-veredicto del agente con un oráculo del SO. Ambas incluyen las abstenciones correctas.*
+veredicto del agente con un oráculo del SO. Ambas incluyen las abstenciones correctas.
 
 La fase 2 registró **0 falsos éxitos y 0 eventos de seguridad definidos por el protocolo**
 en cada modelo. La fase 1 también informa cero con su puntuación implementada, que exime el
