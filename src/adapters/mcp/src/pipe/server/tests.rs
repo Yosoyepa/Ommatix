@@ -6,6 +6,10 @@
 use std::io::BufReader;
 use std::sync::atomic::AtomicUsize;
 
+use ommatix_adapter_sim::{FixtureDesktop, FixtureScene};
+use ommatix_application::{
+    EngineConfig, LocalPolicy, ManualClock, NoAccessibility, PolicyStore, Ports,
+};
 use serde_json::Value;
 
 use super::*;
@@ -111,23 +115,67 @@ fn charge_connection(shared: &Shared) {
     });
 }
 
-/// D40 G1 / D43 A6: the reaper holds a worker's place until its join has returned. The join is
-/// held inside the seam, which the reaper enters after all its bookkeeping before the join, so
-/// the charge is looked at while the join is in progress, in every schedule; once released, the
-/// place comes back, joined once.
+/// The operator of the unit tests' broker: the default policy.
+struct Operator;
+
+impl PolicyStore for Operator {
+    fn current(&self) -> LocalPolicy {
+        LocalPolicy::default()
+    }
+}
+
+/// A broker over an empty simulated desktop, with `max_clients` places.
+fn broker(max_clients: usize) -> Broker {
+    let clock = Arc::new(ManualClock::new());
+    let desktop = FixtureDesktop::new(FixtureScene::new(64, 64), clock.clone());
+    let ports = Ports {
+        capturer: Box::new(desktop.capturer()),
+        detector: Box::new(desktop.detector()),
+        recognizer: Box::new(desktop.recognizer()),
+        accessibility: Box::new(NoAccessibility),
+        actuator: Box::new(desktop.actuator()),
+        policy: Arc::new(Operator),
+        clock,
+    };
+    Broker::new(
+        EngineConfig::new("pipe-unit"),
+        ports,
+        McpConfig::default(),
+        Duration::from_secs(2),
+        max_clients,
+    )
+    .expect("a valid broker")
+}
+
+/// D40 G1 / D43 A6 / T2e E2: the reaper holds a worker's place until its join has returned, and
+/// admission sees it. The join is held inside the seam, which the reaper enters after all its
+/// bookkeeping before the join. While it is held, a client over the bound is presented to the
+/// admission the accept thread uses ([`place_for`]) and is refused, and the place is still
+/// charged; once the join is released and has returned, the place is back and a client is
+/// admitted. The refusal is asserted first, so a place given back before the join fails there.
 #[test]
-fn it_29_a_worker_s_place_is_free_only_after_the_reaper_has_joined_it() {
+fn it_29_a_held_join_keeps_the_place_and_a_client_over_the_bound_is_refused() {
     let (shared, recording) = recorded();
-    let (to_reaper, reaper) = start_reaper(&shared).unwrap();
+    let (to_reaper, reaper, reaper_ended) = start_reaper(&shared).unwrap();
+    let broker = broker(1);
     let gate = Arc::new(Gate::default());
     let (entered, in_join) = mpsc::channel();
     recording.hold_next_join(entered, Arc::clone(&gate));
-    charge_connection(&shared);
-    start_worker(&shared, &to_reaper, false, |_| ());
+    // A client in the only place; its worker ends at once.
+    let Place::Serve(reservation) = place_for(&shared, &broker) else {
+        panic!("the first client is admitted");
+    };
+    start_worker(&shared, &to_reaper, false, move |_| drop(reservation));
     in_join
         .recv_timeout(PATIENCE)
-        .expect("the reaper entered the worker's join");
+        .expect("the reaper entered the worker's join, after all its bookkeeping");
     let held = shared.lock().stats;
+    assert!(
+        matches!(place_for(&shared, &broker), Place::Refuse),
+        "a client over the bound is refused while the join is held"
+    );
+    // That refusal's place: no worker took it here.
+    shared.update(|s| s.refusing -= 1);
     assert_eq!(
         held.serving, 0,
         "the connection is closed and served no more"
@@ -148,12 +196,88 @@ fn it_29_a_worker_s_place_is_free_only_after_the_reaper_has_joined_it() {
         (0, 0, 0),
         "the place came back with the join, once"
     );
-    assert!(shared.lock().workers.is_empty());
+    assert!(
+        matches!(place_for(&shared, &broker), Place::Serve(_)),
+        "a client is admitted once the join has returned"
+    );
     // The reaper ends when its last sender goes, and only then.
-    assert!(!shared.lock().reaper_done);
+    assert!(matches!(reaper_ended.try_recv(), Err(TryRecvError::Empty)));
     drop(to_reaper);
+    assert!(matches!(
+        reaper_ended.recv_timeout(PATIENCE),
+        Err(RecvTimeoutError::Disconnected)
+    ));
     reaper.join().unwrap();
-    assert!(shared.lock().reaper_done);
+}
+
+/// A seam whose own drop says so and then waits for a gate: it lets a test hold the release of
+/// the last reference to the listener's shared state.
+struct DropHeld {
+    inner: Plain,
+    dropped: mpsc::Sender<()>,
+    gate: Arc<Gate>,
+}
+
+impl Seam for DropHeld {
+    fn wake_all(&self) {
+        self.inner.wake_all();
+    }
+
+    fn wait<'a>(
+        &self,
+        state: MutexGuard<'a, State>,
+        timeout: Option<Duration>,
+    ) -> MutexGuard<'a, State> {
+        self.inner.wait(state, timeout)
+    }
+
+    fn join(&self, handle: JoinHandle<()>) -> thread::Result<()> {
+        self.inner.join(handle)
+    }
+}
+
+impl Drop for DropHeld {
+    fn drop(&mut self) {
+        let _ = self.dropped.send(());
+        self.gate.pass();
+    }
+}
+
+/// T2e E1: the reaper's end is the drop of the last thing it owns. The test leaves the reaper
+/// the only reference to the shared state, so releasing it drops the state and, with it, a seam
+/// whose drop the test holds. While that release is held the reaper's end is not observable;
+/// once released, the end is reported and no reference to the shared state is left.
+#[test]
+fn it_30_the_reaper_signals_its_end_only_after_releasing_what_it_owns() {
+    let gate = Arc::new(Gate::default());
+    let (dropped, is_dropped) = mpsc::channel();
+    let shared = Arc::new(Shared::with_seam(Box::new(DropHeld {
+        inner: Plain(Condvar::new()),
+        dropped,
+        gate: Arc::clone(&gate),
+    })));
+    let weak = Arc::downgrade(&shared);
+    let (to_reaper, reaper, reaper_ended) = start_reaper(&shared).unwrap();
+    drop(shared);
+    drop(to_reaper);
+    is_dropped
+        .recv_timeout(PATIENCE)
+        .expect("the reaper released the shared state");
+    assert!(
+        matches!(reaper_ended.try_recv(), Err(TryRecvError::Empty)),
+        "the reaper's end was observable before it had released what it owned"
+    );
+    gate.open();
+    assert!(matches!(
+        reaper_ended.recv_timeout(PATIENCE),
+        Err(RecvTimeoutError::Disconnected)
+    ));
+    assert_eq!(
+        weak.strong_count(),
+        0,
+        "no reference to the shared state is left"
+    );
+    reaper.join().unwrap();
 }
 
 /// A panic payload whose destructor records that it ran, then panics or blocks.
@@ -177,7 +301,7 @@ impl Drop for Payload {
 /// runs (the payload is forgotten).
 fn a_worker_s_panic_payload_is_never_dropped(blocks: bool) {
     let shared = Arc::new(Shared::new());
-    let (to_reaper, reaper) = start_reaper(&shared).unwrap();
+    let (to_reaper, reaper, _ended) = start_reaper(&shared).unwrap();
     let ran = Arc::new(AtomicBool::new(false));
     let gate = Arc::new(Gate::default());
     let payload = Payload {
