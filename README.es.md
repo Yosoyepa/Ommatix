@@ -166,7 +166,7 @@ Respuesta estructurada de [simulated_output.json](docs/thesis/contratos/ejemplos
     <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-mobile-dark.svg">
     <source media="(max-width: 640px)" srcset="docs/assets/readme/gate-mobile-light.svg">
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-dark.svg">
-    <img src="docs/assets/readme/gate-light.svg" alt="El dry run devuelve simulated; la entrada real requiere política, primer plano atestiguado, frescura y una comprobación final antes de entregar y verificar." width="1200">
+    <img src="docs/assets/readme/gate-light.svg" alt="Una petición válida y nueva pasa una comprobación de referencia; el dry run devuelve entonces simulated; la entrada real debe pasar además política, primer plano, frescura y un último vistazo. Una comprobación fallida se rechaza y no se entrega nada. La entrega informa input_delivered; un efecto verificado, effect_observed; uno sin confirmar, indeterminate." width="1200">
   </picture>
 </p>
 

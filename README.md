@@ -164,7 +164,7 @@ Structured response from [simulated_output.json](docs/thesis/contratos/ejemplos/
     <source media="(max-width: 640px) and (prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-mobile-dark.svg">
     <source media="(max-width: 640px)" srcset="docs/assets/readme/gate-mobile-light.svg">
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/gate-dark.svg">
-    <img src="docs/assets/readme/gate-light.svg" alt="Dry run returns simulated; live input requires policy, foreground attestation, freshness and a final check before delivery and verification." width="1200">
+    <img src="docs/assets/readme/gate-light.svg" alt="A valid, new request passes a reference check; a dry run then returns simulated; live input must also pass policy, foreground, freshness and a last look. A failed check is rejected and nothing is delivered. Delivery reports input_delivered; a verified effect, effect_observed; an unconfirmed one, indeterminate." width="1200">
   </picture>
 </p>
 
