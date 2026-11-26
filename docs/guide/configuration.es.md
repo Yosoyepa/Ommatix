@@ -28,9 +28,58 @@
 | `--session-id ID` | de 1 a 64 caracteres ASCII visibles, para una salida reproducible; con actuación viva, un ID fijo se rechaza al arrancar (capítulo 08 §8.4) | derivado de la hora de inicio y del ID del proceso |
 | `--legacy` | sirve además el perfil MCP legacy 2025-11-25 (como `[mcp] legacy_enabled = true`) | apagado |
 | `--observations N` (sólo `demo`) | 1–20 | 3 |
-| `--plan-trace` (sólo `demo`) | escribe además una línea por observación en stderr, `ommatix-plan-trace` y un objeto JSON (esquema `ommatix.plan-trace/1`): por qué el planificador eligió ese trabajo, sólo con conteos y áreas (teselas cambiadas y sucias, cada componente y región antes y después del cierre sobre la última evidencia, la mayor caja de evidencia que tocó, la suma que comparó el presupuesto de área, la comprobación que decidió). Ningún píxel, texto ni coordenada; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
+| `--plan-trace` (sólo `demo`) | escribe además una línea por observación en stderr, también de la que falló: `ommatix-plan-trace` y un objeto JSON (esquema `ommatix.plan-trace/1`) con por qué el planificador eligió ese trabajo, sólo con conteos y áreas; cada campo se define [abajo](#la-línea-de---plan-trace). Ningún píxel, texto ni coordenada; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
 
+### La línea de `--plan-trace`
 
+Cada línea es `ommatix-plan-trace ` y un objeto JSON en la misma línea (claves ordenadas). Sale del
+planificador de la observación (Algoritmo 1) y sólo lleva conteos, áreas y nombres de una lista cerrada.
+**Las áreas están en píxeles del frame y ninguna lo excede.** Un campo marcado *unión* cuenta un píxel
+una sola vez por más cajas que lo cubran; *una caja* es el área de un solo rectángulo. `null` significa
+que el planificador no llegó a medir el campo (véase «Cuándo es `null` o está vacío»).
+
+| Campo | Unidad | Significado |
+|---|---|---|
+| `schema` | texto | `ommatix.plan-trace/1` |
+| `observation_id` | número | la posición de la observación en esta corrida de `demo`, desde 1 (como en `--timings`) |
+| `outcome` | texto | `ok`, o `error` si la observación falló (no se publicó nada) |
+| `error_code` | texto | el código de error del contrato de una observación fallida (por ejemplo `CAPTURE_UNAVAILABLE`); `null` si `outcome` es `ok` |
+| `work` | texto | el trabajo del plan: `full`, `regions` o `idle` (como en el registro de la observación) |
+| `full_refresh_reason` | texto | la razón de un plan `full` (`no_committed_base`, `geometry_changed`, `closure_budget`, `too_many_regions`, `area_budget`, `experimental_baseline`, `adaptive_cost`); `null` en otro caso |
+| `frame_area_px` | píxeles | el área del frame, ancho por alto |
+| `tile_size` | píxeles | el lado de una tesela (`[engine] tile_size`) |
+| `changed_tiles` | conteo | teselas que difieren de la base confirmada; todas si no había base o su geometría cambió |
+| `pending_tiles` | conteo | teselas de la rejilla de este frame aún pendientes de una observación fallida, hayan cambiado o no |
+| `dirty_tiles` | conteo | las teselas que el plan deja sucias: cambiadas y pendientes, cada una una vez; toda la rejilla si se decidió un refresco completo antes de cualquier región |
+| `components` | lista | una entrada por grupo 8-conexo de teselas sucias, en el orden del planificador, tal como quedó tras el primer cierre sobre la evidencia del último snapshot |
+| `components[].tiles` | conteo | teselas del grupo |
+| `components[].tight_area_px` | píxeles, una caja | la caja alrededor de las teselas del grupo, antes del halo |
+| `components[].padded_area_px` | píxeles, una caja | esa caja tras el halo, recortada al frame: la región **antes** del cierre |
+| `components[].closed_area_px` | píxeles, una caja | la región **después** del cierre |
+| `components[].largest_support_px` | píxeles, una caja | la mayor caja de evidencia (un control detectado, una palabra, un elemento de accesibilidad o un miembro de una relación) que la región cerrada solapa; `0` si ninguna |
+| `regions` | lista | las regiones finales del plan tras fusionar y el último cierre, en el orden del plan |
+| `regions[].area_px` | píxeles, una caja | la región |
+| `regions[].components` | conteo | cuántos grupos terminaron en esta región |
+| `regions[].pre_closure_area_px` | píxeles, **unión** | de qué estaba hecha la región antes de todo cierre o fusión: la unión de las cajas con halo de esos grupos, con cada solape contado una vez; como máximo `area_px` |
+| `regions[].largest_support_px` | píxeles, una caja | como `components[].largest_support_px`, para la región final |
+| `covered_area_px` | píxeles, suma | la suma de las áreas de las regiones, que es lo que compara el presupuesto de área; las regiones no se solapan, así que también es su unión |
+| `budget_area_px` | píxeles | `full_refresh_area_ratio` del frame (`[engine]`): un umbral, como máximo el frame |
+| `max_regions` | conteo | `[engine] max_regions`, el máximo de regiones de un plan regional |
+| `decided_by` | texto | la comprobación que hizo del plan un refresco completo (los mismos nombres que `full_refresh_reason`); `null` si el plan es de reposo o regional |
+| `decisive_region` | índice | con `area_budget`: el índice (desde 0) en `regions` de la mayor región (la primera si hay empate); `null` en otro caso |
+
+**Cuándo es `null` o está vacío.** Una observación fallida no publica nada, así que su línea sólo lleva
+`schema`, `observation_id`, `outcome` y `error_code`: todo lo demás es `null`, y `components` y
+`regions` son `[]`. Un refresco completo decidido antes de que exista una región (`no_committed_base`,
+`geometry_changed`, `experimental_baseline`) tiene `components` y `regions` vacíos y `covered_area_px`
+en `0`; también `closure_budget`, cuyo componente que agotó las rondas no deja entrada.
+`covered_area_px` y `regions` se llenan una vez fusionadas las regiones, así que también se llenan con
+`too_many_regions`. Un plan de reposo tiene las dos listas vacías.
+
+Para saber por qué hubo un refresco completo, compare el `padded_area_px` de un componente con su
+`closed_area_px` y con el frame: un `padded_area_px` pequeño con un `closed_area_px` y un
+`largest_support_px` grandes significa que el cierre sobre una caja grande de evidencia hizo grande la
+región; un `padded_area_px` que ya es grande significa que el cambio mismo era grande.
 
 ## Archivo de configuración
 

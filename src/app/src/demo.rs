@@ -9,8 +9,10 @@
 //!
 //! With `--plan-trace`, each observation also writes one line to stderr (`ommatix-plan-trace`
 //! followed by a JSON object, schema `ommatix.plan-trace/1`): the numbers behind the plan's
-//! choice of work, counts and areas only. It is the planner's own record of why an observation
-//! was a full refresh; it is off unless asked for and no MCP client can reach it.
+//! choice of work, counts and areas only. An observation that failed gets its line too, with
+//! `outcome` `error`, its code and nothing else measured, as `--timings` does. It is the
+//! planner's own record of why an observation was a full refresh; it is off unless asked for
+//! and no MCP client can reach it. Every field is defined in `docs/guide/configuration.md`.
 
 // `demo` is the one command whose output is meant for a human on stdout.
 #![allow(clippy::print_stdout)]
@@ -214,6 +216,8 @@ fn plan_trace_record(n: u8, page: &ObservePage, trace: &PlanTrace) -> Value {
     json!({
         "schema": PLAN_TRACE_SCHEMA,
         "observation_id": n,
+        "outcome": "ok",
+        "error_code": null,
         "work": p.work.as_str(),
         "full_refresh_reason": p.full_refresh_reason.map(FullRefreshReason::as_str),
         "frame_area_px": trace.frame_area_px,
@@ -239,6 +243,32 @@ fn plan_trace_record(n: u8, page: &ObservePage, trace: &PlanTrace) -> Value {
         "max_regions": trace.max_regions,
         "decided_by": trace.decided_by.map(FullRefreshReason::as_str),
         "decisive_region": trace.decisive_region,
+    })
+}
+
+/// The `--plan-trace` line of an observation that failed: the same keys as the line of one
+/// that succeeded, its error code, and `null` (or an empty list) for everything the planner
+/// did not get to report: a failed observation publishes nothing, so no trace is kept.
+fn plan_trace_error_record(n: u8, error: &ToolError) -> Value {
+    json!({
+        "schema": PLAN_TRACE_SCHEMA,
+        "observation_id": n,
+        "outcome": "error",
+        "error_code": error.code.as_str(),
+        "work": null,
+        "full_refresh_reason": null,
+        "frame_area_px": null,
+        "tile_size": null,
+        "changed_tiles": null,
+        "pending_tiles": null,
+        "dirty_tiles": null,
+        "components": [],
+        "regions": [],
+        "covered_area_px": null,
+        "budget_area_px": null,
+        "max_regions": null,
+        "decided_by": null,
+        "decisive_region": null,
     })
 }
 
@@ -301,6 +331,9 @@ pub fn run(
                 println!("observation {n}: {} ({})", e.code.as_str(), e.message);
                 if timings {
                     eprintln!("ommatix-observation {}", error_record(n, &e));
+                }
+                if plan_trace {
+                    eprintln!("ommatix-plan-trace {}", plan_trace_error_record(n, &e));
                 }
                 break;
             }
@@ -413,9 +446,11 @@ mod tests {
 
     /// The keys of one `--plan-trace` line (JSON writes them sorted). Every one is a
     /// count, an area, a closed-list name or an index: none names a place on the screen.
-    const TRACE_KEYS: [&str; 16] = [
+    const TRACE_KEYS: [&str; 18] = [
         "schema",
         "observation_id",
+        "outcome",
+        "error_code",
         "work",
         "full_refresh_reason",
         "frame_area_px",
@@ -478,6 +513,8 @@ mod tests {
             assert_eq!(sorted_keys(&parsed), expected, "{line}");
             assert_eq!(parsed["schema"], PLAN_TRACE_SCHEMA);
             assert_eq!(parsed["observation_id"], n);
+            assert_eq!(parsed["outcome"], "ok");
+            assert!(parsed["error_code"].is_null());
             // The work and the reason are the observation record's own.
             assert_eq!(parsed["work"], page.plan.work.as_str());
             assert_eq!(
@@ -544,6 +581,36 @@ mod tests {
             }
         }
         assert!(seen_regions, "an observation of the demo planned regions");
+    }
+
+    /// A failed observation has its line: the same keys, the code, and nothing measured.
+    #[test]
+    fn a_failed_observation_has_a_plan_trace_line_that_measures_nothing() {
+        let error = ToolError::new(ErrorCode::InferenceFailed, "detection failed");
+        let record = plan_trace_error_record(3, &error);
+        let mut expected: Vec<String> = TRACE_KEYS.iter().map(|k| (*k).to_owned()).collect();
+        expected.sort();
+        assert_eq!(sorted_keys(&record), expected, "{record}");
+        assert_eq!(record["schema"], PLAN_TRACE_SCHEMA);
+        assert_eq!(record["observation_id"], 3);
+        assert_eq!(record["outcome"], "error");
+        assert_eq!(record["error_code"], "INFERENCE_FAILED");
+        assert_eq!(record["components"], json!([]));
+        assert_eq!(record["regions"], json!([]));
+        for key in expected {
+            if ![
+                "schema",
+                "observation_id",
+                "outcome",
+                "error_code",
+                "components",
+                "regions",
+            ]
+            .contains(&key.as_str())
+            {
+                assert!(record[&key].is_null(), "{key} in {record}");
+            }
+        }
     }
 
     #[test]

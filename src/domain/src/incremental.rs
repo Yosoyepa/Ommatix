@@ -13,6 +13,8 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
+use rstar::primitives::{GeomWithData, Rectangle};
+use rstar::{AABB, RTree};
 use thiserror::Error;
 
 use crate::bbox::BBox;
@@ -552,7 +554,10 @@ pub fn plan_regions_traced(
 /// What the planner saw when it chose the work of one observation (the research record of
 /// `demo --plan-trace`). **Counts and areas only**: no pixel, label, coordinate or box, so it
 /// is as safe to print as the plan itself. Areas are in pixels of the frame, as `f64` like
-/// the areas the budget compares; none exceeds the frame's. It never reaches an MCP client.
+/// the areas the budget compares. **Every measured area is at most the frame's**, and each
+/// field says whether it is the area of a *union* (a pixel counted once, however many boxes
+/// cover it) or a *sum* of areas of boxes that cannot overlap. It never reaches an MCP
+/// client.
 ///
 /// What each field holds depends on how far the planner got: a full refresh decided before
 /// any region exists (no committed base, a geometry change, the baseline) has no components
@@ -575,9 +580,11 @@ pub struct PlanTrace {
     pub components: Vec<ComponentTrace>,
     /// The regions after merging and the last closure: the plan's own, in its order.
     pub regions: Vec<RegionTrace>,
-    /// The sum of the regions' areas, which the area budget compares.
+    /// The sum of the regions' areas, which the area budget compares. The regions never
+    /// overlap, so the sum is also their union.
     pub covered_area_px: f64,
-    /// `max_area_fraction` of the frame: the covered area may not exceed it.
+    /// `max_area_fraction` of the frame (a threshold, not a measured area; at most the frame
+    /// while the fraction is at most 1, as the configuration requires).
     pub budget_area_px: f64,
     /// `max_regions` of the parameters.
     pub max_regions: usize,
@@ -592,11 +599,13 @@ pub struct PlanTrace {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ComponentTrace {
     pub tiles: usize,
-    /// The tiles' own union, before the halo.
+    /// The area of the box around the component's tiles, before the halo (one box).
     pub tight_area_px: f64,
-    /// After the halo, clipped to the frame: the region **before** the closure.
+    /// The area of that box after the halo, clipped to the frame (one box): the region
+    /// **before** the closure.
     pub padded_area_px: f64,
-    /// After the closure over the last snapshot's evidence: the region **after** it.
+    /// The area of the region **after** the closure over the last snapshot's evidence (one
+    /// box).
     pub closed_area_px: f64,
     /// The largest evidence box (a support, or a member of a relation) the closed region
     /// overlaps, hence contains; `0` when it touches none. A box that large next to a small
@@ -607,11 +616,13 @@ pub struct ComponentTrace {
 /// One region of the final plan.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RegionTrace {
+    /// The area of the region (one box).
     pub area_px: f64,
     /// The components whose padded region lies inside this one.
     pub components: usize,
-    /// The sum of those components' padded areas: the region before any closure or merge (an
-    /// upper bound when their halos overlap).
+    /// What the region is made of before any closure or merge: the area of the **union** of
+    /// those components' padded boxes. Halos of neighbouring components overlap, and an
+    /// overlap is counted once; it never exceeds `area_px`.
     pub pre_closure_area_px: f64,
     /// As [`ComponentTrace::largest_support_px`], for the final region.
     pub largest_support_px: f64,
@@ -631,6 +642,108 @@ fn largest_evidence_px(region: &BBox, evidence: &Evidence<'_>) -> f64 {
         .filter(|(a, b)| region.overlaps(a) || region.overlaps(b))
         .flat_map(|(a, b)| [a.area(), b.area()]);
     supports.chain(related).fold(0.0, f64::max)
+}
+
+/// The area of the union of `boxes`: a pixel covered by several boxes counts once. A sweep
+/// over the boxes' left and right edges with a segment tree over their distinct `y` values,
+/// `O(n log n)`; used only to describe a plan, never to make one.
+fn union_area(boxes: &[BBox]) -> f64 {
+    let mut ys: Vec<f64> = boxes.iter().flat_map(|b| [b.y0(), b.y1()]).collect();
+    ys.sort_by(f64::total_cmp);
+    ys.dedup();
+    if ys.len() < 2 {
+        return 0.0;
+    }
+    let y_index = |y: f64| {
+        ys.binary_search_by(|probe| probe.total_cmp(&y))
+            .expect("a box edge is one of the distinct y values")
+    };
+    // (x, +1 for a left edge and -1 for a right edge, first and last elementary interval).
+    let mut edges: Vec<(f64, i32, usize, usize)> = Vec::with_capacity(2 * boxes.len());
+    for b in boxes {
+        let (lo, hi) = (y_index(b.y0()), y_index(b.y1()) - 1);
+        edges.push((b.x0(), 1, lo, hi));
+        edges.push((b.x1(), -1, lo, hi));
+    }
+    edges.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let intervals = ys.len() - 1;
+    let mut sweep = CoverTree {
+        ys: &ys,
+        count: vec![0; 4 * intervals],
+        length: vec![0.0; 4 * intervals],
+    };
+    let mut area = 0.0;
+    let mut previous_x = edges[0].0;
+    for (x, delta, lo, hi) in edges {
+        area += sweep.length[1] * (x - previous_x);
+        previous_x = x;
+        sweep.update(1, (0, intervals - 1), (lo, hi), delta);
+    }
+    area
+}
+
+/// The covered length of a set of intervals of `ys` under insertions and removals.
+struct CoverTree<'a> {
+    ys: &'a [f64],
+    /// How many inserted intervals cover each node's whole range.
+    count: Vec<i32>,
+    /// The covered length inside each node's range.
+    length: Vec<f64>,
+}
+
+impl CoverTree<'_> {
+    /// Adds `delta` to the cover of the elementary intervals `target.0..=target.1` (interval
+    /// `i` is `ys[i]..ys[i + 1]`), inside `node`, which stands for `range`.
+    fn update(&mut self, node: usize, range: (usize, usize), target: (usize, usize), delta: i32) {
+        if target.0 > range.1 || target.1 < range.0 {
+            return;
+        }
+        if target.0 <= range.0 && range.1 <= target.1 {
+            self.count[node] += delta;
+        } else {
+            let middle = usize::midpoint(range.0, range.1);
+            self.update(2 * node, (range.0, middle), target, delta);
+            self.update(2 * node + 1, (middle + 1, range.1), target, delta);
+        }
+        self.length[node] = if self.count[node] > 0 {
+            self.ys[range.1 + 1] - self.ys[range.0]
+        } else if range.0 == range.1 {
+            0.0
+        } else {
+            self.length[2 * node] + self.length[2 * node + 1]
+        };
+    }
+}
+
+/// For each of `regions` (disjoint boxes), the `padded` boxes that lie inside it. A padded box
+/// lies inside the region its closure grew into, and a box with area has its centre strictly
+/// inside exactly one of two regions that do not overlap, so an R*-tree on the regions finds
+/// it without comparing every pair.
+fn members_of(regions: &[BBox], padded: &[BBox]) -> Vec<Vec<BBox>> {
+    let tree = RTree::bulk_load(
+        regions
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                GeomWithData::new(
+                    Rectangle::from_corners([r.x0(), r.y0()], [r.x1(), r.y1()]),
+                    i,
+                )
+            })
+            .collect(),
+    );
+    let mut members = vec![Vec::new(); regions.len()];
+    for b in padded {
+        let (cx, cy) = b.center();
+        let at = AABB::from_point([cx, cy]);
+        if let Some(entry) = tree
+            .locate_in_envelope_intersecting(at)
+            .find(|e| regions[e.data].contains(b))
+        {
+            members[entry.data].push(*b);
+        }
+    }
+    members
 }
 
 /// The planner's body. With a `trace` it also records what it computes; the plan does not
@@ -747,14 +860,14 @@ fn plan_regions_recorded(
     if let Some(t) = trace {
         t.regions = regions
             .iter()
-            .map(|region| {
-                let members = padded_boxes.iter().filter(|p| region.contains(p));
-                RegionTrace {
-                    area_px: region.area(),
-                    components: members.clone().count(),
-                    pre_closure_area_px: members.map(BBox::area).sum(),
-                    largest_support_px: largest_evidence_px(region, &evidence),
-                }
+            .zip(members_of(&regions, &padded_boxes))
+            .map(|(region, members)| RegionTrace {
+                area_px: region.area(),
+                components: members.len(),
+                // The union lies inside the region; the `min` only guards the last bit of
+                // rounding of a sum of differences.
+                pre_closure_area_px: union_area(&members).min(region.area()),
+                largest_support_px: largest_evidence_px(region, &evidence),
             })
             .collect();
         t.covered_area_px = regions.iter().map(BBox::area).sum();
@@ -778,6 +891,26 @@ fn plan_regions_recorded(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every planner test below goes through this: it plans with `plan_regions` and with
+    /// `plan_regions_traced` and requires the same plan, so the tests of the shared body also
+    /// check the traced entry point (a local item shadows the glob import).
+    fn plan_regions(
+        base: Option<&BgraFrame>,
+        current: &BgraFrame,
+        pending: &BTreeSet<TileCoord>,
+        evidence: Evidence<'_>,
+        params: &PlanParams,
+    ) -> Result<RegionPlan, IncrementalError> {
+        let plain = super::plan_regions(base, current, pending, evidence, params);
+        let traced =
+            plan_regions_traced(base, current, pending, evidence, params).map(|(plan, _)| plan);
+        assert_eq!(
+            plain, traced,
+            "the traced planner must plan what plan_regions plans"
+        );
+        plain
+    }
 
     fn bx(x0: f64, y0: f64, x1: f64, y1: f64) -> BBox {
         BBox::new(x0, y0, x1, y1).unwrap()
@@ -1951,6 +2084,82 @@ mod plan_trace_tests {
         assert!(components.is_empty() && regions.is_empty());
     }
 
+    /// The reviewer's case: a 32x16 frame, two disconnected 8 px edge tiles and a 16 px halo.
+    /// Each padded box is 384 px2 and they share 256 px2, so the union is 512 px2, the whole
+    /// frame and the final region. A sum of the two (768 px2) would exceed the frame.
+    #[test]
+    fn plan_trace_overlapping_halos_are_counted_once_before_the_closure() {
+        let base = blank(32, 16, 1);
+        // The tile at column 0, row 0 and the one at column 3, row 1: 8-connectivity keeps them apart.
+        let current = painted(&painted(&base, (0, 0, 1, 1)), (31, 15, 32, 16));
+        let params = PlanParams {
+            tile_size: 8,
+            halo_px: 16.0,
+            max_area_fraction: 1.0,
+            ..PlanParams::default()
+        };
+        let (plan, trace) = traced(&base, &current, &[], &params);
+        assert!(
+            matches!(plan.work, Work::Regions(ref rs) if rs.len() == 1),
+            "{plan:?}"
+        );
+        assert_eq!(trace.components.len(), 2);
+        let padded: Vec<f64> = trace.components.iter().map(|c| c.padded_area_px).collect();
+        assert_eq!(padded, [384.0, 384.0]);
+        let [region] = trace.regions[..] else {
+            panic!("one region expected: {trace:?}");
+        };
+        assert_eq!(region.components, 2);
+        assert_eq!(region.area_px, 512.0);
+        assert_eq!(region.pre_closure_area_px, 512.0, "a union, not 768");
+        assert_eq!(trace.frame_area_px, 512.0);
+    }
+
+    /// Two halos that do not touch have a union equal to their sum.
+    #[test]
+    fn plan_trace_disjoint_halos_before_the_closure_add_up() {
+        let base = blank(400, 100, 1);
+        let current = painted(&painted(&base, (0, 0, 1, 1)), (399, 0, 400, 1));
+        let params = PlanParams {
+            tile_size: 8,
+            halo_px: 4.0,
+            max_area_fraction: 1.0,
+            ..PlanParams::default()
+        };
+        let (_, trace) = traced(&base, &current, &[], &params);
+        assert_eq!(trace.regions.len(), 2, "{trace:?}");
+        for region in &trace.regions {
+            assert_eq!(region.components, 1);
+            assert_eq!(region.pre_closure_area_px, 12.0 * 12.0);
+        }
+    }
+
+    /// `union_area` against the area counted pixel by pixel, on generated boxes (integer
+    /// corners, so every pixel is whole).
+    #[test]
+    fn plan_trace_the_union_area_is_the_area_of_the_covered_pixels() {
+        let mut rng = Rng(0x0011_0022);
+        for case in 0..300 {
+            let (w, h) = (rng.between(1, 40), rng.between(1, 30));
+            let boxes: Vec<BBox> = (0..rng.between(0, 9))
+                .map(|_| random_box(&mut rng, w, h))
+                .collect();
+            let mut covered = vec![false; (w * h) as usize];
+            for b in &boxes {
+                for y in b.y0() as u32..b.y1() as u32 {
+                    for x in b.x0() as u32..b.x1() as u32 {
+                        covered[(y * w + x) as usize] = true;
+                    }
+                }
+            }
+            let expected = covered.iter().filter(|&&c| c).count() as f64;
+            assert_eq!(union_area(&boxes), expected, "case {case}: {boxes:?}");
+            let sum: f64 = boxes.iter().map(BBox::area).sum();
+            assert!(union_area(&boxes) <= sum);
+        }
+        assert_eq!(union_area(&[]), 0.0);
+    }
+
     /// Fixed-seed generator (splitmix64), as in the tests above.
     struct Rng(u64);
 
@@ -1969,9 +2178,9 @@ mod plan_trace_tests {
         }
     }
 
+    /// A box with area inside a `w` x `h` frame; three in four are control-sized.
     fn random_box(rng: &mut Rng, w: u32, h: u32) -> BBox {
-        let (x0, y0) = (rng.between(0, w - 1), rng.between(0, h - 1));
-        // Three boxes in four are control-sized; the others may be as large as the frame.
+        let (x0, y0) = (rng.between(0, w), rng.between(0, h));
         let cap = if rng.between(0, 4) == 0 { u32::MAX } else { 96 };
         let (x1, y1) = (
             rng.between(x0 + 1, x0.saturating_add(cap).min(w) + 1),
@@ -1980,135 +2189,327 @@ mod plan_trace_tests {
         bx(f64::from(x0), f64::from(y0), f64::from(x1), f64::from(y1))
     }
 
-    /// For generated frames, bases, evidence, pending tiles and parameters: the traced plan is
-    /// the plan `plan_regions` returns, and the trace agrees with it.
-    // One generated case checked against every property of the trace, so that a failure names
-    // the case and shows its whole trace.
+    /// One generated planning problem.
+    struct Input {
+        base: Option<BgraFrame>,
+        current: BgraFrame,
+        pending: BTreeSet<TileCoord>,
+        supports: Vec<BBox>,
+        relations: Vec<(BBox, BBox)>,
+        params: PlanParams,
+    }
+
+    /// The kinds of problem the generator is built to reach, one per `profile % PROFILES`.
+    const PROFILES: u32 = 11;
+    /// Tile sizes from the smallest the grid test uses to the largest the configuration allows
+    /// (`tile_size` 8-1024), with sizes that do not divide the frames.
+    const TILES: [u32; 11] = [4, 8, 16, 32, 64, 65, 100, 128, 256, 512, 1024];
+
+    /// A rectangle `(x0, y0, x1, y1)` of at most `span` px in each direction inside `w` x `h`.
+    fn random_rect(rng: &mut Rng, w: u32, h: u32, span: u32) -> (u32, u32, u32, u32) {
+        let (x0, y0) = (rng.between(0, w), rng.between(0, h));
+        (
+            x0,
+            y0,
+            rng.between(x0 + 1, (x0 + span).min(w) + 1),
+            rng.between(y0 + 1, (y0 + span).min(h) + 1),
+        )
+    }
+
+    /// The problem of `profile`: 0 general, 1 no base, 2 base of another geometry, 3 closure
+    /// that runs out of rounds, 4 many separate regions, 5 a change over the area budget, 6 the
+    /// baseline, 7 two separate regions under the adaptive rule, 8 nothing changed, 9 thin
+    /// frames, 10 wide frames with tiles that do not divide them.
+    // One generator for every profile, so that the profiles stay side by side.
     #[allow(clippy::too_many_lines)]
-    #[test]
-    fn plan_trace_the_traced_plan_equals_the_plan_and_the_numbers_agree_with_it() {
-        let mut rng = Rng(0x00A5_0001);
-        let mut full = 0;
-        let mut regional = 0;
-        for case in 0..400 {
-            let (w, h) = (rng.between(33, 400), rng.between(33, 300));
-            let tile = [8, 16, 32, 64][rng.between(0, 4) as usize];
-            let base_frame = blank(w, h, 1);
-            let mut current = base_frame.clone();
-            for _ in 0..rng.between(0, 5) {
-                let x0 = rng.between(0, w);
-                let y0 = rng.between(0, h);
-                // Mostly small changes, so that regional plans are common.
-                let rect = (
-                    x0,
-                    y0,
-                    rng.between(x0 + 1, (x0 + 48).min(w) + 1),
-                    rng.between(y0 + 1, (y0 + 48).min(h) + 1),
-                );
+    fn generate(rng: &mut Rng, profile: u32) -> Input {
+        let (w, h) = match profile {
+            4 | 7 => (rng.between(300, 700), rng.between(120, 300)),
+            9 if rng.between(0, 2) == 0 => (rng.between(1, 5), rng.between(1, 500)),
+            9 => (rng.between(1, 500), rng.between(1, 5)),
+            10 => (rng.between(500, 900), rng.between(33, 120)),
+            _ => (rng.between(33, 400), rng.between(33, 300)),
+        };
+        let tile = TILES[rng.between(0, TILES.len() as u32) as usize];
+        let mut params = PlanParams {
+            tile_size: tile,
+            halo_px: f64::from(rng.between(0, 41)),
+            max_closure_rounds: [1, 2, 1000][rng.between(0, 3) as usize],
+            max_regions: rng.between(2, 6) as usize,
+            max_area_fraction: f64::from(rng.between(3, 11)) / 10.0,
+            experimental_full_frame: false,
+            adaptive_min_regions: [0, 0, 2, 3][rng.between(0, 4) as usize],
+        };
+        let base_frame = blank(w, h, 1);
+        let mut current = base_frame.clone();
+        let mut supports: Vec<BBox> = Vec::new();
+        match profile {
+            // Nothing changed and nothing is pending.
+            8 => {}
+            // Separate single-pixel changes, far enough apart to stay separate regions.
+            4 | 7 => {
+                let n = if profile == 4 { rng.between(5, 9) } else { 2 };
+                params.tile_size = 8;
+                params.halo_px = f64::from(rng.between(0, 5));
+                params.max_closure_rounds = 1000;
+                params.max_area_fraction = 1.0;
+                params.adaptive_min_regions = if profile == 4 { 0 } else { 2 };
+                params.max_regions = if profile == 4 {
+                    rng.between(2, 5) as usize
+                } else {
+                    4
+                };
+                for i in 0..n {
+                    let x = i * (w / n) + rng.between(0, 8);
+                    let y = rng.between(0, h);
+                    current = painted(&current, (x, y, x + 1, y + 1));
+                }
+            }
+            // A change that alone covers most of the frame, over a small budget.
+            5 => {
+                params.max_area_fraction = 0.3;
+                params.adaptive_min_regions = 0;
+                params.max_closure_rounds = 1000;
+                current = painted(&current, (0, 0, w, h * 2 / 3 + 1));
+            }
+            // A support that grows the region, with a closure that has one round.
+            3 => {
+                params.tile_size = 8 + 8 * rng.between(0, 2);
+                params.halo_px = f64::from(rng.between(0, 5));
+                params.max_closure_rounds = 1;
+                let rect = random_rect(rng, w, h, 20);
                 current = painted(&current, rect);
-            }
-            let supports: Vec<BBox> = (0..rng.between(0, 6))
-                .map(|_| random_box(&mut rng, w, h))
-                .collect();
-            let relations: Vec<(BBox, BBox)> = (0..rng.between(0, 3))
-                .map(|_| (random_box(&mut rng, w, h), random_box(&mut rng, w, h)))
-                .collect();
-            let pending: BTreeSet<TileCoord> = (0..rng.between(0, 4))
-                .map(|_| TileCoord::new(rng.between(0, w / tile + 3), rng.between(0, h / tile + 3)))
-                .collect();
-            let params = PlanParams {
-                tile_size: tile,
-                halo_px: f64::from(rng.between(0, 41)),
-                max_closure_rounds: [1, 2, 1000][rng.between(0, 3) as usize],
-                max_regions: rng.between(2, 6) as usize,
-                max_area_fraction: f64::from(rng.between(3, 11)) / 10.0,
-                experimental_full_frame: rng.between(0, 20) == 0,
-                adaptive_min_regions: [0, 0, 2, 3][rng.between(0, 4) as usize],
-            };
-            let base = match rng.between(0, 20) {
-                0 => None,
-                1 => Some(blank(w + 1, h, 1)),
-                _ => Some(base_frame),
-            };
-            let evidence = Evidence {
-                supports: &supports,
-                relations: &relations,
-            };
-            let expected =
-                plan_regions(base.as_ref(), &current, &pending, evidence, &params).unwrap();
-            let (plan, trace) =
-                plan_regions_traced(base.as_ref(), &current, &pending, evidence, &params).unwrap();
-            let why = format!("case {case}: {trace:?}");
-
-            // The plan is bit for bit the plan.
-            assert_eq!(plan, expected, "{why}");
-
-            // The trace agrees with it.
-            let frame_area = f64::from(w) * f64::from(h);
-            assert_eq!(trace.frame_area_px, frame_area, "{why}");
-            assert_eq!(trace.dirty_tiles, plan.dirty.len(), "{why}");
-            assert_eq!(trace.tile_size, tile, "{why}");
-            assert_eq!(trace.max_regions, params.max_regions, "{why}");
-            assert_eq!(
-                trace.budget_area_px,
-                params.max_area_fraction * frame_area,
-                "{why}"
-            );
-            match &plan.work {
-                Work::FullRefresh(reason) => {
-                    full += 1;
-                    assert_eq!(trace.decided_by, Some(*reason), "{why}");
-                }
-                Work::Nothing | Work::Regions(_) => {
-                    assert_eq!(trace.decided_by, None, "{why}");
-                }
-            }
-            if let Work::Regions(regions) = &plan.work {
-                regional += 1;
-                let areas: Vec<f64> = regions.iter().map(BBox::area).collect();
-                let traced_areas: Vec<f64> = trace.regions.iter().map(|r| r.area_px).collect();
-                assert_eq!(traced_areas, areas, "{why}");
-                assert!(trace.covered_area_px <= trace.budget_area_px, "{why}");
-            }
-            if matches!(plan.work, Work::Nothing) {
-                assert!(
-                    trace.components.is_empty() && trace.regions.is_empty(),
-                    "{why}"
+                let grown = bx(
+                    f64::from(rect.0.saturating_sub(30)),
+                    f64::from(rect.1.saturating_sub(30)),
+                    f64::from((rect.2 + 30).min(w)),
+                    f64::from((rect.3 + 30).min(h)),
                 );
+                supports.push(grown);
             }
-            if trace.decided_by == Some(FullRefreshReason::AreaBudget) {
-                assert!(trace.covered_area_px > trace.budget_area_px, "{why}");
-                let decisive = trace.decisive_region.expect("a decisive region");
-                let largest = trace.regions.iter().map(|r| r.area_px).fold(0.0, f64::max);
-                assert_eq!(trace.regions[decisive].area_px, largest, "{why}");
-            } else {
-                assert_eq!(trace.decisive_region, None, "{why}");
-            }
-            if trace.decided_by == Some(FullRefreshReason::TooManyRegions) {
-                assert!(trace.regions.len() > params.max_regions, "{why}");
-            }
-            // Areas never exceed the frame, and the closure only grows a region.
-            for c in &trace.components {
-                assert!(c.tiles > 0, "{why}");
-                assert!(c.tight_area_px <= c.padded_area_px, "{why}");
-                assert!(c.padded_area_px <= c.closed_area_px, "{why}");
-                assert!(c.closed_area_px <= frame_area, "{why}");
-                assert!(c.largest_support_px <= c.closed_area_px, "{why}");
-            }
-            for r in &trace.regions {
-                assert!(r.area_px <= frame_area, "{why}");
-                assert!(r.largest_support_px <= r.area_px, "{why}");
-                assert!(r.components >= 1, "{why}");
-            }
-            // Every component ends in exactly one final region.
-            if !trace.regions.is_empty() {
-                let members: usize = trace.regions.iter().map(|r| r.components).sum();
-                assert_eq!(members, trace.components.len(), "{why}");
+            // Mostly small changes, so that regional plans are common.
+            _ => {
+                for _ in 0..rng.between(0, 5) {
+                    current = painted(&current, random_rect(rng, w, h, 48));
+                }
             }
         }
-        assert!(
-            full > 40 && regional > 40,
-            "the generator covers both: {full} full, {regional} regional"
+        if !matches!(profile, 3 | 4 | 5 | 7 | 8) {
+            supports.extend((0..rng.between(0, 6)).map(|_| random_box(rng, w, h)));
+        }
+        let relations: Vec<(BBox, BBox)> = if matches!(profile, 0 | 9 | 10) {
+            (0..rng.between(0, 3))
+                .map(|_| (random_box(rng, w, h), random_box(rng, w, h)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let pending: BTreeSet<TileCoord> = if matches!(profile, 0 | 9 | 10) {
+            (0..rng.between(0, 4))
+                .map(|_| TileCoord::new(rng.between(0, w / tile + 3), rng.between(0, h / tile + 3)))
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        params.experimental_full_frame = profile == 6;
+        let base = match profile {
+            1 => None,
+            2 if rng.between(0, 2) == 0 => Some(blank(w + 1, h, 1)),
+            2 => Some(blank(w, h, 2)),
+            _ => Some(base_frame),
+        };
+        Input {
+            base,
+            current,
+            pending,
+            supports,
+            relations,
+            params,
+        }
+    }
+
+    /// The label of the kind of plan, for the coverage count.
+    fn kind(plan: &RegionPlan) -> &'static str {
+        match &plan.work {
+            Work::Nothing => "idle",
+            Work::Regions(_) => "regional",
+            Work::FullRefresh(reason) => reason.as_str(),
+        }
+    }
+
+    /// Everything the trace must satisfy for `input`, in `why`'s words on failure.
+    // Every property of one trace, in one place, so that a failure shows the whole case.
+    #[allow(clippy::too_many_lines)]
+    fn check(input: &Input, why: &str) -> &'static str {
+        let evidence = Evidence {
+            supports: &input.supports,
+            relations: &input.relations,
+        };
+        let expected = plan_regions(
+            input.base.as_ref(),
+            &input.current,
+            &input.pending,
+            evidence,
+            &input.params,
+        )
+        .unwrap();
+        let (plan, trace) = plan_regions_traced(
+            input.base.as_ref(),
+            &input.current,
+            &input.pending,
+            evidence,
+            &input.params,
+        )
+        .unwrap();
+        let why = format!("{why}: {trace:?}");
+        let params = &input.params;
+
+        // The plan is bit for bit the plan.
+        assert_eq!(plan, expected, "{why}");
+
+        // The trace agrees with it.
+        let frame_area = f64::from(input.current.width()) * f64::from(input.current.height());
+        assert_eq!(trace.frame_area_px, frame_area, "{why}");
+        assert_eq!(trace.dirty_tiles, plan.dirty.len(), "{why}");
+        assert_eq!(trace.tile_size, params.tile_size, "{why}");
+        assert_eq!(trace.max_regions, params.max_regions, "{why}");
+        assert_eq!(
+            trace.budget_area_px,
+            params.max_area_fraction * frame_area,
+            "{why}"
         );
+        match &plan.work {
+            Work::FullRefresh(reason) => assert_eq!(trace.decided_by, Some(*reason), "{why}"),
+            Work::Nothing | Work::Regions(_) => assert_eq!(trace.decided_by, None, "{why}"),
+        }
+        if let Work::Regions(regions) = &plan.work {
+            let areas: Vec<f64> = regions.iter().map(BBox::area).collect();
+            let traced_areas: Vec<f64> = trace.regions.iter().map(|r| r.area_px).collect();
+            assert_eq!(traced_areas, areas, "{why}");
+            assert!(trace.covered_area_px <= trace.budget_area_px, "{why}");
+        }
+        if matches!(plan.work, Work::Nothing) {
+            assert!(
+                trace.components.is_empty() && trace.regions.is_empty(),
+                "{why}"
+            );
+        }
+        if trace.decided_by == Some(FullRefreshReason::AreaBudget) {
+            assert!(trace.covered_area_px > trace.budget_area_px, "{why}");
+            let decisive = trace.decisive_region.expect("a decisive region");
+            let largest = trace.regions.iter().map(|r| r.area_px).fold(0.0, f64::max);
+            assert_eq!(trace.regions[decisive].area_px, largest, "{why}");
+        } else {
+            assert_eq!(trace.decisive_region, None, "{why}");
+        }
+        if trace.decided_by == Some(FullRefreshReason::TooManyRegions) {
+            assert!(trace.regions.len() > params.max_regions, "{why}");
+        }
+
+        // Every area is at most the frame's, a union is at most its parts' sum, and the
+        // closure only grows a region.
+        assert!(trace.covered_area_px <= frame_area, "{why}");
+        assert!(trace.budget_area_px <= frame_area, "{why}");
+        for c in &trace.components {
+            assert!(c.tiles > 0, "{why}");
+            assert!(c.tight_area_px <= c.padded_area_px, "{why}");
+            assert!(c.padded_area_px <= c.closed_area_px, "{why}");
+            assert!(c.closed_area_px <= frame_area, "{why}");
+            assert!(c.largest_support_px <= c.closed_area_px, "{why}");
+        }
+        let padded_sum: f64 = trace.components.iter().map(|c| c.padded_area_px).sum();
+        for r in &trace.regions {
+            assert!(r.area_px <= frame_area, "{why}");
+            assert!(r.pre_closure_area_px <= r.area_px, "{why}");
+            assert!(r.pre_closure_area_px <= padded_sum, "{why}");
+            assert!(r.pre_closure_area_px > 0.0, "{why}");
+            assert!(r.largest_support_px <= r.area_px, "{why}");
+            assert!(r.components >= 1, "{why}");
+        }
+        // Every component ends in exactly one final region.
+        if !trace.regions.is_empty() {
+            let members: usize = trace.regions.iter().map(|r| r.components).sum();
+            assert_eq!(members, trace.components.len(), "{why}");
+        }
+        kind(&plan)
+    }
+
+    /// For generated frames of every shape the engine accepts (thin, wide, partial tiles, tile
+    /// sizes up to 1024), bases, evidence, pending tiles and parameters: the traced plan is the
+    /// plan `plan_regions` returns, and the trace agrees with it. Every kind of plan must be
+    /// generated, so a generator that stops reaching one fails here.
+    #[test]
+    fn plan_trace_the_traced_plan_equals_the_plan_and_the_numbers_agree_with_it() {
+        use std::collections::BTreeMap;
+
+        let mut rng = Rng(0x00A5_0001);
+        let mut kinds: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for case in 0..660 {
+            let profile = case % PROFILES;
+            let input = generate(&mut rng, profile);
+            let label = check(&input, &format!("case {case} (profile {profile})"));
+            *kinds.entry(label).or_default() += 1;
+        }
+        for needed in [
+            "idle",
+            "regional",
+            "no_committed_base",
+            "geometry_changed",
+            "closure_budget",
+            "too_many_regions",
+            "area_budget",
+            "experimental_baseline",
+            "adaptive_cost",
+        ] {
+            assert!(
+                kinds.get(needed).copied().unwrap_or(0) >= 10,
+                "the generator stopped reaching {needed}: {kinds:?}"
+            );
+        }
+    }
+
+    /// The frames at the edge of what the engine accepts: 20 000 000 px (`MAX_FRAME_PIXELS`),
+    /// wide, tall and square, with the largest tiles, with and without a support that covers
+    /// almost half of the frame. Areas stay exact and at most the frame's.
+    #[test]
+    fn plan_trace_holds_at_the_pixel_bound() {
+        for (w, h, tile) in [
+            (20_000, 1_000, 1024),
+            (1_000, 20_000, 512),
+            (4_472, 4_472, 100),
+        ] {
+            let base = blank(w, h, 1);
+            let current = painted(&base, (w / 2, h / 2, w / 2 + 3, h / 2 + 3));
+            let frame_area = f64::from(w) * f64::from(h);
+            assert!(frame_area <= MAX_FRAME_PIXELS as f64);
+            for support in [
+                None,
+                Some(bx(0.0, 0.0, f64::from(w) * 0.7, f64::from(h) * 0.7)),
+            ] {
+                let input = Input {
+                    base: Some(base.clone()),
+                    current: current.clone(),
+                    pending: BTreeSet::new(),
+                    supports: support.into_iter().collect(),
+                    relations: Vec::new(),
+                    params: PlanParams {
+                        tile_size: tile,
+                        ..PlanParams::default()
+                    },
+                };
+                let label = check(
+                    &input,
+                    &format!("{w}x{h}, tile {tile}, support {support:?}"),
+                );
+                assert_eq!(
+                    label,
+                    if support.is_some() {
+                        "area_budget"
+                    } else {
+                        "regional"
+                    }
+                );
+            }
+        }
     }
 }

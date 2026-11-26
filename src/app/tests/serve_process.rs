@@ -313,6 +313,8 @@ fn demo_plan_trace_is_on_stderr_only_when_asked_and_changes_nothing_on_stdout() 
         let record: Value = serde_json::from_str(line).expect("a JSON line");
         assert_eq!(record["schema"], "ommatix.plan-trace/1", "{line}");
         assert_eq!(record["observation_id"], i + 1, "{line}");
+        assert_eq!(record["outcome"], "ok", "{line}");
+        assert!(record["error_code"].is_null(), "{line}");
         for key in ["dirty_tiles", "frame_area_px", "covered_area_px"] {
             assert!(record[key].is_number(), "{key} in {line}");
         }
@@ -331,6 +333,49 @@ fn demo_plan_trace_is_on_stderr_only_when_asked_and_changes_nothing_on_stdout() 
     let with = sandbox.run(&["demo", "--session-id", "demo", "--plan-trace"], "");
     assert_eq!(with.stdout, without.stdout);
     assert!(entries(&sandbox.cwd()).is_empty() && entries(&sandbox.tmp()).is_empty());
+}
+
+/// A failed observation has its `--plan-trace` line, as it has its `--timings` record: here the
+/// capture fails on a frame that is not a PNG (a synthetic file, no screen), the demo stops, and
+/// stderr holds exactly one error line of each kind.
+#[test]
+fn demo_plan_trace_says_when_an_observation_failed() {
+    let sandbox = Sandbox::new("demo-plan-trace-error");
+    let images = sandbox.cwd().join("frames");
+    std::fs::create_dir_all(&images).unwrap();
+    std::fs::write(images.join("0001.png"), b"this is not a PNG").unwrap();
+    let output = sandbox.run(
+        &[
+            "demo",
+            "--source",
+            "images",
+            "--images",
+            images.to_str().unwrap(),
+            "--timings",
+            "--plan-trace",
+        ],
+        "",
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let trace: Vec<&str> = stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("ommatix-plan-trace "))
+        .collect();
+    let timings: Vec<&str> = stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("ommatix-observation "))
+        .collect();
+    assert_eq!((trace.len(), timings.len()), (1, 1), "{stderr}");
+    let record: Value = serde_json::from_str(trace[0]).expect("a JSON line");
+    assert_eq!(record["schema"], "ommatix.plan-trace/1");
+    assert_eq!(record["observation_id"], 1);
+    assert_eq!(record["outcome"], "error");
+    let timing: Value = serde_json::from_str(timings[0]).unwrap();
+    assert_eq!(record["error_code"], timing["error_code"], "{stderr}");
+    assert!(record["error_code"].is_string());
+    assert!(record["dirty_tiles"].is_null() && record["decided_by"].is_null());
+    assert_eq!(record["components"], json!([]));
+    assert_eq!(record["regions"], json!([]));
 }
 
 /// SEC-06 at the process boundary: a curated-icon file that no longer matches the digest
