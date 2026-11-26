@@ -6,6 +6,13 @@
 //! followed by a JSON object, schema `ommatix.observation/1`, dossier chapter 09 §9.9): the
 //! stage timings in whole microseconds, the plan and a signature per element. They depend
 //! on the run, so they never reach stdout, and no label is written, only its signature.
+//!
+//! With `--plan-trace`, each observation also writes one line to stderr (`ommatix-plan-trace`
+//! followed by a JSON object, schema `ommatix.plan-trace/1`): the numbers behind the plan's
+//! choice of work, counts and areas only. An observation that failed gets its line too, with
+//! `outcome` `error`, its code and nothing else measured, as `--timings` does. It is the
+//! planner's own record of why an observation was a full refresh; it is off unless asked for
+//! and no MCP client can reach it. Every field is defined in `docs/guide/configuration.md`.
 
 // `demo` is the one command whose output is meant for a human on stdout.
 #![allow(clippy::print_stdout)]
@@ -19,12 +26,15 @@ use ommatix_application::contract::{
     ActionKind, ActionRequest, ElementView, ExpectedEffect, ObservePage, ObserveRequest, ToolError,
 };
 use ommatix_domain::fusion::Actionability;
-use ommatix_domain::incremental::FullRefreshReason;
+use ommatix_domain::incremental::{FullRefreshReason, PlanTrace};
 use ommatix_domain::{Action, MouseButton};
 use serde_json::{Value, json};
 
 /// The schema of the per-observation record written by `--timings`.
 const OBSERVATION_SCHEMA: &str = "ommatix.observation/1";
+
+/// The schema of the per-observation line written by `--plan-trace`.
+const PLAN_TRACE_SCHEMA: &str = "ommatix.plan-trace/1";
 
 /// `TextNode` → `text_node`: the contract's spelling of a variant name.
 fn snake(debug: impl std::fmt::Debug) -> String {
@@ -198,6 +208,70 @@ fn observation_record(n: u8, page: &ObservePage, elements: &[ElementView]) -> Va
     })
 }
 
+/// One observation of `--plan-trace`: the plan's work and reason (as in the observation
+/// record) beside the planner's numbers. Counts and areas in pixels of the frame; nothing
+/// that names a place on the screen. `null` is a check that did not decide.
+fn plan_trace_record(n: u8, page: &ObservePage, trace: &PlanTrace) -> Value {
+    let p = &page.plan;
+    json!({
+        "schema": PLAN_TRACE_SCHEMA,
+        "observation_id": n,
+        "outcome": "ok",
+        "error_code": null,
+        "work": p.work.as_str(),
+        "full_refresh_reason": p.full_refresh_reason.map(FullRefreshReason::as_str),
+        "frame_area_px": trace.frame_area_px,
+        "tile_size": trace.tile_size,
+        "changed_tiles": trace.changed_tiles,
+        "pending_tiles": trace.pending_tiles,
+        "dirty_tiles": trace.dirty_tiles,
+        "components": trace.components.iter().map(|c| json!({
+            "tiles": c.tiles,
+            "tight_area_px": c.tight_area_px,
+            "padded_area_px": c.padded_area_px,
+            "closed_area_px": c.closed_area_px,
+            "largest_support_px": c.largest_support_px,
+        })).collect::<Vec<_>>(),
+        "regions": trace.regions.iter().map(|r| json!({
+            "area_px": r.area_px,
+            "components": r.components,
+            "pre_closure_area_px": r.pre_closure_area_px,
+            "largest_support_px": r.largest_support_px,
+        })).collect::<Vec<_>>(),
+        "covered_area_px": trace.covered_area_px,
+        "budget_area_px": trace.budget_area_px,
+        "max_regions": trace.max_regions,
+        "decided_by": trace.decided_by.map(FullRefreshReason::as_str),
+        "decisive_region": trace.decisive_region,
+    })
+}
+
+/// The `--plan-trace` line of an observation that failed: the same keys as the line of one
+/// that succeeded, its error code, and `null` (or an empty list) for everything the planner
+/// did not get to report: a failed observation publishes nothing, so no trace is kept.
+fn plan_trace_error_record(n: u8, error: &ToolError) -> Value {
+    json!({
+        "schema": PLAN_TRACE_SCHEMA,
+        "observation_id": n,
+        "outcome": "error",
+        "error_code": error.code.as_str(),
+        "work": null,
+        "full_refresh_reason": null,
+        "frame_area_px": null,
+        "tile_size": null,
+        "changed_tiles": null,
+        "pending_tiles": null,
+        "dirty_tiles": null,
+        "components": [],
+        "regions": [],
+        "covered_area_px": null,
+        "budget_area_px": null,
+        "max_regions": null,
+        "decided_by": null,
+        "decisive_region": null,
+    })
+}
+
 /// The record of an observation that failed: its code, and nothing it did not measure.
 fn error_record(n: u8, error: &ToolError) -> Value {
     json!({
@@ -221,15 +295,17 @@ fn clickable(page: &ObservePage) -> Option<&ElementView> {
 
 /// Runs `observations` observations, then a dry-run click on the first confirmed,
 /// enabled element of the last page. With `timings`, each observation's per-stage timings
-/// go to stderr.
+/// go to stderr; with `plan_trace`, so does the planner's trace of it.
 pub fn run(
     engine: &mut Engine,
     sim: Option<&SimulatedDesktop>,
     summary: &str,
     observations: u8,
     timings: bool,
+    plan_trace: bool,
 ) {
     println!("ommatix demo | session {} | {summary}", engine.session_id());
+    engine.set_plan_trace(plan_trace);
     let mut last = None;
     for n in 1..=observations {
         if let Some(what) = sim.and_then(|desktop| play_user(desktop, n)) {
@@ -246,12 +322,18 @@ pub fn run(
                         observation_record(n, &page, &elements)
                     );
                 }
+                if let Some(trace) = engine.last_plan_trace() {
+                    eprintln!("ommatix-plan-trace {}", plan_trace_record(n, &page, trace));
+                }
                 last = Some(page);
             }
             Err(e) => {
                 println!("observation {n}: {} ({})", e.code.as_str(), e.message);
                 if timings {
                     eprintln!("ommatix-observation {}", error_record(n, &e));
+                }
+                if plan_trace {
+                    eprintln!("ommatix-plan-trace {}", plan_trace_error_record(n, &e));
                 }
                 break;
             }
@@ -360,6 +442,210 @@ mod tests {
             .collect();
         assert_eq!(signatures.len(), page.total_elements);
         assert!(signatures.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    /// The keys of one `--plan-trace` line (JSON writes them sorted). Every one is a
+    /// count, an area, a closed-list name or an index: none names a place on the screen.
+    const TRACE_KEYS: [&str; 18] = [
+        "schema",
+        "observation_id",
+        "outcome",
+        "error_code",
+        "work",
+        "full_refresh_reason",
+        "frame_area_px",
+        "tile_size",
+        "changed_tiles",
+        "pending_tiles",
+        "dirty_tiles",
+        "components",
+        "regions",
+        "covered_area_px",
+        "budget_area_px",
+        "max_regions",
+        "decided_by",
+        "decisive_region",
+    ];
+
+    fn sorted_keys(value: &Value) -> Vec<String> {
+        let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    fn sim_wired(id: &str) -> crate::wiring::Wired {
+        let args = crate::cli::RunArgs {
+            config: None,
+            source: crate::cli::SourceKind::Sim,
+            images: None,
+            output: 0,
+            input: None,
+            theme: crate::cli::ThemeKind::Light,
+            session_id: Some(id.to_owned()),
+            legacy: false,
+        };
+        crate::wiring::build(&args, &crate::config::Config::default()).unwrap()
+    }
+
+    #[test]
+    fn a_plan_trace_line_has_the_documented_fields_and_nothing_that_names_a_place() {
+        let mut wired = sim_wired("trace");
+        wired.engine.set_plan_trace(true);
+        let sim = wired.sim.as_ref().unwrap();
+        let mut seen_regions = false;
+        for n in 1..=3 {
+            let _ = play_user(sim, n);
+            let page = wired
+                .engine
+                .observe_screen(&ObserveRequest::default())
+                .unwrap();
+            let trace = wired
+                .engine
+                .last_plan_trace()
+                .expect("a trace was asked for");
+            let record = plan_trace_record(n, &page, trace);
+            // The line is one JSON object that parses back, with exactly the documented keys.
+            let line = record.to_string();
+            assert!(!line.contains('\n'));
+            let parsed: Value = serde_json::from_str(&line).unwrap();
+            let mut expected: Vec<String> = TRACE_KEYS.iter().map(|k| (*k).to_owned()).collect();
+            expected.sort();
+            assert_eq!(sorted_keys(&parsed), expected, "{line}");
+            assert_eq!(parsed["schema"], PLAN_TRACE_SCHEMA);
+            assert_eq!(parsed["observation_id"], n);
+            assert_eq!(parsed["outcome"], "ok");
+            assert!(parsed["error_code"].is_null());
+            // The work and the reason are the observation record's own.
+            assert_eq!(parsed["work"], page.plan.work.as_str());
+            assert_eq!(
+                parsed["full_refresh_reason"],
+                json!(page.plan.full_refresh_reason.map(FullRefreshReason::as_str))
+            );
+            // Counts and areas are numbers; the deciding check is a closed-list name or null.
+            for key in [
+                "frame_area_px",
+                "tile_size",
+                "changed_tiles",
+                "pending_tiles",
+                "dirty_tiles",
+                "covered_area_px",
+                "budget_area_px",
+                "max_regions",
+            ] {
+                assert!(parsed[key].is_number(), "{key} in {line}");
+            }
+            let decided = &parsed["decided_by"];
+            assert!(decided.is_null() || decided.is_string(), "{line}");
+            assert_eq!(
+                decided.as_str(),
+                page.plan.full_refresh_reason.map(FullRefreshReason::as_str),
+                "{line}"
+            );
+            for component in parsed["components"].as_array().unwrap() {
+                assert_eq!(
+                    sorted_keys(component),
+                    [
+                        "closed_area_px",
+                        "largest_support_px",
+                        "padded_area_px",
+                        "tight_area_px",
+                        "tiles"
+                    ],
+                    "{line}"
+                );
+                assert!(
+                    component
+                        .as_object()
+                        .unwrap()
+                        .values()
+                        .all(Value::is_number)
+                );
+            }
+            for region in parsed["regions"].as_array().unwrap() {
+                assert_eq!(
+                    sorted_keys(region),
+                    [
+                        "area_px",
+                        "components",
+                        "largest_support_px",
+                        "pre_closure_area_px"
+                    ],
+                    "{line}"
+                );
+                assert!(region.as_object().unwrap().values().all(Value::is_number));
+                seen_regions = true;
+            }
+            // The trace carries the screen's text nowhere.
+            for text in ["Name", "Cancel", "Save", "hello"] {
+                assert!(!line.contains(text), "{text:?} in {line}");
+            }
+        }
+        assert!(seen_regions, "an observation of the demo planned regions");
+    }
+
+    /// A failed observation has its line: the same keys, the code, and nothing measured.
+    #[test]
+    fn a_failed_observation_has_a_plan_trace_line_that_measures_nothing() {
+        let error = ToolError::new(ErrorCode::InferenceFailed, "detection failed");
+        let record = plan_trace_error_record(3, &error);
+        let mut expected: Vec<String> = TRACE_KEYS.iter().map(|k| (*k).to_owned()).collect();
+        expected.sort();
+        assert_eq!(sorted_keys(&record), expected, "{record}");
+        assert_eq!(record["schema"], PLAN_TRACE_SCHEMA);
+        assert_eq!(record["observation_id"], 3);
+        assert_eq!(record["outcome"], "error");
+        assert_eq!(record["error_code"], "INFERENCE_FAILED");
+        assert_eq!(record["components"], json!([]));
+        assert_eq!(record["regions"], json!([]));
+        for key in expected {
+            if ![
+                "schema",
+                "observation_id",
+                "outcome",
+                "error_code",
+                "components",
+                "regions",
+            ]
+            .contains(&key.as_str())
+            {
+                assert!(record[&key].is_null(), "{key} in {record}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_engine_keeps_no_plan_trace_unless_asked() {
+        let mut wired = sim_wired("trace-off");
+        assert!(wired.engine.last_plan_trace().is_none());
+        let request = ObserveRequest::default();
+        wired.engine.observe_screen(&request).unwrap();
+        assert!(wired.engine.last_plan_trace().is_none(), "off by default");
+        wired.engine.set_plan_trace(true);
+        wired.engine.observe_screen(&request).unwrap();
+        assert!(wired.engine.last_plan_trace().is_some());
+        wired.engine.set_plan_trace(false);
+        wired.engine.observe_screen(&request).unwrap();
+        assert!(wired.engine.last_plan_trace().is_none());
+    }
+
+    #[test]
+    fn asking_for_the_plan_trace_does_not_change_what_the_engine_does() {
+        let run = |trace: bool| {
+            let mut wired = sim_wired("trace-same");
+            wired.engine.set_plan_trace(trace);
+            let sim = wired.sim.as_ref().unwrap();
+            let mut out = Vec::new();
+            for n in 1..=3 {
+                let _ = play_user(sim, n);
+                let page = wired
+                    .engine
+                    .observe_screen(&ObserveRequest::default())
+                    .unwrap();
+                out.push((page.plan.clone(), all_elements(&mut wired.engine, &page)));
+            }
+            out
+        };
+        assert_eq!(run(true), run(false));
     }
 
     #[test]

@@ -83,6 +83,7 @@ fn run_demo(args: &DemoArgs) -> Result<()> {
         &wired.summary,
         args.observations,
         args.timings,
+        args.plan_trace,
     );
     Ok(())
 }

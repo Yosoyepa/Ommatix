@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use ommatix_domain::fusion::FusionParams;
 use ommatix_domain::identity::{AssociationPolicy, Changes, Registry};
-use ommatix_domain::incremental::{PlanParams, connected_components};
+use ommatix_domain::incremental::{PlanParams, PlanTrace, connected_components};
 use ommatix_domain::snapshot::SnapshotStore;
 
 use crate::contract::{
@@ -177,6 +177,9 @@ pub struct Engine {
     /// What the last committed observation measured and planned. It belongs to the published
     /// snapshot: `None` exactly when nothing has been published.
     measured: Option<Measured>,
+    /// Whether each observation also keeps the numbers behind its plan ([`PlanTrace`]). Off
+    /// unless the composition root asks; no request of a client can turn it on.
+    trace_plan: bool,
 }
 
 impl Engine {
@@ -191,6 +194,7 @@ impl Engine {
             action_timings: None,
             purged_identity: None,
             measured: None,
+            trace_plan: false,
         }
     }
 
@@ -284,6 +288,21 @@ impl Engine {
     /// What the last committed observation planned, for MCP `_meta` and the research record.
     pub fn last_plan(&self) -> Option<ObservationPlan> {
         self.measured.as_ref().map(|m| m.plan.clone())
+    }
+
+    /// Asks each following observation to keep the numbers behind its plan, for
+    /// [`Engine::last_plan_trace`]. For the operator's own diagnostics (`demo --plan-trace`):
+    /// the plan, the snapshot and every response are the same with it on or off, and only the
+    /// composition root can call this.
+    pub fn set_plan_trace(&mut self, on: bool) {
+        self.trace_plan = on;
+    }
+
+    /// What the planner saw in the last committed observation: counts and areas, never a
+    /// pixel, a label or a coordinate. `None` before the first observation, after a purge, and
+    /// when that observation ran with the trace off. Not part of the MCP contract.
+    pub fn last_plan_trace(&self) -> Option<&PlanTrace> {
+        self.measured.as_ref().and_then(|m| m.plan_trace.as_ref())
     }
 
     /// Whether the accessibility evidence of the published snapshot is complete: `false`

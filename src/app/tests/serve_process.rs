@@ -280,6 +280,104 @@ fn it_06_demo_timings_on_stderr_are_numbers_only() {
     assert!(entries(&sandbox.cwd()).is_empty() && entries(&sandbox.tmp()).is_empty());
 }
 
+/// `demo --plan-trace` puts one line per observation on stderr: the planner's counts and areas,
+/// never a label or any other text of the screen. Without the option there is no such line,
+/// and with it stdout is the demo's report, byte for byte what it is without.
+#[test]
+fn demo_plan_trace_is_on_stderr_only_when_asked_and_changes_nothing_on_stdout() {
+    let sandbox = Sandbox::new("demo-plan-trace");
+    let plain = sandbox.run(&["demo", "--session-id", "demo", "--timings"], "");
+    assert!(plain.status.success());
+    let plain_err = String::from_utf8(plain.stderr.clone()).unwrap();
+    assert!(!plain_err.contains("ommatix-plan-trace"), "{plain_err}");
+
+    let traced = sandbox.run(
+        &[
+            "demo",
+            "--session-id",
+            "demo",
+            "--plan-trace",
+            "--observations",
+            "3",
+        ],
+        "",
+    );
+    assert!(traced.status.success());
+    let stderr = String::from_utf8(traced.stderr).unwrap();
+    let lines: Vec<&str> = stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("ommatix-plan-trace "))
+        .collect();
+    assert_eq!(lines.len(), 3, "{stderr}");
+    for (i, line) in lines.iter().enumerate() {
+        let record: Value = serde_json::from_str(line).expect("a JSON line");
+        assert_eq!(record["schema"], "ommatix.plan-trace/1", "{line}");
+        assert_eq!(record["observation_id"], i + 1, "{line}");
+        assert_eq!(record["outcome"], "ok", "{line}");
+        assert!(record["error_code"].is_null(), "{line}");
+        for key in ["dirty_tiles", "frame_area_px", "covered_area_px"] {
+            assert!(record[key].is_number(), "{key} in {line}");
+        }
+        assert!(record["components"].is_array() && record["regions"].is_array());
+        for secret in SCREEN_TEXT {
+            assert!(!line.contains(secret), "{line:?}");
+        }
+    }
+    // The first observation has no committed base: it is decided before any region.
+    let first: Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(first["decided_by"], "no_committed_base");
+
+    // stdout is the demo's report with or without the option.
+    let without = sandbox.run(&["demo", "--session-id", "demo"], "");
+    assert_eq!(plain.stdout, without.stdout);
+    let with = sandbox.run(&["demo", "--session-id", "demo", "--plan-trace"], "");
+    assert_eq!(with.stdout, without.stdout);
+    assert!(entries(&sandbox.cwd()).is_empty() && entries(&sandbox.tmp()).is_empty());
+}
+
+/// A failed observation has its `--plan-trace` line, as it has its `--timings` record: here the
+/// capture fails on a frame that is not a PNG (a synthetic file, no screen), the demo stops, and
+/// stderr holds exactly one error line of each kind.
+#[test]
+fn demo_plan_trace_says_when_an_observation_failed() {
+    let sandbox = Sandbox::new("demo-plan-trace-error");
+    let images = sandbox.cwd().join("frames");
+    std::fs::create_dir_all(&images).unwrap();
+    std::fs::write(images.join("0001.png"), b"this is not a PNG").unwrap();
+    let output = sandbox.run(
+        &[
+            "demo",
+            "--source",
+            "images",
+            "--images",
+            images.to_str().unwrap(),
+            "--timings",
+            "--plan-trace",
+        ],
+        "",
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let trace: Vec<&str> = stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("ommatix-plan-trace "))
+        .collect();
+    let timings: Vec<&str> = stderr
+        .lines()
+        .filter_map(|l| l.strip_prefix("ommatix-observation "))
+        .collect();
+    assert_eq!((trace.len(), timings.len()), (1, 1), "{stderr}");
+    let record: Value = serde_json::from_str(trace[0]).expect("a JSON line");
+    assert_eq!(record["schema"], "ommatix.plan-trace/1");
+    assert_eq!(record["observation_id"], 1);
+    assert_eq!(record["outcome"], "error");
+    let timing: Value = serde_json::from_str(timings[0]).unwrap();
+    assert_eq!(record["error_code"], timing["error_code"], "{stderr}");
+    assert!(record["error_code"].is_string());
+    assert!(record["dirty_tiles"].is_null() && record["decided_by"].is_null());
+    assert_eq!(record["components"], json!([]));
+    assert_eq!(record["regions"], json!([]));
+}
+
 /// SEC-06 at the process boundary: a curated-icon file that no longer matches the digest
 /// the operator pinned stops `serve` before it answers anything: non-zero exit, nothing
 /// on stdout, the reason on stderr.

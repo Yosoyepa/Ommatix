@@ -28,8 +28,58 @@
 | `--session-id ID` | 1–64 visible ASCII characters, for reproducible output; with live input a fixed ID is refused at start (chapter 08 §8.4) | derived from the start time and the process ID |
 | `--legacy` | also serve the legacy MCP profile 2025-11-25 (like `[mcp] legacy_enabled = true`) | off |
 | `--observations N` (`demo` only) | 1–20 | 3 |
+| `--plan-trace` (`demo` only) | also write one line per observation to stderr, a failed observation included: `ommatix-plan-trace` and a JSON object (schema `ommatix.plan-trace/1`) with why the planner chose that work, as counts and areas only; every field is defined [below](#the---plan-trace-line). No pixel, text or coordinate; never on stdout, and no MCP client can ask for it | off |
 
+### The `--plan-trace` line
 
+Each line is `ommatix-plan-trace ` and one JSON object on the same line (keys sorted). It comes from
+the planner of the observation (Algorithm 1) and holds counts, areas and closed names only. **Areas
+are in pixels of the frame and none exceeds the frame's.** A field marked *union* counts a pixel once
+however many boxes cover it; *one box* is the area of a single rectangle. `null` means that the planner
+did not get to measure the field (see "When it is `null` or empty").
+
+| Field | Unit | Meaning |
+|---|---|---|
+| `schema` | text | `ommatix.plan-trace/1` |
+| `observation_id` | number | the observation's position in this `demo` run, from 1 (as in `--timings`) |
+| `outcome` | text | `ok`, or `error` when the observation failed (nothing was published) |
+| `error_code` | text | the contract's error code of a failed observation (for example `CAPTURE_UNAVAILABLE`); `null` when `outcome` is `ok` |
+| `work` | text | the plan's work: `full`, `regions` or `idle` (as in the observation record) |
+| `full_refresh_reason` | text | the reason of a `full` plan (`no_committed_base`, `geometry_changed`, `closure_budget`, `too_many_regions`, `area_budget`, `experimental_baseline`, `adaptive_cost`); `null` otherwise |
+| `frame_area_px` | pixels | the frame's area, width times height |
+| `tile_size` | pixels | the side of a tile (`[engine] tile_size`) |
+| `changed_tiles` | count | tiles that differ from the committed base; every tile when there was no base or its geometry differed |
+| `pending_tiles` | count | tiles of this frame's grid still pending from a failed observation, changed or not |
+| `dirty_tiles` | count | the tiles the plan keeps dirty: changed and pending, each once; the whole grid when a full refresh was decided before any region |
+| `components` | list | one entry per 8-connected group of dirty tiles, in the planner's order, as it stood after the first closure over the last snapshot's evidence |
+| `components[].tiles` | count | tiles in the group |
+| `components[].tight_area_px` | pixels, one box | the box around the group's tiles, before the halo |
+| `components[].padded_area_px` | pixels, one box | that box after the halo, clipped to the frame: the region **before** the closure |
+| `components[].closed_area_px` | pixels, one box | the region **after** the closure |
+| `components[].largest_support_px` | pixels, one box | the largest evidence box (a detected control, a word, an accessibility element, or a member of a relation) that the closed region overlaps; `0` when none |
+| `regions` | list | the plan's final regions after merging and the last closure, in the plan's order |
+| `regions[].area_px` | pixels, one box | the region |
+| `regions[].components` | count | how many groups ended in this region |
+| `regions[].pre_closure_area_px` | pixels, **union** | what the region was made of before any closure or merge: the union of those groups' padded boxes, an overlap counted once; at most `area_px` |
+| `regions[].largest_support_px` | pixels, one box | as `components[].largest_support_px`, for the final region |
+| `covered_area_px` | pixels, sum | the sum of the regions' areas, which the area budget compares; the regions do not overlap, so it is also their union |
+| `budget_area_px` | pixels | `full_refresh_area_ratio` of the frame (`[engine]`): a threshold, at most the frame |
+| `max_regions` | count | `[engine] max_regions`, the most regions a regional plan may have |
+| `decided_by` | text | the check that made the plan a full refresh (the same names as `full_refresh_reason`); `null` for an idle or regional plan |
+| `decisive_region` | index | for `area_budget`: the 0-based index in `regions` of the largest region (the first on a tie); `null` otherwise |
+
+**When it is `null` or empty.** A failed observation publishes nothing, so its line carries only
+`schema`, `observation_id`, `outcome` and `error_code`: every other field is `null`, and `components`
+and `regions` are `[]`. A full refresh decided before any region exists (`no_committed_base`,
+`geometry_changed`, `experimental_baseline`) has `components` and `regions` empty and
+`covered_area_px` `0`; so has `closure_budget`, whose component that ran out of rounds leaves no
+entry. `covered_area_px` and `regions` are filled once the regions are merged, so they are also filled
+for `too_many_regions`. An idle plan has both lists empty.
+
+To tell why a full refresh happened, compare a component's `padded_area_px` with its `closed_area_px`
+and the frame: a small `padded_area_px` with a large `closed_area_px` and `largest_support_px` means
+that the closure over a large evidence box made the region large; a `padded_area_px` that is already
+large means that the change itself was large.
 
 ## Configuration file
 
