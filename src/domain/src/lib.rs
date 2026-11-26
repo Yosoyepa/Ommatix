@@ -16,6 +16,8 @@
 //! - [`identity`]: Algorithm 3B. The persistent identity registry and the action check.
 //! - [`snapshot`]: the transactional staging/commit store.
 //! - [`bbox`]: the geometry those algorithms share.
+//! - [`mosaic`]: the geometry of a candidate that has not been measured (ADR-0041, candidate A):
+//!   where the regions of a plan would go on one canvas. Nothing calls it.
 //!
 //! ## Support types for the driven adapters
 //!
@@ -31,6 +33,7 @@ pub mod candidates;
 pub mod fusion;
 pub mod identity;
 pub mod incremental;
+pub mod mosaic;
 pub mod snapshot;
 
 mod action;
