@@ -1926,7 +1926,10 @@ allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
 
     /// UT-77: `attach` reads its configuration without quoting it. A file whose bad line
     /// carries a marker is reported by its cause, a position or the failing key, and the
-    /// marker appears nowhere; the same file's `serve` diagnostics are `Config::load`'s.
+    /// marker appears nowhere; the same file's `serve` diagnostics are `Config::load`'s. Only
+    /// where `attach` exists (Windows, `broker-pipe`): its files say `transport = "pipe"`, which
+    /// any other build refuses as one more invalid value.
+    #[cfg(all(windows, feature = "broker-pipe"))]
     #[test]
     fn ut_77_attach_reads_its_configuration_without_quoting_any_of_it() {
         const MARKER: &str = "Qz7MarkerOfTheFile";
