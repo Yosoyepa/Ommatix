@@ -125,14 +125,15 @@ keys, all off or empty by default:
 | Key | Meaning | Default |
 |---|---|---|
 | `[mcp] transport` | `stdio`, or `pipe`: `serve` runs the broker on the pipe and serves nothing on stdio; refused with `legacy_enabled` or `--legacy` | `stdio` |
-| `[mcp] pipe_name` | the pipe's name after `\\.\pipe\`, 1–128 ASCII letters, digits, `-`, `_`, `.`; empty: `ommatix-` and the user's name, lower-cased, without other characters (`serve` and `attach` derive it alike) | empty |
-| `[safety] grants_file` | the operator's grants file: one `[[grant]]` per ticket (its SHA-256 and what it allows), read at every call; missing or invalid, no agent has a grant | empty: no agent has a grant |
+| `[mcp] pipe_name` | the pipe's name after `\\.\pipe\`, 1–128 ASCII letters, digits, `-`, `_`, `.`; empty: `ommatix-` and the user's name, lower-cased, without other characters (`serve` and `attach` derive it alike). One engine per name: another name allows another engine, and the default is not isolated per user or per session (pipe names are one namespace for the machine) | empty |
+| `[safety] grants_file` | the operator's grants file: one `[[grant]]` per ticket (its SHA-256 and what it allows), read at every call; missing, invalid or not a regular file, no agent has a grant. Keep it on a local fixed disk: nothing bounds the time of its read, and every agent waits while it blocks | empty: no agent has a grant |
 
 Each agent's MCP host then starts `ommatix attach --config <file> [--ticket-file <file>]`, which
 relays its stdio to the pipe and starts no engine. An agent without a valid grant observes
 without values and delivers nothing. This has not been validated with a second local user, an
 elevated process, a real MCP host or the MSVC toolchain; the steps, the grants file's form and
-the exit codes of `attach`, and of `serve` when the pipe's listener stops, are in the
+the exit codes of `attach`, with the conditions of its exit, and of `serve` when the pipe's
+listener stops or its name is refused (7), are in the
 [installation guide](../thesis/S4_INSTALACION_Y_REVERSION.md) §7.1.
 
 See [operator control](live-input.md) for stop, purge and window scope.

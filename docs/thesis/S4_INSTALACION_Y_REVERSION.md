@@ -208,7 +208,7 @@ Apagado por defecto y **sin validar** con un segundo usuario local, un motor ele
    grants_file = "grants.toml"
    ```
 
-   No se combina con `legacy_enabled = true` ni con `--legacy`. Sin `grants_file`, ningún agente tiene concesión: observa sin valores y no entrega nada.
+   No se combina con `legacy_enabled = true` ni con `--legacy`. Sin `grants_file`, ningún agente tiene concesión: observa sin valores y no entrega nada. El nombre por defecto no es propio de cada usuario ni de cada sesión: los nombres de tubo son un solo espacio para toda la máquina, y otro `pipe_name` permite otro motor.
 3. Crear un tique por agente, en un archivo **sin salto de línea** (`Set-Content` y `Out-File` añaden uno; `WriteAllText` no), y su SHA-256:
 
    ```powershell
@@ -233,7 +233,9 @@ Apagado por defecto y **sin validar** con un segundo usuario local, un motor ele
    ```
 
    Una concesión sólo estrecha la política local de `[safety]`: nunca permite lo que ésta no permite.
-5. Arrancar el motor, el operador, desde una sesión **no elevada**: `ommatix.exe serve --config <configuración>` (con `--source dxgi` para la pantalla). No escribe nada en stdout; en stderr dice el nombre del tubo y cuántas concesiones lee. Un segundo `serve` con el mismo nombre se niega a arrancar. Sirve hasta que se le termina (Ctrl+C); si el oyente deja de aceptar por un error que no es pasajero, `serve` lo dice en stderr, lo para y sale con 3 (parada completa: el hilo de aceptación, todos los hilos de trabajo y el segador unidos), 4 (quedaban hilos de trabajo sin unir, de conexiones o de rechazos, por ejemplo un cliente que ni envía ni se va o una petición que pasó la comprobación de parada y sigue en curso, o sólo faltaba que terminara el segador; el fin del proceso los termina) o 5 (el despertar no llegó al hilo de aceptación, por ejemplo porque otro proceso del usuario tiene instancias del mismo nombre; el fin del proceso lo termina). Con 1 se negó a arrancar.
+
+   El archivo de concesiones, los archivos de tique y la configuración que lee `attach` tienen que ser archivos regulares en un **disco local fijo**: un directorio, un dispositivo (`NUL`) o un tubo con nombre se rechazan antes de leer nada, pero nada acota el tiempo de abrirlos ni de leerlos. Si están en un recurso de red o en un volumen que se suspende o se retira, el arranque espera, y como el archivo de concesiones se lee en cada llamada bajo el cerrojo del intermediario, todos los agentes esperan mientras su lectura se bloquea.
+5. Arrancar el motor, el operador, desde una sesión **no elevada**: `ommatix.exe serve --config <configuración>` (con `--source dxgi` para la pantalla). No escribe nada en stdout; en stderr dice el nombre del tubo y cuántas concesiones lee. Un segundo `serve` con el mismo nombre se niega a arrancar y sale con 7: el sistema le negó crear la primera instancia del nombre, y la causa habitual, no segura, es que otro proceso ya tiene ese nombre. Sirve hasta que se le termina (Ctrl+C); si el oyente deja de aceptar, por un error que no es pasajero o porque su hilo de aceptación terminó sin error, `serve` lo dice en stderr, lo para y sale con 3 (parada completa: el hilo de aceptación, todos los hilos de trabajo y el segador unidos), 4 (quedaban hilos de trabajo sin unir, de conexiones o de rechazos, por ejemplo un cliente que ni envía ni se va o una petición que pasó la comprobación de parada y sigue en curso, o sólo faltaba que terminara el segador; el fin del proceso los termina) o 5 (el despertar no llegó al hilo de aceptación, por ejemplo porque otro proceso que puede abrir el nombre tiene instancias suyas; el fin del proceso lo termina). Con 1 se negó a arrancar por cualquier otra causa.
 6. En el anfitrión MCP de cada agente, lanzar `attach` en lugar de `serve`; `attach` nunca arranca un motor:
 
    ```json
@@ -248,8 +250,10 @@ Apagado por defecto y **sin validar** con un segundo usuario local, un motor ele
    }
    ```
 
-   Códigos de salida de `attach`: 0, su entrada terminó; 1, se negó a arrancar (configuración sin `transport = "pipe"` o archivo de tique inválido); 3, ningún motor escucha; 4, el motor lo rechazó o cerró antes de responder (un tique ya usado, sin plaza); 5, el motor terminó la conexión después de responder; 6, falló la retransmisión. En stderr dice sólo cuál de esos lados terminó, nunca el tique ni el tráfico.
-7. **Apagarlo todo:** terminar `serve` (cada `attach` sale con 5), volver a `transport = "stdio"` y vaciar `pipe_name` y `grants_file` (con `stdio` se rechazan si no están vacíos), borrar los archivos de tique y de concesiones y, si se quiere, volver a compilar sin `broker-pipe`.
+   Códigos de salida de `attach`: 0, su entrada terminó; 1, se negó a arrancar (configuración inválida o sin `transport = "pipe"`, o archivo de tique inválido); 3, ningún motor escucha; 4, el motor lo rechazó o cerró antes de responder (un tique ya usado, sin plaza); 5, el motor terminó la conexión después de responder; 6, falló la retransmisión. En stderr escribe una sola línea: cuál de esos lados terminó o, si se negó a arrancar, la ruta que dio el operador y una causa cerrada (no legible; TOML no válido, sólo con números de línea y columna; las claves que no cumplen su regla); nunca el tique, una línea o un valor de un archivo, ni el tráfico.
+
+   Cuándo sale: enseguida cuando termina su entrada, si las peticiones que el anfitrión ya había enviado cupieron en el lado del motor; como mucho 5 s después de que termine el lado del motor; y en ambos casos si puede escribir su línea de stderr. Un anfitrión que deja de leer la salida de `attach` con más peticiones en cola de las que toma el motor lo retiene hasta que el motor cierra la conexión (y entonces sale con 5). Lo que el anfitrión no leyó se pierde.
+7. **Apagarlo todo:** terminar `serve` (cada `attach` conectado sale: con 5 si el motor ya le había respondido, con 4 si el motor cerró sin responderle nada, y con 0 si su entrada ya había terminado), volver a `transport = "stdio"` y vaciar `pipe_name` y `grants_file` (con `stdio` se rechazan si no están vacíos), borrar los archivos de tique y de concesiones y, si se quiere, volver a compilar sin `broker-pipe`.
 
 ### Qué deja el motor en la máquina
 

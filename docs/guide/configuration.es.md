@@ -134,14 +134,14 @@ con estas claves, apagadas o vacías por defecto:
 | Clave | Significado | Por defecto |
 |---|---|---|
 | `[mcp] transport` | `stdio`, o `pipe`: `serve` sirve el intermediario por el tubo y nada por stdio; se rechaza con `legacy_enabled` o `--legacy` | `stdio` |
-| `[mcp] pipe_name` | el nombre del tubo tras `\\.\pipe\`, 1–128 letras ASCII, dígitos, `-`, `_`, `.`; vacío: `ommatix-` y el nombre del usuario en minúsculas, sin otros caracteres (`serve` y `attach` lo derivan igual) | vacío |
-| `[safety] grants_file` | el archivo de concesiones del operador: una tabla `[[grant]]` por tique (su SHA-256 y lo que permite), leído en cada llamada; si falta o no vale, ningún agente tiene concesión | vacío: ningún agente tiene concesión |
+| `[mcp] pipe_name` | el nombre del tubo tras `\\.\pipe\`, 1–128 letras ASCII, dígitos, `-`, `_`, `.`; vacío: `ommatix-` y el nombre del usuario en minúsculas, sin otros caracteres (`serve` y `attach` lo derivan igual). Un motor por nombre: otro nombre permite otro motor, y el nombre por defecto no se aísla por usuario ni por sesión (los nombres de tubo son un solo espacio para la máquina) | vacío |
+| `[safety] grants_file` | el archivo de concesiones del operador: una tabla `[[grant]]` por tique (su SHA-256 y lo que permite), leído en cada llamada; si falta, no vale o no es un archivo regular, ningún agente tiene concesión. Debe estar en un disco local fijo: nada acota el tiempo de su lectura, y todos los agentes esperan mientras se bloquea | vacío: ningún agente tiene concesión |
 
 El anfitrión MCP de cada agente lanza entonces `ommatix attach --config <archivo> [--ticket-file <archivo>]`,
 que retransmite su stdio al tubo y no arranca ningún motor. Un agente sin concesión válida
 observa sin valores y no entrega nada. No se ha validado con un segundo usuario local, un proceso
 elevado, un anfitrión MCP real ni la cadena MSVC; los pasos, la forma del archivo de concesiones
-y los códigos de salida de `attach`, y los de `serve` cuando el oyente del tubo se detiene, están en la
+y los códigos de salida de `attach`, con las condiciones de su salida, y los de `serve` cuando el oyente del tubo se detiene o se le niega el nombre (7), están en la
 [guía de instalación](../thesis/S4_INSTALACION_Y_REVERSION.md) §7.1.
 
 Véase [control del operador](live-input.es.md) para la parada, purga y alcance por ventanas.

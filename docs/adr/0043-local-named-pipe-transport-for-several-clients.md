@@ -153,25 +153,30 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    client that does not read blocks only its own thread.
 3. **Remote clients are refused** (`PIPE_REJECT_REMOTE_CLIENTS`, the crate's default, never turned
    off).
-4. **One name per user session, created first-instance; this is how a second engine is refused.**
-   The pipe's name is fixed per user session and the first instance is created with
-   `FILE_FLAG_FIRST_PIPE_INSTANCE`. A second `serve` with the broker on, on the same desktop,
-   cannot create it and exits with an error that says so. This is what ADR-0039 decision 1 needs
-   and nothing else in the code provides. The name is `[mcp] pipe_name` when the operator sets
-   one; otherwise it is `ommatix-` followed by the user's name as the process receives it (the
-   `USERNAME` variable), lower-cased, with every character the pipe does not accept left out
-   (the pipe takes 1 to 128 ASCII letters, digits, `-`, `_` and `.`), and cut to 128 characters.
-   `serve` and `attach` derive it the same way from the same configuration, and when nothing of
-   the user's name is left the start is refused. Pipe names are not scoped to a logon session,
-   so two sessions of one user share the name, and one engine serves them. The name is
-   predictable, and whoever starts the process can set `USERNAME`: the name is not a defence
-   (first open point). The descriptor gives the owner every right, so any process of the same
-   user can also add instances to the engine's pipe after it is created. A client reaches the
-   oldest free instance first, so such instances can receive clients, an agent's `attach`
-   included, and the shutdown's own wake-up connections (decision 7): a second way, beside
-   taking the name first, for another process of the same user to receive `attach`'s traffic.
-   A second engine of the same user is still refused, because it cannot create the first
-   instance.
+4. **One engine per chosen name, created first-instance; this is how a second engine on that name
+   is refused.** The pipe's first instance is created with `FILE_FLAG_FIRST_PIPE_INSTANCE`. A
+   second `serve` with the broker on and the same name cannot create it: the system answers access
+   denied, and `serve` exits with code 7 and a line that names that refusal, with a name another
+   process already holds as its usual cause, not as a certainty (access denied alone does not prove
+   it). Every other failure to bind stays exit code 1. The guard is per chosen name, not per user
+   or per session: another `[mcp] pipe_name` allows another listener, and another engine, beside
+   the first. This is what ADR-0039 decision 1 needs, for one name, and nothing else in the code
+   provides it. The name is `[mcp] pipe_name` when the operator sets one; otherwise it is
+   `ommatix-` followed by the user's name as the process receives it (the `USERNAME` variable),
+   lower-cased, with every character the pipe does not accept left out (the pipe takes 1 to 128
+   ASCII letters, digits, `-`, `_` and `.`), and cut to 128 characters. `serve` and `attach` derive
+   it the same way from the same configuration, and when nothing of the user's name is left the
+   start is refused. Pipe names are one namespace for the whole machine, shared by every logon
+   session: the default name is not isolated per user or per session, so two sessions of one user
+   share the name and one engine serves them, and two accounts whose names give the same derived
+   name collide. The name is predictable, and whoever starts the process can set `USERNAME`: the
+   name is not a defence (first open point). The descriptor gives the owner every right, so any
+   process the descriptor admits (with an engine that is not elevated, any process of the same
+   user; elevated, decision 6) can also add instances to the engine's pipe after it is created. A
+   client reaches the oldest free instance first, so such instances can receive clients, an agent's
+   `attach` included, and the shutdown's own wake-up connections (decision 7): a second way, beside
+   taking the name first, for another process to receive `attach`'s traffic. A second engine on the
+   same name is still refused, because it cannot create the first instance.
 5. **A descriptor that grants the owner only: `D:P(A;;GA;;;OW)`.** Protected, one allow entry for
    the object's owner, nothing for Everyone, Anonymous, SYSTEM or Administrators. Without it, the
    default pipe descriptor lets Everyone and Anonymous read (from the first experiment). The user's own
@@ -179,20 +184,22 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    string takes a SID or a two-letter alias, and obtaining the SID otherwise needs `unsafe` of our
    own or a subprocess (`Command::new`), both forbidden in this adapter.
 6. **The engine never runs elevated for this.** The owner of an object created by an elevated
-   process is, by default, the Administrators group, not the user, so `OW` would then grant the
-   pipe to every administrator of the machine and not to the user alone. The operator starts the
-   engine with the broker on from an unelevated session. Measured, not inferred: in CI run
-   45814291197 (`feat/broker-pipe` at `37c0ea0`, GitHub's Windows runner, the process elevated:
-   integrity `S-1-16-12288`, Administrators enabled, the token's default owner `S-1-5-32-544`)
-   the pipe's descriptor, read through a connected client handle, is
-   `O:BA G:<the user's primary group> D:P(A;;FA;;;OW)`: the same protected DACL, one entry of full
-   access to OWNER RIGHTS, as when not elevated, with `BUILTIN\Administrators` as its owner
-   instead of the user. Not elevated, on the development machine, it reads `D:P(A;;FA;;;OW)` with
-   the user as owner. So "the owner only" means, when the engine runs elevated, every process
-   whose token holds the Administrators group as owner, that is any elevated process of any
-   administrator of the machine, not only the user's; when it is not elevated, it means the
-   user. The descriptor is the same in both cases; who its owner is differs. The engine does not
-   refuse to start elevated; whether it should is the owner's decision (second open point).
+   process is, by default, the Administrators group, not the user, so `OW` then names that group
+   and not the user alone. The operator starts the engine with the broker on from an unelevated
+   session. **Measured:** on GitHub's Windows runner (windows-latest, Windows Server 2025), where
+   the test process is elevated (integrity `S-1-16-12288`, Administrators enabled, the token's
+   default owner `S-1-5-32-544`), CI run 45814291197 (`feat/broker-pipe` at `37c0ea0`) and run
+   45825241884 (at `12256e9`, whose test asserts it) read the pipe's descriptor through a connected
+   client handle as `O:BA G:<the user's primary group> D:P(A;;FA;;;OW)`: the same protected DACL as
+   when not elevated, one entry of full access to OWNER RIGHTS, with `BUILTIN\Administrators` as
+   the owner instead of the user. Not elevated, on the development machine, the DACL reads the
+   same, `D:P(A;;FA;;;OW)`, with the user as owner. The DACL is the same; the descriptor is not,
+   because its owner differs. **Inferred, not checked by any run:** with that owner, the owner-only
+   DACL grants the pipe to every process whose token has the Administrators group enabled, that is
+   every elevated process of every administrator of the machine, and not to the user alone; no run
+   has opened the pipe of an elevated engine from another process or account (SEC-11, pending). Not
+   elevated, "the owner only" means the user. The engine does not refuse to start elevated; whether
+   it should is the owner's decision (second open point).
 7. **The bound on clients is enforced in the accept loop.** ADR-0039 allows eight clients at once.
    The pipe's own instance limit cannot enforce that: it makes a further client connect and wait,
    not fail (from the first experiment). The crate's limit is left at its default, and the accept loop
@@ -280,9 +287,9 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    successors) is independent and unchanged.
 
    **The wake-up, and what shutdown reports.** Shutdown wakes its accept thread by connecting to
-   its own pipe through the identification-level client of decision 12, and waits for that
-   thread a bounded time (twenty tries of 100 ms), never with a bare join: the descriptor gives
-   the pipe's owner every right, so any process of the same user can add instances under the
+   its own pipe through the identification-level client of decision 12, and waits for that thread a
+   bounded time (twenty tries of 100 ms), never with a bare join: the descriptor gives the pipe's
+   owner every right, so any process the descriptor admits (decision 6) can add instances under the
    name (decision 4), and the wake-up connection, like any other connection, may land on one of
    those instead of the engine's. The wake-up ends the accept's wait only when it reaches this
    listener's instance and the accept returns; otherwise the stop takes effect at the next
@@ -306,21 +313,40 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    is not bounded against a predicate that itself takes time. `serve` calls shutdown only once
    its listener has stopped accepting, and then exits; otherwise the engine ends with its
    process.
-8. **`attach` only relays, and never starts an engine.** The executable gains an `attach` mode
-   that connects to the pipe of the current user session and relays its standard input and output
-   to it, so an MCP host keeps starting a stdio server. When no engine listens, `attach` fails with
-   a clear error on stderr and starts nothing. The operator, or an agent host's launcher acting
-   with the operator's authority, starts the one engine process with the broker on. The relay
-   starts both of its threads before it writes the handshake, so a thread that cannot start
-   leaves the pipe unwritten and the input unread. The crate hands a dropped stream it counts as
-   unflushed (a client stream made from a handle, or one written since its last flush) to a
-   process-wide pool that flushes it before closing it, and a flush waits until the peer has
-   read everything: a dropped stream is not closed at once, and one whose peer never reads keeps
-   a pool thread blocked until the process ends. So every stream of the pipe, on both ends, is
-   marked flushed before it is dropped, the server's on every exit, unwinding included, and
-   `attach`'s by whichever relay thread drops it last; the direction still running when the
-   relay returns holds the stream until its source ends, and `attach` exits at once, which
-   closes everything.
+8. **`attach` only relays, and never starts an engine.** The executable gains an `attach` mode that
+   connects to the pipe of the name its configuration gives (decision 4) and relays its standard
+   input and output to it, so an MCP host keeps starting a stdio server. When no engine listens,
+   `attach` fails with a clear error on stderr and starts nothing. The operator, or an agent host's
+   launcher acting with the operator's authority, starts the one engine process with the broker on.
+   The relay starts both of its threads before it writes the handshake, so a thread that cannot
+   start leaves the pipe unwritten and the input unread. The crate hands a dropped stream it counts
+   as unflushed (a client stream made from a handle, or one written since its last flush) to a
+   process-wide pool that flushes it before closing it, and a flush waits until the peer has read
+   everything: a dropped stream is not closed at once, and one whose peer never reads keeps a pool
+   thread blocked until the process ends. So every stream of the pipe, on both ends, is marked
+   flushed before it is dropped, the server's on every exit, unwinding included, and `attach`'s by
+   whichever relay thread drops it last.
+
+   **How `attach` ends, and its bound.** The direction still running when the relay returns holds
+   its stream until its source ends or the process exits; `attach` does not wait for it. It writes
+   the engine's bytes to a duplicate of its standard output's handle, past the standard library's
+   buffer, and never flushes standard output: neither a flush nor the runtime's cleanup at exit
+   (which writes what that buffer holds) can wait on a host that stopped reading. The bound, and
+   its conditions: after the host's input ends, it exits at once, provided the requests the host
+   had already sent could be written to the engine; after the engine's side ends, it exits within
+   the 5 s it gives the bytes already read from the engine to reach its output; in both cases
+   provided its one stderr line can be written. A host that sends requests, stops reading
+   `attach`'s output and has more requests queued than the engine's side takes holds `attach` until
+   the engine ends the connection (then the 5 s and exit code 5): `attach`'s input direction is
+   still writing to an engine that is itself blocked writing replies nobody reads, and meanwhile
+   that connection keeps its place and a reply blocked on it, the limit of a client that does not
+   read (decision 7, What the listener cannot do). Output the host had not read when it stopped
+   reading, and what the relay still held, is lost: `attach` does not wait for a host to drain it.
+   Its exit codes: 0, its input ended; 1, it refused to start; 3, no engine listens; 4, refused
+   (every instance busy, the engine full, or a connection closed before any answer); 5, the engine
+   ended the connection after answering; 6, the relay failed. A refusal to start names the path the
+   operator gave and a closed cause (unreadable; not valid TOML, with line and column numbers only;
+   the keys that fail their rule), never a line or a value of a file.
 9. **The ticket handshake.** A ticket reaches `attach` as the path of a file (`--ticket-file`),
    never as an argument value or an environment variable: an argument is visible in the process
    list and the environment is inherited by children, while a file can be restricted, and removed
@@ -349,6 +375,22 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    - in `attach`, the read of the ticket file is bounded and a larger file is refused, and a
      ticket that contains a line break (`\n` or `\r`, anywhere, a trailing one included) is
      refused before anything is sent, so a ticket file can never put a second line on the pipe.
+
+   **The operator's files.** The ticket file, the grants file and `attach`'s configuration are the
+   operator's own files, chosen by the operator, on a local fixed disk, and trusted for integrity;
+   they are opened with ordinary file opens, never through the client of decision 12, which is for
+   the connection to the engine. After the open and before any read, the handle must be a regular
+   file on a disk; anything else (a directory, a device such as `NUL`, a named pipe) or a failed
+   query is refused: `attach` exits with code 1 and sends nothing, and a grants file is invalid and
+   grants nothing. On Windows the standard library's `is_file` means only "neither a directory nor
+   a symbolic link" (a named pipe's handle passes it), so the executable asks the system for the
+   kind of the handle (`GetFileType`, through `winapi-util`, see Consequences) and also requires
+   the metadata to say a file. A stated limit, with no time bound: the open, the two queries and
+   the bounded read can each block for as long as the operator's filesystem does (a network share,
+   a suspended or removed volume). At start that holds `serve`'s count of grants and `attach`'s
+   start. The grants file is read synchronously, at every tool call, under the broker's lock, so
+   that a grant applies atomically with the call: while such a read blocks, every client waits. The
+   file must be on a local fixed disk.
 10. **Off by default.** The pipe exists only with the broker of ADR-0039 switched on, behind two
     gates that are both off by default: the cargo feature `broker-pipe`, which default builds do
     not compile, and the configuration switch `[mcp] transport = "pipe"`, which a build without
@@ -386,7 +428,7 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
       of the pipe's path;
     - the file contains only the function that opens the client handle and wraps it (the retry of
       a busy pipe is beside it, in the module); it opens a path it builds itself from the fixed
-      prefix `\\.\pipe\` and the per-session name; its one custom flag is the
+      prefix `\\.\pipe\` and the pipe's name; its one custom flag is the
       `FILE_FLAG_OVERLAPPED` constant and its one quality of service `SECURITY_IDENTIFICATION`,
       each defined once with its value; the test refuses in it, as a word anywhere, comments
       included, `create`, `create_new`, `truncate`, `append`, `creation_disposition` and
@@ -394,9 +436,10 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
       truncate, extend or delete a file, and `unsafe`, `cfg`, `extern`, `mod`, `include`,
       `include_str`, `include_bytes`, `macro_rules` and `asm`; and it refuses in it any string
       literal, block comment, attribute or macro;
-    - this client is the one way the product opens the pipe, the server's own wake-up at
-      shutdown included: a second test refuses, in every production source, the crate's own ways
-      of connecting.
+    - this client is the one way the product opens the pipe, for the connection to the engine,
+      the server's own wake-up at shutdown included: a second test refuses, in every production
+      source, the crate's own ways of connecting. The operator's files are opened otherwise
+      (decision 9).
 
     The second experiment (see Context) showed what this decision needs: the wrapped handle
     carries traffic in both directions at once with no `unsafe` of our own, and a server that
@@ -411,8 +454,9 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
 ### Open points
 
 - **Verifying who owns the pipe before anything is relayed.** Decision 12 keeps a process that
-  took the name first from acting as the user, and the real engine then refuses to start, with an
-  error that says the name is taken. It does not keep that process from learning who connected,
+  took the name first from acting as the user, and the real engine then refuses to start, with
+  exit code 7 (access denied on the first instance, of which a name already held is the usual
+  cause). It does not keep that process from learning who connected,
   from reading the ticket and the agent's requests, or from answering them as if it were the
   engine, with or without a ticket: fabricated observations, whose labels may carry instructions
   for the model, and action results that never happened. What limits the damage as the design
@@ -424,13 +468,14 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
   derived so that another user cannot predict and take it, are not decided; the calls that tell
   who owns a pipe are not in the crate's safe API. A process of the same user is outside what the
   grant defends against (ADR-0040); another user's is not.
-- **Whether, and how, the engine refuses to start the broker when elevated.** The engine does
-  not refuse today. Elevated, the pipe's owner is `BUILTIN\Administrators` (measured in CI run
-  45814291197, decision 6), so any elevated process of any administrator of the machine can open
-  the pipe, not only the user's. Whether the engine should refuse is the owner's decision. The
-  only integrity read in the code is the input adapter's, under ADR-0016 and only with
-  `sendinput`. Reusing it through the composition root, or another way, is not decided; until
-  then decision 6 is the operator's rule.
+- **Whether, and how, the engine refuses to start the broker when elevated.** The engine does not
+  refuse today. Elevated, the pipe's owner is `BUILTIN\Administrators` and its DACL the same
+  owner-only one (measured in CI runs 45814291197 and 45825241884, decision 6). That any elevated
+  process of any administrator of the machine can then open the pipe, not only the user's, is an
+  inference from that owner, not yet checked (SEC-11). Whether the engine should refuse is the
+  owner's decision. The only integrity read in the code is the input adapter's, under ADR-0016 and
+  only with `sendinput`. Reusing it through the composition root, or another way, is not decided;
+  until then decision 6 is the operator's rule.
 
 ## Alternatives considered
 
@@ -477,23 +522,33 @@ From the spike, each with its reason:
   by hand and are listed in `S4_REPRODUCIBILIDAD.md` §3. With all features, `ISC` and
   `MIT OR Apache-2.0 OR Zlib` are missing from that document; they belong to other features'
   crates, a gap from before this transport.
+  A fourth crate, `winapi-util` 0.1.11 (`Unlicense OR MIT`, an expression already listed), becomes
+  a dependency of the executable with `broker-pipe` only, Windows only and pinned: it asks the
+  system for the kind of an opened handle, so that the operator's files are read only from disk
+  files (decision 9), which the standard library cannot tell. It was already in the lockfile, with
+  its `windows-sys` 0.61.2, through the development tools, so the lockfile gains no package, only
+  the line that names it among the executable's dependencies; but it is a new crate in the feature
+  build's shipped graph, and merging the transport line is the owner's acceptance of it, as of
+  `interprocess`. Its `unsafe` call is the crate's own, as `interprocess`'s are: the workspace's
+  code stays without `unsafe`, and ADR-0016 is unchanged.
 - **Speed.** Flushing after every reply, as `serve` does today, cost up to 1.9 times the time of
   the same run without it on large replies, and never blocked while the client read. The client's
   quality of service did not change throughput measurably. Because `OpenOptions` does not wait on
   a busy pipe, `attach` may pay one retry pause when it connects while the listener re-creates
   its waiting instance.
-- **A new local attack surface:** a pipe any process of the user can open. What bounds it: remote
-  clients refused; one owner-only descriptor; one engine per name; a client that grants the
-  server identification and nothing more; a bound on clients, on every line and on the
-  handshake; no authority without a ticket, which travels in a file, on one line, and never
-  through the model; the grant's meet with the operator's policy (ADR-0040); and the switch that
-  is off by default. What does not: a process that takes the name first can still read the ticket
-  and the traffic of an `attach` that connects to it, and answer the agent as if it were the
-  engine, with fabricated observations and invented action results; it holds no engine, so it
-  delivers nothing to the desktop through this relay, but it can mislead the agent (open point);
-  and a process of the same user can add instances to the engine's pipe and receive some of
-  `attach`'s connections in the same way (decision 4).
-- **A residual denial of service, from processes of the same user.** A client that stays
+- **A new local attack surface:** a pipe that any process the descriptor admits can open (with an
+  engine that is not elevated, any process of the user; elevated, decision 6). What bounds it:
+  remote clients refused; one owner-only descriptor; one engine per name; a client that grants the
+  server identification and nothing more; a bound on clients, on every line and on the handshake;
+  no authority without a ticket, which travels in a file, on one line, and never through the model;
+  the grant's meet with the operator's policy (ADR-0040); and the switch that is off by default.
+  What does not: a process that takes the name first can still read the ticket and the traffic of
+  an `attach` that connects to it, and answer the agent as if it were the engine, with fabricated
+  observations and invented action results; it holds no engine, so it delivers nothing to the
+  desktop through this relay, but it can mislead the agent (open point); and a process the
+  descriptor admits can add instances to the engine's pipe and receive some of `attach`'s
+  connections in the same way (decision 4).
+- **A residual denial of service, from processes the descriptor admits.** A client that stays
   connected without sending or reading holds a place, a thread and the name with no time bound,
   and shutdown cannot end it (decision 7); a peer that presents enough distinct tickets fills
   the set of spent tickets, after which nobody new is admitted by ticket until the engine
@@ -502,6 +557,10 @@ From the spike, each with its reason:
   them outside what a grant defends against; the bound on clients and the set's bound keep both
   to memory and threads that are counted in advance (decision 7 states the bound on the
   listener's threads and who enforces it).
+- **The operator's files can stall the engine.** The grants file is read at every call under the
+  broker's lock, and nothing bounds the time of its open, its queries or its read: on a filesystem
+  that stalls, every client waits for as long as the read does (decision 9). The files must be on a
+  local fixed disk.
 - **Kept until the process ends.** A listener worker's panic payload is forgotten, not dropped,
   so it stays allocated, with whatever it owns, for the life of the process, once per worker
   that panicked (decision 7). The broker's fail-closed poisoning, unchanged, stops service for
@@ -529,7 +588,10 @@ and, in the executable, the switch `[mcp] transport = "pipe"`, both off by defau
   never dropped, the digest pin as the guarantee of the exception) (`feat/broker-pipe`);
 - the switch, the derivation of the name, the grants file, `attach`, `serve`'s exit when the
   listener stops accepting and the process tests, in the executable, with requirement RF-20, its
-  planned tests and scenarios, and the dossier (`feat/broker-attach`).
+  planned tests and scenarios, and the dossier, with the resolutions of its first review
+  (`attach`'s exit bounded on the host's side, with its conditions; its closed startup
+  diagnostics; the operator's files read only from disk files; `serve`'s exit code 7 for a
+  refused first instance; a raw comparison of the stdio session) (`feat/broker-attach`).
 
 Run on the development machine (Windows 11, GNU host, not elevated), through real pipes between
 threads and between processes. Not run: a second local user, an elevated engine, a real MCP
@@ -545,7 +607,7 @@ New planned tests, with identifiers to be assigned in the matrix when the ADR is
   grant, an empty, unknown or spent one gives none, the ticket never appears in a reply or a log).
 - On Windows, a loopback pipe test with the real broker and the simulated desktop: a session over
   the pipe answers as the same session over stdio.
-- A second listener on the same name is refused, and the second `serve` exits with its error.
+- A second listener on the same name is refused, and the second `serve` exits with code 7.
 - A client beyond the bound is told so and closed; the others are not disturbed. A client beyond
   the bound that never reads does not stall accepting: the next client is accepted at once.
 - An oversized line is refused without ending the connection; an oversized handshake, or one
@@ -581,23 +643,23 @@ New planned tests, with identifiers to be assigned in the matrix when the ADR is
 - The `windows` job of CI (MSVC host) builds and tests the pipe.
 - **Supervised by the owner, because it needs administrator rights:** a second local user cannot
   open the pipe; a pipe created first by a second local user, playing the squatter, cannot act as
-  the `attach` user; and the descriptor created by an elevated process is checked for what `OW`
-  then grants. Neither experiment tested these; the last one has a first measurement in CI (run
-  45814291197, decision 6: the owner is `BUILTIN\Administrators`), not yet a supervised check.
-  Until they have run, the claim that the pipe is restricted to the current user, with an engine
-  that is not elevated, rests on one read-back descriptor and a negative control, and this ADR
-  must not be accepted on it.
+  the `attach` user; and what `OW` grants on the pipe of an elevated engine. Neither experiment
+  tested these. The descriptor of an elevated engine is now read back on CI (runs 45814291197 and
+  45825241884, decision 6: the DACL's shape asserted, the owner `BUILTIN\Administrators` reported);
+  a second local user is still not tested, and no process of another account, or one not elevated,
+  has opened the pipe of an elevated engine. Until they have run, the claim that the pipe is
+  restricted to the current user, with an engine that is not elevated, rests on one read-back
+  descriptor and a negative control, and this ADR must not be accepted on it.
 
 ## Reversibility
 
 The transport exists only with the broker switched on, which is off by default; with it off the
-executable serves stdio as today. Removing it removes a module of `adapter-mcp`, the `attach` mode
-and three crates from the lockfile. A failure of the supervised checks, or of flushing under load,
-moves the transport to the fallback above under its own ADR, and so does a failure of the
-identification-level client on the MSVC host or with the real broker; a defect in the
-descriptor, in the first-instance refusal or in the client's quality of service withdraws it until
-fixed. Removing the transport removes the
-SEC-04 exception with it.
+executable serves stdio as today. Removing it removes a module of `adapter-mcp`, the `attach` mode,
+three crates from the lockfile and one from the executable's dependencies. A failure of the
+supervised checks, or of flushing under load, moves the transport to the fallback above under its
+own ADR, and so does a failure of the identification-level client on the MSVC host or with the real
+broker; a defect in the descriptor, in the first-instance refusal or in the client's quality of
+service withdraws it until fixed. Removing the transport removes the SEC-04 exception with it.
 
 ## Provenance
 
@@ -617,48 +679,61 @@ check with the one named exception of decision 12.
 El transporte local de varios clientes es un tubo con nombre de Windows a través de la crate
 `interprocess`, fijada a una versión exacta, sin funciones por defecto y con su API síncrona: un
 hilo por conexión, un lector de líneas que respeta los límites de ADR-0015 y nada de `unsafe`
-propio. Se rechazan los clientes remotos; el nombre es fijo por sesión de usuario y se crea como
-primera instancia, lo que impide un segundo motor; el descriptor `D:P(A;;GA;;;OW)` sólo da acceso
-al propietario, y el motor no se ejecuta elevado. El límite de clientes se aplica al aceptar.
-`attach` sólo retransmite y nunca arranca un motor; se conecta con calidad de servicio de
-identificación, para que quien haya ocupado antes el nombre no pueda actuar como el usuario, con
-una sola llamada a `OpenOptions` en un archivo, fijado por su SHA-256, que es la única excepción,
-acotada, a la comprobación SEC-04, abierta con `FILE_FLAG_OVERLAPPED`; un segundo experimento mostró que ese
-manejador envuelto transmite en ambos sentidos a la vez sin `unsafe` propio y que el servidor sólo
-obtiene nivel de identificación. Un tubo ocupado se reintenta un número acotado de veces y uno
-ausente significa que no hay motor. Un cliente rechazado no bloquea la
-aceptación de otros. El tique llega en un archivo acotado, sin saltos de línea, y viaja en una
-primera línea acotada; una primera línea demasiado larga o mal formada cierra la conexión sin
-concesión. Cuesta tres crates y dos licencias. Un proceso que ocupe antes el nombre no puede
-actuar como el usuario, pero sí leer el tique y las peticiones y responder como si fuera el motor:
-observaciones inventadas, que pueden llevar instrucciones para el modelo, y resultados de acciones
-que no ocurrieron; no entrega nada al escritorio por este canal, pero puede engañar al agente.
-Quedan abiertos cómo comprobar quién es dueño del tubo antes de retransmitir cualquier mensaje y
-si el motor debe negarse a arrancar elevado, lo que decide el responsable: hoy no se niega, y
-elevado el dueño del tubo es el grupo `BUILTIN\Administrators` (medido en la ejecución de CI
-45814291197), así que cualquier proceso elevado de cualquier administrador de la máquina lo
-puede abrir; sin elevar, el dueño es el usuario. No se acepta sin probar
-antes, con el responsable, un segundo usuario (también como ocupante del nombre) y un proceso
-elevado; tampoco están probados el anfitrión MSVC ni un anfitrión MCP real. El nombre del tubo es
-`[mcp] pipe_name` o se deriva del nombre del usuario; el tique son 32 a 128 caracteres base64url
-en un archivo, de un solo uso por proceso, y su concesión sale del archivo de concesiones,
-leído en cada llamada. Un cliente callado retiene una plaza, un hilo y el nombre sin límite de
-tiempo, y la parada no lo puede terminar. Una plaza sólo se devuelve después de que el hilo
-segador ha unido (join) el hilo que la tenía, así que el oyente tiene a lo sumo n + 6 hilos sin
-unir (el de aceptación, el segador y n + 4 plazas); el segador no ejecuta nunca la carga del
-pánico de un hilo de trabajo, que queda en memoria mientras viva el proceso. Hay una
-comprobación de parada por petición, justo antes de entregarla al intermediario: ninguna la pasa
-después de la parada, una que ya la pasó llega a su fin y una a medio leer se descarta. La
-parada dice en qué estado deja el oyente: completo (todos sus hilos unidos, el segador
-incluido), con hilos que quedan o con su hilo de aceptación vivo, porque el despertar no siempre
-lo alcanza; su espera no acota las dos uniones finales, que siguen a la señal de fin de cada
-hilo. Un servidor soltado antes de completo puede ejecutar la destrucción final del
-intermediario en un hilo desligado. Dentro de la dependencia, un cliente que se conecta y se va
-antes de que vuelva la aceptación hace que ésta vuelva a esperar sin la pausa ni la parada del
-oyente. `serve`, si el oyente deja de aceptar por un error que no es pasajero, lo para y sale
-con 3, 4 o 5; un proceso del mismo usuario puede añadir
-instancias del nombre y recibir conexiones de `attach`; el conjunto de tiques gastados se puede
-llenar. La garantía de la excepción a SEC-04 es el resumen fijado; sus reglas de texto son un
-aviso de buena fe. El
-transporte, `attach` y el interruptor existen en ramas locales, detrás de una función de
-compilación y de un interruptor apagados por defecto.
+propio. Se rechazan los clientes remotos. El tubo se crea como primera instancia de su nombre, lo
+que impide un segundo motor con ese nombre: el segundo `serve` sale con el código 7 (el sistema
+negó el acceso a la primera instancia; la causa habitual es un nombre que ya tiene otro proceso,
+pero el acceso denegado no lo prueba). La protección es por nombre elegido: otro `pipe_name`
+permite otro motor, y el nombre por defecto no se aísla por usuario ni por sesión. El descriptor
+`D:P(A;;GA;;;OW)` sólo da acceso al propietario, que con un motor sin elevar es el usuario, y el
+motor no se ejecuta elevado. El límite de clientes se aplica al aceptar. `attach` sólo retransmite
+y nunca arranca un motor; se conecta con calidad de servicio de identificación, para que quien haya
+ocupado antes el nombre no pueda actuar como el usuario, con una sola llamada a `OpenOptions` en un
+archivo, fijado por su SHA-256, que es la única excepción, acotada, a la comprobación SEC-04,
+abierta con `FILE_FLAG_OVERLAPPED`; un segundo experimento mostró que ese manejador envuelto
+transmite en ambos sentidos a la vez sin `unsafe` propio y que el servidor sólo obtiene nivel de
+identificación. Un tubo ocupado se reintenta un número acotado de veces y uno ausente significa que
+no hay motor. Un cliente rechazado no bloquea la aceptación de otros. El tique llega en un archivo
+acotado, sin saltos de línea, y viaja en una primera línea acotada; una primera línea demasiado
+larga o mal formada cierra la conexión sin concesión. Los archivos del operador (el del tique, el
+de concesiones y la configuración de `attach`) son suyos, en un disco local fijo y de confianza; se
+rechazan antes de leerlos si no son un archivo regular de disco (un directorio, un dispositivo o un
+tubo con nombre); su apertura, sus consultas y su lectura no tienen límite de tiempo, y el archivo
+de concesiones se lee en cada llamada bajo el cerrojo del intermediario, así que, si su sistema de
+archivos se detiene, todos los clientes esperan. Cuesta cuatro crates (la cuarta, `winapi-util`,
+sólo con `broker-pipe`, para saber de qué tipo es un manejador abierto) y dos licencias nuevas. Un
+proceso que ocupe antes el nombre no puede actuar como el usuario, pero sí leer el tique y las
+peticiones y responder como si fuera el motor: observaciones inventadas, que pueden llevar
+instrucciones para el modelo, y resultados de acciones que no ocurrieron; no entrega nada al
+escritorio por este canal, pero puede engañar al agente. Quedan abiertos cómo comprobar quién es
+dueño del tubo antes de retransmitir cualquier mensaje y si el motor debe negarse a arrancar
+elevado, lo que decide el responsable: hoy no se niega. Medido en las ejecuciones de CI 45814291197
+y 45825241884, con el proceso elevado: la DACL es la misma, `D:P(A;;FA;;;OW)`, y el dueño es el
+grupo `BUILTIN\Administrators`, no el usuario; sin elevar, el dueño es el usuario. Que entonces
+cualquier proceso elevado de cualquier administrador de la máquina pueda abrir el tubo es una
+inferencia que ninguna ejecución ha comprobado (SEC-11). No se acepta sin probar antes, con el
+responsable, un segundo usuario (también como ocupante del nombre) y un proceso elevado; tampoco
+están probados el anfitrión MSVC ni un anfitrión MCP real. El nombre del tubo es `[mcp] pipe_name`
+o se deriva del nombre del usuario; el tique son 32 a 128 caracteres base64url en un archivo, de un
+solo uso por proceso, y su concesión sale del archivo de concesiones, leído en cada llamada. Un
+cliente callado retiene una plaza, un hilo y el nombre sin límite de tiempo, y la parada no lo
+puede terminar. Una plaza sólo se devuelve después de que el hilo segador ha unido (join) el hilo
+que la tenía, así que el oyente tiene a lo sumo n + 6 hilos sin unir (el de aceptación, el segador
+y n + 4 plazas); el segador no ejecuta nunca la carga del pánico de un hilo de trabajo, que queda
+en memoria mientras viva el proceso. Hay una comprobación de parada por petición, justo antes de
+entregarla al intermediario: ninguna la pasa después de la parada, una que ya la pasó llega a su
+fin y una a medio leer se descarta. La parada dice en qué estado deja el oyente: completo (todos
+sus hilos unidos, el segador incluido), con hilos que quedan o con su hilo de aceptación vivo,
+porque el despertar no siempre lo alcanza; su espera no acota las dos uniones finales, que siguen a
+la señal de fin de cada hilo. Un servidor soltado antes de completo puede ejecutar la destrucción
+final del intermediario en un hilo desligado. Dentro de la dependencia, un cliente que se conecta y
+se va antes de que vuelva la aceptación hace que ésta vuelva a esperar sin la pausa ni la parada
+del oyente. `serve`, si el oyente deja de aceptar, por un error que no es pasajero o porque su hilo
+de aceptación terminó sin error, lo para y sale con 3, 4 o 5. `attach` sale enseguida cuando
+termina su entrada, si las peticiones ya enviadas caben en el lado del motor, o a lo sumo 5 s
+después de que termine el lado del motor, y en ambos casos si puede escribir su línea de stderr; un
+anfitrión que deja de leer con más peticiones en cola de las que toma el motor lo retiene hasta que
+el motor cierra la conexión, y lo que no leyó se pierde. Un proceso que el descriptor admite puede
+añadir instancias del nombre y recibir conexiones de `attach`; el conjunto de tiques gastados se
+puede llenar. La garantía de la excepción a SEC-04 es el resumen fijado; sus reglas de texto son un
+aviso de buena fe. El transporte, `attach` y el interruptor existen en ramas locales, detrás de una
+función de compilación y de un interruptor apagados por defecto.
