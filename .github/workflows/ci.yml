@@ -81,6 +81,9 @@ jobs:
       - name: Agent experiment tools (AG-01 fake local server; AG-02 proxy, runner, summary and rehearsal on a fake engine)
         working-directory: .
         run: python -m unittest discover -s tools/agent -p "test_*.py"
+      - name: Measurement tools (RNF-05 latency, PERF-03 soak, IT-07 DPI; fake hosts, no screen, no engine, no Windows API)
+        working-directory: .
+        run: python -m unittest discover -s tools/perf -p "test_*.py"
 
   screen-feature:
     name: screen capture + native input features (app, capture, input)
