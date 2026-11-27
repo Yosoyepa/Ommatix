@@ -18,10 +18,16 @@
 //!   crosses its edge was seen whole by the crop: the region is widened to contain it. The
 //!   widening goes to a fixed point, closing again over the held cut-prone boxes (I1) and
 //!   over every fresh cut-prone item the widened region now meets, without reading again.
-//! - **(b) Near the crop's edge.** One that meets a final region within [`EDGE_BAND_PX`] of a
-//!   crop edge that is not the frame's edge (or a final region that left its crop) may have
-//!   been clipped by the crop itself: the observation reads once more, with each crop grown
-//!   from the widened regions. A second (b) is a full refresh (`closure_budget`).
+//! - **(b) Near the crop's edge.** The observation reads once more, with each crop grown from
+//!   the widened regions, when a final region comes within [`EDGE_BAND_PX`] of a crop edge
+//!   that is not the frame's edge (O3g, decision D65), leaves its crop, or meets a fresh
+//!   cut-prone item within the band. The first condition implies the other two, which are
+//!   kept as they were reviewed (O3e) and counted on their own: an item a final region meets
+//!   lies inside it after (a), so it is at least as far from the crop's edges as the region.
+//!   The first also covers what the other two cannot see: a held box (or the other member of
+//!   a held relation) that the widening brings into the band and that the crop **dropped**
+//!   there, so that it is absent from the fresh read; without a second read the merge would
+//!   replace it with nothing. A second (b) is a full refresh (`closure_budget`).
 //!
 //! What it keeps: the fresh words and non-surface detections that meet a final region (each
 //! then lies inside one), and the surfaces a final region contains (a surface the region only
@@ -29,10 +35,12 @@
 //! and not concerned: the provider returns every element that meets the regions it reads,
 //! whole (R1), so its read regions are decided as before ([`super::Engine::observe`]).
 //!
-//! The invariant it ends with, when the observation stays regional: every committed fresh
-//! word or non-surface detection lies wholly inside a final region and at least
-//! [`EDGE_BAND_PX`] from every edge of the crop it was read from that is not the frame's
-//! edge; no held cut-prone box is met and not contained by a final region.
+//! The invariant it ends with, when the observation stays regional: every final region lies
+//! at least [`EDGE_BAND_PX`] inside the crop it was read from on every side that is not the
+//! frame's edge, and every fresh word or non-surface detection it keeps, and every held
+//! cut-prone box a final region meets, lies wholly inside a final region; so each was read
+//! with at least [`EDGE_BAND_PX`] of context on every such side. No held cut-prone box is met
+//! and not contained by a final region.
 //!
 //! **Limit L4.** [`EDGE_BAND_PX`] is about one glyph of a 9-10 pt font at 150 % scale. A
 //! recogniser that drops a cut glyph wider than the band (a larger scale or font) can still
@@ -116,6 +124,9 @@ pub struct CropEdgeTrace {
     /// Items of the first read within the band of a non-frame crop edge, plus final regions
     /// that left their crop (counted as detections): (b).
     pub near_crop_edge: CropEdgeKinds,
+    /// Final regions of the first read inside their crop but within the band of one of its
+    /// non-frame edges (O3g): (b). Counted whether or not another trigger also fired.
+    pub regions_in_band: usize,
     /// Reads after the first: 0 or 1.
     pub rereads: usize,
     pub outcome: CropEdgeOutcome,
@@ -188,6 +199,17 @@ pub(super) fn near_crop_edge(b: &BBox, crop: &BBox, bounds: &BBox) -> bool {
         || (crop.y1() < bounds.y1() && crop.y1() - b.y1() < EDGE_BAND_PX)
 }
 
+/// Whether `region` lies inside `crop` and at least [`EDGE_BAND_PX`] from each of its edges
+/// that is not an edge of the frame `bounds` (O3g). Written out rather than as the negation of
+/// [`near_crop_edge`], which judges an item, so that each rule can be checked on its own.
+pub(super) fn region_clear_of_band(region: &BBox, crop: &BBox, bounds: &BBox) -> bool {
+    crop.contains(region)
+        && (crop.x0() <= bounds.x0() || region.x0() - crop.x0() >= EDGE_BAND_PX)
+        && (crop.y0() <= bounds.y0() || region.y0() - crop.y0() >= EDGE_BAND_PX)
+        && (crop.x1() >= bounds.x1() || crop.x1() - region.x1() >= EDGE_BAND_PX)
+        && (crop.y1() >= bounds.y1() || crop.y1() - region.y1() >= EDGE_BAND_PX)
+}
+
 /// Settles one read: (a) to a fixed point, then the test for (b). Counts into `trace` when
 /// given (the first read).
 pub(super) fn settle(
@@ -244,6 +266,16 @@ pub(super) fn settle(
             again = true;
             if let Some(t) = trace.as_deref_mut() {
                 t.near_crop_edge.detections += 1;
+            }
+        } else if !crops
+            .iter()
+            .any(|c| region_clear_of_band(region, c, bounds))
+        {
+            // O3g: the region came within the band of its crop's edge, so what it closed over
+            // there (a held box the crop may have dropped) was read with too little context.
+            again = true;
+            if let Some(t) = trace.as_deref_mut() {
+                t.regions_in_band += 1;
             }
         }
     }
@@ -394,9 +426,10 @@ mod tests {
         let region = [bx(100.0, 100.0, 200.0, 150.0)];
         let words = [
             Word::new("a", bx(190.0, 110.0, 205.0, 130.0)),
-            Word::new("b", bx(204.0, 140.0, 215.0, 160.0)),
+            Word::new("b", bx(204.0, 140.0, 214.0, 160.0)),
         ];
-        let held = [bx(214.0, 120.0, 220.0, 158.0)];
+        // Ends at 216, 16 px from the crop's edge (232): (a) alone, no re-read (O3g).
+        let held = [bx(212.0, 120.0, 216.0, 158.0)];
         let s = settle(
             &region,
             &crops(&region, &frame()),
@@ -405,7 +438,7 @@ mod tests {
             100,
             None,
         );
-        assert_eq!(s, Settled::Regions(vec![bx(100.0, 100.0, 220.0, 160.0)]));
+        assert_eq!(s, Settled::Regions(vec![bx(100.0, 100.0, 216.0, 160.0)]));
     }
 
     /// (b): a word that meets the region and reaches the crop's band is read again.
@@ -441,6 +474,79 @@ mod tests {
             None,
         );
         assert_eq!(s, Settled::Regions(region.to_vec()));
+    }
+
+    /// (b), O3g: the widening brings a held box into the crop's band. No fresh item is near
+    /// the edge and the region stays inside its crop, so only the region's own place says that
+    /// the held box was read with too little context (a crop may have dropped it).
+    #[test]
+    fn a_region_the_widening_brings_into_the_band_is_read_again() {
+        let region = [bx(100.0, 100.0, 200.0, 150.0)];
+        // The crop ends at x = 232; the word reaches 205, 27 px from it.
+        let words = [Word::new("w", bx(190.0, 110.0, 205.0, 130.0))];
+        // Held and absent from the read: it ends at 222, 10 px from the crop's edge.
+        let held = [bx(204.0, 110.0, 222.0, 130.0)];
+        let mut t = CropEdgeTrace::new(&region);
+        let s = settle(
+            &region,
+            &crops(&region, &frame()),
+            &items(&words, &[], &[], &held),
+            &frame(),
+            100,
+            Some(&mut t),
+        );
+        assert_eq!(s, Settled::ReadAgain(vec![bx(100.0, 100.0, 222.0, 150.0)]));
+        assert_eq!(t.regions_in_band, 1);
+        assert_eq!(t.near_crop_edge, CropEdgeKinds::default());
+        // Exactly at the band's width it is clear: 216 is 16 px from 232.
+        let held = [bx(204.0, 110.0, 216.0, 130.0)];
+        let s = settle(
+            &region,
+            &crops(&region, &frame()),
+            &items(&words, &[], &[], &held),
+            &frame(),
+            100,
+            None,
+        );
+        assert_eq!(s, Settled::Regions(vec![bx(100.0, 100.0, 216.0, 150.0)]));
+    }
+
+    /// A region on the frame's edges is not in the band there: the frame's edges are exempt
+    /// from the region's rule as from the item's, on each side alone.
+    #[test]
+    fn a_region_on_the_frames_edge_is_not_in_the_band() {
+        for region in [
+            bx(0.0, 0.0, 100.0, 100.0),
+            bx(540.0, 220.0, 640.0, 320.0),
+            bx(0.0, 220.0, 100.0, 320.0),
+            bx(540.0, 0.0, 640.0, 100.0),
+        ] {
+            let mut t = CropEdgeTrace::new(&[region]);
+            let s = settle(
+                &[region],
+                &crops(&[region], &frame()),
+                &items(&[], &[], &[], &[]),
+                &frame(),
+                100,
+                Some(&mut t),
+            );
+            assert_eq!(s, Settled::Regions(vec![region]), "{region:?}");
+            assert_eq!(t.regions_in_band, 0, "{region:?}");
+        }
+        // A region whose crop's left edge is not the frame's (the crop starts at 8), widened
+        // over a held box to 10 px inside that edge: read again.
+        let region = [bx(40.0, 100.0, 100.0, 150.0)];
+        let held = [bx(18.0, 110.0, 45.0, 130.0)];
+        let words = [Word::new("w", bx(30.0, 110.0, 45.0, 130.0))];
+        let s = settle(
+            &region,
+            &crops(&region, &frame()),
+            &items(&words, &[], &[], &held),
+            &frame(),
+            100,
+            None,
+        );
+        assert_eq!(s, Settled::ReadAgain(vec![bx(18.0, 100.0, 100.0, 150.0)]));
     }
 
     /// A surface that a region only meets triggers nothing and is not kept; one inside is.

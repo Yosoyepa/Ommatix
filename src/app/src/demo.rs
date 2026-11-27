@@ -239,6 +239,7 @@ fn crop_edge_record(c: &CropEdgeTrace) -> Value {
         "final_area_px": c.final_area_px,
         "crossing": kinds(&c.crossing),
         "near_crop_edge": kinds(&c.near_crop_edge),
+        "regions_in_band": c.regions_in_band,
         "rereads": c.rereads,
         "outcome": c.outcome.as_str(),
     })
@@ -1001,6 +1002,7 @@ mod tests {
                 words: 3,
                 detections: 4,
             },
+            regions_in_band: 5,
             rereads: 1,
             outcome: ommatix_application::CropEdgeOutcome::Reread,
         };
@@ -1021,6 +1023,7 @@ mod tests {
                 "near_crop_edge",
                 "outcome",
                 "planned_area_px",
+                "regions_in_band",
                 "rereads"
             ]
         );
@@ -1034,6 +1037,7 @@ mod tests {
         }
         assert_eq!(record["crossing"]["detections"], 2);
         assert_eq!(record["near_crop_edge"]["words"], 3);
+        assert_eq!(record["regions_in_band"], 5);
         assert_eq!(record["outcome"], "reread");
         let Value::Object(map) = &mut record else {
             panic!()

@@ -802,7 +802,15 @@ enum CropReading {
     /// texts joined): a crop's context changes how a recogniser splits a line. The joined
     /// word can reach far past the region, to the crop's edge and past it.
     Joined,
+    /// On every other crop read, every word [`WIDER_PX`] wider on its right (L3: a box read
+    /// wider than the whole frame reads it); and on every crop read, every word that is not
+    /// [`readable_in`] the area asked about is **dropped**, not clipped: a recogniser that
+    /// loses a word the crop's edge cuts or comes close to (O3g).
+    WiderDroppingBand,
 }
+
+/// How much wider [`CropReading::WiderDroppingBand`] reads a word.
+const WIDER_PX: f64 = 14.0;
 
 /// The gap below which [`CropReading::Joined`] joins two words of a line.
 const JOIN_GAP_PX: f64 = 10.0;
@@ -884,10 +892,20 @@ impl TextRecognizer for CropRecognizer {
                         CropReading::TighterAlternately if self.2 % 2 == 1 && b.width() > 2.0 => {
                             b = bx(b.x0(), b.y0(), b.x1() - 1.0, b.y1());
                         }
+                        CropReading::WiderDroppingBand if self.2 % 2 == 1 => {
+                            b = bx(b.x0(), b.y0(), (b.x1() + WIDER_PX).min(whole.x1()), b.y1());
+                        }
                         CropReading::Tighter
                         | CropReading::TighterOnce
                         | CropReading::TighterAlternately
-                        | CropReading::Joined => {}
+                        | CropReading::Joined
+                        | CropReading::WiderDroppingBand => {}
+                    }
+                    if matches!(self.1, CropReading::WiderDroppingBand) {
+                        if readable_in(&b, r, &whole) {
+                            out.push(Word { bbox: b, text });
+                        }
+                        continue;
                     }
                 }
                 if let Some(bbox) = b.clip(r) {
@@ -1163,28 +1181,44 @@ fn word_change(scene: &mut Scene, rng: &mut Rng, counter: &mut u8) {
 /// UT-89, the property: on generated scenes, with a recogniser that marks every word it
 /// clipped at the edge of the area it is asked about and a detector that clips every control
 /// there, no committed word is a clipped one, every committed detection is a box of the scene,
-/// and the defence never commits more regions than the plan had. Two kinds of sequence: (i)
-/// scattered words, the recogniser one pixel tight on every other crop (L3 drift, so a held
-/// box can be tighter than the next reading of its pixels: the cut O3d built); (ii) lines of
-/// close words that a crop reads joined, so a word reaches the crop's edge and past it. Every
-/// fourth sequence has a tighter area budget. With this seed (O3f): 662 regional
-/// observations, the defence's outcome none 478, widened 54, reread 62, full_refresh 68 (63
-/// `closure_budget`, 5 `area_budget`); the bounds below leave room under those counts.
+/// and the defence never commits more regions than the plan had. Three kinds of sequence: (i)
+/// 40 of scattered words, the recogniser one pixel tight on every other crop (L3 drift, so a
+/// held box can be tighter than the next reading of its pixels: the cut O3d built); (ii) 40 of
+/// lines of close words that a crop reads joined, so a word reaches the crop's edge and past
+/// it; (iii) 40 of lines of close words, the recogniser [`WIDER_PX`] wider on every other
+/// crop and **dropping** every word near a crop's edge (O3g): the widening brings held
+/// neighbours into the band, where the crop drops them; there no word of the scene may be
+/// lost (each lies inside a committed word). Every fourth sequence of (i) and (ii) has a
+/// tighter area budget. With this seed (O3g): 982 regional observations (662 of (i)-(ii), as
+/// in O3f, and 320 of (iii)), the defence's outcome none 596, widened 142, reread 174,
+/// full_refresh 70 (63 `closure_budget`, 7 `area_budget`); a final region within the band
+/// of its crop on 27 observations of (i)-(ii) and 20 of (iii). The bounds below leave room
+/// under those counts.
 #[test]
+#[allow(clippy::too_many_lines)] // one generator, three kinds of sequence, one property
 fn ut_89_no_committed_word_or_detection_is_clipped_at_a_crop_edge() {
     let mut rng = Rng(0x5EED_0089);
     // Regional observations by the defence's outcome: none, widened, reread, full_refresh.
     let mut outcomes = [0usize; 4];
     // Full refreshes of the defence by reason: closure_budget, area_budget.
     let mut full_by = [0usize; 2];
-    for sequence in 0..80 {
-        // Even sequences: scattered words and a recogniser one pixel tight on every other
-        // crop (the cut O3d built). Odd ones: lines read joined from a crop, which reach the
-        // crop's edge (the second read) and past the second crop's (the full refresh). Every
-        // fourth sequence has a tighter area budget, which a widening can break.
-        let lines = sequence % 2 == 1;
+    // Regional observations of the dropping kind (iii), and how many observations of kinds
+    // (i)-(ii) and of kind (iii) had a final region within the band of its crop (O3g).
+    let (mut dropping_regional, mut in_band) = (0usize, [0usize; 2]);
+    for sequence in 0..120 {
+        // The first 80 as in O3f. Even ones: scattered words and a recogniser one pixel tight
+        // on every other crop (the cut O3d built). Odd ones: lines read joined from a crop,
+        // which reach the crop's edge (the second read) and past the second crop's (the full
+        // refresh). Every fourth has a tighter area budget, which a widening can break. The
+        // last 40: lines read wider and dropped near a crop's edge (O3g).
+        let dropping = sequence >= 80;
+        let lines = dropping || sequence % 2 == 1;
         let params = PlanParams {
-            max_area_fraction: if sequence % 4 == 3 { 0.3 } else { 0.6 },
+            max_area_fraction: if !dropping && sequence % 4 == 3 {
+                0.3
+            } else {
+                0.6
+            },
             ..small_params()
         };
         let scene = if lines {
@@ -1192,7 +1226,9 @@ fn ut_89_no_committed_word_or_detection_is_clipped_at_a_crop_edge() {
         } else {
             word_scene(&mut rng)
         };
-        let reading = if lines {
+        let reading = if dropping {
+            CropReading::WiderDroppingBand
+        } else if lines {
             CropReading::Joined
         } else {
             CropReading::TighterAlternately
@@ -1220,7 +1256,17 @@ fn ut_89_no_committed_word_or_detection_is_clipped_at_a_crop_edge() {
                     || scene.surfaces.iter().any(|(b, _)| *b == c.bbox);
                 assert!(ok, "{at}: clipped detection {c:?}");
             }
+            if dropping {
+                for (b, text, _) in &scene.words {
+                    assert!(
+                        e.words.iter().any(|w| w.bbox.contains(b)),
+                        "{at}: the scene's word {text} at {b:?} was lost"
+                    );
+                }
+            }
             if let Some(edge) = engine.last_crop_edge() {
+                dropping_regional += usize::from(dropping);
+                in_band[usize::from(dropping)] += usize::from(edge.regions_in_band > 0);
                 outcomes[match edge.outcome {
                     CropEdgeOutcome::None => 0,
                     CropEdgeOutcome::Widened => 1,
@@ -1264,13 +1310,20 @@ fn ut_89_no_committed_word_or_detection_is_clipped_at_a_crop_edge() {
     let [closure, area] = full_by;
     eprintln!(
         "UT-89: {regional} regional observations: none {none}, widened {widened}, \
-         reread {reread}, full_refresh {full} (closure_budget {closure}, area_budget {area})"
+         reread {reread}, full_refresh {full} (closure_budget {closure}, area_budget {area}); \
+         a final region in the band on {} of kinds (i)-(ii) and {} of kind (iii) \
+         ({dropping_regional} regional)",
+        in_band[0], in_band[1]
     );
     assert!(regional >= 500, "only {regional} regional observations");
     assert!(widened >= 40, "{outcomes:?}");
     assert!(reread >= 45, "{outcomes:?}");
     assert!(full >= 45, "{outcomes:?}");
     assert!(closure >= 40 && area >= 3, "{full_by:?}");
+    assert!(
+        dropping_regional >= 250 && in_band[1] >= 12,
+        "{dropping_regional} {in_band:?}"
+    );
 }
 
 /// A word held from an earlier crop and read otherwise by the full read, away from every
@@ -1648,4 +1701,234 @@ fn o3f_a_held_relation_pulls_its_other_member_into_the_widening() {
         [input]
     );
     assert_eq!(e.words.iter().map(|w| w.bbox).collect::<Vec<_>>(), [label]);
+}
+
+// ---- O3g: a held item the widening brings into a crop's band, which the crop drops ----
+//
+// The same 640x320 scene and caret as O3f. A held word W at (150..170, 100..112) meets the
+// tile's region (32..160, 32..160), so the planner closes over it: the planned region is
+// (32..170, 32..160) and its crop (0..202, 0..192), whose right edge is 202.
+
+/// The band of the dropping fakes below, written here rather than taken from the engine, so
+/// that a mutant of the engine's band does not change what the fakes read.
+const FAKE_BAND_PX: f64 = 16.0;
+
+/// Whether a fake reading `area` of `frame` returns an item at `b`: only one inside the area
+/// and at least [`FAKE_BAND_PX`] from each of its edges that is not the frame's edge. What a
+/// recogniser or a detector does when it loses an item a crop's edge cuts or comes close to.
+fn readable_in(b: &BBox, area: &BBox, frame: &BBox) -> bool {
+    area.contains(b)
+        && (area.x0() <= frame.x0() || b.x0() - area.x0() >= FAKE_BAND_PX)
+        && (area.y0() <= frame.y0() || b.y0() - area.y0() >= FAKE_BAND_PX)
+        && (area.x1() >= frame.x1() || area.x1() - b.x1() >= FAKE_BAND_PX)
+        && (area.y1() >= frame.y1() || area.y1() - b.y1() >= FAKE_BAND_PX)
+}
+
+/// Reads the scene's words; on the `i`-th crop read, the words `script[i]` names (by their
+/// index in the scene) at the boxes it gives and the others at their own; and it drops every
+/// word that is not [`readable_in`] an area it was asked about. Records every read's areas.
+struct BandDropRecognizer {
+    scene: SharedScene,
+    script: Vec<Vec<(usize, BBox)>>,
+    crop_reads: usize,
+    reads: Arc<Mutex<Vec<Vec<BBox>>>>,
+}
+
+impl TextRecognizer for BandDropRecognizer {
+    fn name(&self) -> &'static str {
+        "scene-ocr-band-drop"
+    }
+
+    fn recognize(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Vec<Word>, PortError> {
+        if regions.is_empty() {
+            return Ok(Vec::new());
+        }
+        let s = scene_of(&self.scene);
+        let whole = frame.bounds();
+        self.reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(regions.to_vec());
+        let script = if regions == [whole] {
+            Vec::new()
+        } else {
+            self.crop_reads += 1;
+            self.script
+                .get(self.crop_reads - 1)
+                .cloned()
+                .unwrap_or_default()
+        };
+        Ok(s.words
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (b, text, _))| {
+                let b = script.iter().find(|(j, _)| *j == i).map_or(*b, |(_, r)| *r);
+                regions
+                    .iter()
+                    .any(|r| readable_in(&b, r, &whole))
+                    .then(|| Word {
+                        bbox: b,
+                        text: text.clone(),
+                    })
+            })
+            .collect())
+    }
+}
+
+/// Every control of the scene, as an `Input`, dropped unless [`readable_in`] an area it is
+/// asked about. No surfaces and no band: the classic plan.
+struct BandDropDetector(SharedScene);
+
+impl VisionDetector for BandDropDetector {
+    fn name(&self) -> &'static str {
+        "scene-detector-band-drop"
+    }
+
+    fn models_loaded(&self) -> bool {
+        false
+    }
+
+    fn detect(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Vec<Control>, PortError> {
+        let s = scene_of(&self.0);
+        let whole = frame.bounds();
+        Ok(s.controls
+            .iter()
+            .filter(|(b, _)| regions.iter().any(|r| readable_in(b, r, &whole)))
+            .map(|(bbox, _)| Control {
+                bbox: *bbox,
+                role: Role::Input,
+                affordance: Affordance {
+                    actionability: Actionability::Unknown,
+                    enabled: true,
+                    visible: true,
+                },
+            })
+            .collect())
+    }
+}
+
+/// Observes `scene` (a full refresh), draws the caret at (100, 100) and observes again with
+/// the dropping fakes and the scripted crop readings. Returns the engine and the areas of
+/// every recogniser read of the second observation.
+fn dropping_observation(scene: Scene, script: Vec<Vec<(usize, BBox)>>) -> (Engine, Vec<Vec<BBox>>) {
+    let shared = Arc::new(Mutex::new(scene));
+    let reads = Arc::new(Mutex::new(Vec::new()));
+    let mut engine = scene_engine_with(
+        &shared,
+        PlanParams::default(),
+        Box::new(BandDropDetector(shared.clone())),
+        Box::new(BandDropRecognizer {
+            scene: shared.clone(),
+            script,
+            crop_reads: 0,
+            reads: reads.clone(),
+        }),
+    );
+    engine.set_plan_trace(true);
+    engine.observe_screen(&ObserveRequest::default()).unwrap();
+    assert_eq!(engine.last_plan().unwrap().work, WorkKind::Full);
+    reads.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    scene_of(&shared).carets.push((100, 100));
+    engine.observe_screen(&ObserveRequest::default()).unwrap();
+    let trace = engine.last_plan_trace().unwrap();
+    assert_eq!(trace.regions.len(), 1, "{trace:?}");
+    assert!(
+        (trace.covered_area_px - 138.0 * 128.0).abs() < 1e-9,
+        "the planned region is (32..170, 32..160): {trace:?}"
+    );
+    let seen = reads.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    (engine, seen)
+}
+
+/// O3g: the crop reads W 4 px wider, across the region's edge (174), clear of the crop's
+/// band; the widening meets the held word H at (172..190, 100..112), which ends 12 px from
+/// the crop's right edge, and the recogniser drops H there. No fresh item comes near the
+/// crop's edge and the final region (32..190) stays inside its crop, so before O3g nothing
+/// read again and the merge dropped H: the held word was lost. Now the final region within
+/// the band makes the one re-read, whose crop (0..222) reads H whole.
+#[test]
+fn o3g_a_held_word_the_widening_brings_into_the_crops_band_is_read_again_not_lost() {
+    let w = bx(150.0, 100.0, 170.0, 112.0);
+    let h = bx(172.0, 100.0, 190.0, 112.0);
+    let mut scene = empty_scene();
+    scene.words.push((w, "Linea".into(), [20, 20, 20]));
+    scene.words.push((h, "tres".into(), [20, 20, 20]));
+    let (engine, reads) =
+        dropping_observation(scene, vec![vec![(0, bx(150.0, 100.0, 174.0, 112.0))]]);
+    let words: Vec<(BBox, &str)> = engine
+        .store
+        .published()
+        .unwrap()
+        .evidence
+        .words
+        .iter()
+        .map(|w| (w.bbox, w.text.as_str()))
+        .collect();
+    assert_eq!(
+        words,
+        [(w, "Linea"), (h, "tres")],
+        "the held word H is kept"
+    );
+    let edge = *engine.last_crop_edge().unwrap();
+    assert_eq!(edge.outcome, CropEdgeOutcome::Reread, "{edge:?}");
+    assert_eq!(edge.crossing.words, 1, "{edge:?}");
+    // Neither earlier trigger fired: no fresh item near the edge, no region out of its crop.
+    assert_eq!(edge.near_crop_edge, CropEdgeKinds::default(), "{edge:?}");
+    assert_eq!(edge.regions_in_band, 1, "{edge:?}");
+    assert_eq!(
+        reads,
+        vec![
+            vec![bx(0.0, 0.0, 202.0, 192.0)],
+            vec![bx(0.0, 0.0, 222.0, 192.0)]
+        ]
+    );
+    let plan = engine.last_plan().unwrap();
+    assert_eq!(plan.work, WorkKind::Regions);
+    assert!(
+        (plan.region_area_px - 158.0 * 128.0).abs() < 1e-9,
+        "{plan:?}"
+    );
+}
+
+/// O3g, the same through a held relation and the detector: the widening meets a held label L
+/// at (172..180, 100..112), clear of the band and read again; the relation pulls in its input
+/// I at (184..196, 98..114), 6 px from the crop's right edge, which the detector drops there.
+/// Before O3g the input was lost; now the re-read's crop (0..228) detects it whole.
+#[test]
+fn o3g_a_held_input_a_relation_brings_into_the_crops_band_is_read_again_not_lost() {
+    let w = bx(150.0, 100.0, 170.0, 112.0);
+    let label = bx(172.0, 100.0, 180.0, 112.0);
+    let input = bx(184.0, 98.0, 196.0, 114.0);
+    let mut scene = empty_scene();
+    scene.words.push((w, "x".into(), [20, 20, 20]));
+    scene.words.push((label, "Id:".into(), [20, 20, 20]));
+    scene.controls.push((input, [200, 200, 200]));
+    let (engine, reads) =
+        dropping_observation(scene, vec![vec![(0, bx(150.0, 100.0, 174.0, 112.0))]]);
+    let held = engine.store.published().unwrap();
+    assert_eq!(
+        held.evidence
+            .controls
+            .iter()
+            .map(|c| c.bbox)
+            .collect::<Vec<_>>(),
+        [input],
+        "the held input is kept"
+    );
+    assert!(
+        held.relations.contains(&(input, label)),
+        "{:?}",
+        held.relations
+    );
+    let edge = *engine.last_crop_edge().unwrap();
+    assert_eq!(edge.outcome, CropEdgeOutcome::Reread, "{edge:?}");
+    assert_eq!(edge.near_crop_edge, CropEdgeKinds::default(), "{edge:?}");
+    assert_eq!(edge.regions_in_band, 1, "{edge:?}");
+    assert_eq!(
+        reads,
+        vec![
+            vec![bx(0.0, 0.0, 202.0, 192.0)],
+            vec![bx(0.0, 0.0, 228.0, 192.0)]
+        ]
+    );
 }

@@ -68,7 +68,8 @@ whole_on_read, band_px }`, passed beside `Evidence` to `plan_regions_with` (the 
   closure over every support) is computed and runs. A support-aware regional plan's regions
   each lie inside a classic region, so its covered area is never larger, and its full
   refreshes are a subset of today's, with today's reasons.
-- **R5, the crop-edge defence (added by unit O3e, decision D59).** For **every** regional
+- **R5, the crop-edge defence (added by unit O3e, decision D59; (b) made stricter by unit
+  O3g, decision D65).** For **every** regional
   observation, classic plans included, the detector and the recogniser read each region grown by
   a margin `m` = 32 px, clipped to the frame (the *crop*; overlapping crops are read as their
   union). The accessibility provider reads its regions as before, never grown: it returns every
@@ -76,19 +77,27 @@ whole_on_read, band_px }`, passed beside `Evidence` to `plan_regions_with` (the 
   (a) a word, or a detection that is not a surface, that meets a region and crosses its edge was
   seen whole: the region widens to contain it, and the widening goes to a fixed point that closes
   again over the held words and non-surface detections (and the relations between them) and over
-  every fresh one the widened region meets, without reading again; (b) one that meets a final
-  region within a band `t` = 16 px of a crop edge that is not the frame's edge, or a final region
-  that left its crop, may have been clipped by the crop itself: the observation reads once more,
-  with crops grown from the widened regions. A second (b), or a closure out of rounds, makes the
+  every fresh one the widened region meets, without reading again; (b) a final region that
+  comes within a band `t` = 16 px of a crop edge that is not the frame's edge, or leaves its
+  crop, or meets a fresh word or non-surface detection within that band, may hold something the
+  crop clipped or dropped: the observation reads once more, with crops grown from the widened
+  regions. The first condition (O3g) implies the other two (an item a final region meets lies
+  inside it after (a), so at least as far from the crop's edges as the region), which are kept
+  as reviewed in O3e and counted on their own; it alone covers a held word or detection (or the
+  other member of a held relation) that the widening brought into the band and that the crop
+  **dropped** there: absent from the fresh read, it would otherwise have been replaced by
+  nothing in the merge. A second (b), or a closure out of rounds, makes the
   observation a full refresh with the existing reason `closure_budget`, whose meaning widens: the
   closure over the evidence did not settle within its bound, **at planning or at the read**. The
   budgets (regions, area, the adaptive rule) are checked again on the final regions, with their
   own reasons. The observation keeps the fresh words and non-surface detections that meet a final
   region (each then lies inside one) and the surfaces a final region contains. The invariant it
-  ends with, when the observation stays regional: every committed fresh word or non-surface
-  detection lies wholly inside a final region and at least `t` from every edge of the crop it was
-  read from that is not the frame's edge, and no held word or non-surface detection is met and not
-  contained by a final region. `m` and `t` are constants (no configuration key): `t` is about one
+  ends with, when the observation stays regional: every final region lies at least `t` inside the
+  crop it was read from on every side that is not the frame's edge; every committed fresh word or
+  non-surface detection, and every held one a final region meets, lies wholly inside a final
+  region, so each was read with at least `t` of context on every such side; and no held word or
+  non-surface detection is met and not contained by a final region. `m` and `t` are constants (no
+  configuration key): `t` is about one
   glyph at 150 % scale, `m = 2t` so that a word lying on a region's edge is a band's width clear
   of the crop's edge.
 - **Merge.** A held detector box is replaced when it lies **inside** a re-analysed region
@@ -156,7 +165,10 @@ client; `_meta`'s fields and the schemas do not change and no configuration key 
   16), on S1e and S1 (4 regional observations each) neither (a) nor (b) fired, and the pixels
   each of the two stages reads per regional observation grew from 20 400 to 36 400 px² (S1e)
   and from 45 312 to 76 800 px² (S1), about 1.7 to 1.8 times; S1's word beside the caret still
-  differs (one other-text pair per observation, as before).
+  differs (one other-text pair per observation, as before). The stricter (b) of O3g fired 0
+  times on the same frames (4 and 4 regional observations, no region widened), so it added no
+  read there. In UT-89's generated scenes it fired on 27 of 662 regional observations of the
+  O3f kinds and on 20 of 320 of a recogniser that drops what comes near a crop's edge.
 - **What a regional read does to text near a change** (lab, observation only, agent-run,
   exploratory, commit `a014f1c`, before R5): in L6b, 70 regional observations, every differing
   word inside a region (`never_l3` 0): one other-text pair at the caret per observation in S1 and
@@ -196,7 +208,9 @@ client; `_meta`'s fields and the schemas do not change and no configuration key 
   merge), UT-85 (regional against full on generated scenes and on the lab's boxes, with fakes
   that cut every box but a surface at a crop's edge), UT-86 (the flat-region contract with the
   real detector, L1 pinned), UT-89 (R5: a word held tighter than its pixels widens the region
-  instead of being cut, and a property: on generated scenes, with fakes that clip at the edge of
+  instead of being cut; O3g: a held word, and a held input pulled in by its relation, that the
+  widening brings into the band and the crop drops are read again, not lost; and a property: on
+  generated scenes, with fakes that clip at the edge of
   what they are asked to read and an OCR that reads every crop a pixel tight, no committed word or
   detection is ever a clipped one), and the mutations listed in the units' reports (O3, O3e).
 - **Not validated:** the real screen. The lab's protocol (unit O3 §8): scenes S1 (caret,
@@ -235,7 +249,8 @@ banda, el planificador deja de cerrar sobre las cajas de accesibilidad (se relee
 sobre las superficies cuyo borde no cambió (el detector las da enteras o no las da), ignora las
 relaciones cuyo control es una de ellas, y si el plan resultante es un refresco completo usa el
 plan de siempre. En toda observación regional, el detector y el OCR leen cada región ampliada en
-32 px (R5): lo que cruza el borde de una región la amplía, lo que queda a menos de 16 px del borde
-del recorte obliga a una lectura más, y si vuelve a pasar hay refresco completo (`closure_budget`,
+32 px (R5): lo que cruza el borde de una región la amplía, y una región final que queda a menos
+de 16 px de un borde del recorte que no es el del fotograma (o algo leído en esa franja) obliga a
+una lectura más, y si vuelve a pasar hay refresco completo (`closure_budget`,
 cuyo sentido se amplía a la lectura). Quedan declarados los límites L1 a L4; falta la validación
 sobre la pantalla real.
