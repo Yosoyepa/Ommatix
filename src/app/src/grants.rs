@@ -459,10 +459,15 @@ mod tests {
         assert_eq!(store.count(), Err(GrantsProblem::Missing));
         assert_eq!(store.grant(&hash(1)), None);
         let store = GrantsFile::new(dir.0.clone());
+        // Windows refuses to open a directory as a file; elsewhere the open succeeds and the
+        // handle's kind refuses it.
+        #[cfg(windows)]
         assert!(matches!(
             store.count(),
             Err(GrantsProblem::Unreadable | GrantsProblem::Missing)
         ));
+        #[cfg(not(windows))]
+        assert_eq!(store.count(), Err(GrantsProblem::NotARegularFile));
         assert_eq!(store.grant(&hash(1)), None);
     }
 
