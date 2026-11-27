@@ -404,7 +404,7 @@ fn pipe_client() -> (String, String) {
 /// The exception admits the client file as it is: its digest is the pinned one, its text keeps
 /// the rules, and it is among the sources scanned, whole.
 #[test]
-fn the_source_check_admits_the_pipe_client_as_it_is() {
+fn sec_04_the_source_check_admits_the_pipe_client_as_it_is() {
     let (path, text) = pipe_client();
     assert_eq!(sha256_lf(&text), PIPE_CLIENT_SHA256, "the pin is current");
     assert_eq!(
@@ -427,7 +427,7 @@ fn the_source_check_admits_the_pipe_client_as_it_is() {
 /// its formatting, and by the pin; and a change the rules allow is still refused by the pin.
 #[test]
 #[allow(clippy::too_many_lines)] // one list of cases, each one line or two
-fn the_source_check_refuses_the_pipe_client_with_anything_more() {
+fn sec_04_the_source_check_refuses_the_pipe_client_with_anything_more() {
     let (path, text) = pipe_client();
     let flag = ".custom_flags(FILE_FLAG_OVERLAPPED)";
     let qos = ".security_qos_flags(SECURITY_IDENTIFICATION)";
@@ -586,7 +586,7 @@ fn the_source_check_refuses_the_pipe_client_with_anything_more() {
 /// is refused by the rule it breaks, whatever the pin says. The attribute introducers are split
 /// by legal whitespace, so only the rule that reads the code without whitespace sees them.
 #[test]
-fn the_lexical_rules_refuse_mutants_of_the_client_on_their_own() {
+fn sec_04_the_lexical_rules_refuse_mutants_of_the_client_on_their_own() {
     let (_, text) = pipe_client();
     assert_eq!(
         sec_04_pipe_client_text_findings(&text),
@@ -645,7 +645,7 @@ fn the_lexical_rules_refuse_mutants_of_the_client_on_their_own() {
 /// A test-module marker in the client file does not hide what follows it from the check: the
 /// file is collected whole, and the marker is itself refused.
 #[test]
-fn a_test_module_marker_in_the_pipe_client_hides_nothing() {
+fn sec_04_a_test_module_marker_in_the_pipe_client_hides_nothing() {
     let (_, text) = pipe_client();
     let hidden = format!(
         "{text}\n#[cfg(test)]\nmod hidden {{\n    fn f() {{ let _ = std::fs::File::create(\"x\"); }}\n}}\n"
@@ -669,7 +669,7 @@ fn a_test_module_marker_in_the_pipe_client_hides_nothing() {
 /// every other forbidden substring is still refused everywhere; and a second entry in the list
 /// of exceptions is refused, whatever file it names.
 #[test]
-fn the_source_check_refuses_open_options_in_any_other_file() {
+fn sec_04_the_source_check_refuses_open_options_in_any_other_file() {
     let (_, text) = pipe_client();
     let plain = "use std::fs::OpenOptions;\nfn f() { let _ = OpenOptions::new(); }\n";
     for path in [
@@ -722,7 +722,7 @@ fn the_source_check_refuses_open_options_in_any_other_file() {
 /// identification-level client is the only way in; and the server's wake-up at shutdown goes
 /// through that client.
 #[test]
-fn the_pipe_is_opened_only_through_the_identification_level_client() {
+fn sec_04_the_pipe_is_opened_only_through_the_identification_level_client() {
     const CONNECTING: [&str; 6] = [
         "connect_by_path",
         "ConnectWaitMode",
@@ -760,11 +760,11 @@ fn the_pipe_is_opened_only_through_the_identification_level_client() {
 }
 
 /// The broker's named pipe (ADR-0043, proposed) is not in the default build: the feature
-/// `broker-pipe` is off by default, its two crates are optional and Windows only, the pipe crate
-/// is pinned with its default features off, no other crate turns the feature on, and the
-/// `windows` job of CI builds, lints and tests it.
+/// `broker-pipe` is off by default, its crates (the adapter's two, the executable's one) are
+/// optional and Windows only, pinned exactly (the pipe crate with its default features off), no
+/// other crate turns the feature on, and the `windows` job of CI builds, lints and tests it.
 #[test]
-fn the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_only() {
+fn it_33_the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_only() {
     let manifest: toml::Value = toml::from_str(&read("src/adapters/mcp/Cargo.toml")).unwrap();
     let features = manifest["features"].as_table().expect("features");
     assert_eq!(features["default"], toml::Value::Array(Vec::new()));
@@ -788,8 +788,35 @@ fn the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_only() {
         Some(false)
     );
     assert_eq!(pinned["widestring"].as_str(), Some("=1.2.1"));
+    // The executable turns on the adapter's feature with its own, also off by default, and
+    // nothing else (T3: the switch and `attach`); no other crate mentions it.
+    let app: toml::Value = toml::from_str(&read("src/app/Cargo.toml")).unwrap();
+    let app_features = app["features"].as_table().expect("features");
+    assert_eq!(app_features["default"], toml::Value::Array(Vec::new()));
+    assert_eq!(
+        app_features["broker-pipe"],
+        toml::Value::Array(vec![
+            "ommatix-adapter-mcp/broker-pipe".into(),
+            "dep:winapi-util".into()
+        ])
+    );
+    // Its one crate of its own (D57: the kind of an opened handle, so that the operator's grants
+    // and ticket files are read only from a disk file): optional, Windows only, pinned, and in
+    // no plain dependency table.
+    assert!(!dependencies("src/app/Cargo.toml").contains("winapi-util"));
+    assert_eq!(
+        app["target"]["cfg(windows)"]["dependencies"]["winapi-util"]["optional"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(pinned["winapi-util"].as_str(), Some("=0.1.11"));
+    assert!(
+        app_features
+            .iter()
+            .filter(|(name, _)| *name != "broker-pipe")
+            .all(|(_, enabled)| !enabled.to_string().contains("broker-pipe")),
+        "only the feature of that name turns it on"
+    );
     for other in [
-        "src/app/Cargo.toml",
         "src/acceptance/Cargo.toml",
         "src/adapters/accessibility/Cargo.toml",
         "src/adapters/capture/Cargo.toml",
@@ -804,6 +831,8 @@ fn the_broker_pipe_feature_is_off_by_default_and_its_crates_are_windows_only() {
         "cargo build -p ommatix-adapter-mcp --features broker-pipe",
         "cargo clippy -p ommatix-adapter-mcp --features broker-pipe --all-targets -- -D warnings",
         "cargo test -p ommatix-adapter-mcp --features broker-pipe",
+        "cargo clippy -p ommatix --features broker-pipe --all-targets -- -D warnings",
+        "cargo test -p ommatix --features broker-pipe",
     ] {
         assert!(ci.contains(step), "{step}");
     }

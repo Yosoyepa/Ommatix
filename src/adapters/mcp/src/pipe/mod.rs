@@ -277,7 +277,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_pipe_name_is_a_local_pipe_and_nothing_else() {
+    fn it_28_a_pipe_name_is_a_local_pipe_and_nothing_else() {
         let name = PipeName::new("ommatix-broker.1_A").unwrap();
         assert_eq!(name.path(), r"\\.\pipe\ommatix-broker.1_A");
         assert_eq!(name.name(), "ommatix-broker.1_A");
@@ -299,7 +299,7 @@ mod tests {
     }
 
     #[test]
-    fn errors_name_their_cause_by_code_and_never_carry_text_from_outside() {
+    fn it_26_errors_name_their_cause_by_code_and_never_carry_text_from_outside() {
         let taken = io::Error::from_raw_os_error(ERROR_ACCESS_DENIED);
         assert_eq!(PipeError::of_bind(&taken), PipeError::NameTaken);
         let other = io::Error::from_raw_os_error(87);
@@ -337,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn the_full_line_is_one_json_rpc_error_without_an_identifier() {
+    fn it_29_the_full_line_is_one_json_rpc_error_without_an_identifier() {
         assert!(!FULL_LINE.contains('\n') && !FULL_LINE.contains('\r'));
         let value: serde_json::Value = serde_json::from_str(FULL_LINE).unwrap();
         assert_eq!(value["jsonrpc"], "2.0");

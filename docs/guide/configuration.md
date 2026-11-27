@@ -47,7 +47,7 @@ template's values apply, which deny actuation and redact values. No CLI flag loo
   `applicationframehost.exe`); and values this build cannot
   honour: a `platform` other than `windows`, a `snapshot_policy` other than `strict`, a `profile` other than
   `2026-07-28` (the legacy profile is enabled with `legacy_enabled`), a `transport` other than
-  `stdio`, `allow_destructive = true`, `allow_screenshots_to_client = true`,
+  `stdio` or `pipe`, `pipe` on a build without `broker-pipe`, off Windows or with `legacy_enabled`, a `pipe_name` or `grants_file` without `pipe`, `allow_destructive = true`, `allow_screenshots_to_client = true`,
   `[models] detector_path`, `detector_sha256`, `ocr_path` or `ocr_sha256` (weights are
   declared in the model manifest), a half-configured or malformed detector pin (below),
   and `[cache] persist = true`.
@@ -113,10 +113,28 @@ Domain errors come back as tool results with `isError: true`, a `code`, `retryab
 `io.ommatix/accessibility` (`observe_screen`), the stage timings of the action under
 `io.ommatix/action_timings` (`execute_action`).
 
-The executable serves one agent over stdio. A broker that lets several agents share one engine
-under an input lease and per-client grants exists in the MCP adapter, behind the proposed
+By default the executable serves one agent over stdio, and everything above is that path. A
+broker that lets several agents share one engine under an input lease and per-client grants
+exists in the MCP adapter, behind the proposed
 [ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md) and
-[ADR-0040](../adr/0040-task-scoped-grants-narrower-than-the-local-policy.md); the executable
-cannot reach it yet (no transport is built), so nothing here configures it.
+[ADR-0040](../adr/0040-task-scoped-grants-narrower-than-the-local-policy.md). The executable
+serves it over a local named pipe (proposed [ADR-0043](../adr/0043-local-named-pipe-transport-for-several-clients.md))
+**only** on Windows, **only** in a build with `--features broker-pipe` and **only** with these
+keys, all off or empty by default:
+
+| Key | Meaning | Default |
+|---|---|---|
+| `[mcp] transport` | `stdio`, or `pipe`: `serve` runs the broker on the pipe and serves nothing on stdio; refused with `legacy_enabled` or `--legacy` | `stdio` |
+| `[mcp] pipe_name` | the pipe's name after `\\.\pipe\`, 1–128 ASCII letters, digits, `-`, `_`, `.`; empty: `ommatix-` and the user's name, lower-cased, without other characters (`serve` and `attach` derive it alike). One engine per name: another name allows another engine, and the default is not isolated per user or per session (pipe names are one namespace for the machine) | empty |
+| `[safety] grants_file` | the operator's grants file: one `[[grant]]` per ticket (its SHA-256 and what it allows), read at every call; missing, invalid or not a regular file, no agent has a grant. Keep it on a local fixed disk: nothing bounds the time of its open, of the two queries of its handle (metadata and kind) or of its read, and every agent waits while it blocks | empty: no agent has a grant |
+
+Each agent's MCP host then starts `ommatix attach --config <file> [--ticket-file <file>]`, which
+relays its stdio to the pipe and starts no engine. An agent without a valid grant observes
+without values and delivers nothing. This has not been validated with a second local user, an
+elevated process, a real MCP host or the MSVC toolchain; the steps, the grants file's form and
+the exit codes of `attach`, with the conditions of its exit, and of `serve` when the pipe's
+listener stops or the first instance of its name is refused with access denied (7; a name
+another process already holds is the usual cause), are in the
+[installation guide](../thesis/S4_INSTALACION_Y_REVERSION.md) §7.1.
 
 See [operator control](live-input.md) for stop, purge and window scope.

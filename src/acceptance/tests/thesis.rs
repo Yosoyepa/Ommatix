@@ -20,8 +20,12 @@
 //! window the operator did not record; BDD-37 uses the product's pin file. BDD-63..67
 //! (ADR-0039 and ADR-0040, proposed) put several agents on one engine through the broker of
 //! the MCP adapter, over the same kind of double: one input lease asked for with the `lease`
-//! argument of `observe_screen` and reported in `_meta`, each client under its own grant. The
-//! executable does not serve the broker yet.
+//! argument of `observe_screen` and reported in `_meta`, each client under its own grant.
+//! BDD-68..71 (ADR-0040 and ADR-0043, proposed) admit those agents by the ticket handshake, on
+//! in-memory streams, with their grants read from the product's grants file
+//! ([`GrantsFile`]) in a temporary directory, at every call. The executable serves the broker
+//! only on a Windows build with `broker-pipe` and the switch on; the pipe itself is tested in
+//! the MCP adapter and the app, not here.
 
 // cucumber passes captured step parameters by value.
 #![allow(clippy::needless_pass_by_value)]
@@ -32,10 +36,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use cucumber::{World, given, then, when};
+use ommatix::grants::GrantsFile;
 use ommatix::policy::ConfigPolicy;
 use ommatix_adapter_mcp::{
-    Broker, BrokerConnection, Connection, LEASE_META_KEY, LEGACY_PROTOCOL_VERSION,
-    MODERN_PROTOCOL_VERSION, McpConfig, McpServer, Profile,
+    Admission, Broker, BrokerConnection, BrokerError, Connection, LEASE_META_KEY,
+    LEGACY_PROTOCOL_VERSION, MODERN_PROTOCOL_VERSION, McpConfig, McpServer, Profile,
 };
 use ommatix_adapter_sim::{FixtureDesktop, FixtureScene, confirmed};
 use ommatix_application::contract::{ActionKind, ValidatedAction};
@@ -75,7 +80,7 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-37", "BDD-38", "BDD-39", "BDD-40", "BDD-41", "BDD-42", "BDD-43", "BDD-44", "BDD-45",
     "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52", "BDD-53", "BDD-54",
     "BDD-55", "BDD-56", "BDD-57", "BDD-58", "BDD-59", "BDD-60", "BDD-61", "BDD-62", "BDD-63",
-    "BDD-64", "BDD-65", "BDD-66", "BDD-67",
+    "BDD-64", "BDD-65", "BDD-66", "BDD-67", "BDD-68", "BDD-69", "BDD-70", "BDD-71",
 ];
 
 #[derive(Debug, Default, World)]
@@ -3460,6 +3465,8 @@ struct Cohort {
     next_id: u64,
     /// `get_engine_metrics.observations` when the scenario started counting.
     observations: Option<Value>,
+    /// The operator's grants file, for agents admitted by ticket (BDD-68..BDD-71).
+    grants: Option<GrantsDir>,
 }
 
 impl std::fmt::Debug for Cohort {
@@ -3499,6 +3506,7 @@ impl Cohort {
             pairs: Vec::new(),
             next_id: 0,
             observations: None,
+            grants: None,
         }
     }
 
@@ -3858,4 +3866,265 @@ fn none_carries_the_lease(e: &mut Engine) {
         cohort.broker.retained().is_some(),
         "the broker is available"
     );
+}
+
+// ---- BDD-68..BDD-71: agents admitted by a ticket and the grants file (ADR-0040, ADR-0043) ----
+
+/// The ticket the operator issued in these scenarios (32 to 128 base64url characters).
+const SCENARIO_TICKET: &str = "BDD-ticket_0123456789abcdefghijklmnopq";
+
+/// A directory of the operator's, with the grants file the broker reads; removed at the end.
+#[derive(Debug)]
+struct GrantsDir(PathBuf);
+
+impl GrantsDir {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ommatix-bdd-grants-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a temporary directory");
+        Self(dir)
+    }
+
+    fn file(&self) -> PathBuf {
+        self.0.join("grants.toml")
+    }
+
+    /// Lists [`SCENARIO_TICKET`] with [`delivering_grant`], by the ticket's SHA-256.
+    fn grant_the_ticket(&self) {
+        use sha2::{Digest, Sha256};
+        use std::fmt::Write as _;
+        let hash =
+            Sha256::digest(SCENARIO_TICKET.as_bytes())
+                .iter()
+                .fold(String::new(), |mut hex, b| {
+                    let _ = write!(hex, "{b:02x}");
+                    hex
+                });
+        let grant = delivering_grant();
+        let applications: Vec<String> = grant
+            .applications
+            .iter()
+            .map(|a| format!("\"{a}\""))
+            .collect();
+        std::fs::write(
+            self.file(),
+            format!(
+                "[[grant]]\nticket_sha256 = \"{hash}\"\napplications = [{}]\n\
+                 deliver_input = {}\nread_values = {}\n",
+                applications.join(", "),
+                grant.deliver_input,
+                grant.read_values
+            ),
+        )
+        .expect("the grants file is written");
+    }
+
+    /// The operator withdraws every grant.
+    fn withdraw(&self) {
+        std::fs::write(self.file(), "").expect("the grants file is written");
+    }
+}
+
+impl Drop for GrantsDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl Cohort {
+    /// A broker whose grants come from the operator's grants file, read at every call, with no
+    /// agent connected yet.
+    fn with_grants_file() -> Self {
+        let grants = GrantsDir::new();
+        grants.grant_the_ticket();
+        let (desktop, ports) = shared_desktop_ports();
+        let broker = Broker::with_grant_store(
+            EngineConfig::new(SESSION),
+            ports,
+            McpConfig::default(),
+            Duration::from_secs(2),
+            8,
+            Arc::new(GrantsFile::new(grants.file())),
+        )
+        .expect("a valid broker");
+        let mut cohort = Self::new(Vec::new());
+        cohort.desktop = desktop;
+        cohort.broker = broker;
+        cohort.grants = Some(grants);
+        cohort
+    }
+
+    /// An agent admitted by the handshake `line` (a ticket, or empty for none).
+    fn admit(&mut self, line: &str) -> Result<usize, BrokerError> {
+        let agent = self.broker.admit(line.as_bytes().to_vec())?;
+        self.agents.push(agent);
+        self.pages.push(None);
+        self.results.push(None);
+        Ok(self.agents.len() - 1)
+    }
+
+    fn grants(&self) -> &GrantsDir {
+        self.grants.as_ref().expect("the operator's grants file")
+    }
+
+    /// Whether agent `who`'s last page shows the value of the screen's input.
+    fn shows_values(&self, who: usize) -> bool {
+        self.page(who).to_string().contains(SHARED_VALUE)
+    }
+}
+
+#[given(
+    "un motor con el intermediario y un archivo de concesiones que da a un tique permiso para entregar y leer valores"
+)]
+fn an_engine_with_a_grants_file(e: &mut Engine) {
+    e.cohort = Some(Cohort::with_grants_file());
+}
+
+#[when("un agente se conecta presentando ese tique y observa la pantalla pidiendo valores")]
+fn an_agent_attaches_with_the_ticket_and_observes(e: &mut Engine) {
+    let cohort = e.cohort();
+    let who = cohort.admit(SCENARIO_TICKET).expect("the ticket admits it");
+    cohort.observe(who, &json!({ "include_values": true }));
+}
+
+#[when("un agente se conecta sin tique y observa la pantalla pidiendo valores")]
+fn an_agent_attaches_without_a_ticket_and_observes(e: &mut Engine) {
+    let cohort = e.cohort();
+    let who = cohort.admit("").expect("an empty handshake admits it");
+    cohort.observe(who, &json!({ "include_values": true }));
+}
+
+#[then("la página muestra los valores")]
+fn the_page_shows_the_values(e: &mut Engine) {
+    let cohort = e.cohort();
+    assert!(cohort.shows_values(0), "{}", cohort.page(0));
+}
+
+#[then("la página no muestra los valores")]
+fn the_page_does_not_show_the_values(e: &mut Engine) {
+    let cohort = e.cohort();
+    assert!(!cohort.shows_values(0), "{}", cohort.page(0));
+}
+
+#[then("su acción real se entrega")]
+fn its_live_action_is_delivered(e: &mut Engine) {
+    let cohort = e.cohort();
+    let page = cohort.page(0);
+    let result = cohort.act(0, &Cohort::click(&page, "ticket-live", true));
+    assert_eq!(result["status"], "input_delivered", "{result}");
+    assert_eq!(cohort.events(), 1);
+}
+
+#[then("su clic real se rechaza con POLICY_DENIED sin entregar ningún evento")]
+fn its_live_action_is_refused_by_policy(e: &mut Engine) {
+    let cohort = e.cohort();
+    let page = cohort.page(0);
+    let result = cohort.act(0, &Cohort::click(&page, "no-ticket-live", true));
+    assert_eq!(result["error"]["code"], "POLICY_DENIED", "{result}");
+    assert_eq!(result["input_delivered"], false);
+    assert_eq!(cohort.events(), 0);
+}
+
+#[given("un agente conectado con ese tique")]
+fn an_agent_attached_with_the_ticket(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.admit(SCENARIO_TICKET).expect("the ticket admits it");
+    cohort.observe(0, &json!({ "include_values": true }));
+    assert!(cohort.shows_values(0));
+}
+
+/// Presents [`SCENARIO_TICKET`] on an in-memory stream with a request after it: whether the
+/// broker admitted a client, and what it wrote back.
+fn present_the_ticket_again(cohort: &mut Cohort) -> (Admission, Vec<u8>) {
+    let request = cohort.line("get_engine_metrics", &json!({}));
+    let input = format!("{SCENARIO_TICKET}\n{request}\n");
+    let mut written = Vec::new();
+    let admission = cohort
+        .broker
+        .serve_sync_with_handshake(input.as_bytes(), &mut written)
+        .expect("in-memory streams do not fail");
+    (admission, written)
+}
+
+#[when("otro agente presenta el mismo tique")]
+fn another_agent_presents_the_same_ticket(e: &mut Engine) {
+    let cohort = e.cohort();
+    let (admission, written) = present_the_ticket_again(cohort);
+    cohort.results.push(Some(json!({
+        "admission": format!("{admission:?}"),
+        "written": written.len(),
+    })));
+}
+
+#[then("su conexión se rechaza sin respuesta ni concesión")]
+fn its_connection_is_refused_unanswered(e: &mut Engine) {
+    let cohort = e.cohort();
+    let last = cohort.results.last().cloned().flatten().expect("a record");
+    assert_eq!(
+        last["admission"],
+        format!("{:?}", Admission::Refused(BrokerError::Refused))
+    );
+    assert_eq!(last["written"], 0, "nothing is written back");
+    let state = cohort.broker.retained().expect("the broker is available");
+    assert_eq!(state.clients.len(), 1, "only the first agent is connected");
+}
+
+#[then("el tique sigue rechazado después de que el primero se va")]
+fn the_ticket_stays_refused_after_the_first_leaves(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.agents.remove(0).close();
+    let state = cohort.broker.retained().expect("the broker is available");
+    assert!(state.clients.is_empty());
+    let (admission, written) = present_the_ticket_again(cohort);
+    assert_eq!(admission, Admission::Refused(BrokerError::Refused));
+    assert!(written.is_empty(), "{written:?}");
+    assert_eq!(
+        cohort
+            .broker
+            .admit(SCENARIO_TICKET.as_bytes().to_vec())
+            .err(),
+        Some(BrokerError::Refused)
+    );
+}
+
+#[given("un agente conectado con ese tique que ha entregado una acción real")]
+fn an_agent_with_the_ticket_that_delivered(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.admit(SCENARIO_TICKET).expect("the ticket admits it");
+    cohort.observe(0, &json!({ "include_values": true }));
+    assert!(cohort.shows_values(0));
+    let page = cohort.page(0);
+    let result = cohort.act(0, &Cohort::click(&page, "before-withdrawal", true));
+    assert_eq!(result["status"], "input_delivered", "{result}");
+    assert_eq!(cohort.events(), 1);
+}
+
+#[when("el operador retira la concesión del archivo")]
+fn the_operator_withdraws_the_grant(e: &mut Engine) {
+    e.cohort().grants().withdraw();
+}
+
+#[then("su siguiente observación no muestra valores")]
+fn its_next_observation_shows_no_values(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.observe(0, &json!({ "include_values": true }));
+    assert!(!cohort.shows_values(0), "{}", cohort.page(0));
+}
+
+#[then(
+    "su acción real sobre esa página se rechaza con POLICY_DENIED sin entregar ningún evento nuevo"
+)]
+fn its_live_action_on_that_page_is_refused(e: &mut Engine) {
+    let cohort = e.cohort();
+    let page = cohort.page(0);
+    let result = cohort.act(0, &Cohort::click(&page, "after-withdrawal", true));
+    assert_eq!(result["error"]["code"], "POLICY_DENIED", "{result}");
+    assert_eq!(result["input_delivered"], false);
+    assert_eq!(cohort.events(), 1, "nothing after the withdrawal");
 }

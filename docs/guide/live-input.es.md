@@ -17,13 +17,18 @@ La entrada real exige **todo** lo siguiente:
    operador;
 3. `dry_run: false` del agente, sobre un objetivo del snapshot vigente.
 
-Estas son las condiciones del ejecutable, que sirve a un solo agente por stdio. El
-intermediario de las propuestas
+Estas son las condiciones del ejecutable cuando sirve a un solo agente por stdio, lo que hace
+por defecto. El intermediario de las propuestas
 [ADR-0039](../adr/0039-several-agents-through-one-engine-with-an-input-lease.md) y
 [ADR-0040](../adr/0040-task-scoped-grants-narrower-than-the-local-policy.md) (varios agentes,
-un arrendamiento de entrada, una concesión por cliente) existe en el adaptador MCP, pero el
-ejecutable no puede alcanzarlo; tal como está especificado, añadiría el arrendamiento y la
-concesión del cliente a estas condiciones, nunca las sustituiría.
+un arrendamiento de entrada, una concesión por cliente) sólo se alcanza en Windows, en un
+binario compilado con `broker-pipe` y con `[mcp] transport = "pipe"` (propuesta
+[ADR-0043](../adr/0043-local-named-pipe-transport-for-several-clients.md)); allí añade dos
+condiciones a éstas y no sustituye ninguna: el agente tiene el arrendamiento de entrada, y la
+concesión que su tique elige en el archivo de concesiones del operador permite la aplicación y la
+entrada real. Un agente conectado sin tique, o cuya concesión se retira, no entrega nada. Ese
+camino no se ha validado con un segundo usuario local, un proceso elevado, un anfitrión MCP real
+ni la cadena MSVC.
 
 La línea de órdenes rechaza un adaptador de entrada real antes de abrir ningún adaptador si
 no se cumplen 1 o 2. En cada acción, el motor comprueba después la aplicación en primer plano

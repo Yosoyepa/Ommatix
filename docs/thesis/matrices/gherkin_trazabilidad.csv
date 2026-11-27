@@ -66,3 +66,7 @@ BDD-64,RF-19,IT-12,features/09_varios_agentes.feature,"El arrendamiento pasa al 
 BDD-65,RF-19,IT-14,features/09_varios_agentes.feature,Un agente sin concesión observa sin valores y no entrega,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-66,RF-19,IT-16,features/09_varios_agentes.feature,El reintento de una petición entregada después de perder el arrendamiento,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-67,RF-19,IT-19,features/09_varios_agentes.feature,Para un agente solo no cambia nada,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-68,RF-20,IT-23,features/09_varios_agentes.feature,Un agente conectado con un tique actúa bajo su concesión,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-69,RF-20,IT-24,features/09_varios_agentes.feature,Un agente conectado sin tique observa sin valores y no entrega,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-70,RF-20,IT-25,features/09_varios_agentes.feature,Un tique presentado dos veces,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-71,RF-20,IT-23,features/09_varios_agentes.feature,Una concesión retirada del archivo entre dos acciones,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE

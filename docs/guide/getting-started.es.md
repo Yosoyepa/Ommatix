@@ -29,7 +29,11 @@ binario en `PATH`, o cambie `command` por su ruta absoluta:
 {"mcpServers":{"ommatix":{"command":"ommatix","args":["serve"]}}}
 ```
 
-El cliente crea el proceso y habla JSON-RPC por stdio; los diagnósticos van a stderr.
+El cliente crea el proceso y habla JSON-RPC por stdio; los diagnósticos van a stderr. Es un
+agente por motor, lo que se hace por defecto y lo documentado. Varios agentes sobre un motor sólo
+son posibles en Windows, en un binario compilado con `--features broker-pipe` y con
+`[mcp] transport = "pipe"` (propuestas ADR-0039, ADR-0040 y ADR-0043, sin validar con un segundo
+usuario, un proceso elevado, un anfitrión MCP real ni MSVC): vea [configuración](configuration.es.md).
 La compatibilidad depende del perfil: consulte [el contrato](../thesis/07_CONTRATOS_MCP_Y_ERRORES.md)
 y [la instalación](../thesis/S4_INSTALACION_Y_REVERSION.md).
 

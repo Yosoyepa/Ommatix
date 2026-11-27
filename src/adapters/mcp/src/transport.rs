@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn the_blocking_reader_discards_an_oversized_line_without_buffering_it() {
+    fn it_22_the_blocking_reader_discards_an_oversized_line_without_buffering_it() {
         let mut input = vec![b'x'; 1 << 20];
         input.extend_from_slice(b"\nok\n");
         let mut reader = LineReader::new(io::BufReader::with_capacity(4096, &input[..]), 64);
@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_line_that_ends_at_its_newline_is_terminated() {
+    fn it_24_only_a_line_that_ends_at_its_newline_is_terminated() {
         assert_eq!(
             frames_terminated(b"ab\r\ncd", 8, 3),
             vec![
@@ -333,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn the_blocking_and_asynchronous_readers_frame_every_generated_stream_alike() {
+    fn it_22_the_blocking_and_asynchronous_readers_frame_every_generated_stream_alike() {
         let mut rng = Rng(0x7EA5_0001);
         let alphabet = b"ab\r\n\n\n x{}\xff";
         for _ in 0..2_000 {

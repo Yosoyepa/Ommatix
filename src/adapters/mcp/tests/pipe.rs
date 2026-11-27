@@ -643,7 +643,7 @@ fn scripted_session() -> Vec<u8> {
 }
 
 #[test]
-fn a_ticket_client_through_the_pipe_gets_byte_for_byte_what_in_memory_streams_get() {
+fn it_27_a_ticket_client_through_the_pipe_gets_byte_for_byte_what_in_memory_streams_get() {
     let mut input = format!("{}\n", ticket(1)).into_bytes();
     input.extend_from_slice(&scripted_session());
 
@@ -688,7 +688,7 @@ fn a_ticket_client_through_the_pipe_gets_byte_for_byte_what_in_memory_streams_ge
 // ---- 2. one listener per name ----
 
 #[test]
-fn a_second_listener_on_the_same_name_fails_and_a_new_one_binds_once_the_first_is_gone() {
+fn it_28_a_second_listener_on_the_same_name_fails_and_a_new_one_binds_once_the_first_is_gone() {
     let world = World::new();
     let broker = world.broker();
     let mut first = bind(&broker, "second");
@@ -847,7 +847,7 @@ fn elevated(facts: &BTreeMap<String, String>) -> bool {
 }
 
 #[test]
-fn the_pipe_s_descriptor_grants_its_owner_only_and_the_owner_is_this_user() {
+fn sec_08_the_pipe_s_descriptor_grants_its_owner_only_and_the_owner_is_this_user() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "acl");
@@ -953,7 +953,8 @@ fn squat(open: impl FnOnce(&PipeName) -> PipeStream) -> io::Result<()> {
 }
 
 #[test]
-fn a_squatter_cannot_act_as_the_production_client_but_can_as_a_client_without_quality_of_service() {
+fn sec_09_a_squatter_cannot_act_as_the_production_client_but_can_as_a_client_without_quality_of_service()
+ {
     const ERROR_BAD_IMPERSONATION_LEVEL: i32 = 1346;
     let production = squat(|name| connect(name, CONNECT_ATTEMPTS, CONNECT_PAUSE).unwrap());
     assert_eq!(
@@ -970,7 +971,7 @@ fn a_squatter_cannot_act_as_the_production_client_but_can_as_a_client_without_qu
 // ---- 5. the bound on clients ----
 
 #[test]
-fn connections_beyond_the_bound_are_refused_at_accept_and_never_stall_it() {
+fn it_29_connections_beyond_the_bound_are_refused_at_accept_and_never_stall_it() {
     let world = World::new();
     let broker = world.bounded(2);
     let mut server = bind(&broker, "bound");
@@ -1020,8 +1021,8 @@ fn connections_beyond_the_bound_are_refused_at_accept_and_never_stall_it() {
 }
 
 #[test]
-fn a_peer_that_streams_a_handshake_without_end_is_dropped_after_a_bounded_read_and_its_place_freed()
-{
+fn it_24_a_peer_that_streams_a_handshake_without_end_is_dropped_after_a_bounded_read_and_its_place_freed()
+ {
     let world = World::new();
     let broker = world.bounded(1);
     let mut server = bind(&broker, "endless");
@@ -1067,7 +1068,7 @@ fn a_peer_that_streams_a_handshake_without_end_is_dropped_after_a_bounded_read_a
 // ---- 6. handshakes that admit nobody ----
 
 #[test]
-fn a_bad_handshake_admits_nobody_and_the_listener_keeps_serving_the_others() {
+fn it_24_a_bad_handshake_admits_nobody_and_the_listener_keeps_serving_the_others() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "handshake");
@@ -1108,7 +1109,7 @@ fn a_bad_handshake_admits_nobody_and_the_listener_keeps_serving_the_others() {
 // ---- 7. lines after the handshake ----
 
 #[test]
-fn an_oversized_line_is_answered_and_a_client_leaving_mid_line_disturbs_nobody() {
+fn it_27_an_oversized_line_is_answered_and_a_client_leaving_mid_line_disturbs_nobody() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "lines");
@@ -1157,7 +1158,7 @@ struct Record {
 
 #[test]
 #[allow(clippy::too_many_lines)] // one run: the clients, then the checks of its record
-fn eight_clients_through_the_pipe_at_once_keep_the_brokers_invariants() {
+fn it_27_eight_clients_through_the_pipe_at_once_keep_the_brokers_invariants() {
     const STEPS: usize = 60;
     let world = World::new();
     for n in 10..18 {
@@ -1306,7 +1307,7 @@ fn eight_clients_through_the_pipe_at_once_keep_the_brokers_invariants() {
 // ---- 9. the client ----
 
 #[test]
-fn an_absent_pipe_is_no_engine_and_a_busy_one_is_retried_a_bounded_number_of_times() {
+fn it_32_an_absent_pipe_is_no_engine_and_a_busy_one_is_retried_a_bounded_number_of_times() {
     let started = Instant::now();
     assert_eq!(
         connect(&unique("absent"), CONNECT_ATTEMPTS, CONNECT_PAUSE).err(),
@@ -1456,7 +1457,7 @@ fn echo_engine(
 }
 
 #[test]
-fn the_relay_carries_pipelined_requests_and_large_replies_both_ways_at_once() {
+fn it_31_the_relay_carries_pipelined_requests_and_large_replies_both_ways_at_once() {
     const REQUESTS: usize = 10_000;
     let name = unique("relay");
     let listener: Listener = PipeListenerOptions::new()
@@ -1519,7 +1520,7 @@ fn expected_replies(requests: usize) -> usize {
 }
 
 #[test]
-fn the_relay_reports_the_engine_closing_the_pipe_and_refuses_a_bad_handshake_unwritten() {
+fn it_31_the_relay_reports_the_engine_closing_the_pipe_and_refuses_a_bad_handshake_unwritten() {
     let name = unique("relay-end");
     let listener: Listener = PipeListenerOptions::new()
         .path(name.path())
@@ -1603,7 +1604,7 @@ fn open_remote(name: &PipeName) -> io::Result<std::fs::File> {
 }
 
 #[test]
-fn a_client_through_the_smb_loopback_path_is_refused() {
+fn sec_10_a_client_through_the_smb_loopback_path_is_refused() {
     // The control: a pipe that accepts remote clients must be reachable this way, or this
     // machine cannot carry the test.
     let control_name = unique("remote-control");
@@ -1640,7 +1641,7 @@ fn a_client_through_the_smb_loopback_path_is_refused() {
 // ---- 12. shutdown ----
 
 #[test]
-fn shutdown_with_no_client_leaves_nothing_and_the_name_binds_again_at_once() {
+fn it_30_shutdown_with_no_client_leaves_nothing_and_the_name_binds_again_at_once() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "down");
@@ -1660,7 +1661,7 @@ fn shutdown_with_no_client_leaves_nothing_and_the_name_binds_again_at_once() {
 }
 
 #[test]
-fn shutdown_stops_accepting_at_once_and_connections_end_when_their_clients_act_or_leave() {
+fn it_30_shutdown_stops_accepting_at_once_and_connections_end_when_their_clients_act_or_leave() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "down-busy");
@@ -1723,7 +1724,7 @@ fn shutdown_stops_accepting_at_once_and_connections_end_when_their_clients_act_o
 /// all along and recorded by it at each charge, never pass the bound, and the threads not yet
 /// joined never pass `2 + places`; at the end every worker is joined.
 #[test]
-fn churn_never_holds_more_places_than_the_bound_on_clients() {
+fn it_29_churn_never_holds_more_places_than_the_bound_on_clients() {
     const BOUND: usize = 2;
     const CHURNERS: usize = 8;
     const CYCLES: usize = 500;
@@ -1808,7 +1809,7 @@ fn churn_never_holds_more_places_than_the_bound_on_clients() {
 /// test holds closed), the listener still accepts clients up to the bound and refuses the one
 /// beyond it, and none of that waits for the call to finish.
 #[test]
-fn accepting_never_waits_on_a_call_that_holds_the_broker() {
+fn it_29_accepting_never_waits_on_a_call_that_holds_the_broker() {
     let world = World::new();
     let broker = world.bounded(3);
     let mut server = bind(&broker, "long-call");
@@ -1898,7 +1899,7 @@ fn competitor(name: &PipeName, instances: usize) -> std::process::Child {
 /// shutdown says that its accept thread is still alive, keeps it, says so again when asked again,
 /// and completes once the other instances are gone.
 #[test]
-fn shutdown_tells_when_its_accept_thread_could_not_be_woken_and_completes_once_it_can() {
+fn it_30_shutdown_tells_when_its_accept_thread_could_not_be_woken_and_completes_once_it_can() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "compete");
@@ -1940,7 +1941,7 @@ fn shutdown_tells_when_its_accept_thread_could_not_be_woken_and_completes_once_i
 /// R-T2-6: requests the connection received before the stop and has not handed to the broker
 /// yet are never served after it.
 #[test]
-fn requests_already_received_are_not_served_after_shutdown() {
+fn it_30_requests_already_received_are_not_served_after_shutdown() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "buffered");
@@ -1984,7 +1985,7 @@ fn requests_already_received_are_not_served_after_shutdown() {
 /// reaper has joined it, the place is back, and a second shutdown says `Complete`, with every
 /// worker joined once and no thread of the listener left.
 #[test]
-fn a_worker_s_place_is_free_only_after_its_thread_is_joined_and_shutdown_says_so() {
+fn it_29_a_worker_s_place_is_free_only_after_its_thread_is_joined_and_shutdown_says_so() {
     watchdog(
         "the held worker's places, refusal and shutdowns",
         a_worker_s_place_is_free_only_after_its_thread_is_joined_and_shutdown_says_so_body,
@@ -2071,7 +2072,7 @@ fn a_worker_s_place_is_free_only_after_its_thread_is_joined_and_shutdown_says_so
 /// D40 G1: the caller's predicate runs outside the listener's lock, so one that blocks does not
 /// stop a new client from being accepted and served.
 #[test]
-fn a_blocking_predicate_of_wait_until_does_not_stop_admission() {
+fn it_29_a_blocking_predicate_of_wait_until_does_not_stop_admission() {
     watchdog(
         "a client served while a predicate of wait_until blocks",
         a_blocking_predicate_of_wait_until_does_not_stop_admission_body,
@@ -2160,7 +2161,7 @@ fn a_change_between_the_copy_and_the_wait_is_not_missed_body() {
 /// D40 G2: a request begun before the stop and ended after it is discarded: the stop reaches
 /// the reader as the stop, not as an end of input that would complete the line.
 #[test]
-fn a_request_begun_before_the_stop_is_discarded_not_dispatched() {
+fn it_30_a_request_begun_before_the_stop_is_discarded_not_dispatched() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "begun");
@@ -2193,7 +2194,7 @@ fn a_request_begun_before_the_stop_is_discarded_not_dispatched() {
 /// D40 G2: a request that passed the stop check before the stop runs to its end: it delivers
 /// and replies after the stop, and its connection is `Remaining` meanwhile.
 #[test]
-fn a_request_that_passed_the_check_before_the_stop_runs_to_its_end() {
+fn it_30_a_request_that_passed_the_check_before_the_stop_runs_to_its_end() {
     let world = World::new();
     let broker = world.broker();
     let mut server = bind(&broker, "passed");
@@ -2240,7 +2241,7 @@ fn a_request_that_passed_the_check_before_the_stop_runs_to_its_end() {
 /// it runs when the test drops the server, on the test's own thread. The test keeps no other
 /// owner of the broker.
 #[test]
-fn the_broker_s_teardown_runs_on_the_thread_that_drops_a_complete_server() {
+fn it_30_the_broker_s_teardown_runs_on_the_thread_that_drops_a_complete_server() {
     watchdog(
         "the broker's teardown after a complete shutdown",
         the_broker_s_teardown_runs_on_the_thread_that_drops_a_complete_server_body,

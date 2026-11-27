@@ -156,9 +156,17 @@ impl Default for EngineSection {
 #[serde(deny_unknown_fields, default)]
 pub struct McpSection {
     pub profile: String,
+    /// `"stdio"` (the default): `serve` is one agent's MCP server on its standard streams.
+    /// `"pipe"`: `serve` runs the broker of ADR-0039 behind the local named pipe of ADR-0043
+    /// (both proposed) and serves nothing on stdio; agents reach it through `attach`. Only on
+    /// a Windows build with the `broker-pipe` feature.
     pub transport: String,
     pub legacy_enabled: bool,
     pub max_message_bytes: usize,
+    /// With `transport = "pipe"`, the pipe's name after `\\.\pipe\`: 1 to 128 ASCII letters,
+    /// digits, `-`, `_` or `.`. Empty (the default): derived from the user's name, the same way
+    /// by `serve` and `attach` ([`Config::pipe_name`]).
+    pub pipe_name: String,
 }
 
 impl Default for McpSection {
@@ -168,8 +176,55 @@ impl Default for McpSection {
             transport: "stdio".to_owned(),
             legacy_enabled: false,
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
+            pipe_name: String::new(),
         }
     }
+}
+
+/// The prefix of a pipe name derived from the user's name.
+#[cfg_attr(
+    not(feature = "broker-pipe"),
+    allow(
+        dead_code,
+        reason = "used by serve and attach over the pipe, which need the feature"
+    )
+)]
+pub const PIPE_NAME_PREFIX: &str = "ommatix-";
+
+/// The longest pipe name (after `\\.\pipe\`), the pipe module's own bound.
+pub const MAX_PIPE_NAME: usize = 128;
+
+/// A name the pipe module accepts: 1 to [`MAX_PIPE_NAME`] ASCII letters, digits, `-`, `_` or
+/// `.` (the rule of `ommatix_adapter_mcp::pipe::PipeName`, which a build without the feature
+/// does not have).
+pub fn valid_pipe_name(name: &str) -> bool {
+    (1..=MAX_PIPE_NAME).contains(&name.len()) && name.bytes().all(pipe_name_byte)
+}
+
+const fn pipe_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.')
+}
+
+/// The default pipe name (D38): [`PIPE_NAME_PREFIX`] and the user's name as the process
+/// received it (`USERNAME`), lower-cased, with every character the pipe module does not accept
+/// left out, cut so that the whole name fits [`MAX_PIPE_NAME`]. `None` when no user name is set
+/// or nothing of it is left.
+#[cfg_attr(
+    not(feature = "broker-pipe"),
+    allow(
+        dead_code,
+        reason = "used by serve and attach over the pipe, which need the feature"
+    )
+)]
+pub fn derive_pipe_name(user: Option<&std::ffi::OsStr>) -> Option<String> {
+    let user = user?.to_string_lossy().to_lowercase();
+    let kept: String = user
+        .bytes()
+        .filter(|b| pipe_name_byte(*b))
+        .take(MAX_PIPE_NAME - PIPE_NAME_PREFIX.len())
+        .map(char::from)
+        .collect();
+    (!kept.is_empty()).then(|| format!("{PIPE_NAME_PREFIX}{kept}"))
 }
 
 /// `[safety]`: the local policy. Its defaults deny everything.
@@ -202,6 +257,11 @@ pub struct SafetySection {
     /// and never deletes the file. Relative to the configuration file. Empty (the default): no
     /// purge file.
     pub purge_file: String,
+    /// The operator's grants file (ADR-0040, decisions 3 to 5; proposed): which grant each
+    /// ticket selects for a client of the broker. Read on every tool call of such a client; a
+    /// missing or invalid file gives no client a grant. Only with `[mcp] transport = "pipe"`.
+    /// Relative to the configuration file. Empty (the default): no client has a grant.
+    pub grants_file: String,
 }
 
 /// The OCR engine (`[models] ocr`).
@@ -493,6 +553,160 @@ impl CacheSection {
     }
 }
 
+/// Why `attach` could not use its configuration ([`Config::load_closed`]): a closed list of
+/// causes that carries nothing of the file's text, so that it can be printed on stderr. A
+/// position is line and column numbers (1-based; the column in characters), and a key is one
+/// of this file's own names ([`KNOWN_KEYS`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigProblem {
+    /// The file could not be opened or read.
+    Unreadable(std::io::ErrorKind),
+    /// The path opened, but not as a regular file on a disk, or its kind could not be read.
+    NotARegularFile,
+    /// The file is larger than the configuration's bound.
+    TooLarge,
+    /// The file is not UTF-8 text.
+    NotUtf8,
+    /// Not valid TOML of this configuration's form: a syntax error, an unknown section or key,
+    /// or a value of the wrong type; where, when the parser says.
+    NotValid { at: Option<(usize, usize)> },
+    /// Values that fail their rule, by key.
+    Invalid(Vec<&'static str>),
+}
+
+impl std::fmt::Display for ConfigProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable(kind) => write!(f, "unreadable: it cannot be read ({kind:?})"),
+            Self::NotARegularFile => f.write_str(
+                "unreadable: it is not a regular file on a disk (a directory, a device or a \
+                 named pipe is refused before anything is read)",
+            ),
+            Self::TooLarge => write!(f, "unreadable: it is larger than {MAX_CONFIG_BYTES} bytes"),
+            Self::NotUtf8 => f.write_str("not valid TOML: it is not UTF-8 text"),
+            Self::NotValid {
+                at: Some((line, column)),
+            } => write!(
+                f,
+                "not valid TOML for this configuration (a syntax error, an unknown key or a \
+                 value of the wrong type) at line {line}, column {column}"
+            ),
+            Self::NotValid { at: None } => f.write_str(
+                "not valid TOML for this configuration (a syntax error, an unknown key or a \
+                 value of the wrong type)",
+            ),
+            Self::Invalid(keys) => write!(
+                f,
+                "invalid values: {} fail their rule (`ommatix serve --config` with the same \
+                 file states each rule)",
+                keys.join(", ")
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ConfigProblem {}
+
+/// Every key of the configuration, as its problems name it. A problem is reported to `attach`
+/// by the key it starts with, never by its text, which may quote a value of the file.
+pub const KNOWN_KEYS: &[&str] = &[
+    "[engine] action_freshness",
+    "[engine] action_freshness_margin_px",
+    "[engine] mode",
+    "[engine] platform",
+    "[engine] snapshot_policy",
+    "[engine] tile_size",
+    "[engine] halo_px",
+    "[engine] max_regions",
+    "[engine] full_refresh_area_ratio",
+    "[engine] adaptive_min_regions",
+    "[engine] max_snapshot_age_ms",
+    "[engine] verify_timeout_ms",
+    "[engine] verify_poll_ms",
+    "[engine] concurrent_stages",
+    "[engine] experimental_full_frame",
+    "[engine] candidate_search",
+    "[mcp] profile",
+    "[mcp] transport",
+    "[mcp] legacy_enabled",
+    "[mcp] max_message_bytes",
+    "[mcp] pipe_name",
+    "[safety] actuation_enabled",
+    "[safety] allowed_applications",
+    "[safety] allow_destructive",
+    "[safety] allow_screenshots_to_client",
+    "[safety] include_values",
+    "[safety] stop_file",
+    "[safety] allowed_window_classes",
+    "[safety] window_pin_file",
+    "[safety] purge_file",
+    "[safety] grants_file",
+    "[models] detector_manifest",
+    "[models] detector_manifest_sha256",
+    "[models] onnxruntime_path",
+    "[models] onnxruntime_sha256",
+    "[models] detector_execution_provider",
+    "[models] directml_path",
+    "[models] directml_sha256",
+    "[models] detector_threads",
+    "[models] ocr",
+    "[models] ocr_language",
+    "[models] accessibility",
+    "[models] detector_path",
+    "[models] detector_sha256",
+    "[models] ocr_path",
+    "[models] ocr_sha256",
+    "[cache] max_entries",
+    "[cache] persist",
+    "[cache] prototypes",
+    "[cache] prototypes_sha256",
+    "[cache] context",
+    "[cache] gradient_tau",
+    "[cache] max_distance",
+    "[cache] min_margin",
+];
+
+/// The key a problem starts with (the longest of [`KNOWN_KEYS`] followed by something that is
+/// not part of a key), else its section, else a generic word: never any other text of the
+/// problem.
+fn problem_key(problem: &str) -> &'static str {
+    KNOWN_KEYS
+        .iter()
+        .filter(|key| {
+            problem.strip_prefix(**key).is_some_and(|rest| {
+                !rest
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            })
+        })
+        .max_by_key(|key| key.len())
+        .or_else(|| {
+            SECTIONS.iter().find(|section| {
+                problem
+                    .strip_prefix(**section)
+                    .is_some_and(|rest| rest.starts_with(' '))
+            })
+        })
+        .copied()
+        .unwrap_or("a value")
+}
+
+/// The configuration's sections, for a problem that names a section and none of its keys.
+const SECTIONS: &[&str] = &["[engine]", "[mcp]", "[safety]", "[models]", "[cache]"];
+
+/// The 1-based line and column (in characters) of byte `offset` of `text`.
+fn line_and_column(text: &str, offset: usize) -> (usize, usize) {
+    let offset = (0..=offset.min(text.len()))
+        .rev()
+        .find(|&i| text.is_char_boundary(i))
+        .unwrap_or(0);
+    let before = &text[..offset];
+    let line = before.matches('\n').count() + 1;
+    let start = before.rfind('\n').map_or(0, |i| i + 1);
+    (line, before[start..].chars().count() + 1)
+}
+
 /// The whole file. `Config::default()` is the dossier template.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -530,6 +744,51 @@ impl Config {
         };
         let text = read().with_context(|| format!("cannot read {}", path.display()))?;
         let mut config = Self::parse(&text).with_context(|| format!("in {}", path.display()))?;
+        config.base_dir = path.parent().map(Path::to_path_buf);
+        Ok(config)
+    }
+
+    /// [`Config::load`] for `attach`, whose diagnostics must carry nothing of the file's text:
+    /// the path is opened as the operator's regular file
+    /// ([`ommatix::operator_file::open_regular`]), read up to the same bound, parsed and
+    /// validated, and a failure is a [`ConfigProblem`], a closed cause with at most line and
+    /// column numbers or the names of the keys that fail their rule. `serve` keeps
+    /// [`Config::load`]'s diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigProblem`].
+    #[cfg_attr(
+        not(feature = "broker-pipe"),
+        allow(dead_code, reason = "used by attach, which needs the feature")
+    )]
+    pub fn load_closed(path: &Path) -> std::result::Result<Self, ConfigProblem> {
+        use std::io::Read as _;
+
+        use ommatix::operator_file::{OpenError, open_regular};
+
+        let file = open_regular(path).map_err(|e| match e {
+            OpenError::NotFound => ConfigProblem::Unreadable(std::io::ErrorKind::NotFound),
+            OpenError::Unopenable(kind) => ConfigProblem::Unreadable(kind),
+            OpenError::NotARegularFile => ConfigProblem::NotARegularFile,
+        })?;
+        let mut bytes = Vec::new();
+        file.take(MAX_CONFIG_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| ConfigProblem::Unreadable(e.kind()))?;
+        if bytes.len() as u64 > MAX_CONFIG_BYTES {
+            return Err(ConfigProblem::TooLarge);
+        }
+        let text = String::from_utf8(bytes).map_err(|_| ConfigProblem::NotUtf8)?;
+        let mut config: Self = toml::from_str(&text).map_err(|e| ConfigProblem::NotValid {
+            at: e.span().map(|span| line_and_column(&text, span.start)),
+        })?;
+        let problems = config.problems();
+        if !problems.is_empty() {
+            let mut keys: Vec<&'static str> = problems.iter().map(|p| problem_key(p)).collect();
+            keys.dedup();
+            return Err(ConfigProblem::Invalid(keys));
+        }
         config.base_dir = path.parent().map(Path::to_path_buf);
         Ok(config)
     }
@@ -603,8 +862,8 @@ impl Config {
              legacy_enabled = true",
         );
         check(
-            m.transport == "stdio",
-            "[mcp] transport: only \"stdio\" is implemented",
+            m.transport == "stdio" || m.transport == "pipe",
+            "[mcp] transport: \"stdio\" (the default) or \"pipe\" (ADR-0043, proposed)",
         );
         check(
             (MIN_MAX_MESSAGE_BYTES..=DEFAULT_MAX_MESSAGE_BYTES).contains(&m.max_message_bytes),
@@ -643,10 +902,102 @@ impl Config {
              sends no screenshots",
         );
 
+        out.extend(self.transport_problems());
         out.extend(window_class_problems(s));
         out.extend(self.models.problems());
         out.extend(self.cache.problems());
         out
+    }
+
+    /// Whether `serve` runs the broker over the pipe (`[mcp] transport = "pipe"`).
+    pub fn pipe(&self) -> bool {
+        self.mcp.transport == "pipe"
+    }
+
+    /// What the pipe transport cannot be combined with, or needs, each with its reason. Checked
+    /// when the configuration is read, so `serve` refuses before it builds or opens anything.
+    fn transport_problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let (m, s) = (&self.mcp, &self.safety);
+        if !self.pipe() {
+            if !m.pipe_name.is_empty() {
+                out.push(
+                    "[mcp] pipe_name is used only with transport = \"pipe\"; leave it empty"
+                        .to_owned(),
+                );
+            }
+            if !s.grants_file.is_empty() {
+                out.push(
+                    "[safety] grants_file is read only with [mcp] transport = \"pipe\": the \
+                     stdio server has one agent, which no grant narrows; leave it empty"
+                        .to_owned(),
+                );
+            }
+            return out;
+        }
+        if !cfg!(all(windows, feature = "broker-pipe")) {
+            out.push(
+                "[mcp] transport = \"pipe\" needs a Windows build with `--features \
+                 broker-pipe` (ADR-0043, proposed); this build serves stdio only"
+                    .to_owned(),
+            );
+        }
+        if m.legacy_enabled {
+            out.push(
+                "[mcp] legacy_enabled = true cannot be combined with transport = \"pipe\": the \
+                 broker serves the 2026-07-28 profile only"
+                    .to_owned(),
+            );
+        }
+        if !m.pipe_name.is_empty() && !valid_pipe_name(&m.pipe_name) {
+            out.push(
+                "[mcp] pipe_name must be 1 to 128 ASCII letters, digits, '-', '_' or '.', or \
+                 empty to derive it from the user's name"
+                    .to_owned(),
+            );
+        }
+        if !s.grants_file.is_empty() && s.grants_file.trim().is_empty() {
+            out.push("[safety] grants_file must be a path, or empty for none".to_owned());
+        }
+        out
+    }
+
+    /// The pipe's name with `transport = "pipe"`: `[mcp] pipe_name`, or the one derived from the
+    /// user's name ([`derive_pipe_name`]). `serve` and `attach` call this on the same
+    /// configuration, so they meet on the same name.
+    ///
+    /// # Errors
+    ///
+    /// When `pipe_name` is empty and no usable user name is set.
+    #[cfg_attr(
+        not(feature = "broker-pipe"),
+        allow(
+            dead_code,
+            reason = "used by serve and attach over the pipe, which need the feature"
+        )
+    )]
+    pub fn pipe_name(&self) -> Result<String> {
+        if !self.mcp.pipe_name.is_empty() {
+            return Ok(self.mcp.pipe_name.clone());
+        }
+        derive_pipe_name(std::env::var_os("USERNAME").as_deref()).context(
+            "the pipe's name cannot be derived: USERNAME is not set or has no ASCII letter, \
+             digit, '-', '_' or '.'; set [mcp] pipe_name",
+        )
+    }
+
+    /// The operator's grants file, resolved like every path in this file; `None` when
+    /// `[safety] grants_file` is empty.
+    #[cfg_attr(
+        not(feature = "broker-pipe"),
+        allow(
+            dead_code,
+            reason = "used by serve and attach over the pipe, which need the feature"
+        )
+    )]
+    pub fn grants_file(&self) -> Option<PathBuf> {
+        let path = &self.safety.grants_file;
+        (!path.is_empty()).then(|| self.resolve_path(path))
     }
 
     /// Notes on settings that change the run and are not production behaviour, reported on
@@ -1413,6 +1764,135 @@ allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
         let message = format!("{:#}", Config::load(Some(path)).unwrap_err());
         assert!(message.contains("cannot read"), "{message}");
     }
+    /// UT-77: `[mcp] transport = "pipe"` is refused, before anything is built or opened,
+    /// where this build cannot honour it and with whatever it cannot be combined with; the keys
+    /// it brings are refused without it.
+    #[test]
+    fn ut_77_the_pipe_switch_is_refused_where_it_cannot_be_honoured() {
+        let pipe = "[mcp]\ntransport = \"pipe\"\n";
+        let built = cfg!(all(windows, feature = "broker-pipe"));
+        assert_eq!(Config::parse(pipe).is_ok(), built);
+        if !built {
+            let message = error(pipe);
+            assert!(
+                message.contains("needs a Windows build with `--features broker-pipe`"),
+                "{message}"
+            );
+        }
+        let long = format!(
+            "[mcp]\ntransport = \"pipe\"\npipe_name = \"{}\"\n",
+            "a".repeat(129)
+        );
+        for (text, expected) in [
+            (
+                "[mcp]\ntransport = \"pipe\"\nlegacy_enabled = true\n",
+                "legacy_enabled = true cannot be combined",
+            ),
+            (
+                "[mcp]\ntransport = \"pipe\"\npipe_name = \"a b\"\n",
+                "pipe_name must be",
+            ),
+            (
+                "[mcp]\ntransport = \"pipe\"\npipe_name = '..\\x'\n",
+                "pipe_name must be",
+            ),
+            (
+                "[mcp]\ntransport = \"pipe\"\npipe_name = \"a/b\"\n",
+                "pipe_name must be",
+            ),
+            (
+                "[mcp]\ntransport = \"pipe\"\npipe_name = \"é\"\n",
+                "pipe_name must be",
+            ),
+            (long.as_str(), "pipe_name must be"),
+            (
+                "[mcp]\ntransport = \"pipe\"\n[safety]\ngrants_file = \" \"\n",
+                "grants_file must be a path",
+            ),
+            ("[mcp]\npipe_name = \"x\"\n", "pipe_name is used only with"),
+            (
+                "[safety]\ngrants_file = \"g.toml\"\n",
+                "grants_file is read only with",
+            ),
+            ("[mcp]\ntransport = \"Pipe\"\n", "[mcp] transport"),
+            ("[mcp]\ntransport = \"tcp\"\n", "[mcp] transport"),
+        ] {
+            let message = error(text);
+            assert!(message.contains(expected), "{text}: {message}");
+        }
+        // The defaults keep the switch off and the new keys empty.
+        let default = Config::default();
+        assert!(!default.pipe());
+        assert_eq!(default.mcp.pipe_name, "");
+        assert_eq!(default.grants_file(), None);
+        if built {
+            let mut config = Config::parse(
+                "[mcp]\ntransport = \"pipe\"\npipe_name = \"ommatix-test.1_A\"\n\
+                 [safety]\ngrants_file = \"grants.toml\"\n",
+            )
+            .unwrap();
+            assert!(config.pipe());
+            assert_eq!(config.pipe_name().unwrap(), "ommatix-test.1_A");
+            config.base_dir = Some(PathBuf::from("operator"));
+            assert_eq!(
+                config.grants_file(),
+                Some(Path::new("operator").join("grants.toml"))
+            );
+        }
+    }
+
+    /// UT-78: the default pipe name is derived from the user's name, the same way for `serve`
+    /// and `attach` (D38); a user name with nothing usable is refused.
+    #[test]
+    fn ut_78_the_pipe_name_derives_from_the_user_name_or_is_refused() {
+        use std::ffi::OsStr;
+
+        let derive = |user: &str| derive_pipe_name(Some(OsStr::new(user)));
+        assert_eq!(derive("Juan").as_deref(), Some("ommatix-juan"));
+        assert_eq!(derive("José María").as_deref(), Some("ommatix-josmara"));
+        assert_eq!(derive(r"CORP\ana.b").as_deref(), Some("ommatix-corpana.b"));
+        assert_eq!(derive("a:b/c d").as_deref(), Some("ommatix-abcd"));
+        assert_eq!(derive("user_1-x").as_deref(), Some("ommatix-user_1-x"));
+        for nothing in ["", "ü", "東京", " \t", r"\/:"] {
+            assert_eq!(derive(nothing), None, "{nothing:?}");
+        }
+        assert_eq!(derive_pipe_name(None), None);
+        let long = derive(&"Ab".repeat(200)).unwrap();
+        assert_eq!(long.len(), MAX_PIPE_NAME);
+        assert!(long.starts_with(PIPE_NAME_PREFIX));
+        for user in ["Juan", "José María", r"CORP\ana.b", &"x".repeat(500)] {
+            let name = derive(user).unwrap();
+            assert!(valid_pipe_name(&name), "{name}");
+            #[cfg(feature = "broker-pipe")]
+            assert!(ommatix_adapter_mcp::pipe::PipeName::new(&name).is_ok());
+        }
+        // The app's rule is the pipe module's rule.
+        #[cfg(feature = "broker-pipe")]
+        for name in [
+            "a",
+            "a.b-c_D9",
+            "",
+            "a b",
+            "a/b",
+            r"a\b",
+            "a:b",
+            "é",
+            "a\0",
+            &"a".repeat(128),
+            &"a".repeat(129),
+        ] {
+            assert_eq!(
+                valid_pipe_name(name),
+                ommatix_adapter_mcp::pipe::PipeName::new(name).is_ok(),
+                "{name:?}"
+            );
+        }
+        // A configured name wins over the user's.
+        let mut config = Config::default();
+        config.mcp.pipe_name = "ommatix-fixed".to_owned();
+        assert_eq!(config.pipe_name().unwrap(), "ommatix-fixed");
+    }
+
     #[test]
     fn ut_64_the_default_freshness_scope_is_the_whole_frame_and_unknown_values_are_refused() {
         let default = Config::parse("").unwrap();
@@ -1442,5 +1922,157 @@ allowed_applications = [\"explorer.exe\", \"applicationframehost.exe\"]
         ] {
             assert!(Config::parse(&format!("[engine]\n{invalid}")).is_err());
         }
+    }
+
+    /// UT-77: `attach` reads its configuration without quoting it. A file whose bad line
+    /// carries a marker is reported by its cause, a position or the failing key, and the
+    /// marker appears nowhere; the same file's `serve` diagnostics are `Config::load`'s. Only
+    /// where `attach` exists (Windows, `broker-pipe`): its files say `transport = "pipe"`, which
+    /// any other build refuses as one more invalid value.
+    #[cfg(all(windows, feature = "broker-pipe"))]
+    #[test]
+    fn ut_77_attach_reads_its_configuration_without_quoting_any_of_it() {
+        const MARKER: &str = "Qz7MarkerOfTheFile";
+        let dir =
+            std::env::temp_dir().join(format!("ommatix-config-closed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, text: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, text).unwrap();
+            path
+        };
+        let pipe = "[mcp]\ntransport = \"pipe\"\npipe_name = \"ommatix-unit\"\n";
+
+        // A syntax error on line 4, at the marker.
+        let syntax = write("syntax.toml", &format!("{pipe}{MARKER} = = 1\n"));
+        let problem = Config::load_closed(&syntax).unwrap_err();
+        assert!(
+            matches!(problem, ConfigProblem::NotValid { at: Some((4, _)) }),
+            "{problem:?}"
+        );
+        // An unknown key named by the marker, and a value of the wrong type.
+        let unknown = write("unknown.toml", &format!("{pipe}[engine]\n{MARKER} = 1\n"));
+        assert!(matches!(
+            Config::load_closed(&unknown).unwrap_err(),
+            ConfigProblem::NotValid { at: Some((5, 1)) }
+        ));
+        let typed = write(
+            "typed.toml",
+            &format!("{pipe}[engine]\ntile_size = \"{MARKER}\"\n"),
+        );
+        assert!(matches!(
+            Config::load_closed(&typed).unwrap_err(),
+            ConfigProblem::NotValid { at: Some((5, _)) }
+        ));
+        // A rule that `serve` states with the value: an application quoted in its message.
+        let rule = write(
+            "rule.toml",
+            &format!(
+                "{pipe}[engine]\ntile_size = 4\n[safety.allowed_window_classes]\n\"{MARKER}\" = []\n"
+            ),
+        );
+        let serve = format!("{:#}", Config::load(Some(&rule)).unwrap_err());
+        assert!(
+            serve.contains(MARKER),
+            "serve's rule quotes the value: {serve}"
+        );
+        let problem = Config::load_closed(&rule).unwrap_err();
+        assert_eq!(
+            problem,
+            ConfigProblem::Invalid(vec![
+                "[engine] tile_size",
+                "[safety] allowed_window_classes"
+            ])
+        );
+        // Not UTF-8, and over the bound.
+        let mut bytes = pipe.as_bytes().to_vec();
+        bytes.extend_from_slice(b"\xff\xfe");
+        let binary = dir.join("binary.toml");
+        std::fs::write(&binary, &bytes).unwrap();
+        assert_eq!(
+            Config::load_closed(&binary).unwrap_err(),
+            ConfigProblem::NotUtf8
+        );
+        let large = write("large.toml", &format!("{pipe}# {}\n", MARKER.repeat(5000)));
+        assert_eq!(
+            Config::load_closed(&large).unwrap_err(),
+            ConfigProblem::TooLarge
+        );
+        assert!(matches!(
+            Config::load_closed(&dir.join("absent.toml")).unwrap_err(),
+            ConfigProblem::Unreadable(std::io::ErrorKind::NotFound)
+        ));
+        #[cfg(windows)]
+        assert_eq!(
+            Config::load_closed(Path::new("NUL")).unwrap_err(),
+            ConfigProblem::NotARegularFile
+        );
+
+        for path in [&syntax, &unknown, &typed, &rule, &binary, &large] {
+            let shown = Config::load_closed(path).unwrap_err().to_string();
+            assert!(
+                !shown.contains(MARKER) && !shown.contains('\n') && !shown.contains("  "),
+                "{shown:?}"
+            );
+        }
+        #[cfg(windows)]
+        {
+            let shown = ConfigProblem::NotARegularFile.to_string();
+            assert!(!shown.contains("  "), "{shown:?}");
+        }
+        // A valid file loads as `Config::load` loads it.
+        let valid = write("valid.toml", pipe);
+        assert_eq!(
+            Config::load_closed(&valid).unwrap(),
+            Config::load(Some(&valid)).unwrap()
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Every problem `Config::problems` can state starts with a key of [`KNOWN_KEYS`], so that
+    /// `attach` names it rather than the generic word.
+    #[test]
+    fn ut_77_every_problem_starts_with_a_known_key() {
+        let mut config = Config::default();
+        config.engine.platform = "x".into();
+        config.engine.snapshot_policy = "x".into();
+        config.engine.tile_size = 1;
+        config.engine.halo_px = 5000;
+        config.engine.max_regions = 0;
+        config.engine.full_refresh_area_ratio = 0.0;
+        config.engine.adaptive_min_regions = 5000;
+        config.engine.max_snapshot_age_ms = 0;
+        config.engine.verify_timeout_ms = 1_000_000;
+        config.engine.verify_poll_ms = 0;
+        config.mcp.profile = "x".into();
+        config.mcp.transport = "x".into();
+        config.mcp.max_message_bytes = 1;
+        config.mcp.pipe_name = "x".into();
+        config.safety.allowed_applications = vec![String::new()];
+        config.safety.stop_file = " ".into();
+        config.safety.window_pin_file = " ".into();
+        config.safety.purge_file = " ".into();
+        config.safety.grants_file = "x".into();
+        config.safety.allow_destructive = true;
+        config
+            .safety
+            .allowed_window_classes
+            .insert("X".into(), vec!["Progman".into()]);
+        config.models.detector_path = "x".into();
+        config.models.ocr_path = "x".into();
+        config.models.detector_threads = 10_000;
+        config.models.ocr_language = "?".into();
+        config.cache.max_entries = 0;
+        config.cache.persist = true;
+        config.cache.prototypes_sha256 = "x".into();
+        config.cache.gradient_tau = Some(0);
+        let problems = config.problems();
+        assert!(problems.len() > 20, "{problems:#?}");
+        for problem in &problems {
+            assert_ne!(problem_key(problem), "a value", "{problem}");
+        }
+        assert_eq!(problem_key("[engine] tile_sizes must be"), "[engine]");
+        assert_eq!(problem_key("anything else"), "a value");
     }
 }

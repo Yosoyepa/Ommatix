@@ -72,6 +72,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                  # unit, integration and Gherkin acceptance tests
 cargo clippy -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia --all-targets -- -D warnings   # on Windows
 cargo test -p ommatix --features dxgi,sendinput,onnx,winrt-ocr,uia                              # on Windows
+cargo clippy -p ommatix --features broker-pipe --all-targets -- -D warnings                     # on Windows: the pipe switch and attach (ADR-0043, proposed)
+cargo test -p ommatix --features broker-pipe                                                    # on Windows: serve on a named pipe, attach processes
+cargo test -p ommatix-adapter-mcp --features broker-pipe                                        # on Windows: the pipe itself
 ```
 
 No test sends real input: the `SendInput` actuator is tested through its pure helpers only.

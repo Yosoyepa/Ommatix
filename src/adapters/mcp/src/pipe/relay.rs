@@ -314,7 +314,8 @@ mod tests {
     }
 
     #[test]
-    fn a_handshake_with_a_line_break_or_over_the_bound_is_refused_before_anything_is_written() {
+    fn it_31_a_handshake_with_a_line_break_or_over_the_bound_is_refused_before_anything_is_written()
+    {
         for (line, refusal) in [
             (b"abc\n".to_vec(), RelayError::LineBreak),
             (b"\nabc".to_vec(), RelayError::LineBreak),
@@ -341,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn the_handshake_line_goes_first_and_alone_and_an_empty_one_is_a_bare_line_end() {
+    fn it_31_the_handshake_line_goes_first_and_alone_and_an_empty_one_is_a_bare_line_end() {
         for line in [&b""[..], &[b'Q'; TICKET_MAX_LEN][..]] {
             let pipe = Arc::new(Duplex::default());
             let input = Arc::new(Lane::default());
@@ -361,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn both_directions_flow_at_once_and_either_side_ending_ends_the_relay() {
+    fn it_31_both_directions_flow_at_once_and_either_side_ending_ends_the_relay() {
         // The engine's side answers every line with a long reply while the input is still
         // being written: a relay that copied one direction at a time would stall.
         let pipe = Arc::new(Duplex::default());
@@ -412,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn a_thread_that_cannot_start_leaves_the_pipe_unwritten_and_the_input_unread() {
+    fn it_31_a_thread_that_cannot_start_leaves_the_pipe_unwritten_and_the_input_unread() {
         for refused in [1_u32, 2] {
             let pipe = Arc::new(Duplex::default());
             let input = Arc::new(Lane::default());
@@ -452,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn the_end_of_the_input_and_a_failed_output_are_reported_as_such() {
+    fn it_31_the_end_of_the_input_and_a_failed_output_are_reported_as_such() {
         let pipe = Arc::new(Duplex::default());
         let input = Arc::new(Lane::default());
         input.close();

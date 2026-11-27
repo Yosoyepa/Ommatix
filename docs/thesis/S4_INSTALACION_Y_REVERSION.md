@@ -43,6 +43,7 @@ Siempre con `--locked`: `Cargo.lock` es parte de lo fijado y un cambio en él es
 | El detector en la GPU (DirectML) | `cargo build --release --locked -p ommatix --features dxgi,directml,winrt-ocr` | idem |
 | Con evidencia de accesibilidad (UI Automation, [ADR-0017](../adr/0017-ui-automation-evidence-fused-with-vision.md)) | añadir `uia` a cualquiera de las dos anteriores | idem |
 | Con entrada real, **sólo en una sesión supervisada con el consentimiento del responsable** | añadir `sendinput` (implica `dxgi`) | idem; sigue necesitando el §5.2 |
+| Varios agentes por un tubo con nombre ([ADR-0043](../adr/0043-local-named-pipe-transport-for-several-clients.md), propuesta; apagado por defecto) | añadir `broker-pipe`, p. ej. `cargo build --release --locked -p ommatix --features broker-pipe` | idem, con la orden `attach`; sigue necesitando el §7.1 |
 
 El conjunto de las mediciones de latencia y de las sesiones de [`S4_SESIONES_PENDIENTES.md`](S4_SESIONES_PENDIENTES.md) es `dxgi,directml,winrt-ocr,uia`. Las pruebas de CI de Windows usan `dxgi,sendinput,onnx,winrt-ocr`.
 
@@ -191,9 +192,72 @@ Expone tres herramientas con los esquemas de `docs/thesis/contratos/esquemas/`: 
 
 **Compatibilidad comprobada:** los clientes de `tools/s3/mcp_driver.py` y `tools/s4/` (propios) y los 10 contratos CT-01..10 del adaptador. Ningún cliente MCP de terceros se ha probado (`README.md`). Un cliente que no hable el perfil 2026-07-28 necesita `--legacy`.
 
+### 7.1 Varios agentes por un tubo con nombre (ADR-0043 y ADR-0040, propuestas)
+
+Apagado por defecto y **sin validar** con un segundo usuario local, un motor elevado, un anfitrión MCP real ni el anfitrión MSVC (capítulo 08 §8.6). Un solo agente por stdio sigue siendo el camino por defecto y el documentado arriba. Sólo en Windows.
+
+1. Compilar con la función: `cargo build --release --locked -p ommatix --features broker-pipe`.
+2. En la configuración del operador, encender el interruptor y, si se quiere, nombrar el tubo y el archivo de concesiones (rutas relativas al archivo de configuración):
+
+   ```toml
+   [mcp]
+   transport = "pipe"
+   # vacío: "ommatix-" y el nombre del usuario
+   pipe_name = ""
+   [safety]
+   grants_file = "grants.toml"
+   ```
+
+   No se combina con `legacy_enabled = true` ni con `--legacy`. Sin `grants_file`, ningún agente tiene concesión: observa sin valores y no entrega nada. El nombre por defecto no es propio de cada usuario ni de cada sesión: los nombres de tubo son un solo espacio para toda la máquina, y otro `pipe_name` permite otro motor.
+3. Crear un tique por agente, en un archivo **sin salto de línea** (`Set-Content` y `Out-File` añaden uno; `WriteAllText` no), y su SHA-256:
+
+   ```powershell
+   $bytes = New-Object byte[] 32
+   [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+   $ticket = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+   [System.IO.File]::WriteAllText("$env:LOCALAPPDATA\Ommatix\agente1.ticket", $ticket)
+   $sha = [System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::ASCII.GetBytes($ticket))
+   ([System.BitConverter]::ToString($sha) -replace '-', '').ToLower()
+   ```
+
+   Restrinja el archivo del tique al usuario que lanza el agente: quien pueda leerlo puede presentarlo antes. Un tique sirve una vez por proceso del motor; bórrelo cuando su agente se haya conectado.
+4. Escribir el archivo de concesiones, una tabla por tique (el SHA-256 del paso anterior, 64 hexadecimales). Se lee en cada llamada; si falta o no vale (una clave desconocida, un hash repetido, más de 64 concesiones, más de 64 KiB), ningún agente tiene concesión:
+
+   ```toml
+   [[grant]]
+   ticket_sha256 = "<SHA-256 del tique>"
+   applications = ["notepad.exe"]
+   deliver_input = false
+   read_values = true
+   # opcionales: window_pin = <identificador>, y [grant.window_classes]
+   ```
+
+   Una concesión sólo estrecha la política local de `[safety]`: nunca permite lo que ésta no permite.
+
+   El archivo de concesiones, los archivos de tique y la configuración que lee `attach` tienen que ser archivos regulares en un **disco local fijo**: un directorio, un dispositivo (`NUL`) o un tubo con nombre se rechazan antes de leer nada, pero nada acota el tiempo de abrirlos, de las dos consultas de su manejador (los metadatos y el tipo) ni de leerlos. Si están en un recurso de red o en un volumen que se suspende o se retira, el arranque espera, y como el archivo de concesiones se lee en cada llamada bajo el cerrojo del intermediario, todos los agentes esperan mientras su lectura se bloquea.
+5. Arrancar el motor, el operador, desde una sesión **no elevada**: `ommatix.exe serve --config <configuración>` (con `--source dxgi` para la pantalla). No escribe nada en stdout; en stderr dice el nombre del tubo y cuántas concesiones lee. Un segundo `serve` con el mismo nombre se niega a arrancar y sale con 7: el sistema le negó crear la primera instancia del nombre, y la causa habitual, no segura, es que otro proceso ya tiene ese nombre. Sirve hasta que se le termina (Ctrl+C); si el oyente deja de aceptar, por un error que no es pasajero o porque su hilo de aceptación terminó sin error, `serve` lo dice en stderr, lo para y sale con 3 (parada completa: el hilo de aceptación, todos los hilos de trabajo y el segador unidos), 4 (quedaban hilos de trabajo sin unir, de conexiones o de rechazos, por ejemplo un cliente que ni envía ni se va o una petición que pasó la comprobación de parada y sigue en curso, o sólo faltaba que terminara el segador; el fin del proceso los termina) o 5 (el despertar no llegó al hilo de aceptación, por ejemplo porque otro proceso que puede abrir el nombre tiene instancias suyas; el fin del proceso lo termina). Con 1 se negó a arrancar por cualquier otra causa.
+6. En el anfitrión MCP de cada agente, lanzar `attach` en lugar de `serve`; `attach` nunca arranca un motor:
+
+   ```json
+   {
+     "mcpServers": {
+       "ommatix": {
+         "command": "C:\\ruta\\al\\repositorio\\target\\release\\ommatix.exe",
+         "args": ["attach", "--config", "C:\\Users\\<usuario>\\AppData\\Local\\Ommatix\\ommatix.toml",
+                  "--ticket-file", "C:\\Users\\<usuario>\\AppData\\Local\\Ommatix\\agente1.ticket"]
+       }
+     }
+   }
+   ```
+
+   Códigos de salida de `attach`: 0, su entrada terminó; 1, se negó a arrancar (configuración inválida o sin `transport = "pipe"`, o archivo de tique inválido); 3, ningún motor escucha; 4, el motor lo rechazó o cerró antes de responder (un tique ya usado, sin plaza); 5, el motor terminó la conexión después de responder; 6, falló la retransmisión. En stderr escribe una sola línea: cuál de esos lados terminó o, si se negó a arrancar, la ruta que dio el operador y una causa cerrada (no legible; TOML no válido, sólo con números de línea y columna; las claves que no cumplen su regla); nunca el tique, una línea o un valor de un archivo, ni el tráfico.
+
+   Cuándo sale: El plazo de salida empieza cuando la retransmisión informa de su resultado: tras observar el fin de la entrada del anfitrión, lo que exige que las escrituras de las peticiones anteriores hayan vuelto, `attach` sale sin esperar ningún vaciado, y tras informar la retransmisión de un fin o un error de lectura o de escritura del lado del motor, `attach` concede hasta cinco segundos a la salida pendiente; en ambos casos, siempre que su stderr de diagnóstico se pueda escribir cuando haga falta. Cuando una escritura pendiente hacia la salida estándar no leída del anfitrión ya está bloqueada y la dirección opuesta espera la entrada estándar del anfitrión, el cierre del motor puede pasar inadvertido indefinidamente, salvo que la E/S del anfitrión deje terminar una dirección de la retransmisión, y la salida puede descartar la salida pendiente de la retransmisión, mientras que los bytes ya guardados en el tubo de salida del anfitrión pueden seguir siendo legibles. Para ese caso no existe ninguna cota de tiempo.
+7. **Apagarlo todo:** terminar `serve` (un `attach` conectado sale según el paso 6: cuando su retransmisión informa del fin o de un error de uno de sus lados, con el código que allí se clasifica; que el motor le hubiera respondido no basta para prometer el 5, y si la retransmisión no lo observa, la E/S del anfitrión sólo ayuda cuando deja terminar una dirección de la retransmisión), volver a `transport = "stdio"` y vaciar `pipe_name` y `grants_file` (con `stdio` se rechazan si no están vacíos), borrar los archivos de tique y de concesiones y, si se quiere, volver a compilar sin `broker-pipe`.
+
 ### Qué deja el motor en la máquina
 
-Nada propio: ninguna crate de producción abre un socket, escribe un archivo ni lanza un proceso (prueba `sec_04_no_production_code_opens_a_socket_writes_a_file_or_starts_a_process`). Los únicos archivos son los que el operador colocó (§4), los que crea para la parada y la ventana registrada (§5.2) y los informes que las herramientas de `tools/` escriben donde se les indica con `--out`.
+Nada propio: ninguna crate de producción abre un socket, escribe un archivo ni lanza un proceso (prueba `sec_04_no_production_code_opens_a_socket_writes_a_file_or_starts_a_process`). Con el tubo del §7.1, `serve` crea un tubo con nombre, un objeto del núcleo que no es un archivo y desaparece con el proceso, y `attach` lo abre con la única excepción a esa prueba (capítulo 08 §8.6); ninguno de los dos escribe nada. Los únicos archivos son los que el operador colocó (§4), los que crea para la parada y la ventana registrada (§5.2) y los informes que las herramientas de `tools/` escriben donde se les indica con `--out`.
 
 ## 8. Reversión
 

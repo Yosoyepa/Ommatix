@@ -25,6 +25,29 @@ pub enum Command {
     Demo(DemoArgs),
     /// M1: read-only DXGI frame pairs and window-group counts; no engine or live input.
     FreshnessProbe(FreshnessProbeArgs),
+    /// Relay this process's standard input and output to the engine that `serve` runs with
+    /// `[mcp] transport = "pipe"` (ADR-0043, proposed; Windows, `--features broker-pipe`). Point
+    /// an agent's MCP client at this command. It starts no engine: with none listening it exits
+    /// with code 3. Exit codes: 0 when its input ended, 1 when it refused to start, 3 when no
+    /// engine listens, 4 when the engine refused it or closed before answering, 5 when the
+    /// engine ended the connection after answering, 6 when the relay failed.
+    #[cfg(feature = "broker-pipe")]
+    Attach(AttachArgs),
+}
+
+#[cfg(feature = "broker-pipe")]
+#[derive(Debug, Clone, clap::Args)]
+pub struct AttachArgs {
+    /// The configuration file `serve` reads; the pipe's name comes from it, derived the same
+    /// way. It must say `[mcp] transport = "pipe"`.
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+    /// A file that holds exactly one ticket (32 to 128 characters of A-Z, a-z, 0-9, '-' and
+    /// '_', with nothing else, not even a line break), sent as the first line on the pipe so
+    /// that the engine applies the grant the operator listed for it. Without it, the agent has
+    /// no grant: it observes without values and delivers nothing.
+    #[arg(long, value_name = "PATH")]
+    pub ticket_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, clap::Args)]

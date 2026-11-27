@@ -28,7 +28,7 @@ Build first with `cargo build --locked`. In your client’s MCP configuration, u
 {"mcpServers":{"ommatix":{"command":"ommatix","args":["serve"]}}}
 ```
 
-The example assumes the binary is on `PATH`; otherwise replace `command` with its absolute path. The client launches the process and exchanges JSON-RPC over stdio; diagnostics go to stderr. Compatibility depends on the profile: see [the contract](../thesis/07_CONTRATOS_MCP_Y_ERRORES.md) and [installation](../thesis/S4_INSTALACION_Y_REVERSION.md).
+The example assumes the binary is on `PATH`; otherwise replace `command` with its absolute path. The client launches the process and exchanges JSON-RPC over stdio; diagnostics go to stderr. That is one agent per engine, the default and the documented path. Several agents on one engine are possible only on Windows, in a build with `--features broker-pipe` and with `[mcp] transport = "pipe"` (proposed ADR-0039, ADR-0040 and ADR-0043, not validated with a second user, an elevated process, a real MCP host or MSVC): see [configuration](configuration.md). Compatibility depends on the profile: see [the contract](../thesis/07_CONTRATOS_MCP_Y_ERRORES.md) and [installation](../thesis/S4_INSTALACION_Y_REVERSION.md).
 
 ## Before using a real screen
 

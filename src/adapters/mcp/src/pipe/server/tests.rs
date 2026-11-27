@@ -154,7 +154,7 @@ fn broker(max_clients: usize) -> Broker {
 /// charged; once the join is released and has returned, the place is back and a client is
 /// admitted. The refusal is asserted first, so a place given back before the join fails there.
 #[test]
-fn a_held_join_keeps_the_place_and_a_client_over_the_bound_is_refused() {
+fn it_29_a_held_join_keeps_the_place_and_a_client_over_the_bound_is_refused() {
     let (shared, recording) = recorded();
     let (to_reaper, reaper, reaper_ended) = start_reaper(&shared).unwrap();
     let broker = broker(1);
@@ -248,7 +248,7 @@ impl Drop for DropHeld {
 /// whose drop the test holds. While that release is held the reaper's end is not observable;
 /// once released, the end is reported and no reference to the shared state is left.
 #[test]
-fn the_reaper_signals_its_end_only_after_releasing_what_it_owns() {
+fn it_30_the_reaper_signals_its_end_only_after_releasing_what_it_owns() {
     let gate = Arc::new(Gate::default());
     let (dropped, is_dropped) = mpsc::channel();
     let shared = Arc::new(Shared::with_seam(Box::new(DropHeld {
@@ -340,12 +340,12 @@ fn a_worker_s_panic_payload_is_never_dropped(blocks: bool) {
 }
 
 #[test]
-fn a_worker_s_panic_payload_whose_destructor_panics_is_never_dropped() {
+fn it_29_a_worker_s_panic_payload_whose_destructor_panics_is_never_dropped() {
     a_worker_s_panic_payload_is_never_dropped(false);
 }
 
 #[test]
-fn a_worker_s_panic_payload_whose_destructor_blocks_is_never_dropped() {
+fn it_29_a_worker_s_panic_payload_whose_destructor_blocks_is_never_dropped() {
     a_worker_s_panic_payload_is_never_dropped(true);
 }
 
@@ -360,7 +360,7 @@ fn a_time_too_large_to_represent_is_no_deadline() {
 }
 
 #[test]
-fn a_transient_error_of_accepting_is_retried_and_a_fatal_one_stops_the_listener_visibly() {
+fn it_30_a_transient_error_of_accepting_is_retried_and_a_fatal_one_stops_the_listener_visibly() {
     let shared = Shared::new();
     let mut script = vec![
         Err(io::Error::from_raw_os_error(1450)),
@@ -404,7 +404,7 @@ fn a_transient_error_of_accepting_is_retried_and_a_fatal_one_stops_the_listener_
 /// was made and that the pause then ended on it, with the stop set. Without the stop's wake-up
 /// the loop would wait forever and the test fails at its deadline.
 #[test]
-fn the_stop_s_wake_up_ends_the_pause_between_two_tries_of_accepting() {
+fn it_30_the_stop_s_wake_up_ends_the_pause_between_two_tries_of_accepting() {
     let (shared, recording) = recorded();
     let tries = Arc::new(AtomicUsize::new(0));
     let (ended, outcome) = mpsc::channel();
@@ -453,7 +453,7 @@ fn the_stop_s_wake_up_ends_the_pause_between_two_tries_of_accepting() {
 }
 
 #[test]
-fn a_connection_s_reader_hands_one_line_at_a_time_and_ends_with_the_stop() {
+fn it_30_a_connection_s_reader_hands_one_line_at_a_time_and_ends_with_the_stop() {
     let shared = Shared::new();
     let input: &[u8] = b"one\r\ntwo\nthree";
     let mut reader = UntilStopped::new(input, &shared);
@@ -566,7 +566,7 @@ impl Backend for Counting {
 /// D40 G2: a frame held between its read and the dispatch check while the stop is set is not
 /// handed to the connection, and nothing is written back.
 #[test]
-fn a_frame_held_before_the_dispatch_check_when_the_stop_comes_is_not_dispatched() {
+fn it_30_a_frame_held_before_the_dispatch_check_when_the_stop_comes_is_not_dispatched() {
     let boundaries = Arc::new(AtomicUsize::new(0));
     let mut connection = Connection::with_backend(
         Box::new(Counting {
