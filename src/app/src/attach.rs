@@ -26,12 +26,19 @@
 //! no byte can be pending in that buffer at exit, and the runtime's cleanup in
 //! `std::process::exit` (pinned 1.99.0: `io::cleanup` takes the stdout lock with `try_lock`
 //! and, if it gets it, replaces the line writer, whose drop writes what it held) finds it empty
-//! and writes nothing. `main` does not flush stdout either. The exit's bound: at once after the
-//! host's input ends; at most `DRAIN_WAIT` (5 s) after the engine's side ends; in both cases
-//! on the condition that the one stderr line can be written (stderr is unbuffered, and a host
-//! that never drains a full stderr pipe holds that write). What the host had not read when it
-//! stopped reading, and what the relay still held, is lost: `attach` does not wait for a host
-//! to drain its output.
+//! and writes nothing. `main` does not flush stdout either.
+//!
+//! **The exit's budget, and the case it does not cover** (ADR-0043, decision 8). Start the exit
+//! budget when the relay reports its result: after observed host EOF, which requires the earlier
+//! request writes to have returned, attach exits without a drain wait, and after the relay
+//! reports an engine-side read or write end or error, attach allows up to five seconds for
+//! pending output, in both cases provided its diagnostic stderr is writable when needed. When a
+//! pending write to the host's unread stdout is already blocked and the opposite direction is
+//! waiting for host stdin, engine closure can go unnoticed indefinitely unless host I/O lets a
+//! relay direction finish, and exit can discard pending relay output while bytes already
+//! buffered in the host's output pipe may remain readable. No time bound exists for that case;
+//! what it costs the engine is the limit of a client that does not read (decision 7). The
+//! relay is the pipe module's and is not changed here.
 
 use std::io;
 use std::path::Path;
@@ -494,6 +501,16 @@ mod watch {
     /// How the relay ended, as `attach` reports it. When the engine's side ended, it waits for
     /// the bytes already read from the pipe to reach the output (at most [`DRAIN_WAIT`]), then
     /// tells a refusal (nothing came, or only the full line) from an end after answers.
+    ///
+    /// The budget starts here, when the relay reports its result, not when the engine closed the
+    /// pipe: after observed host EOF, which requires the earlier request writes to have returned,
+    /// attach exits without a drain wait, and after the relay reports an engine-side read or
+    /// write end or error, attach allows up to five seconds for pending output, in both cases
+    /// provided its diagnostic stderr is writable when needed. When a pending write to the host's
+    /// unread stdout is already blocked and the opposite direction is waiting for host stdin,
+    /// engine closure can go unnoticed indefinitely unless host I/O lets a relay direction
+    /// finish, and exit can discard pending relay output while bytes already buffered in the
+    /// host's output pipe may remain readable.
     pub fn classify(end: RelayEnd, watch: &Watch) -> Outcome {
         match end {
             RelayEnd::InputEnded => Outcome::InputEnded,

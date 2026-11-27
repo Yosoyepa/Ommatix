@@ -112,14 +112,65 @@ impl Sandbox {
 /// How long [`Sandbox::run`] waits for the binary to end before the test fails.
 const RUN_PATIENCE: Duration = Duration::from_secs(60);
 
-/// A child process killed (and reaped) when this is dropped, however the test ends: a watchdog
-/// that fails a test never leaves the child running.
+/// How long the harness waits for a killed child to be reaped. Windows ends a process
+/// asynchronously and may first wait for its pending I/O to be cancelled, so the wait has its
+/// own bound instead of `Child::wait`, which waits without one.
+const REAP_PATIENCE: Duration = Duration::from_secs(10);
+
+/// Kills `child`, unless it has already exited, and waits at most [`REAP_PATIENCE`] for it to be
+/// reaped, polling `try_wait`. It never blocks longer: when the deadline passes, or a call fails,
+/// it says why, with the pid, instead of the exit status.
+fn kill_and_reap(child: &mut std::process::Child) -> Result<std::process::ExitStatus, String> {
+    let pid = child.id();
+    if let Ok(Some(status)) = child.try_wait() {
+        return Ok(status);
+    }
+    // A kill that fails is not the end of the story (the child may have exited in between):
+    // it is reported if the child is not reaped in time.
+    let killed = child.kill();
+    let deadline = Instant::now() + REAP_PATIENCE;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                return Err(format!(
+                    "pid {pid} was not reaped within {REAP_PATIENCE:?} of its kill \
+                     (kill: {killed:?})"
+                ));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "waiting for pid {pid} failed: {error} (kill: {killed:?})"
+                ));
+            }
+        }
+    }
+}
+
+/// A child process killed and reaped, within [`REAP_PATIENCE`], when this is dropped, however the
+/// test ends. Dropping it is cleanup only: it never panics (a drop may run while a failed test is
+/// already unwinding) and never blocks past the bound; when the child is not confirmed ended it
+/// writes the pid and the reason on stderr and gives up. A test that needs the end confirmed
+/// stops the child explicitly ([`KillOnDrop::stop`]).
 struct KillOnDrop(std::process::Child);
+
+#[cfg(all(windows, feature = "broker-pipe"))]
+impl KillOnDrop {
+    /// Kills and reaps the child within [`REAP_PATIENCE`], and fails the test if its end is not
+    /// confirmed by then (only the pipe's tests stop a child explicitly).
+    fn stop(&mut self) -> std::process::ExitStatus {
+        kill_and_reap(&mut self.0).unwrap_or_else(|why| panic!("stopping a child: {why}"))
+    }
+}
 
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        if let Err(why) = kill_and_reap(&mut self.0) {
+            eprintln!("test harness: {why}; left behind");
+        }
     }
 }
 
@@ -397,11 +448,12 @@ mod pipe {
         receive
     }
 
-    /// Everything a child wrote on a stream, collected on a thread of its own, which ends at the
-    /// stream's end.
+    /// Everything a child wrote on a stream, collected on a thread of its own. The thread ends
+    /// at the stream's end (a read of 0 bytes), or at a read error, which it returns: the two are
+    /// told apart, and only the first is the whole stream.
     struct Collected {
         bytes: Arc<Mutex<Vec<u8>>>,
-        reader: thread::JoinHandle<()>,
+        reader: thread::JoinHandle<Result<(), String>>,
     }
 
     fn collect(stream: impl Read + Send + 'static) -> Collected {
@@ -410,11 +462,13 @@ mod pipe {
         let reader = thread::spawn(move || {
             let mut stream = stream;
             let mut buffer = [0_u8; 4096];
-            while let Ok(n) = stream.read(&mut buffer) {
-                if n == 0 {
-                    break;
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) => return Ok(()),
+                    Ok(n) => sink.lock().unwrap().extend_from_slice(&buffer[..n]),
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(error) => return Err(error.to_string()),
                 }
-                sink.lock().unwrap().extend_from_slice(&buffer[..n]);
             }
         });
         Collected { bytes, reader }
@@ -427,14 +481,19 @@ mod pipe {
         }
 
         /// Everything, once the stream has ended (the writer's process exited and nothing else
-        /// holds the stream); a test fails instead of waiting longer than [`PATIENCE`].
+        /// holds the stream). The test fails if the reader stopped on a read error instead of the
+        /// stream's end (what it collected would be a prefix), or if it has not ended within
+        /// [`PATIENCE`].
         fn into_text_at_end(self) -> String {
             let deadline = Instant::now() + PATIENCE;
             while !self.reader.is_finished() {
                 assert!(Instant::now() < deadline, "the stream did not end");
                 thread::sleep(Duration::from_millis(10));
             }
-            self.reader.join().unwrap();
+            let ended = self.reader.join().expect("the reader thread");
+            if let Err(error) = ended {
+                panic!("the stream was not read to its end: a read failed ({error})");
+            }
             String::from_utf8_lossy(&self.bytes.lock().unwrap()).into_owned()
         }
     }
@@ -520,21 +579,16 @@ mod pipe {
             }
         }
 
+        /// Ends `serve` and fails the test if its end is not confirmed within the bound. When the
+        /// engine is only dropped, its guard ends it and reports, without failing.
         fn stop(&mut self) {
-            let _ = self.child.0.kill();
-            let _ = self.child.0.wait();
-        }
-    }
-
-    impl Drop for Engine {
-        fn drop(&mut self) {
-            self.stop();
+            self.child.stop();
         }
     }
 
     /// One `attach` process, driven through its standard streams.
     struct Attached {
-        child: Child,
+        child: KillOnDrop,
         stdin: Option<ChildStdin>,
         replies: Receiver<String>,
         stderr: Option<Collected>,
@@ -555,10 +609,10 @@ mod pipe {
             // The ticket never travels as an argument: only the path of its file does.
             assert!(args.iter().all(|a| !a.contains(TICKET)));
             let args: Vec<&str> = args.iter().map(String::as_str).collect();
-            let mut child = sandbox.command(&args).spawn().expect("the binary starts");
-            let stdin = child.stdin.take();
-            let replies = lines_of(child.stdout.take().unwrap());
-            let stderr = Some(collect(child.stderr.take().unwrap()));
+            let mut child = KillOnDrop(sandbox.command(&args).spawn().expect("the binary starts"));
+            let stdin = child.0.stdin.take();
+            let replies = lines_of(child.0.stdout.take().unwrap());
+            let stderr = Some(collect(child.0.stderr.take().unwrap()));
             Self {
                 child,
                 stdin,
@@ -568,6 +622,9 @@ mod pipe {
             }
         }
 
+        /// Writes one line to `attach`'s input. Each line is a few hundred bytes and every call
+        /// waits for its reply before the next line is sent, so the 64 KiB input pipe never holds
+        /// more than one unread line and this write cannot wait on the child.
         fn send(&mut self, line: &str) {
             let stdin = self.stdin.as_mut().expect("the input is open");
             stdin.write_all(line.as_bytes()).unwrap();
@@ -620,7 +677,7 @@ mod pipe {
         /// Waits for the exit without closing the input: the code, the whole of stderr (read to
         /// its end, so that nothing written just before the exit is missed) and any reply.
         fn exit(mut self) -> (i32, String, Vec<String>) {
-            let status = wait(&mut self.child);
+            let status = wait(&mut self.child.0);
             let stderr = self.stderr.take().expect("stderr").into_text_at_end();
             // The reader thread ends with the process's stdout.
             let mut rest = Vec::new();
@@ -628,13 +685,6 @@ mod pipe {
                 rest.push(line);
             }
             (status.code().unwrap_or(-1), stderr, rest)
-        }
-    }
-
-    impl Drop for Attached {
-        fn drop(&mut self) {
-            let _ = self.child.kill();
-            let _ = self.child.wait();
         }
     }
 
@@ -903,6 +953,16 @@ mod pipe {
         }
         assert!(largest > 7000, "tools/list is the large reply: {largest}");
         assert!(bytes > 1_500_000, "{bytes}");
+        // Every reply has arrived, so the writer has written every request; its join is still
+        // bounded, so that a writer blocked on the child fails the test instead of hanging it.
+        let deadline = Instant::now() + PATIENCE;
+        while !writer.is_finished() {
+            assert!(
+                Instant::now() < deadline,
+                "the writer of attach's input did not finish"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
         let stdin = writer.join().unwrap();
         agent.stdin = Some(stdin);
 
@@ -920,11 +980,11 @@ mod pipe {
     /// 1.99.0, `child_pipe.rs`: `PIPE_BUFFER_CAPACITY`, 64 KiB).
     const STD_PIPE_CAPACITY: usize = 64 * 1024;
 
-    /// Whether a stdout pipe that still holds `held` bytes after the exit was full: it had less
-    /// room left than one write of the relay ([`RELAY_CHUNK`]). A write that does not fit waits
-    /// whole, none of it readable, so a full pipe holds between its capacity less one write and
-    /// its capacity.
-    fn full(held: usize) -> bool {
+    /// Whether the bytes the host can still read after the exit, `held`, are within one write of
+    /// the relay ([`RELAY_CHUNK`]) of the stdout pipe's capacity. It describes what was retained
+    /// and is read after the exit; it is not an observation that a write of the relay was
+    /// blocked at any moment (the pipe's sizes are advisory and `RELAY_CHUNK` is an upper bound).
+    fn retained_within_one_relay_write_of_capacity(held: usize) -> bool {
         held > STD_PIPE_CAPACITY - RELAY_CHUNK && held <= STD_PIPE_CAPACITY
     }
 
@@ -932,8 +992,11 @@ mod pipe {
     const BOUND: Duration = Duration::from_secs(10);
 
     /// An `attach` whose host sends `requests` `tools/list` requests (more than 7 kB of reply
-    /// each), never reads its stdout (the read end is kept open, unread) and waits three seconds
-    /// for the replies to fill the pipes on their way.
+    /// each), keeps the read end of its stdout open and unread, and waits three seconds. What the
+    /// tests then assert is what they observe: exit codes and timings, the bytes the unread pipe
+    /// retained and the whole replies among them. That the relay's write to the host was blocked
+    /// is not observed; it rests on the source (the relay's owned handle is the only writer of
+    /// the host's stdout: UT-79's source test) and on those observations.
     struct StalledHost {
         engine: Engine,
         child: KillOnDrop,
@@ -1014,17 +1077,13 @@ mod pipe {
         }
     }
 
-    /// IT-31: `attach`'s exit is bounded on the host's side. A host that sends a few requests,
-    /// stops reading `attach`'s stdout with more output on its way than the pipe holds, and then
-    /// closes `attach`'s input gets the normal exit (code 0) within the bound: nothing waits for
-    /// the host to drain. The few requests fit the engine's side (8 replies fill the 64 KiB pipe,
-    /// the next waits in the relay and the engine; the unanswered requests, a few hundred bytes,
-    /// wait in the engine's input), which is the condition of that bound. The pipe is shown to
-    /// have been full (after the exit it still holds more than its capacity less one write of the
-    /// relay: [`full`]) with output still pending (fewer whole replies than requests), which the
-    /// host never reads.
+    /// IT-31: the host's input ends while its stdout is unread. With 12 requests (fewer than the
+    /// engine's side takes), `attach` exits 0 within [`BOUND`] after the host closes its input,
+    /// with no drain wait; afterwards the unread pipe still holds bytes within one relay write of
+    /// its capacity, and fewer whole replies than requests: output the host had not read is lost
+    /// to it.
     #[test]
-    fn it_31_attach_exits_at_the_end_of_its_input_even_with_its_output_full_and_unread() {
+    fn it_31_attach_exits_0_at_the_end_of_its_input_with_its_output_unread() {
         let sandbox = Sandbox::new("full-output");
         let mut host = StalledHost::start(&sandbox, "full-output", 12);
         drop(host.stdin.take());
@@ -1037,27 +1096,26 @@ mod pipe {
             "ommatix: attach: the agent's host closed the input; detached"
         );
         assert!(
-            full(held),
-            "the output pipe was full when the input ended: it held {held} bytes"
+            retained_within_one_relay_write_of_capacity(held),
+            "the unread pipe retained {held} bytes"
         );
         assert!(
             whole < host.requests,
-            "output was still pending: {whole} whole replies of {}",
+            "{whole} whole replies of {}",
             host.requests
         );
         eprintln!(
-            "exit {took:?} after the end of the input; the pipe held {held} bytes, {whole} whole \
-             replies of {}",
+            "exit {took:?} after the end of the input; the pipe retained {held} bytes, {whole} \
+             whole replies of {}",
             host.requests
         );
     }
 
-    /// IT-31: the other side of that condition. A host that has more requests queued than the
-    /// engine's side takes, and stops reading, holds `attach` after the end of its input: its
-    /// input direction is still writing to an engine that is itself held writing replies, so the
-    /// end of the input is not seen and `attach` does not exit within the bound while the
-    /// engine lives. Once the engine's side ends, `attach` drains for at most 5 s and exits
-    /// with 5; what the host never read is lost.
+    /// IT-31: with 120 requests (more than the engine's side takes) and stdout unread, closing
+    /// the host's input does not end `attach` within [`BOUND`] while the engine lives (the end of
+    /// the input is not observed by the relay). Once the engine is stopped, `attach` exits 5 within
+    /// `BOUND` plus the 5 s drain; the unread pipe retains bytes within one relay write of its
+    /// capacity and fewer whole replies than requests.
     #[test]
     fn it_31_with_more_requests_queued_than_the_engine_takes_attach_waits_for_the_engine() {
         let sandbox = Sandbox::new("held-input");
@@ -1065,7 +1123,7 @@ mod pipe {
         drop(host.stdin.take());
         assert!(
             host.exit_within(BOUND).is_none(),
-            "attach saw the end of its input although its input direction was held"
+            "attach exited although its host's 120 requests did not fit the engine's side"
         );
         host.engine.stop();
         let ended = host.exit_within(BOUND + Duration::from_secs(5));
@@ -1076,11 +1134,42 @@ mod pipe {
             stderr.trim_end(),
             "ommatix: attach: the engine ended the connection"
         );
-        assert!(full(held), "{held}");
+        assert!(retained_within_one_relay_write_of_capacity(held), "{held}");
         assert!(whole < host.requests, "{whole}");
         eprintln!(
-            "exit {took:?} after the engine ended; the pipe held {held} bytes, {whole} whole \
+            "exit {took:?} after the engine ended; the pipe retained {held} bytes, {whole} whole \
              replies of {}",
+            host.requests
+        );
+    }
+
+    /// IT-31: the case the bound does not cover. The host neither reads `attach`'s stdout nor
+    /// closes its input (12 requests sent, all of which fit the engine's side); the engine is then
+    /// stopped. `attach` is still running after [`BOUND`] plus the 5 s drain: the engine's end is
+    /// not noticed. Once the host closes its input, `attach` exits 0 within `BOUND`.
+    #[test]
+    fn it_31_a_host_that_neither_reads_nor_closes_keeps_attach_after_the_engine_ends() {
+        let sandbox = Sandbox::new("unnoticed-end");
+        let mut host = StalledHost::start(&sandbox, "unnoticed-end", 12);
+        host.engine.stop();
+        assert!(
+            host.exit_within(BOUND + Duration::from_secs(5)).is_none(),
+            "attach exited although its host neither read nor closed"
+        );
+        drop(host.stdin.take());
+        let ended = host.exit_within(BOUND);
+        let (stderr, held, whole) = host.after_exit_or_fail(ended.is_none());
+        let (status, took) = ended.unwrap();
+        assert_eq!(status.code(), Some(0), "{stderr}");
+        assert_eq!(
+            stderr.trim_end(),
+            "ommatix: attach: the agent's host closed the input; detached"
+        );
+        assert!(retained_within_one_relay_write_of_capacity(held), "{held}");
+        assert!(whole < host.requests, "{whole}");
+        eprintln!(
+            "exit {took:?} after the host closed its input, the engine long gone; the pipe \
+             retained {held} bytes, {whole} whole replies of {}",
             host.requests
         );
     }
