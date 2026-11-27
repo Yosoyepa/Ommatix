@@ -327,21 +327,24 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    flushed before it is dropped, the server's on every exit, unwinding included, and `attach`'s by
    whichever relay thread drops it last.
 
-   **How `attach` ends, and its bound.** The direction still running when the relay returns holds
+   **How `attach` ends, and its budget.** The direction still running when the relay returns holds
    its stream until its source ends or the process exits; `attach` does not wait for it. It writes
    the engine's bytes to a duplicate of its standard output's handle, past the standard library's
    buffer, and never flushes standard output: neither a flush nor the runtime's cleanup at exit
-   (which writes what that buffer holds) can wait on a host that stopped reading. The bound, and
-   its conditions: after the host's input ends, it exits at once, provided the requests the host
-   had already sent could be written to the engine; after the engine's side ends, it exits within
-   the 5 s it gives the bytes already read from the engine to reach its output; in both cases
-   provided its one stderr line can be written. A host that sends requests, stops reading
-   `attach`'s output and has more requests queued than the engine's side takes holds `attach` until
-   the engine ends the connection (then the 5 s and exit code 5): `attach`'s input direction is
-   still writing to an engine that is itself blocked writing replies nobody reads, and meanwhile
-   that connection keeps its place and a reply blocked on it, the limit of a client that does not
-   read (decision 7, What the listener cannot do). Output the host had not read when it stopped
-   reading, and what the relay still held, is lost: `attach` does not wait for a host to drain it.
+   (which writes what that buffer holds) can wait on a host that stopped reading. Start the exit
+   budget when the relay reports its result: after observed host EOF, which requires the earlier
+   request writes to have returned, attach exits without a drain wait, and after the relay reports
+   an engine-side read or write end or error, attach allows up to five seconds for pending output,
+   in both cases provided its diagnostic stderr is writable when needed. When a pending write to
+   the host's unread stdout is already blocked and the opposite direction is waiting for host
+   stdin, engine closure can go unnoticed indefinitely unless host I/O lets a relay direction
+   finish, and exit can discard pending relay output while bytes already buffered in the host's
+   output pipe may remain readable. No time bound exists for that case: a host that neither reads
+   `attach`'s output nor writes or closes its input leaves the relay blocked on both sides, and
+   `attach` stays until the host reads, writes or closes; bytes not drained are lost. What it costs
+   the engine is the limit of a client that does not read (decision 7, What the listener cannot
+   do). The relay is not changed for this: a relay whose directions can be woken, or an independent
+   signal of termination, is a hardening note for the pipe line.
    Its exit codes: 0, its input ended; 1, it refused to start; 3, no engine listens; 4, refused
    (every instance busy, the engine full, or a connection closed before any answer); 5, the engine
    ended the connection after answering; 6, the relay failed. A refusal to start names the path the
@@ -589,8 +592,8 @@ and, in the executable, the switch `[mcp] transport = "pipe"`, both off by defau
 - the switch, the derivation of the name, the grants file, `attach`, `serve`'s exit when the
   listener stops accepting and the process tests, in the executable, with requirement RF-20, its
   planned tests and scenarios, and the dossier, with the resolutions of its first review
-  (`attach`'s exit bounded on the host's side, with its conditions; its closed startup
-  diagnostics; the operator's files read only from disk files; `serve`'s exit code 7 for a
+  (`attach`'s exit budget stated as its relay gives it, and the case it does not cover; its closed
+  startup diagnostics; the operator's files read only from disk files; `serve`'s exit code 7 for a
   refused first instance; a raw comparison of the stdio session) (`feat/broker-attach`).
 
 Run on the development machine (Windows 11, GNU host, not elevated), through real pipes between
@@ -728,12 +731,19 @@ la señal de fin de cada hilo. Un servidor soltado antes de completo puede ejecu
 final del intermediario en un hilo desligado. Dentro de la dependencia, un cliente que se conecta y
 se va antes de que vuelva la aceptación hace que ésta vuelva a esperar sin la pausa ni la parada
 del oyente. `serve`, si el oyente deja de aceptar, por un error que no es pasajero o porque su hilo
-de aceptación terminó sin error, lo para y sale con 3, 4 o 5. `attach` sale enseguida cuando
-termina su entrada, si las peticiones ya enviadas caben en el lado del motor, o a lo sumo 5 s
-después de que termine el lado del motor, y en ambos casos si puede escribir su línea de stderr; un
-anfitrión que deja de leer con más peticiones en cola de las que toma el motor lo retiene hasta que
-el motor cierra la conexión, y lo que no leyó se pierde. Un proceso que el descriptor admite puede
-añadir instancias del nombre y recibir conexiones de `attach`; el conjunto de tiques gastados se
-puede llenar. La garantía de la excepción a SEC-04 es el resumen fijado; sus reglas de texto son un
-aviso de buena fe. El transporte, `attach` y el interruptor existen en ramas locales, detrás de una
-función de compilación y de un interruptor apagados por defecto.
+de aceptación terminó sin error, lo para y sale con 3, 4 o 5. El plazo de salida empieza cuando la
+retransmisión informa de su resultado: tras observar el fin de la entrada del anfitrión, lo que
+exige que las escrituras de las peticiones anteriores hayan vuelto, `attach` sale sin esperar
+ningún vaciado, y tras informar la retransmisión de un fin o un error de lectura o de escritura del
+lado del motor, `attach` concede hasta cinco segundos a la salida pendiente; en ambos casos,
+siempre que su stderr de diagnóstico se pueda escribir cuando haga falta. Cuando una escritura
+pendiente hacia la salida estándar no leída del anfitrión ya está bloqueada y la dirección opuesta
+espera la entrada estándar del anfitrión, el cierre del motor puede pasar inadvertido
+indefinidamente, salvo que la E/S del anfitrión deje terminar una dirección de la retransmisión, y
+la salida puede descartar la salida pendiente de la retransmisión, mientras que los bytes ya
+guardados en el tubo de salida del anfitrión pueden seguir siendo legibles. Para ese caso no existe
+ninguna cota de tiempo. Un proceso que el descriptor admite puede añadir instancias del nombre y
+recibir conexiones de `attach`; el conjunto de tiques gastados se puede llenar. La garantía de la
+excepción a SEC-04 es el resumen fijado; sus reglas de texto son un aviso de buena fe. El
+transporte, `attach` y el interruptor existen en ramas locales, detrás de una función de
+compilación y de un interruptor apagados por defecto.
