@@ -202,9 +202,13 @@ client; `_meta`'s fields and the schemas do not change and no configuration key 
     drops a cut glyph wider than the band (a higher scale, a larger font) can still return a word
     short of the band, so a cut is made unlikely, not impossible. Pinned as a limit, not solved.
     Likewise, if a recogniser drops a fresh word altogether because it read it joined with a
-    neighbour that reaches the band or crop edge (returning nothing, while the final region stays
-    at least t clear of the crop's edge), neither (a) nor (b) sees the omission and the merge
-    replaces the held word with nothing until the next full refresh.
+    neighbour, or larger than its pixels, so that the reading reaches the band or crop edge
+    (returning nothing, while the final region stays at least t clear of the crop's edge),
+    neither (a) nor (b) sees the omission and the merge replaces the held word with nothing until
+    the next full refresh. A test pins this as the engine's behaviour today
+    (`o3h_a_word_read_past_the_band_and_dropped_is_the_stated_limit_l4`), and UT-89's dropping
+    recogniser therefore judges a drop on the word's pixels, not on its reading: the property
+    test does not cover this case.
 
 ## Required validation
 
@@ -260,6 +264,7 @@ plan de siempre. En toda observación regional, el detector y el OCR leen cada r
 de 16 px de un borde del recorte que no es el del fotograma (o algo leído en esa franja) obliga a
 una lectura más, y si vuelve a pasar hay refresco completo (`closure_budget`,
 cuyo sentido se amplía a la lectura). Quedan declarados los límites L1 a L4 (L4 incluye la palabra nueva que un reconocedor descarta
-por completo al leerla unida a una vecina que llega a la banda: la fusión sustituye la palabra
-retenida por nada hasta el siguiente refresco completo); falta la validación
+por completo al leerla unida a una vecina, o más grande que sus píxeles, de modo que la lectura
+llega a la banda: la fusión sustituye la palabra retenida por nada hasta el siguiente refresco
+completo); falta la validación
 sobre la pantalla real.

@@ -46,9 +46,10 @@
 //! recogniser that drops a cut glyph wider than the band (a larger scale or font) can still
 //! return a word short of the band: the defence makes such a cut unlikely, not impossible.
 //! Likewise, if a recogniser drops a fresh word altogether because it read it joined with a
-//! neighbour that reaches the band or crop edge (returning nothing, while the final region
-//! stays at least t clear of the crop's edge), neither (a) nor (b) sees the omission and the
-//! merge replaces the held word with nothing until the next full refresh.
+//! neighbour, or larger than its pixels, so that the reading reaches the band or crop edge
+//! (returning nothing, while the final region stays at least t clear of the crop's edge),
+//! neither (a) nor (b) sees the omission and the merge replaces the held word with nothing
+//! until the next full refresh.
 
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{Control, Word};
