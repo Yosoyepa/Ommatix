@@ -6,7 +6,8 @@
 //! ([`Config::pipe_name`]). It reads the ticket, if any, from the file `--ticket-file` names
 //! (bounded; exactly one ticket and nothing else, no line break), opens the pipe with the
 //! adapter's identification-level client, sends the handshake line (empty without a ticket)
-//! and relays both streams with the adapter's relay until either side ends. It starts no
+//! and relays both streams with the adapter's relay until one of its directions reports its
+//! end or an error (a physical closure alone may go unobserved: see below). It starts no
 //! process, creates no file, writes nothing on stdout but the relayed bytes, and its one stderr
 //! line (printed by `main.rs`) says which side ended or that no engine listens: never the
 //! ticket, the content of a file or the traffic.
@@ -17,8 +18,9 @@
 //! does not read would hold every later dropped stream of the process. The server avoids it by
 //! dropping every stream with `assume_flushed()`; `attach` does the same: its stream is wrapped
 //! so that whichever thread drops it last marks it flushed first ([`Unlingering`]), and the
-//! process exits as soon as the relay has settled, without waiting for the direction still
-//! blocked on a read.
+//! process exits once the relay has returned and its bounded drain, if one is due, is over,
+//! without waiting for the other direction, which can still write and can remain blocked after
+//! its source closes.
 //!
 //! **Nothing goes through Rust's global stdout buffer.** The relay writes the engine's bytes to
 //! a duplicate of the standard output's handle, an ordinary file without a buffer
@@ -275,7 +277,8 @@ pub fn prepare(args: &AttachArgs) -> Result<(String, Option<Ticket>)> {
     Ok((name, ticket))
 }
 
-/// Runs `attach`: prepares, connects and relays until either side ends.
+/// Runs `attach`: prepares, connects and relays until one relay direction reports its end or
+/// an error, then does the bounded drain if one is due.
 ///
 /// # Errors
 ///
@@ -498,9 +501,11 @@ mod watch {
         }
     }
 
-    /// How the relay ended, as `attach` reports it. When the engine's side ended, it waits for
-    /// the bytes already read from the pipe to reach the output (at most [`DRAIN_WAIT`]), then
-    /// tells a refusal (nothing came, or only the full line) from an end after answers.
+    /// How the relay ended, as `attach` reports it. When a relay direction reported the
+    /// engine's side ended (a read's end or error, or a write's error), it waits for the bytes
+    /// already read from the pipe to reach the output (at most [`DRAIN_WAIT`]), then tells a
+    /// refusal (nothing came, or only the full line) from an end after answers; a physical
+    /// closure that no relay direction reports is not seen here.
     ///
     /// The budget starts here, when the relay reports its result, not when the engine closed the
     /// pipe: after observed host EOF, which requires the earlier request writes to have returned,

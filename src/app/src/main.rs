@@ -42,7 +42,9 @@ fn main() -> Result<()> {
 /// Nothing here touches stdout: the relay wrote the engine's bytes to its own duplicate of the
 /// handle, past Rust's buffer, so the runtime's cleanup in `exit` has nothing to write, and no
 /// flush waits on a host that stopped reading (see the `attach` module). The one stderr line is
-/// the only write after the relay's end; the exit's bound assumes it can be written.
+/// the only write `run_attach` itself makes after the relay returns (the relay's other direction,
+/// detached, can still write to stdout and can remain blocked after its source closes); the
+/// exit's budget assumes that line can be written.
 #[cfg(feature = "broker-pipe")]
 fn run_attach(args: &cli::AttachArgs) -> Result<()> {
     let ended = attach::run(args)?;
