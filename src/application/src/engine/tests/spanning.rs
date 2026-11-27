@@ -6,7 +6,7 @@
 use super::*;
 
 use crate::contract::ElementView;
-use crate::engine::crop_edge::CropEdgeOutcome;
+use crate::engine::crop_edge::{CropEdgeKinds, CropEdgeOutcome};
 use crate::engine::observe::EvidenceSet;
 use crate::engine::plan_check::{Unexplained, WordDetail, WordPlaces};
 use crate::ports::FrameCapturer;
@@ -393,6 +393,20 @@ fn scene_engine_reading(
     band: Option<u32>,
     recognizer: Box<dyn TextRecognizer>,
 ) -> Engine {
+    scene_engine_with(
+        scene,
+        params,
+        Box::new(SceneDetector(scene.clone(), Vec::new(), band)),
+        recognizer,
+    )
+}
+
+fn scene_engine_with(
+    scene: &SharedScene,
+    params: PlanParams,
+    detector: Box<dyn VisionDetector>,
+    recognizer: Box<dyn TextRecognizer>,
+) -> Engine {
     let world = Arc::new(Mutex::new(World::default()));
     let clock = Arc::new(ManualClock::new());
     let operator_stop = lock(&world).operator_stop.clone();
@@ -402,7 +416,7 @@ fn scene_engine_reading(
         config,
         Ports {
             capturer: Box::new(SceneCapturer(scene.clone(), clock.clone(), 0)),
-            detector: Box::new(SceneDetector(scene.clone(), Vec::new(), band)),
+            detector,
             recognizer,
             accessibility: Box::new(SceneAccess(scene.clone())),
             actuator: Box::new(Actuator(world)),
@@ -784,6 +798,40 @@ enum CropReading {
     /// [`CropReading::Tighter`] on every other crop read: a box held from one crop can be
     /// tighter than the next crop's reading of the same pixels.
     TighterAlternately,
+    /// Words of one line less than [`JOIN_GAP_PX`] apart read as one word (their union, the
+    /// texts joined): a crop's context changes how a recogniser splits a line. The joined
+    /// word can reach far past the region, to the crop's edge and past it.
+    Joined,
+}
+
+/// The gap below which [`CropReading::Joined`] joins two words of a line.
+const JOIN_GAP_PX: f64 = 10.0;
+
+/// The words of a scene as [`CropReading::Joined`] reads them from a crop.
+fn joined(words: &[(BBox, String, [u8; 3])]) -> Vec<(BBox, String)> {
+    let mut sorted: Vec<(BBox, String)> = words.iter().map(|(b, t, _)| (*b, t.clone())).collect();
+    sorted.sort_by(|a, b| {
+        a.0.y0()
+            .total_cmp(&b.0.y0())
+            .then(a.0.x0().total_cmp(&b.0.x0()))
+    });
+    let mut out: Vec<(BBox, String)> = Vec::new();
+    for (b, t) in sorted {
+        if let Some((last, text)) = out.last_mut()
+            // Whole-pixel boxes: the same line has the same top and bottom.
+            && (last.y0() - b.y0()).abs() < 0.5
+            && (last.y1() - b.y1()).abs() < 0.5
+            && b.x0() >= last.x1()
+            && b.x0() - last.x1() < JOIN_GAP_PX
+        {
+            *last = last.union(&b);
+            text.push(' ');
+            text.push_str(&t);
+            continue;
+        }
+        out.push((b, t));
+    }
+    out
 }
 
 /// [`SceneRecognizer`] on the whole frame; on a crop, the word read per [`CropReading`] and
@@ -803,9 +851,14 @@ impl TextRecognizer for CropRecognizer {
         let cropped = regions.iter().any(|r| *r != whole);
         let first_crop = cropped && self.2 == 0;
         self.2 += usize::from(cropped);
+        let source: Vec<(BBox, String)> = if cropped && matches!(self.1, CropReading::Joined) {
+            joined(&s.words)
+        } else {
+            s.words.iter().map(|(b, t, _)| (*b, t.clone())).collect()
+        };
         let mut out = Vec::new();
         for r in regions {
-            for (b, text, _) in &s.words {
+            for (b, text) in &source {
                 let (mut b, mut text) = (*b, text.clone());
                 if *r != whole {
                     match self.1 {
@@ -833,7 +886,8 @@ impl TextRecognizer for CropRecognizer {
                         }
                         CropReading::Tighter
                         | CropReading::TighterOnce
-                        | CropReading::TighterAlternately => {}
+                        | CropReading::TighterAlternately
+                        | CropReading::Joined => {}
                     }
                 }
                 if let Some(bbox) = b.clip(r) {
@@ -1022,11 +1076,6 @@ fn ut_89_a_word_held_tighter_than_its_pixels_widens_the_region_instead_of_being_
     );
 }
 
-/// UT-89, the property: on generated scenes, with a recogniser that reads every other crop one
-/// pixel tight (L3 drift, so a held box can be tighter than the next reading of its pixels)
-/// and marks every word it clipped at the edge of the area it is asked about, and a detector
-/// that clips every control there, no committed word is a clipped one and every committed
-/// detection is a box of the scene.
 /// A window with lines of words, 30 to 70 px long, and a few controls, on a small frame.
 fn word_scene(rng: &mut Rng) -> Scene {
     let (w, h) = (240, 180);
@@ -1040,6 +1089,44 @@ fn word_scene(rng: &mut Rng) -> Scene {
             format!("w{i}"),
             [20, 200 - 20 * i as u8, 200],
         ));
+    }
+    let controls = (0..rng.below(3))
+        .map(|i| (rng.rect(w, h, 30), [200, 40 + 30 * i as u8, 40]))
+        .collect();
+    Scene {
+        w,
+        h,
+        surfaces: vec![(bx(8.0, 8.0, 232.0, 172.0), [243, 243, 243])],
+        controls,
+        words,
+        elements: Vec::new(),
+        carets: Vec::new(),
+    }
+}
+
+/// Lines of words 18 to 40 px long, most of them less than [`JOIN_GAP_PX`] apart, and a few
+/// controls, on a small frame: lines that [`CropReading::Joined`] reads as long words.
+fn line_scene(rng: &mut Rng) -> Scene {
+    let (w, h) = (240, 180);
+    let mut words = Vec::new();
+    for line in 0..rng.between(3, 5) {
+        let y = f64::from(14 + 30 * line + rng.below(10));
+        let mut x = f64::from(rng.between(12, 60));
+        while x < 200.0 {
+            let len = f64::from(rng.between(18, 40)).min(228.0 - x);
+            let n = words.len();
+            words.push((
+                bx(x, y, x + len, y + 12.0),
+                format!("l{line}w{n}"),
+                [20, 40 + 5 * (n % 30) as u8, 200],
+            ));
+            let gap = if rng.below(3) == 0 {
+                rng.between(14, 24)
+            } else {
+                rng.between(3, 9)
+            };
+            x += len + f64::from(gap);
+        }
     }
     let controls = (0..rng.below(3))
         .map(|i| (rng.rect(w, h, 30), [200, 40 + 30 * i as u8, 40]))
@@ -1073,47 +1160,91 @@ fn word_change(scene: &mut Scene, rng: &mut Rng, counter: &mut u8) {
     }
 }
 
+/// UT-89, the property: on generated scenes, with a recogniser that marks every word it
+/// clipped at the edge of the area it is asked about and a detector that clips every control
+/// there, no committed word is a clipped one, every committed detection is a box of the scene,
+/// and the defence never commits more regions than the plan had. Two kinds of sequence: (i)
+/// scattered words, the recogniser one pixel tight on every other crop (L3 drift, so a held
+/// box can be tighter than the next reading of its pixels: the cut O3d built); (ii) lines of
+/// close words that a crop reads joined, so a word reaches the crop's edge and past it. Every
+/// fourth sequence has a tighter area budget. With this seed (O3f): 662 regional
+/// observations, the defence's outcome none 478, widened 54, reread 62, full_refresh 68 (63
+/// `closure_budget`, 5 `area_budget`); the bounds below leave room under those counts.
 #[test]
 fn ut_89_no_committed_word_or_detection_is_clipped_at_a_crop_edge() {
     let mut rng = Rng(0x5EED_0089);
-    let mut regional = 0;
-    let mut defended = 0;
-    for sequence in 0..60 {
-        let shared = Arc::new(Mutex::new(word_scene(&mut rng)));
+    // Regional observations by the defence's outcome: none, widened, reread, full_refresh.
+    let mut outcomes = [0usize; 4];
+    // Full refreshes of the defence by reason: closure_budget, area_budget.
+    let mut full_by = [0usize; 2];
+    for sequence in 0..80 {
+        // Even sequences: scattered words and a recogniser one pixel tight on every other
+        // crop (the cut O3d built). Odd ones: lines read joined from a crop, which reach the
+        // crop's edge (the second read) and past the second crop's (the full refresh). Every
+        // fourth sequence has a tighter area budget, which a widening can break.
+        let lines = sequence % 2 == 1;
+        let params = PlanParams {
+            max_area_fraction: if sequence % 4 == 3 { 0.3 } else { 0.6 },
+            ..small_params()
+        };
+        let scene = if lines {
+            line_scene(&mut rng)
+        } else {
+            word_scene(&mut rng)
+        };
+        let reading = if lines {
+            CropReading::Joined
+        } else {
+            CropReading::TighterAlternately
+        };
+        let shared = Arc::new(Mutex::new(scene));
         let mut engine = scene_engine_reading(
             &shared,
-            small_params(),
+            params,
             Some(4),
-            Box::new(CropRecognizer(
-                shared.clone(),
-                CropReading::TighterAlternately,
-                0,
-            )),
+            Box::new(CropRecognizer(shared.clone(), reading, 0)),
         );
+        engine.set_plan_trace(true);
         let mut seq_rng = Rng(rng.next_u64());
         let mut counter = 0u8;
         for step in 0..10 {
             engine.observe_screen(&ObserveRequest::default()).unwrap();
+            let at = format!("sequence {sequence}, step {step}");
             let scene = scene_of(&shared).clone();
             let e = &engine.store.published().unwrap().evidence;
             for w in &e.words {
-                assert!(
-                    !w.text.ends_with(CLIPPED),
-                    "sequence {sequence}, step {step}: clipped word {w:?}"
-                );
+                assert!(!w.text.ends_with(CLIPPED), "{at}: clipped word {w:?}");
             }
             for c in &e.controls {
                 let ok = scene.controls.iter().any(|(b, _)| *b == c.bbox)
                     || scene.surfaces.iter().any(|(b, _)| *b == c.bbox);
-                assert!(
-                    ok,
-                    "sequence {sequence}, step {step}: clipped detection {c:?}"
-                );
+                assert!(ok, "{at}: clipped detection {c:?}");
             }
             if let Some(edge) = engine.last_crop_edge() {
-                regional += 1;
-                if edge.outcome != CropEdgeOutcome::None {
-                    defended += 1;
+                outcomes[match edge.outcome {
+                    CropEdgeOutcome::None => 0,
+                    CropEdgeOutcome::Widened => 1,
+                    CropEdgeOutcome::Reread => 2,
+                    CropEdgeOutcome::FullRefresh => 3,
+                }] += 1;
+                if edge.outcome == CropEdgeOutcome::FullRefresh {
+                    match engine.last_plan_trace().unwrap().decided_by {
+                        Some(FullRefreshReason::ClosureBudget) => full_by[0] += 1,
+                        Some(FullRefreshReason::AreaBudget) => full_by[1] += 1,
+                        other => panic!("{at}: a full refresh of R5 decided by {other:?}"),
+                    }
+                }
+                // The widening never adds a region: the budgets on the number of regions,
+                // which the plan passed, cannot be broken by R5.
+                if edge.outcome != CropEdgeOutcome::FullRefresh {
+                    let trace = engine.last_plan_trace().unwrap();
+                    let planned = trace
+                        .spanning
+                        .as_ref()
+                        .and_then(|s| s.classic.as_ref())
+                        .map_or(trace.regions.len(), |c| c.region_count);
+                    let committed = engine.last_plan().unwrap().region_count;
+                    assert!(committed <= planned, "{at}: {committed} > {planned}");
                 }
             }
             let mut s = scene_of(&shared);
@@ -1128,12 +1259,18 @@ fn ut_89_no_committed_word_or_detection_is_clipped_at_a_crop_edge() {
             }
         }
     }
-    assert!(regional >= 100, "only {regional} regional observations");
-    assert!(
-        defended >= 30,
-        "the defence acted on only {defended} observations"
+    let [none, widened, reread, full] = outcomes;
+    let regional: usize = outcomes.iter().sum();
+    let [closure, area] = full_by;
+    eprintln!(
+        "UT-89: {regional} regional observations: none {none}, widened {widened}, \
+         reread {reread}, full_refresh {full} (closure_budget {closure}, area_budget {area})"
     );
-    eprintln!("UT-89: {regional} regional observations, the defence acted on {defended}");
+    assert!(regional >= 500, "only {regional} regional observations");
+    assert!(widened >= 40, "{outcomes:?}");
+    assert!(reread >= 45, "{outcomes:?}");
+    assert!(full >= 45, "{outcomes:?}");
+    assert!(closure >= 40 && area >= 3, "{full_by:?}");
 }
 
 /// A word held from an earlier crop and read otherwise by the full read, away from every
@@ -1193,4 +1330,322 @@ fn o3d_the_word_detail_holds_no_text_and_no_coordinate() {
     }
     assert!(seen.iter().any(|d| d.never_l3() > 0));
     assert!(seen.iter().any(|d| d.pairs.other_text > 0));
+}
+
+// ---- O3f: each check of the crop-edge defence pinned by a scene of its own ----
+//
+// The frame is 640x320 with the default plan (tiles of 64, halo 32). A caret at (100, 100)
+// dirties the tile (64..128, 64..128), so the planned region is (32..160, 32..160), 16 384 px2,
+// and its crop is (0..192, 0..192): its left and top edges are the frame's (exempt), its right
+// and bottom edges are not. The recogniser's crop readings are scripted: each stands for what
+// a real recogniser can return from a crop (a word read wider than the snapshot holds it, a
+// word it dropped because the crop cut it).
+
+/// Reads the scene's words exactly from the whole frame. From the `i`-th crop read it returns
+/// `script[i]` when given (words with those boxes), and otherwise every word of the scene that
+/// lies wholly inside an area it was asked about: a recogniser that drops what a crop cuts.
+/// Records the areas of every read.
+struct ScriptedRecognizer {
+    scene: SharedScene,
+    script: Vec<Option<Vec<BBox>>>,
+    reads: Arc<Mutex<Vec<Vec<BBox>>>>,
+}
+
+impl TextRecognizer for ScriptedRecognizer {
+    fn name(&self) -> &'static str {
+        "scene-ocr-scripted"
+    }
+
+    fn recognize(&mut self, frame: &BgraFrame, regions: &[BBox]) -> Result<Vec<Word>, PortError> {
+        let s = scene_of(&self.scene);
+        let whole = frame.bounds();
+        let crop_reads = self
+            .reads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|r| r.as_slice() != [whole])
+            .count();
+        if !regions.is_empty() {
+            self.reads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(regions.to_vec());
+        }
+        let word = |bbox: BBox, text: &str| Word {
+            bbox,
+            text: text.into(),
+        };
+        if regions == [whole] {
+            return Ok(s.words.iter().map(|(b, t, _)| word(*b, t)).collect());
+        }
+        if let Some(Some(boxes)) = self.script.get(crop_reads) {
+            return Ok(boxes
+                .iter()
+                .map(|b| word(*b, &format!("read{crop_reads}")))
+                .collect());
+        }
+        Ok(s.words
+            .iter()
+            .filter(|(b, _, _)| regions.iter().any(|r| r.contains(b)))
+            .map(|(b, t, _)| word(*b, t))
+            .collect())
+    }
+}
+
+/// Every control of the scene, as an `Input` (a role that takes an external label, so fusion
+/// relates it to a word on its left), cut at the edge of each area it is asked about. No
+/// surfaces and no band: the classic plan, which R5 defends as well.
+struct InputDetector(SharedScene);
+
+impl VisionDetector for InputDetector {
+    fn name(&self) -> &'static str {
+        "scene-detector-inputs"
+    }
+
+    fn models_loaded(&self) -> bool {
+        false
+    }
+
+    fn detect(&mut self, _: &BgraFrame, regions: &[BBox]) -> Result<Vec<Control>, PortError> {
+        let s = scene_of(&self.0);
+        Ok(s.controls
+            .iter()
+            .flat_map(|(b, _)| regions.iter().filter_map(|r| b.clip(r)))
+            .map(|bbox| Control {
+                bbox,
+                role: Role::Input,
+                affordance: Affordance {
+                    actionability: Actionability::Unknown,
+                    enabled: true,
+                    visible: true,
+                },
+            })
+            .collect())
+    }
+}
+
+fn empty_scene() -> Scene {
+    Scene {
+        w: 640,
+        h: 320,
+        surfaces: Vec::new(),
+        controls: Vec::new(),
+        words: Vec::new(),
+        elements: Vec::new(),
+        carets: Vec::new(),
+    }
+}
+
+/// Observes `scene` once (a full refresh), draws the caret at (100, 100) and observes again
+/// with the scripted crop readings. Returns the engine and the areas of every recogniser read
+/// of the second observation.
+fn caret_observation(
+    scene: Scene,
+    params: PlanParams,
+    script: Vec<Option<Vec<BBox>>>,
+) -> (Engine, Vec<Vec<BBox>>) {
+    let shared = Arc::new(Mutex::new(scene));
+    let reads = Arc::new(Mutex::new(Vec::new()));
+    let mut engine = scene_engine_with(
+        &shared,
+        params,
+        Box::new(InputDetector(shared.clone())),
+        Box::new(ScriptedRecognizer {
+            scene: shared.clone(),
+            script: Vec::new(),
+            reads: reads.clone(),
+        }),
+    );
+    engine.set_plan_trace(true);
+    engine.observe_screen(&ObserveRequest::default()).unwrap();
+    assert_eq!(engine.last_plan().unwrap().work, WorkKind::Full);
+    reads.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    engine.ports.recognizer = Box::new(ScriptedRecognizer {
+        scene: shared.clone(),
+        script,
+        reads: reads.clone(),
+    });
+    scene_of(&shared).carets.push((100, 100));
+    engine.observe_screen(&ObserveRequest::default()).unwrap();
+    let trace = engine.last_plan_trace().unwrap();
+    assert_eq!(trace.regions.len(), 1, "{trace:?}");
+    assert!(
+        (trace.covered_area_px - 16_384.0).abs() < 1e-9,
+        "the planned region is (32..160, 32..160): {trace:?}"
+    );
+    let seen = reads.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    (engine, seen)
+}
+
+fn decided(engine: &Engine) -> (Option<FullRefreshReason>, Option<usize>) {
+    let t = engine.last_plan_trace().unwrap();
+    (t.decided_by, t.decisive_region)
+}
+
+/// O3f, rule R5's second read: the first crop reads a word that crosses the region and ends
+/// 7 px from the crop's right edge, so the region widens and the observation reads again; the
+/// second crop reads one more word 7 px from its own right edge. A second (b) is a full
+/// refresh with `closure_budget`, and the trace's `decided_by` says so. There is no third
+/// regional read.
+#[test]
+fn o3f_a_second_read_that_still_finds_a_word_near_the_crops_edge_is_a_full_refresh() {
+    let (engine, reads) = caret_observation(
+        empty_scene(),
+        PlanParams::default(),
+        vec![
+            Some(vec![bx(150.0, 100.0, 185.0, 112.0)]),
+            // The second crop is the widened region (32..185) grown by 32: (0..217, 0..192).
+            Some(vec![bx(180.0, 100.0, 210.0, 112.0)]),
+            // What a third regional read would return: nothing near any edge.
+            Some(Vec::new()),
+        ],
+    );
+    let edge = *engine.last_crop_edge().unwrap();
+    assert_eq!(edge.outcome, CropEdgeOutcome::FullRefresh, "{edge:?}");
+    assert_eq!(edge.rereads, 1, "{edge:?}");
+    assert_eq!(edge.crossing.words, 1, "{edge:?}");
+    assert_eq!(edge.near_crop_edge.words, 1, "{edge:?}");
+    let frame = bx(0.0, 0.0, 640.0, 320.0);
+    assert_eq!(
+        reads,
+        vec![
+            vec![bx(0.0, 0.0, 192.0, 192.0)],
+            vec![bx(0.0, 0.0, 217.0, 192.0)],
+            vec![frame]
+        ],
+        "two crop reads, then the whole frame"
+    );
+    let plan = engine.last_plan().unwrap();
+    assert_eq!(plan.work, WorkKind::Full);
+    assert_eq!(
+        plan.full_refresh_reason,
+        Some(FullRefreshReason::ClosureBudget)
+    );
+    assert_eq!(
+        decided(&engine),
+        (Some(FullRefreshReason::ClosureBudget), None)
+    );
+}
+
+/// O3f, the budgets on the final regions: the planned region (16 384 px2) is under an area
+/// budget of 0.085 of the frame (17 408 px2); a word the crop reads across its right edge,
+/// clear of the crop's band, widens it to (32..175, 32..160), 18 304 px2, over the budget. The
+/// observation is a full refresh with `area_budget`, decided by R5, where without the check
+/// the widened region would have been committed. The two budgets on the number of regions
+/// (`max_regions`, `adaptive_min_regions`) cannot be broken here: the widening only grows and
+/// merges regions, so the final regions are never more than the planned ones, which passed
+/// both (UT-89's property checks the count on every regional observation).
+#[test]
+fn o3f_widened_regions_over_the_area_budget_make_a_full_refresh() {
+    let (engine, reads) = caret_observation(
+        empty_scene(),
+        PlanParams {
+            max_area_fraction: 0.085,
+            ..PlanParams::default()
+        },
+        vec![Some(vec![bx(150.0, 100.0, 175.0, 112.0)])],
+    );
+    let edge = *engine.last_crop_edge().unwrap();
+    assert_eq!(edge.outcome, CropEdgeOutcome::FullRefresh, "{edge:?}");
+    assert_eq!(edge.rereads, 0, "{edge:?}");
+    assert_eq!(edge.crossing.words, 1, "{edge:?}");
+    assert_eq!(edge.near_crop_edge, CropEdgeKinds::default(), "{edge:?}");
+    assert_eq!(
+        reads.len(),
+        2,
+        "one crop read, then the whole frame: {reads:?}"
+    );
+    let plan = engine.last_plan().unwrap();
+    assert_eq!(plan.work, WorkKind::Full);
+    assert_eq!(
+        plan.full_refresh_reason,
+        Some(FullRefreshReason::AreaBudget)
+    );
+    assert_eq!(
+        decided(&engine),
+        (Some(FullRefreshReason::AreaBudget), None)
+    );
+}
+
+/// O3f, a final region that left its crop: the snapshot holds a word at (170..260, 120..132),
+/// past the planned region. The first crop reads another word across the region's edge and
+/// over the held one's first two pixels, and drops the held word, which the crop cuts. The
+/// widening closes over the held word and leaves the crop; no fresh item came near the
+/// crop's edge, so only that check sees it. The observation reads again with a crop that
+/// holds the held word, which is read whole.
+#[test]
+fn o3f_a_final_region_that_left_its_crop_is_read_again() {
+    let held = bx(170.0, 120.0, 260.0, 132.0);
+    let mut scene = empty_scene();
+    scene.words.push((held, "held".into(), [20, 20, 20]));
+    let (engine, reads) = caret_observation(
+        scene,
+        PlanParams::default(),
+        vec![Some(vec![bx(150.0, 120.0, 172.0, 132.0)])],
+    );
+    let edge = *engine.last_crop_edge().unwrap();
+    assert_eq!(edge.outcome, CropEdgeOutcome::Reread, "{edge:?}");
+    assert_eq!(edge.rereads, 1, "{edge:?}");
+    assert_eq!(edge.crossing.words, 1, "{edge:?}");
+    // The region that left its crop is counted as a detection; no word came near the edge.
+    assert_eq!(
+        edge.near_crop_edge,
+        CropEdgeKinds {
+            words: 0,
+            detections: 1
+        },
+        "{edge:?}"
+    );
+    assert_eq!(
+        reads,
+        vec![
+            vec![bx(0.0, 0.0, 192.0, 192.0)],
+            vec![bx(0.0, 0.0, 292.0, 192.0)]
+        ]
+    );
+    let plan = engine.last_plan().unwrap();
+    assert_eq!(plan.work, WorkKind::Regions);
+    assert!(
+        (plan.region_area_px - 228.0 * 128.0).abs() < 1e-9,
+        "{plan:?}"
+    );
+    let words = &engine.store.published().unwrap().evidence.words;
+    assert_eq!(words.len(), 1, "{words:?}");
+    assert_eq!((words[0].bbox, words[0].text.as_str()), (held, "held"));
+}
+
+/// O3f, a held relation between two cut-prone boxes: the snapshot holds a label word at
+/// (168..200, 100..112) and, on its right, an input at (230..330, 98..114) that fusion relates
+/// to it. Neither meets the planned region. The crop reads a word across the region's edge
+/// and over the label; the widening closes over the label, and the relation pulls in the
+/// input although no region meets it. The second read's crop then holds the input whole.
+#[test]
+fn o3f_a_held_relation_pulls_its_other_member_into_the_widening() {
+    let label = bx(168.0, 100.0, 200.0, 112.0);
+    let input = bx(230.0, 98.0, 330.0, 114.0);
+    let mut scene = empty_scene();
+    scene.words.push((label, "Name:".into(), [20, 20, 20]));
+    scene.controls.push((input, [200, 200, 200]));
+    let (engine, reads) = caret_observation(
+        scene,
+        PlanParams::default(),
+        vec![Some(vec![bx(150.0, 100.0, 170.0, 112.0)])],
+    );
+    let held = engine.store.published().unwrap();
+    assert_eq!(held.relations, vec![(input, label)], "the relation is held");
+    let edge = *engine.last_crop_edge().unwrap();
+    assert_eq!(edge.outcome, CropEdgeOutcome::Reread, "{edge:?}");
+    // The final region is (32..330, 32..160): the label and the input it is related to.
+    assert!(
+        (edge.final_area_px - 298.0 * 128.0).abs() < 1e-9,
+        "{edge:?}"
+    );
+    assert_eq!(reads[1], vec![bx(0.0, 0.0, 362.0, 192.0)]);
+    let e = &held.evidence;
+    assert_eq!(
+        e.controls.iter().map(|c| c.bbox).collect::<Vec<_>>(),
+        [input]
+    );
+    assert_eq!(e.words.iter().map(|w| w.bbox).collect::<Vec<_>>(), [label]);
 }

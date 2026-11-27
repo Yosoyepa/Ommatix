@@ -29,7 +29,7 @@
 | `--legacy` | also serve the legacy MCP profile 2025-11-25 (like `[mcp] legacy_enabled = true`) | off |
 | `--observations N` (`demo` only) | 1–20 | 3 |
 | `--plan-trace` (`demo` only) | also write one line per observation to stderr, a failed observation included: `ommatix-plan-trace` and a JSON object (schema `ommatix.plan-trace/3`) with why the planner chose that work and what the crop-edge defence did to it, as counts, areas and class names only; every field is defined [below](#the---plan-trace-line). No pixel, text or coordinate; never on stdout, and no MCP client can ask for it | off |
-| `--plan-check` (`demo` only) | also compare each regional observation with a full read of the same frame, run after the observation is committed, and write one line per observation to stderr: `ommatix-plan-check` and a JSON object (schema `ommatix.plan-check/2`) with how many boxes each read has and the other lacks, and where and how the differing words differ ([ADR-0045](../adr/0045-support-aware-closure.md)); every field is defined [below](#the---plan-check-line). A diagnostic of the operator's: it runs perception a second time, so a regional observation costs about twice as much, and its time is never reported as the observation's. Counts only; never on stdout, and no MCP client can ask for it | off |
+| `--plan-check` (`demo` only) | also compare each regional observation with a full read of the same frame, run after the observation is committed, and write one line per observation to stderr: `ommatix-plan-check` and a JSON object (schema `ommatix.plan-check/3`) with how many boxes each read has and the other lacks, and where and how the differing words differ ([ADR-0045](../adr/0045-support-aware-closure.md)); every field is defined [below](#the---plan-check-line). A diagnostic of the operator's: it runs perception a second time, so a regional observation costs about twice as much, and its time is never reported as the observation's. Counts only; never on stdout, and no MCP client can ask for it | off |
 
 ### The `--plan-trace` line
 
@@ -119,13 +119,13 @@ again on the whole frame, and the two sets of evidence are compared box by box, 
 containing it) or an accessibility box a region met: where [ADR-0045](../adr/0045-support-aware-closure.md)
 changed what a regional observation keeps. On every regional observation the `controls` and
 `accessibility` counts there must be `0`, and so must `differing_words.never_l3` (no differing word
-crosses a region's edge or lies outside every region). Words that differ inside a region (the limit L3:
-the recogniser read a crop) are reported with their pairing and are not a failure; counts elsewhere
-come from perception that is not local (OCR reads lines in context).
+lies outside every region or where a crop may have cut it). Words that differ inside a region (the
+limit L3: the recogniser read a crop) are reported with their pairing and are not a failure; counts
+elsewhere come from perception that is not local (OCR reads lines in context).
 
 | Field | Unit | Meaning |
 |---|---|---|
-| `schema` | text | `ommatix.plan-check/2` (version 2 adds `differing_words`) |
+| `schema` | text | `ommatix.plan-check/3`. The keys are those of schema 2; schema 3 judges a differing word's place against the final regions and the crops (below), where schema 2 judged it against the planned regions alone. Schema 2 added `differing_words` |
 | `observation_id`, `outcome`, `error_code`, `work` | | as in the `--plan-trace` line |
 | `checked` | boolean | `true` when the comparison ran: the observation was regional and the full read succeeded |
 | `full_truncated` | boolean | the full read's accessibility walk ended on its budget, so its absences prove nothing; `null` when not checked |
@@ -135,10 +135,10 @@ come from perception that is not local (OCR reads lines in context).
 | `….at_spanned_or_whole_on_read` | count | of those boxes, the ones that overlap a spanned surface or an accessibility box a region met |
 | `….elsewhere` | count | the others |
 | `differing_words` | object | the words of `only_full` and `only_regional` described; `null` when not checked. Counts, closed class names and one distance in pixels; no text and no coordinate |
-| `differing_words.only_full`, `differing_words.only_regional` | object | those words by where each box lies against the observation's regions (where the recogniser read a crop) |
-| `….inside_a_region` | count | inside one region. A difference here is the stated limit L3 of ADR-0045: the same pixels recognised from a crop |
-| `….crossing_a_region_edge` | count | meets a region without lying inside any. Never L3: a word a region cut |
-| `….outside_every_region` | count | meets no region. Never L3: a word the regional observation holds from an earlier read and a full read sees otherwise (a change the plan missed, or an earlier crop's difference still held) |
+| `differing_words.only_full`, `differing_words.only_regional` | object | those words by where each box lies against the observation's **final regions** (the regions after the crop-edge defence, [ADR-0045](../adr/0045-support-aware-closure.md) rule R5: those the observation committed, whose sum is `crop_edge.final_area_px`) and the **crops** of the read the observation kept (the planned regions or, after a second read, the widened regions it read, each grown by `crop_edge.margin_px`, clipped to the frame, overlapping crops merged; every final region lies inside one of them, since a region that leaves its crop is read again). Each word is in exactly one of the three classes, tested in this order |
+| `….outside_every_region` | count | meets no final region. Never L3: a word the regional observation holds from an earlier read and a full read sees otherwise (a change the plan missed, or an earlier crop's difference still held) |
+| `….inside_a_region` | count | meets a final region and lies inside a crop at least `crop_edge.band_px` (16) pixels from every edge of that crop that is not an edge of the frame. Such a word may pass a region's edge: the crop read it whole with room to spare. A difference here is the stated limit L3 of ADR-0045: the same pixels recognised from a crop |
+| `….crossing_a_region_edge` | count | meets a final region and is not inside a crop clear of its band: it leaves every crop, or comes within the band of a crop edge that is not the frame's. Never L3: a word a crop may have cut |
 | `differing_words.pairs` | object | each word of `only_full` paired with the not yet paired word of `only_regional` whose box overlaps it most |
 | `….same_text_other_box` | count | pairs with the same text and another box |
 | `….largest_edge_difference_px` | pixels | the largest difference between corresponding edges of a same-text pair; `0` when there is none. A distance, not a coordinate |

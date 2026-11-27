@@ -2,9 +2,10 @@
 //!
 //! The candidate snapshot is built aside from the published one and committed in one
 //! step. Every stage after the capture takes the region plan as input: only the planned
-//! regions reach the detector, the recogniser and the accessibility provider, and
-//! evidence outside them is kept. A failed stage publishes nothing, keeps the planned
-//! tiles pending and blocks actions.
+//! regions reach the accessibility provider, and only the planned regions grown by the
+//! crop-edge defence's margin reach the detector and the recogniser (ADR-0045 rule R5, which
+//! may widen the regions before the commit); evidence outside the final regions is kept. A
+//! failed stage publishes nothing, keeps the planned tiles pending and blocks actions.
 //!
 //! The detector, the recogniser and the accessibility provider read the same frame and do
 //! not depend on each other, so an observation runs them concurrently on scoped threads
@@ -1097,8 +1098,8 @@ impl Engine {
     /// The regions the accessibility provider reads: the plan, the gaps where an earlier read
     /// was cut short, and the regions whose evidence has expired by `now` (ADR-0025), whether
     /// or not pixels changed there. A publication never renews an old read, so this is how a
-    /// new observation does. The detector and the recogniser see the plan only. A full
-    /// refresh reads everything anyway.
+    /// new observation does. The detector and the recogniser read crops of the regions instead
+    /// ([`crop_edge::crops`]). A full refresh reads everything anyway.
     fn accessibility_regions(
         &self,
         work: &Work,

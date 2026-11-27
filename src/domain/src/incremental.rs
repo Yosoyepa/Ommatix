@@ -239,7 +239,9 @@ pub enum FullRefreshReason {
     NoCommittedBase,
     /// Width, height or geometry epoch differ from the committed base.
     GeometryChanged,
-    /// The halo closure did not reach a fixed point within its budget.
+    /// The closure over the evidence did not settle within its bound: at planning, the halo
+    /// closure ran out of rounds; at the read (the crop-edge defence, ADR-0045 rule R5), the
+    /// widening ran out of rounds or a second read still found an item near a crop's edge.
     ClosureBudget,
     /// More regions than the plan allows.
     TooManyRegions,

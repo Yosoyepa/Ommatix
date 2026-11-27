@@ -29,7 +29,7 @@
 | `--legacy` | sirve además el perfil MCP legacy 2025-11-25 (como `[mcp] legacy_enabled = true`) | apagado |
 | `--observations N` (sólo `demo`) | 1–20 | 3 |
 | `--plan-trace` (sólo `demo`) | escribe además una línea por observación en stderr, también de la que falló: `ommatix-plan-trace` y un objeto JSON (esquema `ommatix.plan-trace/3`) con por qué el planificador eligió ese trabajo y qué le hizo la defensa del borde del recorte, sólo con conteos, áreas y nombres de clase; cada campo se define [abajo](#la-línea-de---plan-trace). Ningún píxel, texto ni coordenada; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
-| `--plan-check` (sólo `demo`) | compara además cada observación regional con una lectura completa del mismo fotograma, hecha después de confirmar la observación, y escribe una línea por observación en stderr: `ommatix-plan-check` y un objeto JSON (esquema `ommatix.plan-check/2`) con cuántas cajas tiene cada lectura que la otra no, y dónde y cómo difieren las palabras distintas ([ADR-0045](../adr/0045-support-aware-closure.md)); cada campo se define [abajo](#la-línea-de---plan-check). Es un diagnóstico del operador: ejecuta la percepción dos veces, así que una observación regional cuesta alrededor del doble, y su tiempo nunca se informa como el de la observación. Sólo conteos; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
+| `--plan-check` (sólo `demo`) | compara además cada observación regional con una lectura completa del mismo fotograma, hecha después de confirmar la observación, y escribe una línea por observación en stderr: `ommatix-plan-check` y un objeto JSON (esquema `ommatix.plan-check/3`) con cuántas cajas tiene cada lectura que la otra no, y dónde y cómo difieren las palabras distintas ([ADR-0045](../adr/0045-support-aware-closure.md)); cada campo se define [abajo](#la-línea-de---plan-check). Es un diagnóstico del operador: ejecuta la percepción dos veces, así que una observación regional cuesta alrededor del doble, y su tiempo nunca se informa como el de la observación. Sólo conteos; nunca por stdout, y ningún cliente MCP puede pedirlo | apagado |
 
 ### La línea de `--plan-trace`
 
@@ -121,14 +121,14 @@ multiconjuntos. Una caja «en una caja abarcada o releída entera» solapa una s
 abarcó (una región la tocó sin contenerla) o una caja de accesibilidad que tocó una región: donde
 [ADR-0045](../adr/0045-support-aware-closure.md) cambió lo que conserva una observación regional. En
 cada observación regional, los conteos de `controls` y `accessibility` ahí deben ser `0`, y también
-`differing_words.never_l3` (ninguna palabra distinta cruza el borde de una región ni queda fuera de toda
-región). Las palabras distintas dentro de una región (el límite L3: el reconocedor leyó un recorte) se
+`differing_words.never_l3` (ninguna palabra distinta queda fuera de toda región ni donde un recorte pudo
+cortarla). Las palabras distintas dentro de una región (el límite L3: el reconocedor leyó un recorte) se
 informan con su emparejamiento y no son un fallo; los conteos en otra parte vienen de una percepción que
 no es local (el OCR lee renglones en contexto).
 
 | Campo | Unidad | Significado |
 |---|---|---|
-| `schema` | texto | `ommatix.plan-check/2` (la versión 2 añade `differing_words`) |
+| `schema` | texto | `ommatix.plan-check/3`. Las claves son las del esquema 2; el esquema 3 juzga el lugar de una palabra distinta contra las regiones finales y los recortes (abajo), donde el esquema 2 lo juzgaba sólo contra las regiones planificadas. El esquema 2 añadió `differing_words` |
 | `observation_id`, `outcome`, `error_code`, `work` | | como en la línea de `--plan-trace` |
 | `checked` | booleano | `true` si la comparación se hizo: la observación fue regional y la lectura completa tuvo éxito |
 | `full_truncated` | booleano | el recorrido de accesibilidad de la lectura completa acabó en su presupuesto, así que sus ausencias no prueban nada; `null` si no se comparó |
@@ -138,10 +138,10 @@ no es local (el OCR lee renglones en contexto).
 | `….at_spanned_or_whole_on_read` | conteo | de esas cajas, las que solapan una superficie abarcada o una caja de accesibilidad que tocó una región |
 | `….elsewhere` | conteo | las demás |
 | `differing_words` | objeto | las palabras de `only_full` y `only_regional`, descritas; `null` si no se comparó. Conteos, nombres de clase cerrados y una distancia en píxeles; ningún texto ni coordenada |
-| `differing_words.only_full`, `differing_words.only_regional` | objeto | esas palabras según dónde queda cada caja respecto de las regiones de la observación (donde el reconocedor leyó un recorte) |
-| `….inside_a_region` | conteo | dentro de una región. Una diferencia aquí es el límite declarado L3 de la ADR-0045: los mismos píxeles reconocidos desde un recorte |
-| `….crossing_a_region_edge` | conteo | toca una región sin quedar dentro de ninguna. Nunca es L3: una palabra que una región cortó |
-| `….outside_every_region` | conteo | no toca ninguna región. Nunca es L3: una palabra que la observación regional conserva de una lectura anterior y que una lectura completa ve de otro modo (un cambio que el plan no vio, o la diferencia de un recorte anterior que sigue retenida) |
+| `differing_words.only_full`, `differing_words.only_regional` | objeto | esas palabras según dónde queda cada caja respecto de las **regiones finales** de la observación (las regiones tras la defensa del borde del recorte, [ADR-0045](../adr/0045-support-aware-closure.md) regla R5: las que la observación confirmó, cuya suma es `crop_edge.final_area_px`) y de los **recortes** de la lectura que la observación conservó (las regiones planificadas o, tras una segunda lectura, las regiones ampliadas que leyó, cada una crecida en `crop_edge.margin_px`, recortada al fotograma, con los recortes que se solapan fusionados; toda región final queda dentro de uno de ellos, porque una región que sale de su recorte se lee otra vez). Cada palabra está en exactamente una de las tres clases, probadas en este orden |
+| `….outside_every_region` | conteo | no toca ninguna región final. Nunca es L3: una palabra que la observación regional conserva de una lectura anterior y que una lectura completa ve de otro modo (un cambio que el plan no vio, o la diferencia de un recorte anterior que sigue retenida) |
+| `….inside_a_region` | conteo | toca una región final y queda dentro de un recorte a `crop_edge.band_px` (16) píxeles o más de cada borde de ese recorte que no es un borde del fotograma. Una palabra así puede pasar del borde de una región: el recorte la leyó entera y con holgura. Una diferencia aquí es el límite declarado L3 de la ADR-0045: los mismos píxeles reconocidos desde un recorte |
+| `….crossing_a_region_edge` | conteo | toca una región final y no queda dentro de un recorte lejos de su banda: sale de todo recorte, o llega a la banda de un borde de recorte que no es el del fotograma. Nunca es L3: una palabra que un recorte pudo cortar |
 | `differing_words.pairs` | objeto | cada palabra de `only_full` emparejada con la palabra aún sin pareja de `only_regional` cuya caja más la solapa |
 | `….same_text_other_box` | conteo | parejas con el mismo texto y otra caja |
 | `….largest_edge_difference_px` | píxeles | la mayor diferencia entre bordes correspondientes de una pareja con el mismo texto; `0` si no hay ninguna. Una distancia, no una coordenada |

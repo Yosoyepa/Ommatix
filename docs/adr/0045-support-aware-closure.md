@@ -174,7 +174,7 @@ client; `_meta`'s fields and the schemas do not change and no configuration key 
 - **E, what the closure buys, as it stands.** With I1 (closure), I2 (merge) and I3 (every dirty
   tile inside a region), and perception that is local, the merged evidence of a regional
   observation equals a full read's of the same frame, except the age of kept accessibility
-  evidence. ADR-0045 keeps that, with three stated limits:
+  evidence. ADR-0045 keeps that, with four stated limits:
   - **L1.** A change strictly inside a surface that disconnects it (cutting the only link
     between two parts) makes a full read report two boxes; the planner keeps the old box until
     its band changes or a full refresh. A caret, a status text or a clock cannot do this to a

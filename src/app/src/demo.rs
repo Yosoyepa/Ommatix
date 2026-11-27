@@ -25,8 +25,9 @@
 //! each kind one read has and the other lacks, split by whether they overlap a box ADR-0045
 //! lets a region meet without containing. Schema 2 (O3d) adds `differing_words`: where the
 //! differing words lie against the regions, how they pair up and whether the unexplained ones
-//! touch the dirty tiles. Counts, closed classes and one distance in pixels; no text and no
-//! coordinate.
+//! touch the dirty tiles. Schema 3 (O3e) keeps the keys and judges a word's place against the
+//! final regions and the crops the detector and the recogniser read. Counts, closed classes
+//! and one distance in pixels; no text and no coordinate.
 
 // `demo` is the one command whose output is meant for a human on stdout.
 #![allow(clippy::print_stdout)]
@@ -227,9 +228,6 @@ fn observation_record(n: u8, page: &ObservePage, elements: &[ElementView]) -> Va
     })
 }
 
-/// One observation of `--plan-trace`: the plan's work and reason (as in the observation
-/// record) beside the planner's numbers. Counts and areas in pixels of the frame; nothing
-/// that names a place on the screen. `null` is a check that did not decide.
 /// What the crop-edge defence did (ADR-0045 rule R5): counts and areas.
 fn crop_edge_record(c: &CropEdgeTrace) -> Value {
     let kinds = |k: &CropEdgeKinds| json!({ "words": k.words, "detections": k.detections });
@@ -246,6 +244,9 @@ fn crop_edge_record(c: &CropEdgeTrace) -> Value {
     })
 }
 
+/// One observation of `--plan-trace`: the plan's work and reason (as in the observation
+/// record) beside the planner's numbers. Counts and areas in pixels of the frame; nothing
+/// that names a place on the screen. `null` is a check that did not decide.
 fn plan_trace_record(
     n: u8,
     page: &ObservePage,
@@ -921,9 +922,9 @@ mod tests {
         }
     }
 
-    /// Schema 2 of the check (O3d): the differing words described by place, pairing and the
-    /// dirty tiles, numbers only under closed keys; `never_l3` adds the places that are never
-    /// the limit L3.
+    /// Schema 2 of the check (O3d), kept by schema 3: the differing words described by place,
+    /// pairing and the dirty tiles, numbers only under closed keys; `never_l3` adds the places
+    /// that are never the limit L3.
     #[test]
     fn a_plan_check_line_describes_the_differing_words_with_numbers_only() {
         let mut words = WordDetail::default();
@@ -980,6 +981,65 @@ mod tests {
         assert_eq!(detail["never_l3"], 2);
         assert_eq!(detail["pairs"]["largest_edge_difference_px"], 1.5);
         assert_eq!(detail["unpaired_or_other_text"]["at_dirty_tiles"], 2);
+    }
+
+    /// Schema 3 of the trace (O3e): a `crop_edge` object has exactly the documented keys,
+    /// numbers under each except `outcome`, one of the four closed names.
+    #[test]
+    fn a_crop_edge_record_has_the_documented_keys_and_numbers_only() {
+        let trace = CropEdgeTrace {
+            margin_px: 32.0,
+            band_px: 16.0,
+            planned_area_px: 100.0,
+            crop_area_px: 400.0,
+            final_area_px: 120.0,
+            crossing: CropEdgeKinds {
+                words: 1,
+                detections: 2,
+            },
+            near_crop_edge: CropEdgeKinds {
+                words: 3,
+                detections: 4,
+            },
+            rereads: 1,
+            outcome: ommatix_application::CropEdgeOutcome::Reread,
+        };
+        let mut record = crop_edge_record(&trace);
+        let Value::Object(map) = &record else {
+            panic!("{record}")
+        };
+        let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "band_px",
+                "crop_area_px",
+                "crossing",
+                "final_area_px",
+                "margin_px",
+                "near_crop_edge",
+                "outcome",
+                "planned_area_px",
+                "rereads"
+            ]
+        );
+        for kinds in ["crossing", "near_crop_edge"] {
+            let Value::Object(k) = &record[kinds] else {
+                panic!("{record}")
+            };
+            let mut keys: Vec<&str> = k.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(keys, ["detections", "words"], "{kinds}");
+        }
+        assert_eq!(record["crossing"]["detections"], 2);
+        assert_eq!(record["near_crop_edge"]["words"], 3);
+        assert_eq!(record["outcome"], "reread");
+        let Value::Object(map) = &mut record else {
+            panic!()
+        };
+        map.remove("outcome");
+        numbers_only(&record, "crop_edge");
     }
 
     /// Schema 2 of the trace (ADR-0045): on the simulated desktop the detector declares no
