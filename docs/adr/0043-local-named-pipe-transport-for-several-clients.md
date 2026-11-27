@@ -327,24 +327,24 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    flushed before it is dropped, the server's on every exit, unwinding included, and `attach`'s by
    whichever relay thread drops it last.
 
-   **How `attach` ends, and its budget.** The direction still running when the relay returns holds
-   its stream until its source ends or the process exits; `attach` does not wait for it. It writes
-   the engine's bytes to a duplicate of its standard output's handle, past the standard library's
-   buffer, and never flushes standard output: neither a flush nor the runtime's cleanup at exit
-   (which writes what that buffer holds) can wait on a host that stopped reading. Start the exit
-   budget when the relay reports its result: after observed host EOF, which requires the earlier
-   request writes to have returned, attach exits without a drain wait, and after the relay reports
-   an engine-side read or write end or error, attach allows up to five seconds for pending output,
-   in both cases provided its diagnostic stderr is writable when needed. When a pending write to
-   the host's unread stdout is already blocked and the opposite direction is waiting for host
-   stdin, engine closure can go unnoticed indefinitely unless host I/O lets a relay direction
-   finish, and exit can discard pending relay output while bytes already buffered in the host's
-   output pipe may remain readable. No time bound exists for that case: a host that neither reads
-   `attach`'s output nor writes or closes its input leaves the relay blocked on both sides, and
-   `attach` stays until the host reads, writes or closes; bytes not drained are lost. What it costs
-   the engine is the limit of a client that does not read (decision 7, What the listener cannot
-   do). The relay is not changed for this: a relay whose directions can be woken, or an independent
-   signal of termination, is a hardening note for the pipe line.
+   **How `attach` ends, and its budget.** The relay returns when one of its directions reports its
+   end or an error; a physical closure alone may go unobserved. The other direction, detached,
+   holds its stream and can still write, or remain blocked after its source closes, until the
+   process exits; `attach` does not wait for it beyond its bounded drain. It writes the engine's
+   bytes to a duplicate of its standard output's handle, past the standard library's buffer, and
+   never flushes standard output: neither a flush nor the runtime's cleanup at exit (which writes
+   what that buffer holds) can wait on a host that stopped reading. Start the exit budget when the
+   relay reports its result: after observed host EOF, which requires the earlier request writes to
+   have returned, attach exits without a drain wait, and after the relay reports an engine-side
+   read or write end or error, attach allows up to five seconds for pending output, in both cases
+   provided its diagnostic stderr is writable when needed. When a pending write to the host's
+   unread stdout is already blocked and the opposite direction is waiting for host stdin, engine
+   closure can go unnoticed indefinitely unless host I/O lets a relay direction finish, and exit
+   can discard pending relay output while bytes already buffered in the host's output pipe may
+   remain readable. No time bound exists for that case. What it costs the engine is the limit of a
+   client that does not read (decision 7, What the listener cannot do). The relay is not changed
+   for this: a relay whose directions can be woken, or an independent signal of termination, is a
+   hardening note for the pipe line.
    Its exit codes: 0, its input ended; 1, it refused to start; 3, no engine listens; 4, refused
    (every instance busy, the engine full, or a connection closed before any answer); 5, the engine
    ended the connection after answering; 6, the relay failed. A refusal to start names the path the
