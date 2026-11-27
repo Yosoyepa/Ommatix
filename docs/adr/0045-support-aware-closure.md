@@ -168,7 +168,8 @@ client; `_meta`'s fields and the schemas do not change and no configuration key 
   differs (one other-text pair per observation, as before). The stricter (b) of O3g fired 0
   times on the same frames (4 and 4 regional observations, no region widened), so it added no
   read there. In UT-89's generated scenes it fired on 27 of 662 regional observations of the
-  O3f kinds and on 20 of 320 of a recogniser that drops what comes near a crop's edge.
+  O3f kinds and on 31 of 320 of a recogniser that reads words larger on all four sides and
+  drops what comes near a crop's edge (O3h; 20 in O3g, with the reading larger to the right only).
 - **What a regional read does to text near a change** (lab, observation only, agent-run,
   exploratory, commit `a014f1c`, before R5): in L6b, 70 regional observations, every differing
   word inside a region (`never_l3` 0): one other-text pair at the caret per observation in S1 and
@@ -200,6 +201,10 @@ client; `_meta`'s fields and the schemas do not change and no configuration key 
   - **L4.** `t` = 16 px is about one glyph of a 9–10 pt font at 150 % scale. A recogniser that
     drops a cut glyph wider than the band (a higher scale, a larger font) can still return a word
     short of the band, so a cut is made unlikely, not impossible. Pinned as a limit, not solved.
+    Likewise, if a recogniser drops a fresh word altogether because it read it joined with a
+    neighbour that reaches the band or crop edge (returning nothing, while the final region stays
+    at least t clear of the crop's edge), neither (a) nor (b) sees the omission and the merge
+    replaces the held word with nothing until the next full refresh.
 
 ## Required validation
 
@@ -209,7 +214,9 @@ client; `_meta`'s fields and the schemas do not change and no configuration key 
   that cut every box but a surface at a crop's edge), UT-86 (the flat-region contract with the
   real detector, L1 pinned), UT-89 (R5: a word held tighter than its pixels widens the region
   instead of being cut; O3g: a held word, and a held input pulled in by its relation, that the
-  widening brings into the band and the crop drops are read again, not lost; and a property: on
+  widening brings into the band and the crop drops are read again, not lost; O3h: each of the
+  four sides of the band enforced on its own, a side on the frame's edge exempt, and the limit L4
+  of a word dropped on a reading past the band pinned as what the engine does; and a property: on
   generated scenes, with fakes that clip at the edge of
   what they are asked to read and an OCR that reads every crop a pixel tight, no committed word or
   detection is ever a clipped one), and the mutations listed in the units' reports (O3, O3e).
@@ -252,5 +259,7 @@ plan de siempre. En toda observación regional, el detector y el OCR leen cada r
 32 px (R5): lo que cruza el borde de una región la amplía, y una región final que queda a menos
 de 16 px de un borde del recorte que no es el del fotograma (o algo leído en esa franja) obliga a
 una lectura más, y si vuelve a pasar hay refresco completo (`closure_budget`,
-cuyo sentido se amplía a la lectura). Quedan declarados los límites L1 a L4; falta la validación
+cuyo sentido se amplía a la lectura). Quedan declarados los límites L1 a L4 (L4 incluye la palabra nueva que un reconocedor descarta
+por completo al leerla unida a una vecina que llega a la banda: la fusión sustituye la palabra
+retenida por nada hasta el siguiente refresco completo); falta la validación
 sobre la pantalla real.

@@ -802,14 +802,19 @@ enum CropReading {
     /// texts joined): a crop's context changes how a recogniser splits a line. The joined
     /// word can reach far past the region, to the crop's edge and past it.
     Joined,
-    /// On every other crop read, every word [`WIDER_PX`] wider on its right (L3: a box read
-    /// wider than the whole frame reads it); and on every crop read, every word that is not
-    /// [`readable_in`] the area asked about is **dropped**, not clipped: a recogniser that
-    /// loses a word the crop's edge cuts or comes close to (O3g).
+    /// On every other crop read, every word [`WIDER_PX`] wider and taller (L3: a box read
+    /// larger than the whole frame reads it): to the right and down on the first of each two
+    /// such reads, to the left and up on the second (O3h: so that a widening reaches all four
+    /// sides of a crop's band), within the crop; and on every crop read, every word whose
+    /// **pixels** (its box in the scene) are not [`readable_in`] the area asked about is
+    /// **dropped**, not clipped: a recogniser that loses a word the crop's edge cuts or comes
+    /// close to (O3g). Judged on the pixels, not on the larger reading: a word dropped because
+    /// its reading, larger than its pixels, reaches the band is the stated limit L4 (see
+    /// `o3h_a_word_read_past_the_band_and_dropped_is_the_stated_limit_l4`).
     WiderDroppingBand,
 }
 
-/// How much wider [`CropReading::WiderDroppingBand`] reads a word.
+/// How much wider and taller [`CropReading::WiderDroppingBand`] reads a word.
 const WIDER_PX: f64 = 14.0;
 
 /// The gap below which [`CropReading::Joined`] joins two words of a line.
@@ -868,6 +873,8 @@ impl TextRecognizer for CropRecognizer {
         for r in regions {
             for (b, text) in &source {
                 let (mut b, mut text) = (*b, text.clone());
+                // The word's own pixels, before a crop reads its box otherwise.
+                let pixels = b;
                 if *r != whole {
                     match self.1 {
                         CropReading::Lower => {
@@ -892,8 +899,21 @@ impl TextRecognizer for CropRecognizer {
                         CropReading::TighterAlternately if self.2 % 2 == 1 && b.width() > 2.0 => {
                             b = bx(b.x0(), b.y0(), b.x1() - 1.0, b.y1());
                         }
-                        CropReading::WiderDroppingBand if self.2 % 2 == 1 => {
-                            b = bx(b.x0(), b.y0(), (b.x1() + WIDER_PX).min(whole.x1()), b.y1());
+                        CropReading::WiderDroppingBand if self.2 % 4 == 1 => {
+                            b = bx(
+                                b.x0(),
+                                b.y0(),
+                                (b.x1() + WIDER_PX).min(whole.x1()),
+                                (b.y1() + WIDER_PX).min(whole.y1()),
+                            );
+                        }
+                        CropReading::WiderDroppingBand if self.2 % 4 == 3 => {
+                            b = bx(
+                                (b.x0() - WIDER_PX).max(whole.x0()),
+                                (b.y0() - WIDER_PX).max(whole.y0()),
+                                b.x1(),
+                                b.y1(),
+                            );
                         }
                         CropReading::Tighter
                         | CropReading::TighterOnce
@@ -902,8 +922,12 @@ impl TextRecognizer for CropRecognizer {
                         | CropReading::WiderDroppingBand => {}
                     }
                     if matches!(self.1, CropReading::WiderDroppingBand) {
-                        if readable_in(&b, r, &whole) {
-                            out.push(Word { bbox: b, text });
+                        // Dropped when its pixels are cut by the crop or come near its edge;
+                        // otherwise returned as read, larger, within the crop.
+                        if readable_in(&pixels, r, &whole)
+                            && let Some(bbox) = b.clip(r)
+                        {
+                            out.push(Word { bbox, text });
                         }
                         continue;
                     }
@@ -1185,15 +1209,17 @@ fn word_change(scene: &mut Scene, rng: &mut Rng, counter: &mut u8) {
 /// 40 of scattered words, the recogniser one pixel tight on every other crop (L3 drift, so a
 /// held box can be tighter than the next reading of its pixels: the cut O3d built); (ii) 40 of
 /// lines of close words that a crop reads joined, so a word reaches the crop's edge and past
-/// it; (iii) 40 of lines of close words, the recogniser [`WIDER_PX`] wider on every other
-/// crop and **dropping** every word near a crop's edge (O3g): the widening brings held
+/// it; (iii) 40 of lines of close words, the recogniser [`WIDER_PX`] wider and taller on
+/// every other crop (right and down, then left and up: all four sides of the band, O3h) and
+/// **dropping** every word near a crop's edge (O3g): the widening brings held
 /// neighbours into the band, where the crop drops them; there no word of the scene may be
 /// lost (each lies inside a committed word). Every fourth sequence of (i) and (ii) has a
-/// tighter area budget. With this seed (O3g): 982 regional observations (662 of (i)-(ii), as
-/// in O3f, and 320 of (iii)), the defence's outcome none 596, widened 142, reread 174,
-/// full_refresh 70 (63 `closure_budget`, 7 `area_budget`); a final region within the band
-/// of its crop on 27 observations of (i)-(ii) and 20 of (iii). The bounds below leave room
-/// under those counts.
+/// tighter area budget. With this seed (O3h, the reading of (iii) larger on all four sides):
+/// 982 regional observations (662 of (i)-(ii), as in O3f, and 320 of (iii)), the defence's
+/// outcome none 573, widened 147, reread 193, full_refresh 69 (63 `closure_budget`, 6
+/// `area_budget`); a final region within the band of its crop on 27 observations of (i)-(ii)
+/// and 31 of (iii) (20 in O3g, horizontal only). The bounds below leave room under those
+/// counts.
 #[test]
 #[allow(clippy::too_many_lines)] // one generator, three kinds of sequence, one property
 fn ut_89_no_committed_word_or_detection_is_clipped_at_a_crop_edge() {
@@ -1888,6 +1914,28 @@ fn o3g_a_held_word_the_widening_brings_into_the_crops_band_is_read_again_not_los
         (plan.region_area_px - 158.0 * 128.0).abs() < 1e-9,
         "{plan:?}"
     );
+}
+
+/// O3h, the stated limit L4 pinned (ADR-0045): the held word W lies on the planned region's
+/// edge (32..170); the crop reads it joined with a neighbour, to (150..190), 12 px from the
+/// crop's right edge (202), and the recogniser drops that reading. Nothing fresh is returned,
+/// so (a) does not widen, the final region stays 32 px clear of the crop's edge and (b) does
+/// not fire: the merge replaces W with nothing, until the next full refresh. This test says
+/// what the engine does today; if a later rule closes the limit, it must change.
+#[test]
+fn o3h_a_word_read_past_the_band_and_dropped_is_the_stated_limit_l4() {
+    let w = bx(150.0, 100.0, 170.0, 112.0);
+    let mut scene = empty_scene();
+    scene.words.push((w, "Linea".into(), [20, 20, 20]));
+    let (engine, reads) =
+        dropping_observation(scene, vec![vec![(0, bx(150.0, 100.0, 190.0, 112.0))]]);
+    let edge = *engine.last_crop_edge().unwrap();
+    assert_eq!(edge.outcome, CropEdgeOutcome::None, "{edge:?}");
+    assert_eq!(edge.regions_in_band, 0, "{edge:?}");
+    assert_eq!(edge.near_crop_edge, CropEdgeKinds::default(), "{edge:?}");
+    assert_eq!(reads, vec![vec![bx(0.0, 0.0, 202.0, 192.0)]]);
+    let words = &engine.store.published().unwrap().evidence.words;
+    assert!(words.is_empty(), "W is lost, the limit L4: {words:?}");
 }
 
 /// O3g, the same through a held relation and the detector: the widening meets a held label L

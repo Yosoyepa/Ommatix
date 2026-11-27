@@ -45,6 +45,10 @@
 //! **Limit L4.** [`EDGE_BAND_PX`] is about one glyph of a 9-10 pt font at 150 % scale. A
 //! recogniser that drops a cut glyph wider than the band (a larger scale or font) can still
 //! return a word short of the band: the defence makes such a cut unlikely, not impossible.
+//! Likewise, if a recogniser drops a fresh word altogether because it read it joined with a
+//! neighbour that reaches the band or crop edge (returning nothing, while the final region
+//! stays at least t clear of the crop's edge), neither (a) nor (b) sees the omission and the
+//! merge replaces the held word with nothing until the next full refresh.
 
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::{Control, Word};
@@ -547,6 +551,111 @@ mod tests {
             None,
         );
         assert_eq!(s, Settled::ReadAgain(vec![bx(18.0, 100.0, 100.0, 150.0)]));
+    }
+
+    /// A side of a region or a crop.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Side {
+        Left,
+        Top,
+        Right,
+        Bottom,
+    }
+
+    const SIDES: [Side; 4] = [Side::Left, Side::Top, Side::Right, Side::Bottom];
+
+    /// A 100x100 region of the 640x320 frame: on the frame's edge at `at_frame`, otherwise
+    /// clear of every frame edge (so its crop has four non-frame edges).
+    fn side_region(at_frame: Option<Side>) -> BBox {
+        match at_frame {
+            None => bx(200.0, 100.0, 300.0, 200.0),
+            Some(Side::Left) => bx(0.0, 100.0, 100.0, 200.0),
+            Some(Side::Top) => bx(200.0, 0.0, 300.0, 100.0),
+            Some(Side::Right) => bx(540.0, 100.0, 640.0, 200.0),
+            Some(Side::Bottom) => bx(200.0, 220.0, 300.0, 320.0),
+        }
+    }
+
+    /// A fresh word that crosses `r`'s `side` by 5 px (27 px clear of the crop's edge there),
+    /// a held box beyond it that ends 10 px inside the crop's band on that side, and the final
+    /// region the widening reaches over both.
+    fn widening_into(r: &BBox, side: Side) -> (Word, BBox, BBox) {
+        let (cx, cy) = (f64::midpoint(r.x0(), r.x1()), f64::midpoint(r.y0(), r.y1()));
+        let (fresh, held, finals) = match side {
+            Side::Left => (
+                bx(r.x0() - 5.0, cy - 5.0, r.x0() + 10.0, cy + 5.0),
+                bx(r.x0() - 22.0, cy - 5.0, r.x0() - 4.0, cy + 5.0),
+                bx(r.x0() - 22.0, r.y0(), r.x1(), r.y1()),
+            ),
+            Side::Top => (
+                bx(cx - 5.0, r.y0() - 5.0, cx + 5.0, r.y0() + 10.0),
+                bx(cx - 5.0, r.y0() - 22.0, cx + 5.0, r.y0() - 4.0),
+                bx(r.x0(), r.y0() - 22.0, r.x1(), r.y1()),
+            ),
+            Side::Right => (
+                bx(r.x1() - 10.0, cy - 5.0, r.x1() + 5.0, cy + 5.0),
+                bx(r.x1() + 4.0, cy - 5.0, r.x1() + 22.0, cy + 5.0),
+                bx(r.x0(), r.y0(), r.x1() + 22.0, r.y1()),
+            ),
+            Side::Bottom => (
+                bx(cx - 5.0, r.y1() - 10.0, cx + 5.0, r.y1() + 5.0),
+                bx(cx - 5.0, r.y1() + 4.0, cx + 5.0, r.y1() + 22.0),
+                bx(r.x0(), r.y0(), r.x1(), r.y1() + 22.0),
+            ),
+        };
+        (Word::new("w", fresh), held, finals)
+    }
+
+    /// (b), O3h: the rule of O3g holds on each of the four sides on its own. A region clear of
+    /// the frame, widened over a held box into the band of its crop's left, top, right or
+    /// bottom edge, is read again with `regions_in_band` 1 and no other trigger; and a region
+    /// on the frame's edge at one side stays regional there (exempt) while each of its three
+    /// other sides is still enforced.
+    #[test]
+    fn each_side_of_the_crops_band_is_enforced_on_its_own_and_the_frames_side_is_exempt() {
+        for at_frame in [
+            None,
+            Some(Side::Left),
+            Some(Side::Top),
+            Some(Side::Right),
+            Some(Side::Bottom),
+        ] {
+            let region = [side_region(at_frame)];
+            let crops = crops(&region, &frame());
+            if at_frame.is_some() {
+                // Nothing read: the side on the frame's edge is exempt, the region regional.
+                let mut t = CropEdgeTrace::new(&region);
+                let s = settle(
+                    &region,
+                    &crops,
+                    &items(&[], &[], &[], &[]),
+                    &frame(),
+                    100,
+                    Some(&mut t),
+                );
+                assert_eq!(s, Settled::Regions(region.to_vec()), "{at_frame:?}");
+                assert_eq!(t.regions_in_band, 0, "{at_frame:?}");
+            }
+            for side in SIDES.into_iter().filter(|s| Some(*s) != at_frame) {
+                let (word, held, finals) = widening_into(&region[0], side);
+                let words = [word];
+                let held = [held];
+                let mut t = CropEdgeTrace::new(&region);
+                let s = settle(
+                    &region,
+                    &crops,
+                    &items(&words, &[], &[], &held),
+                    &frame(),
+                    100,
+                    Some(&mut t),
+                );
+                let at = format!("region on the frame at {at_frame:?}, widened at {side:?}");
+                assert_eq!(s, Settled::ReadAgain(vec![finals]), "{at}");
+                assert_eq!(t.regions_in_band, 1, "{at}");
+                assert_eq!(t.crossing.words, 1, "{at}");
+                assert_eq!(t.near_crop_edge, CropEdgeKinds::default(), "{at}");
+            }
+        }
     }
 
     /// A surface that a region only meets triggers nothing and is not kept; one inside is.
