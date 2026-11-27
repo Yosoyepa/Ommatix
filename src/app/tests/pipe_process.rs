@@ -176,18 +176,13 @@ fn report_without_waiting(message: String) {
         });
 }
 
-/// A child process whose end the harness attempts when this is dropped, however the test ends:
-/// it kills the child and confirms its exit within [`REAP_PATIENCE`] ([`kill_and_reap`]).
-/// Dropping it is cleanup only: it cannot panic (a drop may run while a failed test is already
-/// unwinding) and does not wait past that deadline; when the exit stays unconfirmed it reports
-/// the pid and the reason ([`report_without_waiting`]) and gives up. A test that needs the end
-/// confirmed stops the child explicitly ([`KillOnDrop::stop`]).
+/// On drop, attempts to end the child and polls for confirmation until the reap deadline. If exit
+/// remains unconfirmed, it schedules a best-effort diagnostic and gives up.
 struct KillOnDrop(std::process::Child);
 
 #[cfg(all(windows, feature = "broker-pipe"))]
 impl KillOnDrop {
-    /// Kills the child and fails the test unless its exit was confirmed by the deadline of
-    /// [`kill_and_reap`] (only the pipe's tests stop a child explicitly).
+    /// Attempts to end the child and fails the test unless its exit is confirmed by the deadline.
     fn stop(&mut self) -> std::process::ExitStatus {
         kill_and_reap(&mut self.0).unwrap_or_else(|why| panic!("stopping a child: {why}"))
     }
@@ -218,9 +213,43 @@ fn write_by(
         let written = stdin.write_all(&bytes).and_then(|()| stdin.flush());
         let _ = send.send((stdin, written));
     });
-    receive
+    receive_by(&receive, deadline)
+}
+
+/// Use the same absolute deadline for the timed receive and the acceptance check, and return the
+/// timeout outcome for any result first observed after that deadline, including a queued success
+/// or a queued write error.
+fn receive_by<T>(receive: &std::sync::mpsc::Receiver<T>, deadline: Instant) -> Option<T> {
+    let received = receive
         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .ok()
+        .ok();
+    if Instant::now() > deadline {
+        return None;
+    }
+    received
+}
+
+/// The receive-and-validate path of [`write_by`] given an already-populated channel and an
+/// already-expired deadline: a queued success and a queued write error are each the timeout
+/// outcome.
+#[test]
+fn the_harness_treats_a_result_first_observed_after_its_deadline_as_a_timeout() {
+    let expired = Instant::now();
+    while Instant::now() <= expired {
+        std::hint::spin_loop();
+    }
+    let (send, receive) = std::sync::mpsc::channel::<std::io::Result<()>>();
+    send.send(Ok(())).unwrap();
+    assert!(
+        receive_by(&receive, expired).is_none(),
+        "a queued success was accepted"
+    );
+    send.send(Err(std::io::ErrorKind::BrokenPipe.into()))
+        .unwrap();
+    assert!(
+        receive_by(&receive, expired).is_none(),
+        "a queued write error was accepted"
+    );
 }
 
 /// The harness's write deadline holds against a child that never reads its input: a megabyte
@@ -608,10 +637,17 @@ mod pipe {
             let stdout = collect(child.0.stdout.take().unwrap());
             let lines = lines_of(child.0.stderr.take().unwrap());
             let stderr = Arc::new(Mutex::new(Vec::new()));
+            // Use one absolute readiness deadline and check it after every stderr receive, before
+            // accepting a readiness line or requesting another line.
             let deadline = Instant::now() + PATIENCE;
             loop {
-                let left = deadline.saturating_duration_since(Instant::now());
-                let line = lines.recv_timeout(left).unwrap_or_else(|_| {
+                let received =
+                    lines.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+                assert!(
+                    Instant::now() <= deadline,
+                    "serve readiness was not observed by the deadline"
+                );
+                let line = received.unwrap_or_else(|_| {
                     panic!("serve did not listen: {:?}", stderr.lock().unwrap())
                 });
                 let listening = line.contains("on the pipe");
@@ -654,9 +690,9 @@ mod pipe {
             }
         }
 
-        /// Kills `serve` and fails the test unless its exit was confirmed by the deadline
-        /// ([`KillOnDrop::stop`]). When the engine is only dropped, its guard attempts to end it
-        /// and reports, without failing, when its exit stays unconfirmed.
+        /// Attempts to end the child and fails the test unless its exit is confirmed by the
+        /// deadline. When the engine is only dropped, its guard attempts to end it and reports,
+        /// without failing, when its exit stays unconfirmed.
         fn stop(&mut self) {
             self.child.stop();
         }
@@ -1001,7 +1037,7 @@ mod pipe {
     /// every reply matched in order; in this fixture, with every reply read, the engine's stop is
     /// followed by the observed exit 5.
     #[test]
-    fn it_31_attach_relays_pipelined_requests_and_large_replies_and_ends_with_the_engine() {
+    fn it_31_pipelined_fixture_observes_exit_5_after_stop_with_all_replies_read() {
         const REQUESTS: u64 = 600;
         let sandbox = Sandbox::new("relay");
         let config = configure(&sandbox, "relay", None);
@@ -1143,7 +1179,7 @@ mod pipe {
         fn after_exit_or_fail(&mut self, timed_out: bool) -> (String, usize, usize) {
             assert!(
                 !timed_out,
-                "attach did not exit within the bound; stderr so far: {}",
+                "attach's exit was not confirmed within the bound; stderr so far: {}",
                 self.stderr
                     .as_ref()
                     .map(Collected::text)
@@ -1168,7 +1204,7 @@ mod pipe {
     /// exit, the pipe yields bytes within one maximum relay chunk of its requested size, and
     /// fewer whole replies than requests.
     #[test]
-    fn it_31_attach_exits_0_at_the_end_of_its_input_with_its_output_unread() {
+    fn it_31_unread_stdout_with_12_requests_observes_exit_0_after_closing_stdin() {
         let sandbox = Sandbox::new("unread-output");
         let mut host = StalledHost::start(&sandbox, "unread-output", 12);
         drop(host.stdin.take());
@@ -1201,13 +1237,14 @@ mod pipe {
     /// is observed within `BOUND` plus 5 s, measured from that return, with the expected stderr
     /// line; read after the exit, the bytes and the whole replies are as in the first case.
     #[test]
-    fn it_31_with_more_requests_queued_than_the_engine_takes_attach_waits_for_the_engine() {
+    fn it_31_unread_stdout_with_120_requests_observes_no_exit_for_10s_and_exit_5_in_the_15s_check_after_stop()
+     {
         let sandbox = Sandbox::new("held-input");
         let mut host = StalledHost::start(&sandbox, "held-input", 120);
         drop(host.stdin.take());
         assert!(
             host.exit_within(BOUND).is_none(),
-            "attach exited within {BOUND:?} of the end of its input while the engine lived"
+            "attach's exit was observed during the {BOUND:?} check while the engine was running"
         );
         host.engine.stop();
         // Measured from `Engine::stop`'s return.
