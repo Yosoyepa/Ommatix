@@ -229,10 +229,24 @@ Apagado por defecto y **sin validar** con un segundo usuario local, un motor ele
    applications = ["notepad.exe"]
    deliver_input = false
    read_values = true
-   # opcionales: window_pin = <identificador>, y [grant.window_classes]
+   # opcionales: window_pin = <identificador>, delivery_budget y term_ms (abajo), y [grant.window_classes]
    ```
 
    Una concesión sólo estrecha la política local de `[safety]`: nunca permite lo que ésta no permite.
+
+   Una concesión puede llevar además dos claves opcionales, que el intermediario aplica (ADR-0040, propuesta): `delivery_budget`, cuántas acciones en vivo que informen de entrada (entregadas o `indeterminate`) puede tener el agente desde que se conecta, un entero de 0 a 4294967295 (0: sólo observa), y `term_ms`, cuántos milisegundos después de conectarse puede entregar, un entero de 0 a 9223372036854775807 (0: el plazo terminó al conectarse y el agente se sirve como sin concesión). Ausentes, no hay límite; un valor negativo, decimal, entre comillas o mayor que su cota invalida el archivo entero. Por ejemplo, para un agente que puede hacer como mucho 20 entregas en los diez minutos siguientes a su conexión:
+
+   ```toml
+   [[grant]]
+   ticket_sha256 = "<SHA-256 del tique>"
+   applications = ["notepad.exe"]
+   deliver_input = true
+   read_values = false
+   delivery_budget = 20
+   term_ms = 600000
+   ```
+
+   Mientras el agente está conectado, el presupuesto y el plazo son techos: bajarlos en el archivo vale desde su llamada siguiente, contando lo que ya entregó; subirlos, retirar la concesión y volver a listarla no le devuelve nada. Para dar más a un agente, emita un tique nuevo (paso 3) con su concesión; reiniciar el motor también admite de nuevo un tique que el archivo sigue listando, con el presupuesto entero y un plazo nuevo. Otras claves (tipos de acción, región, otros nombres de presupuesto o plazo) no existen e invalidan el archivo.
 
    El archivo de concesiones, los archivos de tique y la configuración que lee `attach` tienen que ser archivos regulares en un **disco local fijo**: un directorio, un dispositivo (`NUL`) o un tubo con nombre se rechazan antes de leer nada, pero nada acota el tiempo de abrirlos, de las dos consultas de su manejador (los metadatos y el tipo) ni de leerlos. Si están en un recurso de red o en un volumen que se suspende o se retira, el arranque espera, y como el archivo de concesiones se lee en cada llamada bajo el cerrojo del intermediario, todos los agentes esperan mientras su lectura se bloquea.
 5. Arrancar el motor, el operador, desde una sesión **no elevada**: `ommatix.exe serve --config <configuración>` (con `--source dxgi` para la pantalla). No escribe nada en stdout; en stderr dice el nombre del tubo y cuántas concesiones lee. Un segundo `serve` con el mismo nombre se niega a arrancar y sale con 7: el sistema le negó crear la primera instancia del nombre, y la causa habitual, no segura, es que otro proceso ya tiene ese nombre. Sirve hasta que se le termina (Ctrl+C); si el oyente deja de aceptar, por un error que no es pasajero o porque su hilo de aceptación terminó sin error, `serve` lo dice en stderr, lo para y sale con 3 (parada completa: el hilo de aceptación, todos los hilos de trabajo y el segador unidos), 4 (quedaban hilos de trabajo sin unir, de conexiones o de rechazos, por ejemplo un cliente que ni envía ni se va o una petición que pasó la comprobación de parada y sigue en curso, o sólo faltaba que terminara el segador; el fin del proceso los termina) o 5 (el despertar no llegó al hilo de aceptación, por ejemplo porque otro proceso que puede abrir el nombre tiene instancias suyas; el fin del proceso lo termina). Con 1 se negó a arrancar por cualquier otra causa.

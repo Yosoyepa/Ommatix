@@ -23,7 +23,9 @@
 //! argument of `observe_screen` and reported in `_meta`, each client under its own grant.
 //! BDD-68..71 (ADR-0040 and ADR-0043, proposed) admit those agents by the ticket handshake, on
 //! in-memory streams, with their grants read from the product's grants file
-//! ([`GrantsFile`]) in a temporary directory, at every call. The executable serves the broker
+//! ([`GrantsFile`]) in a temporary directory, at every call. BDD-72, BDD-74 and BDD-77 (ADR-0040,
+//! proposed) give that file's grant a delivery budget or a term, with the world's manual clock.
+//! The executable serves the broker
 //! only on a Windows build with `broker-pipe` and the switch on; the pipe itself is tested in
 //! the MCP adapter and the app, not here.
 
@@ -80,7 +82,8 @@ const IMPLEMENTED: &[&str] = &[
     "BDD-37", "BDD-38", "BDD-39", "BDD-40", "BDD-41", "BDD-42", "BDD-43", "BDD-44", "BDD-45",
     "BDD-46", "BDD-47", "BDD-48", "BDD-49", "BDD-50", "BDD-51", "BDD-52", "BDD-53", "BDD-54",
     "BDD-55", "BDD-56", "BDD-57", "BDD-58", "BDD-59", "BDD-60", "BDD-61", "BDD-62", "BDD-63",
-    "BDD-64", "BDD-65", "BDD-66", "BDD-67", "BDD-68", "BDD-69", "BDD-70", "BDD-71",
+    "BDD-64", "BDD-65", "BDD-66", "BDD-67", "BDD-68", "BDD-69", "BDD-70", "BDD-71", "BDD-72",
+    "BDD-74", "BDD-77",
 ];
 
 #[derive(Debug, Default, World)]
@@ -3429,6 +3432,12 @@ fn delivering_grant() -> Grant {
 
 /// A simulated desktop and the ports of an engine over it, with the [`LiveDouble`] actuator.
 fn shared_desktop_ports() -> (FixtureDesktop, Ports) {
+    let (desktop, ports, _clock) = shared_desktop_ports_with_clock();
+    (desktop, ports)
+}
+
+/// [`shared_desktop_ports`], with the manual clock the engine and the broker read.
+fn shared_desktop_ports_with_clock() -> (FixtureDesktop, Ports, Arc<ManualClock>) {
     let clock = Arc::new(ManualClock::new());
     let desktop = FixtureDesktop::new(shared_desktop_scene(), clock.clone());
     let ports = Ports {
@@ -3442,9 +3451,9 @@ fn shared_desktop_ports() -> (FixtureDesktop, Ports) {
             Arc::new(Mutex::new(Typing::default())),
         )),
         policy: Arc::new(FixedPolicy(shared_desktop_policy())),
-        clock,
+        clock: clock.clone(),
     };
-    (desktop, ports)
+    (desktop, ports, clock)
 }
 
 /// Several MCP clients on one engine through the broker, over a simulated desktop and the
@@ -3467,6 +3476,8 @@ struct Cohort {
     observations: Option<Value>,
     /// The operator's grants file, for agents admitted by ticket (BDD-68..BDD-71).
     grants: Option<GrantsDir>,
+    /// The clock the engine and the broker read, when the scenario moves it (BDD-74).
+    clock: Option<Arc<ManualClock>>,
 }
 
 impl std::fmt::Debug for Cohort {
@@ -3507,6 +3518,7 @@ impl Cohort {
             next_id: 0,
             observations: None,
             grants: None,
+            clock: None,
         }
     }
 
@@ -3895,8 +3907,9 @@ impl GrantsDir {
         self.0.join("grants.toml")
     }
 
-    /// Lists [`SCENARIO_TICKET`] with [`delivering_grant`], by the ticket's SHA-256.
-    fn grant_the_ticket(&self) {
+    /// Lists [`SCENARIO_TICKET`] with [`delivering_grant`], by the ticket's SHA-256, with
+    /// `extra`, more keys of the same `[[grant]]` (empty for none).
+    fn grant_the_ticket_with(&self, extra: &str) {
         use sha2::{Digest, Sha256};
         use std::fmt::Write as _;
         let hash =
@@ -3916,7 +3929,7 @@ impl GrantsDir {
             self.file(),
             format!(
                 "[[grant]]\nticket_sha256 = \"{hash}\"\napplications = [{}]\n\
-                 deliver_input = {}\nread_values = {}\n",
+                 deliver_input = {}\nread_values = {}\n{extra}",
                 applications.join(", "),
                 grant.deliver_input,
                 grant.read_values
@@ -3941,9 +3954,14 @@ impl Cohort {
     /// A broker whose grants come from the operator's grants file, read at every call, with no
     /// agent connected yet.
     fn with_grants_file() -> Self {
+        Self::with_grants_file_with("")
+    }
+
+    /// [`Cohort::with_grants_file`], the ticket's grant with `extra` keys.
+    fn with_grants_file_with(extra: &str) -> Self {
         let grants = GrantsDir::new();
-        grants.grant_the_ticket();
-        let (desktop, ports) = shared_desktop_ports();
+        grants.grant_the_ticket_with(extra);
+        let (desktop, ports, clock) = shared_desktop_ports_with_clock();
         let broker = Broker::with_grant_store(
             EngineConfig::new(SESSION),
             ports,
@@ -3957,6 +3975,7 @@ impl Cohort {
         cohort.desktop = desktop;
         cohort.broker = broker;
         cohort.grants = Some(grants);
+        cohort.clock = Some(clock);
         cohort
     }
 
@@ -4127,4 +4146,113 @@ fn its_live_action_on_that_page_is_refused(e: &mut Engine) {
     assert_eq!(result["error"]["code"], "POLICY_DENIED", "{result}");
     assert_eq!(result["input_delivered"], false);
     assert_eq!(cohort.events(), 1, "nothing after the withdrawal");
+}
+
+// ---- BDD-72, BDD-74, BDD-77: a grant's delivery budget and term (ADR-0040, proposed) ----
+
+/// A refusal before the gate with `POLICY_DENIED`, nothing delivered, whose message names
+/// `limit` (the broker's texts are static English).
+fn assert_refused_naming(result: &Value, limit: &str) {
+    assert_eq!(result["error"]["code"], "POLICY_DENIED", "{result}");
+    assert_eq!(result["status"], "rejected", "{result}");
+    assert_eq!(result["input_delivered"], false, "{result}");
+    let message = result["error"]["message"].as_str().expect("a message");
+    assert!(
+        message.contains(limit) && message.contains("nothing was delivered"),
+        "{message}"
+    );
+}
+
+#[given(
+    "un motor con el intermediario y un archivo de concesiones que da a un tique permiso para entregar y leer valores con un presupuesto de una entrega"
+)]
+fn an_engine_with_a_grant_of_one_delivery(e: &mut Engine) {
+    e.cohort = Some(Cohort::with_grants_file_with("delivery_budget = 1\n"));
+}
+
+#[given(
+    "un motor con el intermediario y un archivo de concesiones que da a un tique permiso para entregar y leer valores con un plazo de un segundo"
+)]
+fn an_engine_with_a_grant_of_one_second(e: &mut Engine) {
+    e.cohort = Some(Cohort::with_grants_file_with("term_ms = 1000\n"));
+}
+
+#[given("un agente conectado con ese tique que ha gastado su presupuesto con una acción real")]
+fn an_agent_that_spent_its_budget(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.admit(SCENARIO_TICKET).expect("the ticket admits it");
+    cohort.observe(0, &json!({ "include_values": true }));
+    let page = cohort.page(0);
+    let first = Cohort::click(&page, "budget-first", true);
+    let result = cohort.act(0, &first);
+    assert_eq!(result["status"], "input_delivered", "{result}");
+    assert_eq!(cohort.events(), 1);
+    cohort.recorded = Some((first, result));
+}
+
+#[when("repite la misma petición")]
+fn it_repeats_the_same_request(e: &mut Engine) {
+    let cohort = e.cohort();
+    let (arguments, _) = cohort.recorded.clone().expect("a recorded request");
+    let again = cohort.act(0, &arguments);
+    cohort.results[0] = Some(again);
+}
+
+#[then("recibe el mismo resultado sin ningún evento nuevo")]
+fn it_gets_the_same_result_and_no_new_event(e: &mut Engine) {
+    let cohort = e.cohort();
+    let (_, first) = cohort.recorded.clone().expect("a recorded request");
+    let again = cohort.results[0].clone().expect("a repeated result");
+    assert_eq!(again["status"], first["status"], "{again}");
+    assert_eq!(again["request_id"], first["request_id"]);
+    assert_eq!(again["input_delivered"], true);
+    assert_eq!(cohort.events(), 1, "a replay delivers nothing new");
+}
+
+#[then(
+    "una acción real nueva se rechaza con POLICY_DENIED nombrando el presupuesto sin ningún evento nuevo"
+)]
+fn a_new_live_action_is_refused_naming_the_budget(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.observe(0, &json!({ "include_values": true }));
+    let page = cohort.page(0);
+    let result = cohort.act(0, &Cohort::click(&page, "budget-new", true));
+    assert_refused_naming(&result, "budget");
+    assert_eq!(cohort.events(), 1, "nothing after the budget was spent");
+}
+
+#[then("una acción simulada sigue siendo simulated")]
+fn a_dry_run_is_still_simulated(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort.observe(0, &json!({}));
+    let page = cohort.page(0);
+    let result = cohort.act(0, &Cohort::click(&page, "budget-dry", false));
+    assert_eq!(result["status"], "simulated", "{result}");
+    assert_eq!(cohort.events(), 1);
+}
+
+#[when("el reloj pasa el plazo de la concesión")]
+fn the_clock_passes_the_term(e: &mut Engine) {
+    let cohort = e.cohort();
+    cohort
+        .clock
+        .as_ref()
+        .expect("the world's clock")
+        .advance(Duration::from_millis(1_000));
+}
+
+#[then("su clic real se rechaza con POLICY_DENIED nombrando el plazo sin entregar ningún evento")]
+fn its_live_click_is_refused_naming_the_term(e: &mut Engine) {
+    let cohort = e.cohort();
+    let page = cohort.page(0);
+    let result = cohort.act(0, &Cohort::click(&page, "term-live", true));
+    assert_refused_naming(&result, "term");
+    assert_eq!(cohort.events(), 0);
+}
+
+#[when("el operador sube el presupuesto del tique en el archivo a diez entregas")]
+fn the_operator_raises_the_budget(e: &mut Engine) {
+    e.cohort()
+        .grants()
+        .grant_the_ticket_with("delivery_budget = 10\n");
 }

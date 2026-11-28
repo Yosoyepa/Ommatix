@@ -70,3 +70,6 @@ BDD-68,RF-20,IT-23,features/09_varios_agentes.feature,Un agente conectado con un
 BDD-69,RF-20,IT-24,features/09_varios_agentes.feature,Un agente conectado sin tique observa sin valores y no entrega,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-70,RF-20,IT-25,features/09_varios_agentes.feature,Un tique presentado dos veces,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
 BDD-71,RF-20,IT-23,features/09_varios_agentes.feature,Una concesión retirada del archivo entre dos acciones,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-72,RF-19,IT-37,features/09_varios_agentes.feature,Un agente con un presupuesto de una entrega,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-74,RF-19,IT-38,features/09_varios_agentes.feature,Una concesión cuyo plazo terminó,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE
+BDD-77,RF-19,IT-37,features/09_varios_agentes.feature,Subir el presupuesto en el archivo no devuelve entregas,EJECUTADO_SOBRE_CONTRATO_S3_DOBLE

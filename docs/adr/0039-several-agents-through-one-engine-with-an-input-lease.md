@@ -395,8 +395,9 @@ The same branch also has IT-14 (ADR-0040's grants per client) and IT-20 (a call 
 the broker's lock leaves the broker closed to every request).
 
 What does not exist yet: a transport and the `attach` mode (ADR-0043); the switch in the
-executable, which still serves stdio to one client; a grant's other limits, grants read from a
-file, and tickets (ADR-0040); a research record of lease grants and refusals; and the text of the
+executable, which still serves stdio to one client; a grant's limits beyond the policy-shaped
+ones (its delivery budget and term were built later, on `feat/grant-limits`; its kinds of action
+and region are not built), grants read from a file, and tickets (ADR-0040); a research record of lease grants and refusals; and the text of the
 chapters that still describe one agent (02, 04, 05 and 08, among others), which the branch that
 puts the lease on the wire leaves to a later documentation commit of its own.
 

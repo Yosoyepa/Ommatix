@@ -31,7 +31,7 @@ pub use engine::{
     OccluderFallback, OccluderProbeCounts, Ports, VerifyParams, grey_grid,
 };
 pub use error::{PortError, error_chain};
-pub use grant::{Grant, GrantedPolicy, InstalledGrant};
+pub use grant::{Grant, GrantLedger, GrantedPolicy, InstalledGrant};
 pub use lease::LeaseTable;
 pub use ports::{
     AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame,

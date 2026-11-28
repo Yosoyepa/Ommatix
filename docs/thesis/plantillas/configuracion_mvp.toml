@@ -68,7 +68,8 @@ window_pin_file = ""
 # vez por cada archivo nuevo. El motor nunca borra el archivo. Vacío: sin archivo de purga.
 purge_file = ""
 # Concesiones por tique (ADR-0040, propuesta), sólo con [mcp] transport = "pipe": ruta de un
-# archivo TOML con una tabla [[grant]] por tique (el SHA-256 del tique y lo que permite). Se lee
+# archivo TOML con una tabla [[grant]] por tique (el SHA-256 del tique y lo que permite, con
+# delivery_budget y term_ms opcionales; S4_INSTALACION_Y_REVERSION.md, paso 4). Se lee
 # en cada llamada; si falta o no es válido, ningún cliente tiene concesión. Vacío: ningún
 # cliente tiene concesión (observa sin valores y no entrega).
 grants_file = ""

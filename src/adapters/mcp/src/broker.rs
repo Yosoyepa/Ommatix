@@ -30,16 +30,32 @@
 //!    a valid grant (none handed in, an empty handshake, a ticket the store does not list, a
 //!    store that cannot answer) is served under [`Grant::default`], which permits no live input
 //!    and no values (ADR-0040, decision 7).
+//!
+//!    A grant may also carry a delivery budget and a term (ADR-0040, proposed). Each client has a
+//!    [`GrantLedger`] from its admission, the term's start: every grant read at a call lowers
+//!    its ceilings to the meet of what was read so far, never raises them, and it counts the
+//!    client's results that reported input. At this step, with the call's one instant, a client
+//!    whose term has ended is served under [`Grant::default`], and one whose budget is spent
+//!    under its grant without live input.
 //! 5. `observe_screen` publishes a new snapshot only for the holder, or for any client while
 //!    nobody holds the lease; any other client gets the published page served again for it,
-//!    or `STALE_SNAPSHOT` when nothing is published. `execute_action` runs a dry run for any
-//!    client (decision 4), and a client's own retry, a request identifier its journal holds,
-//!    goes to the engine whoever holds the lease: the engine answers it from the journal (a
-//!    replay, or `REQUEST_CONFLICT` for other arguments) and never delivers it again, so a
-//!    client whose input was delivered learns so even after it lost the lease. Any other live
-//!    input reaches the gate only for the holder, and any other client's is refused before the
-//!    gate with `POLICY_DENIED`, delivering and recording nothing. `get_engine_metrics` is
-//!    answered as by the stdio server.
+//!    or `STALE_SNAPSHOT` when nothing is published. `execute_action`, in this order: a dry run
+//!    goes to the engine for any client (decision 4); a client's own retry, a request
+//!    identifier its journal holds, goes to the engine whatever the term, the budget or the
+//!    lease: the engine answers it from the journal (a replay, or `REQUEST_CONFLICT` for other
+//!    arguments) and never delivers it again, so a client whose input was delivered learns so
+//!    even after it lost the lease. Any other live input is refused before the gate with
+//!    `POLICY_DENIED`, delivering and recording nothing, when the client's term has ended,
+//!    then when its budget is spent, then when it does not hold the lease; each refusal's
+//!    message names its cause. Only then does it reach the gate, and the result is counted in
+//!    the client's ledger when it reported input. Neither a dry run, a retry nor a refusal
+//!    spends anything. `get_engine_metrics` is answered as by the stdio server.
+//!
+//! Both limits are checked at the call's entry under the broker's one lock, which also covers
+//! the engine call and the count, and a connection's calls are sequential: two deliveries
+//! cannot both pass a budget of one. An action that passed the check completes, both phases of a
+//! `type` included, even if its term ends meanwhile. The agent is told neither its budget nor
+//! its term, only the refusal.
 //!
 //! Responses have the stdio server's shape, with one addition in `_meta`: on `observe_screen`
 //! and `execute_action`, when the request carried `lease` or more than one client is connected,
@@ -50,9 +66,10 @@
 //! the lease implicitly and gets the stdio server's responses byte for byte. The lease can also
 //! be asked for through [`BrokerConnection::acquire`] and [`BrokerConnection::release`].
 //!
-//! A client that leaves takes its lease, its place in the queue, its journal and its grant
-//! with it; the last one to leave purges the engine, as the end of the stdio server's
-//! connection does (ADR-0039, decision 10).
+//! A client that leaves takes its lease, its place in the queue, its journal, its grant and its
+//! grant's ledger with it; the last one to leave purges the engine, as the end of the stdio
+//! server's connection does (ADR-0039, decision 10). A purge deletes perception state, not a
+//! connected client's ledger.
 //!
 //! ## Tickets (ADR-0040 decision 3, ADR-0043 decision 9; proposed)
 //!
@@ -97,9 +114,8 @@
 //! it admits nobody new by ticket, with the same refusal as a spent ticket, until the engine
 //! process restarts; an empty handshake is still admitted, without a grant.
 //!
-//! Nothing in the executable constructs a broker; only tests do (this crate's and the acceptance
-//! suite's scenarios): the executable serves stdio only, and no transport (pipe or socket)
-//! serves a broker yet.
+//! The executable constructs a broker only when built with the `broker-pipe` feature and
+//! configured with `[mcp] transport = "pipe"` (ADR-0043, proposed); otherwise it serves stdio.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -112,8 +128,8 @@ use std::time::Duration;
 use ommatix_application::contract::{ActionRequest, ActionResult, ErrorCode, ToolError};
 use ommatix_application::lease::{Acquired, ClientId, LeaseChange, LeaseRefusal, Released};
 use ommatix_application::{
-    Clock, Engine, EngineConfig, Grant, GrantStore, GrantedPolicy, JOURNAL_CLIENTS, LeaseTable,
-    PolicyStore, Ports,
+    Clock, Engine, EngineConfig, Grant, GrantLedger, GrantStore, GrantedPolicy, JOURNAL_CLIENTS,
+    LeaseTable, PolicyStore, Ports,
 };
 use ommatix_domain::identity::ActionStatus;
 use rmcp::model::Tool;
@@ -144,6 +160,16 @@ pub const MAX_SPENT_TICKETS: usize = 4096;
 /// quotes nothing from the screen or the agent (ADR-0021, ADR-0040 decision 9).
 const NO_LEASE: &str = "live input needs the input lease and this client does not hold it; \
                         nothing was delivered";
+
+/// The refusal of a live action new to the client's journal once its grant's term has ended
+/// (ADR-0040, proposed). It names the limit and quotes nothing (ADR-0021, ADR-0040 decision 9).
+const TERM_ENDED: &str = "live input is refused: this client's grant has reached the end of its \
+                          term; nothing was delivered";
+
+/// The refusal of a live action new to the client's journal once its grant's delivery budget is
+/// spent (ADR-0040, proposed). It names the limit and quotes nothing.
+const BUDGET_SPENT: &str = "live input is refused: this client's grant has no delivery left in \
+                            its budget; nothing was delivered";
 
 /// The answer to an observation by a client that may not publish when nothing is published.
 const NOTHING_PUBLISHED: &str = "no snapshot is published and another client holds the input \
@@ -208,6 +234,9 @@ pub struct BrokerState {
     pub grant_installed: bool,
     /// [`Engine::retained_state_sizes`].
     pub engine: BTreeMap<&'static str, usize>,
+    /// Per connected client, the results that reported input since its admission, as its
+    /// grant's ledger counts them ([`GrantLedger::spent`]). Never on the wire.
+    pub spent: BTreeMap<ClientId, u64>,
 }
 
 /// Serves several MCP connections on one engine under the input lease and each client's
@@ -243,6 +272,14 @@ enum Authority {
     /// The SHA-256 of the ticket the client attached with: its grant is asked of the
     /// [`GrantStore`] on each call. The ticket itself is not kept.
     Ticket([u8; 32]),
+}
+
+/// A connected client: where its grant comes from, and its grant's ledger. One entry, so that
+/// leaving deletes both at once.
+struct Client {
+    authority: Authority,
+    /// The count and ceilings of its grant's delivery budget and term, kept from its admission.
+    ledger: GrantLedger,
 }
 
 /// What a well-formed handshake line presents.
@@ -285,8 +322,8 @@ struct State {
     granted: Arc<GrantedPolicy>,
     /// The operator's store itself, for the stop and the purge request.
     operator: Arc<dyn PolicyStore>,
-    /// Each connected client, with where its grant comes from.
-    clients: BTreeMap<ClientId, Authority>,
+    /// Each connected client, with where its grant comes from and its grant's ledger.
+    clients: BTreeMap<ClientId, Client>,
     /// The hashes of the tickets spent so far, at most [`MAX_SPENT_TICKETS`]. Kept for the
     /// life of the broker: a purge deletes perception state, not this.
     spent: BTreeSet<[u8; 32]>,
@@ -503,7 +540,13 @@ impl Broker {
             let outcome = state.leases.connect(now);
             state.apply(&outcome.change);
             let client = outcome.result.map_err(BrokerError::Lease)?;
-            state.clients.insert(client, Authority::Handed(grant));
+            state.clients.insert(
+                client,
+                Client {
+                    authority: Authority::Handed(grant),
+                    ledger: GrantLedger::new(now),
+                },
+            );
             (client, seat)
         };
         Ok(self.connection_for(client, seat))
@@ -597,7 +640,13 @@ impl Broker {
                     Authority::Ticket(hash)
                 }
             };
-            state.clients.insert(client, authority);
+            state.clients.insert(
+                client,
+                Client {
+                    authority,
+                    ledger: GrantLedger::new(now),
+                },
+            );
             (client, seat)
         };
         Ok(self.connection_for(client, seat))
@@ -808,6 +857,11 @@ impl State {
             clients: self.clients.keys().copied().collect(),
             grant_installed: self.granted.current() != self.operator.current(),
             engine: self.engine.retained_state_sizes(),
+            spent: self
+                .clients
+                .iter()
+                .map(|(client, entry)| (*client, entry.ledger.spent()))
+                .collect(),
         }
     }
 
@@ -877,7 +931,24 @@ impl Backend for Member {
         // A client the table does not know neither publishes nor delivers.
         let holds = settled.result.unwrap_or(false);
         let reports = asked || state.clients.len() > 1;
-        let grant = self.shared.grant_of(state.clients.get(&self.client));
+        // The grant read for this call, then its budget and term at the call's one instant
+        // (ADR-0040, proposed): the ledger takes the meet of what was read, and the grant
+        // installed is the one the client may still use.
+        let entry = state.clients.get_mut(&self.client);
+        let read = self.shared.grant_of(entry.as_ref().map(|e| &e.authority));
+        let (grant, term_ended, budget_spent) = match entry {
+            Some(entry) => {
+                if let Some(read) = &read {
+                    entry.ledger.read(read);
+                }
+                (
+                    entry.ledger.effective(read, now),
+                    entry.ledger.term_ended(now),
+                    entry.ledger.budget_spent(),
+                )
+            }
+            None => (None, false, false),
+        };
         let granted = Arc::clone(&state.granted);
         let _installed = granted.install(grant);
         let engine = &mut state.engine;
@@ -897,17 +968,34 @@ impl Backend for Member {
                 }
                 tools::observation(engine, result)
             }
-            // A client's own retry is answered from its journal before the lease is asked for:
-            // a known identifier never reaches the gate (ADR-0039, decision 11).
+            // A dry run, and a client's own retry, are answered by the engine before any limit
+            // or the lease is asked for: a dry run spends nothing (ADR-0040, decision 4), and a
+            // known identifier is answered from the journal, never delivered again (ADR-0039,
+            // decision 11; D24).
             ToolCall::Act(request)
-                if request.dry_run
-                    || holds
-                    || engine.knows_request(self.client, &request.request_id) =>
+                if request.dry_run || engine.knows_request(self.client, &request.request_id) =>
             {
                 let result = engine.execute_action_for(self.client, &request);
                 tools::action(&result, engine.last_action_timings())
             }
-            ToolCall::Act(request) => tools::action(&refused_without_lease(&request), None),
+            // A live action new to the journal: the term, then the budget, then the lease, each
+            // refused before the gate, delivering and recording nothing.
+            ToolCall::Act(request) if term_ended => {
+                tools::action(&refused_before_the_gate(&request, TERM_ENDED), None)
+            }
+            ToolCall::Act(request) if budget_spent => {
+                tools::action(&refused_before_the_gate(&request, BUDGET_SPENT), None)
+            }
+            ToolCall::Act(request) if holds => {
+                let result = engine.execute_action_for(self.client, &request);
+                if let Some(entry) = state.clients.get_mut(&self.client) {
+                    entry.ledger.record(&result);
+                }
+                tools::action(&result, engine.last_action_timings())
+            }
+            ToolCall::Act(request) => {
+                tools::action(&refused_before_the_gate(&request, NO_LEASE), None)
+            }
             ToolCall::Metrics => return Ok(tools::metrics(engine)),
         };
         if reports {
@@ -925,15 +1013,16 @@ fn nothing_published() -> ToolError {
     ToolError::new(ErrorCode::StaleSnapshot, NOTHING_PUBLISHED)
 }
 
-/// The refusal of a live action from a client without the lease, shaped as the gate's own
-/// refusals: the request's identifiers, `rejected`, nothing delivered.
-fn refused_without_lease(request: &ActionRequest) -> ActionResult {
+/// The broker's refusal of a live action before the gate (the term, the budget or the lease),
+/// shaped as the gate's own refusals: the request's identifiers, `rejected` with
+/// `POLICY_DENIED` and `message`, nothing delivered. It is not journaled.
+fn refused_before_the_gate(request: &ActionRequest, message: &'static str) -> ActionResult {
     ActionResult {
         request_id: request.request_id.clone(),
         status: ActionStatus::Rejected,
         target_id: request.target_id.clone(),
         snapshot_id: request.snapshot_id.clone(),
-        error: Some(ToolError::new(ErrorCode::PolicyDenied, NO_LEASE)),
+        error: Some(ToolError::new(ErrorCode::PolicyDenied, message)),
         observed_effect: None,
         delivered: false,
     }

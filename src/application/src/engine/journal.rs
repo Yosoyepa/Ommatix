@@ -18,8 +18,6 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use ommatix_domain::identity::ActionStatus;
-
 use crate::contract::{ActionKind, ActionRequest, ActionResult, ExpectedEffect, ScrollDirection};
 
 /// Request IDs remembered per session whose results reported no input, for the actions
@@ -36,11 +34,6 @@ pub const JOURNAL_CLIENTS: usize = 8;
 /// ([`Engine::forget_client`](crate::Engine::forget_client)) keeps the clients' evictable
 /// results within [`JOURNAL_CAPACITY`] together.
 pub const JOURNAL_CAPACITY_PER_CLIENT: usize = JOURNAL_CAPACITY / JOURNAL_CLIENTS;
-
-/// Whether `result` reported input, or may have: such a result is kept for the session.
-fn reported_input(result: &ActionResult) -> bool {
-    result.delivered || result.status == ActionStatus::Indeterminate
-}
 
 /// 64-bit FNV-1a. Not cryptographic: it tells a replay from a conflict, nothing more.
 pub(super) fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -166,7 +159,7 @@ impl Journal {
     }
 
     pub fn record(&mut self, request_id: &str, hash: u64, result: ActionResult) {
-        let keeps_result = reported_input(&result);
+        let keeps_result = result.reported_input();
         let replaced = self
             .entries
             .insert(request_id.to_owned(), (hash, result))
@@ -190,6 +183,7 @@ impl Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ommatix_domain::identity::ActionStatus;
 
     fn request(text: &str) -> ActionRequest {
         ActionRequest {

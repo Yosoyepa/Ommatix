@@ -451,6 +451,13 @@ impl ActionResult {
     pub const fn verified(&self) -> bool {
         self.status.verified()
     }
+
+    /// Whether this result reported input, or may have: delivered, or `indeterminate` with or
+    /// without `delivered`. The one predicate (D11) by which the journal keeps a result for the
+    /// session and by which the broker spends a grant's delivery budget (ADR-0040, proposed).
+    pub fn reported_input(&self) -> bool {
+        self.delivered || self.status == ActionStatus::Indeterminate
+    }
 }
 
 /// An action that passed every check. Only the engine's gate builds one, so an actuator

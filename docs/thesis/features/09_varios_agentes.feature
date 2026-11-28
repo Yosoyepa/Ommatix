@@ -8,7 +8,9 @@ Característica: Varios agentes sobre un motor con un arrendamiento de entrada
   publica. Cada cliente actúa bajo su propia concesión (ADR-0040, propuesta). Los escenarios
   corren sobre el escritorio simulado y un doble del actuador. Desde BDD-68, los agentes se
   conectan con el saludo de un tique (ADR-0043, propuesta) por flujos en memoria y sus
-  concesiones salen del archivo de concesiones del operador, leído en cada llamada. El ejecutable
+  concesiones salen del archivo de concesiones del operador, leído en cada llamada. Desde BDD-72,
+  esa concesión lleva también un presupuesto de entregas o un plazo, con el reloj manual del
+  mundo. El ejecutable
   sirve el intermediario por un tubo con nombre sólo en Windows, compilado con `broker-pipe` y con
   el interruptor encendido; el tubo se prueba en el adaptador MCP y en el ejecutable, no aquí.
 
@@ -81,3 +83,27 @@ Característica: Varios agentes sobre un motor con un arrendamiento de entrada
     Cuando el operador retira la concesión del archivo
     Entonces su siguiente observación no muestra valores
     Y su acción real sobre esa página se rechaza con POLICY_DENIED sin entregar ningún evento nuevo
+
+  @BDD-72 @RF-19 @IT-37
+  Escenario: BDD-72 Un agente con un presupuesto de una entrega
+    Dado un motor con el intermediario y un archivo de concesiones que da a un tique permiso para entregar y leer valores con un presupuesto de una entrega
+    Y un agente conectado con ese tique que ha gastado su presupuesto con una acción real
+    Cuando repite la misma petición
+    Entonces recibe el mismo resultado sin ningún evento nuevo
+    Y una acción real nueva se rechaza con POLICY_DENIED nombrando el presupuesto sin ningún evento nuevo
+    Y una acción simulada sigue siendo simulated
+
+  @BDD-74 @RF-19 @IT-38
+  Escenario: BDD-74 Una concesión cuyo plazo terminó
+    Dado un motor con el intermediario y un archivo de concesiones que da a un tique permiso para entregar y leer valores con un plazo de un segundo
+    Y un agente conectado con ese tique
+    Cuando el reloj pasa el plazo de la concesión
+    Entonces su siguiente observación no muestra valores
+    Y su clic real se rechaza con POLICY_DENIED nombrando el plazo sin entregar ningún evento
+
+  @BDD-77 @RF-19 @IT-37
+  Escenario: BDD-77 Subir el presupuesto en el archivo no devuelve entregas
+    Dado un motor con el intermediario y un archivo de concesiones que da a un tique permiso para entregar y leer valores con un presupuesto de una entrega
+    Y un agente conectado con ese tique que ha gastado su presupuesto con una acción real
+    Cuando el operador sube el presupuesto del tique en el archivo a diez entregas
+    Entonces una acción real nueva se rechaza con POLICY_DENIED nombrando el presupuesto sin ningún evento nuevo
