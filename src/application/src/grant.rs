@@ -48,12 +48,11 @@ pub struct Grant {
     pub deliver_input: bool,
     /// Whether the client may read field values.
     pub read_values: bool,
-    /// The most results that report input the client may have, counted from its admission:
-    /// `None` is no limit, `Some(0)` observe only. Enforced by the broker, not by
-    /// [`Grant::narrow`].
+    /// The ceiling for new live actions whose results report input, counted from admission.
+    /// None supplies no ceiling, and Some(0) bars live input. The broker enforces this limit.
     pub delivery_budget: Option<u32>,
-    /// How long after its admission the client may deliver: `None` for the whole connection.
-    /// Enforced by the broker, not by [`Grant::narrow`].
+    /// The duration from admission used at a tool call's entry. None supplies no term.
+    /// The broker enforces this limit without rechecking an action already admitted.
     pub term: Option<Duration>,
 }
 
@@ -900,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn ut_81_two_grants_that_differ_only_in_budget_and_term_narrow_every_policy_alike() {
+    fn ut_81_different_budgets_and_terms_narrow_the_generated_policies_alike() {
         let mut rng = Rng(0x0040_0083);
         let mut differed = 0;
         for case in 0..CASES {
@@ -1026,7 +1025,7 @@ mod tests {
     }
 
     #[test]
-    fn ut_93_a_saturated_count_reads_as_spent_for_every_budget() {
+    fn ut_93_a_saturated_count_spends_even_the_largest_budget() {
         let mut ledger = GrantLedger {
             admitted_at: Duration::ZERO,
             spent: u64::MAX - 1,

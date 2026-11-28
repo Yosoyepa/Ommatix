@@ -798,7 +798,7 @@ fn it_13_an_operator_purge_honoured_at_the_next_request_ends_the_lease() {
 // ---- 6. grants ----
 
 #[test]
-fn it_14_a_client_without_a_grant_observes_without_values_and_never_delivers() {
+fn it_14_a_client_without_a_grant_observes_without_values_and_its_live_attempt_is_refused() {
     // Alone: it holds the lease implicitly, and still delivers nothing.
     let rig = rig();
     let mut alone = rig.connect(None);
@@ -4186,7 +4186,7 @@ fn it_37_an_engine_refusal_spends_nothing_and_an_indeterminate_result_spends_one
     assert_eq!(code(&stale), Some("STALE_SNAPSHOT"), "{stale}");
     assert_eq!(spent_by(&rig.broker, &conn), Some(0));
 
-    // The OS inserts fewer events than were submitted: indeterminate, not delivered.
+    // The fixture reports fewer inserted events than were submitted: indeterminate, delivered=false.
     rig.world.short.store(true, Ordering::SeqCst);
     let uncertain = observe_and_click(&mut conn, "s2");
     assert_eq!(uncertain["status"], "indeterminate", "{uncertain}");
@@ -4261,7 +4261,7 @@ fn it_37_a_budget_of_zero_refuses_the_first_live_action_and_a_spent_budget_keeps
     assert_eq!(value_of(&see(&mut blind_one)), None);
 }
 
-/// A broker that asks a store, with one client admitted by `presented` under `grant`.
+/// A broker with an in-memory grant store and one client admitted with ticket 1 under grant.
 fn ticketed(grant: Grant) -> (World, Arc<Grants>, Broker, BrokerConnection) {
     let world = World::new();
     let grants = Arc::new(Grants::default());
@@ -4317,10 +4317,10 @@ fn it_37_ten_then_five_then_eight_keeps_five() {
 }
 
 #[test]
-fn it_37_a_withdrawal_and_a_relisting_keep_the_count_and_the_ceiling() {
+fn it_37_withdrawing_and_relisting_with_a_higher_budget_keeps_the_count_and_ceiling() {
     let (world, grants, broker, mut conn) = ticketed(limited(Some(2), None));
     assert!(delivered(&observe_and_click(&mut conn, "w1")));
-    // Withdrawn: the gate refuses with the policy's text, and nothing is spent.
+    // This client holds the lease and has deliveries left. With its grant withdrawn, the gate refuses it.
     grants.set(&ticket(1), None);
     let withdrawn = observe_and_click(&mut conn, "w2");
     assert_eq!(code(&withdrawn), Some("POLICY_DENIED"), "{withdrawn}");
@@ -4340,13 +4340,12 @@ fn it_37_a_withdrawal_and_a_relisting_keep_the_count_and_the_ceiling() {
 fn it_37_a_purge_leaves_a_connected_clients_count_and_another_clients_leaving_too() {
     let (world, grants, broker, mut conn) = ticketed(limited(Some(2), None));
     assert!(delivered(&observe_and_click(&mut conn, "p1")));
-    // The operator's purge, honoured at the next request: perception state goes, not the count.
+    // This request honors the operator's purge. The ledger count is still one.
     world.operator.request_purge();
     let page = observe(&mut conn);
     assert!(!world.operator.purge_pending(), "the purge was honoured");
     assert_eq!(spent_by(&broker, &conn), Some(1));
-    // A second client comes and goes: its leaving purges nothing while this one is connected,
-    // and this client's count stays.
+    // A second client comes and goes. The first client's count remains one.
     grants.set(&ticket(2), Some(full()));
     let other = broker.admit(ticket(2).into_bytes()).unwrap();
     other.close();
@@ -4384,8 +4383,7 @@ fn it_37_a_new_ticket_starts_at_zero_a_restart_admits_a_listed_ticket_with_a_ful
     assert!(delivered(&observe_and_click(&mut second, "n3")));
     second.close();
 
-    // A restart is a new broker over the same file: the first ticket attaches again, with its
-    // whole budget.
+    // A fresh broker using the same in-memory store admits the first ticket with a fresh budget.
     let restarted = world.ticket_broker(grants.clone(), 8);
     let mut again = restarted.admit(ticket(1).into_bytes()).unwrap();
     assert_eq!(spent_by(&restarted, &again), Some(0));
@@ -4398,7 +4396,8 @@ fn it_37_a_new_ticket_starts_at_zero_a_restart_admits_a_listed_ticket_with_a_ful
 }
 
 #[test]
-fn it_37_a_sole_client_with_a_budget_gets_the_stdio_servers_bytes_until_its_refusal() {
+fn it_37_a_sole_client_with_the_same_policy_and_a_budget_matches_stdio_in_the_fixture_until_refusal()
+ {
     let policy = live_policy();
     let equal_with_budget = Grant {
         applications: policy.allowed_applications.iter().cloned().collect(),
@@ -4425,7 +4424,7 @@ fn it_37_a_sole_client_with_a_budget_gets_the_stdio_servers_bytes_until_its_refu
     twin.structured("execute_action", click(&page, "d1", true));
     let page = twin.structured("observe_screen", json!({}));
     assert!(twin.compared >= 8);
-    // The third delivery: the stdio server delivers, the broker refuses before the gate.
+    // On the next new live request, the stdio fixture delivers and the broker refuses for the budget.
     let message = json!({ "jsonrpc": "2.0", "id": 99, "method": "tools/call",
         "params": { "_meta": modern_meta(), "name": "execute_action",
                     "arguments": click(&page, "d3", true) } })
@@ -4538,19 +4537,23 @@ fn it_38_the_term_starts_at_admission_not_at_the_first_grant_read() {
 }
 
 #[test]
-fn it_38_a_two_phase_type_whose_focus_wait_passes_the_end_still_sends_its_keys() {
-    // Focus is reported from the fourth read on: the wait polls past the term's end.
+fn it_38_a_two_phase_type_admitted_before_the_end_sends_keys_and_later_live_input_is_refused() {
+    // The fixture reports focus on the fourth read. The clock is past the term after the action.
     let world = World::phased(3);
     let broker = world.broker(McpConfig::default(), 8);
     let mut conn = broker.connect(Some(limited(None, Some(1_000)))).unwrap();
     world.advance(ms(990));
     let page = observe(&mut conn);
+    assert!(
+        world.clock.now() < ms(1_000),
+        "the manual clock must be before the term at the action call"
+    );
     let typed = act(&mut conn, type_into(&page, "p1", true));
     assert_eq!(typed["input_delivered"], true, "{typed}");
     assert_eq!(world.phases().keys.load(Ordering::SeqCst), 1, "{typed}");
     assert!(
         world.clock.now() > ms(1_000),
-        "the wait ended after the term: {:?}",
+        "the manual clock was past the term after the action: {:?}",
         world.clock.now()
     );
     let next = observe(&mut conn);
@@ -4578,7 +4581,7 @@ fn it_38_a_term_of_zero_is_served_as_no_grant() {
 }
 
 #[test]
-fn it_38_a_lowered_term_ends_at_the_next_call_and_a_raised_one_is_ignored() {
+fn it_38_a_lowered_term_refuses_the_next_live_action_and_a_raise_does_not_restore_it() {
     let (world, grants, _broker, mut conn) = ticketed(limited(None, Some(5_000)));
     world.advance(ms(1_000));
     assert!(delivered(&observe_and_click(&mut conn, "t1")));
@@ -4641,7 +4644,7 @@ fn it_14_a_grant_whose_window_class_or_pin_the_window_does_not_match_is_refused_
         assert_no_screen_text(&refused);
         assert_eq!(rig.world.events(), 0, "{what}");
     }
-    // What the fixture's actuator attests: its window's class and handle deliver.
+    // The fixture attests this class and handle. Each matching limit is a separate positive control.
     let controls = [
         Grant {
             window_classes: BTreeMap::from([(
@@ -4765,8 +4768,7 @@ fn random_limits(rng: &mut Rng) -> (Option<u32>, Option<u64>) {
 
 #[test]
 #[allow(clippy::too_many_lines)] // one generated run: each kind of step beside its prediction
-fn it_39_generated_interleavings_with_budgets_and_terms_never_exceed_a_ceiling_nor_deliver_after_a_term()
- {
+fn it_39_generated_steps_match_the_ledger_and_new_input_respects_entry_limits() {
     const STEPS: usize = 4_000;
     const SLOTS: usize = 4;
     let world = World::new();
@@ -4777,186 +4779,194 @@ fn it_39_generated_interleavings_with_budgets_and_terms_never_exceed_a_ceiling_n
     let (mut issued, mut next_request) = (0_u64, 0_u64);
     let mut seen: BTreeMap<LimitSeen, usize> = BTreeMap::new();
     let mut reported = 0_usize;
+    let mut checked = 0_usize;
 
     for step in 0..STEPS {
         let now = world.clock.now();
         let index = rng.below(SLOTS);
         let dice = rng.below(100);
-        let Some(slot) = slots[index].as_mut() else {
-            // Admit a client, by ticket or by hand, with random limits.
-            let (budget, term_ms) = random_limits(&mut rng);
-            let grant = limited(budget, term_ms);
-            let (conn, ticket, handed) = if rng.chance(50) {
-                issued += 1;
-                let presented = ticket(issued);
-                grants.set(&presented, Some(grant));
-                let conn = broker.admit(presented.clone().into_bytes()).unwrap();
-                (conn, Some(presented), None)
-            } else {
-                (
-                    broker.connect(Some(grant.clone())).unwrap(),
-                    None,
-                    Some(grant),
-                )
+        'step: {
+            let Some(slot) = slots[index].as_mut() else {
+                // Admit a client, by ticket or by hand, with random limits.
+                let (budget, term_ms) = random_limits(&mut rng);
+                let grant = limited(budget, term_ms);
+                let (conn, ticket, handed) = if rng.chance(50) {
+                    issued += 1;
+                    let presented = ticket(issued);
+                    grants.set(&presented, Some(grant));
+                    let conn = broker.admit(presented.clone().into_bytes()).unwrap();
+                    (conn, Some(presented), None)
+                } else {
+                    (
+                        broker.connect(Some(grant.clone())).unwrap(),
+                        None,
+                        Some(grant),
+                    )
+                };
+                slots[index] = Some(Limited {
+                    conn,
+                    account: Account::new(now),
+                    ticket,
+                    handed,
+                    page: None,
+                    recent: Vec::new(),
+                });
+                break 'step;
             };
-            slots[index] = Some(Limited {
-                conn,
-                account: Account::new(now),
-                ticket,
-                handed,
-                page: None,
-                recent: Vec::new(),
-            });
-            continue;
-        };
-        // The grant this call will read: the store's, or the one handed in.
-        let reads = |slot: &Limited| match &slot.ticket {
-            Some(presented) => grants.listed().get(&sha256(presented)).cloned(),
-            None => slot.handed.clone(),
-        };
-        match dice {
-            // Leave.
-            0..=3 => {
-                let slot = slots[index].take().unwrap();
-                let client = slot.conn.client();
-                slot.conn.close();
-                let retained = broker.retained().unwrap();
-                assert!(!retained.spent.contains_key(&client), "step {step}");
-            }
-            // The operator edits a ticket's grant: lower, raise, withdraw or list again.
-            4..=13 => {
-                if let Some(presented) = &slot.ticket {
-                    let edit = if rng.chance(15) {
-                        None
+            // The grant this call will read: the store's, or the one handed in.
+            let reads = |slot: &Limited| match &slot.ticket {
+                Some(presented) => grants.listed().get(&sha256(presented)).cloned(),
+                None => slot.handed.clone(),
+            };
+            match dice {
+                // Leave.
+                0..=3 => {
+                    let slot = slots[index].take().unwrap();
+                    let client = slot.conn.client();
+                    slot.conn.close();
+                    let retained = broker.retained().unwrap();
+                    assert!(!retained.spent.contains_key(&client), "step {step}");
+                }
+                // Edit the in-memory grant store: lower, raise, withdraw or list the grant again.
+                4..=13 => {
+                    if let Some(presented) = &slot.ticket {
+                        let edit = if rng.chance(15) {
+                            None
+                        } else {
+                            let (budget, term_ms) = random_limits(&mut rng);
+                            Some(limited(budget, term_ms))
+                        };
+                        grants.set(presented, edit);
+                    }
+                }
+                // Time passes.
+                14..=23 => world.advance(ms(u64::try_from(100 + rng.below(1_400)).unwrap())),
+                // The lease, through the methods (no tool call: the store is not asked).
+                24..=33 => {
+                    if rng.chance(60) {
+                        let _ = slot.conn.acquire();
                     } else {
-                        let (budget, term_ms) = random_limits(&mut rng);
-                        Some(limited(budget, term_ms))
+                        let _ = slot.conn.release();
+                    }
+                }
+                // The operator's purge: perception state goes, every count stays. It is honoured at
+                // the next request and forgets every journal, so nothing before it is retried.
+                34..=35 => {
+                    world.operator.request_purge();
+                    for slot in slots.iter_mut().flatten() {
+                        slot.recent.clear();
+                    }
+                }
+                // Observe.
+                36..=55 => {
+                    if let Some(grant) = reads(slot)
+                        && slot.account.read(&grant)
+                    {
+                        *seen.entry(LimitSeen::LoweredByEdit).or_default() += 1;
+                    }
+                    let page = observe(&mut slot.conn);
+                    assert!(!world.operator.purge_pending(), "step {step}: honoured");
+                    if page["elements"].is_array() {
+                        slot.page = Some(page);
+                    }
+                }
+                // Act: a new request (live or dry), a retry or a conflict.
+                _ => {
+                    let retry = dice >= 90 && !slot.recent.is_empty();
+                    let conflict = !retry && dice >= 86 && !slot.recent.is_empty();
+                    let (arguments, known) = if retry || conflict {
+                        let (arguments, result) = slot.recent[rng.below(slot.recent.len())].clone();
+                        if conflict {
+                            let mut other = arguments.clone();
+                            other["dry_run"] = json!(arguments["dry_run"] != true);
+                            (other, Some((arguments, result)))
+                        } else {
+                            (arguments, Some((Value::Null, result)))
+                        }
+                    } else {
+                        let Some(page) = &slot.page else { break 'step };
+                        next_request += 1;
+                        let live = rng.chance(80);
+                        (click(page, &format!("g{next_request}"), live), None)
                     };
-                    grants.set(presented, edit);
-                }
-            }
-            // Time passes.
-            14..=23 => world.advance(ms(u64::try_from(100 + rng.below(1_400)).unwrap())),
-            // The lease, through the methods (no tool call: the store is not asked).
-            24..=33 => {
-                if rng.chance(60) {
-                    let _ = slot.conn.acquire();
-                } else {
-                    let _ = slot.conn.release();
-                }
-            }
-            // The operator's purge: perception state goes, every count stays. It is honoured at
-            // the next request and forgets every journal, so nothing before it is retried.
-            34..=35 => {
-                world.operator.request_purge();
-                for slot in slots.iter_mut().flatten() {
-                    slot.recent.clear();
-                }
-            }
-            // Observe.
-            36..=55 => {
-                if let Some(grant) = reads(slot)
-                    && slot.account.read(&grant)
-                {
-                    *seen.entry(LimitSeen::LoweredByEdit).or_default() += 1;
-                }
-                let page = observe(&mut slot.conn);
-                assert!(!world.operator.purge_pending(), "step {step}: honoured");
-                if page["elements"].is_array() {
-                    slot.page = Some(page);
-                }
-            }
-            // Act: a new request (live or dry), a retry or a conflict.
-            _ => {
-                let retry = dice >= 90 && !slot.recent.is_empty();
-                let conflict = !retry && dice >= 86 && !slot.recent.is_empty();
-                let (arguments, known) = if retry || conflict {
-                    let (arguments, result) = slot.recent[rng.below(slot.recent.len())].clone();
-                    if conflict {
-                        let mut other = arguments.clone();
-                        other["dry_run"] = json!(arguments["dry_run"] != true);
-                        (other, Some((arguments, result)))
-                    } else {
-                        (arguments, Some((Value::Null, result)))
+                    // The grant this call reads, as the broker reads it at the call's entry.
+                    if reads(slot).is_some_and(|grant| slot.account.read(&grant)) {
+                        *seen.entry(LimitSeen::LoweredByEdit).or_default() += 1;
                     }
-                } else {
-                    let Some(page) = &slot.page else { continue };
-                    next_request += 1;
-                    let live = rng.chance(80);
-                    (click(page, &format!("g{next_request}"), live), None)
-                };
-                // The grant this call reads, as the broker reads it at the call's entry.
-                if reads(slot).is_some_and(|grant| slot.account.read(&grant)) {
-                    *seen.entry(LimitSeen::LoweredByEdit).or_default() += 1;
-                }
-                let live = arguments["dry_run"] == false;
-                let response = act(&mut slot.conn, arguments.clone());
-                assert_no_screen_text(&response);
-                let outcome = match &known {
-                    Some((_, stored)) if !conflict => {
-                        assert_eq!(&response, stored, "step {step}: a retry replays");
-                        if slot.account.budget_spent() {
-                            LimitSeen::ReplayAfterSpend
-                        } else {
-                            LimitSeen::Other
+                    let live = arguments["dry_run"] == false;
+                    let response = act(&mut slot.conn, arguments.clone());
+                    assert_no_screen_text(&response);
+                    let outcome = match &known {
+                        Some((_, stored)) if !conflict => {
+                            assert_eq!(&response, stored, "step {step}: a retry replays");
+                            if slot.account.budget_spent() {
+                                LimitSeen::ReplayAfterSpend
+                            } else {
+                                LimitSeen::Other
+                            }
+                        }
+                        Some(_) => {
+                            assert_eq!(code(&response), Some("REQUEST_CONFLICT"), "step {step}");
+                            LimitSeen::Conflict
+                        }
+                        None if !live => {
+                            assert!(!refused_by_the_broker(&response), "step {step}");
+                            LimitSeen::DryRun
+                        }
+                        None if slot.account.term_ended(now) => {
+                            assert!(
+                                refused_for(&response, TERM_ENDED),
+                                "step {step}: {response}"
+                            );
+                            LimitSeen::TermEnded
+                        }
+                        None if slot.account.budget_spent() => {
+                            assert!(
+                                refused_for(&response, BUDGET_SPENT),
+                                "step {step}: {response}"
+                            );
+                            LimitSeen::BudgetSpent
+                        }
+                        None => {
+                            assert!(
+                                !refused_for(&response, TERM_ENDED)
+                                    && !refused_for(&response, BUDGET_SPENT),
+                                "step {step}: {response}"
+                            );
+                            if delivered(&response) || response["status"] == "indeterminate" {
+                                // A new result that reports input must fit the budget in force at this call's entry.
+                                assert!(
+                                slot.account
+                                    .budget
+                                    .is_none_or(|budget| slot.account.spent < u64::from(budget)),
+                                "step {step}: new input exceeded the budget ceiling at entry"
+                            );
+                                assert!(
+                                    slot.account.end().is_none_or(|end| now < end),
+                                    "step {step}: new input was reported for a call at or after the term's end"
+                                );
+                                slot.account.spent += 1;
+                                reported += 1;
+                                LimitSeen::Delivered
+                            } else {
+                                LimitSeen::Other
+                            }
+                        }
+                    };
+                    // What the engine answered is in the client's journal; the broker's refusals
+                    // are not.
+                    if known.is_none() && !refused_by_the_broker(&response) {
+                        slot.recent.push((arguments, response));
+                        if slot.recent.len() > 8 {
+                            slot.recent.remove(0);
                         }
                     }
-                    Some(_) => {
-                        assert_eq!(code(&response), Some("REQUEST_CONFLICT"), "step {step}");
-                        LimitSeen::Conflict
-                    }
-                    None if !live => {
-                        assert!(!refused_by_the_broker(&response), "step {step}");
-                        LimitSeen::DryRun
-                    }
-                    None if slot.account.term_ended(now) => {
-                        assert!(
-                            refused_for(&response, TERM_ENDED),
-                            "step {step}: {response}"
-                        );
-                        LimitSeen::TermEnded
-                    }
-                    None if slot.account.budget_spent() => {
-                        assert!(
-                            refused_for(&response, BUDGET_SPENT),
-                            "step {step}: {response}"
-                        );
-                        LimitSeen::BudgetSpent
-                    }
-                    None => {
-                        assert!(
-                            !refused_for(&response, TERM_ENDED)
-                                && !refused_for(&response, BUDGET_SPENT),
-                            "step {step}: {response}"
-                        );
-                        if delivered(&response) || response["status"] == "indeterminate" {
-                            slot.account.spent += 1;
-                            reported += 1;
-                            // G1: never above the ceiling in force at the call's entry.
-                            if let Some(budget) = slot.account.budget {
-                                assert!(slot.account.spent <= u64::from(budget), "step {step}");
-                            }
-                            if let Some(end) = slot.account.end() {
-                                assert!(now < end, "step {step}: delivered at or after the end");
-                            }
-                            LimitSeen::Delivered
-                        } else {
-                            LimitSeen::Other
-                        }
-                    }
-                };
-                // What the engine answered is in the client's journal; the broker's refusals
-                // are not.
-                if known.is_none() && !refused_by_the_broker(&response) {
-                    slot.recent.push((arguments, response));
-                    if slot.recent.len() > 8 {
-                        slot.recent.remove(0);
-                    }
+                    *seen.entry(outcome).or_default() += 1;
                 }
-                *seen.entry(outcome).or_default() += 1;
             }
         }
-        // After every step: each count is the prediction, and none exceeds its ceiling.
+        // After every step, compare connected clients, ledger counts and desktop handoffs with the model.
+        checked += 1;
         let retained = broker.retained().unwrap();
         let mut connected = BTreeSet::new();
         for slot in slots.iter().flatten() {
@@ -4973,13 +4983,17 @@ fn it_39_generated_interleavings_with_budgets_and_terms_never_exceed_a_ceiling_n
             retained.spent.keys().copied().collect::<BTreeSet<_>>(),
             connected
         );
-        assert!(!retained.grant_installed, "step {step}");
+        assert!(
+            !retained.grant_installed,
+            "step {step}: the effective policy differs from the operator's between calls"
+        );
         assert_eq!(
             world.events(),
             reported,
-            "step {step}: events are deliveries"
+            "step {step}: desktop handoffs differ from the modeled total"
         );
     }
+    assert_eq!(checked, STEPS, "the generated run did not check every step");
     for outcome in [
         LimitSeen::Delivered,
         LimitSeen::BudgetSpent,
@@ -5005,10 +5019,41 @@ fn it_39_generated_interleavings_with_budgets_and_terms_never_exceed_a_ceiling_n
 /// is what this test drives.
 #[test]
 fn it_39_four_threads_with_a_budget_of_one_each_deliver_exactly_four_times() {
+    /// Wall-clock allowance for the whole case, including its cleanup.
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+    // Use one wall-clock deadline for the whole case, including its worker joins and cleanup.
+    // The broker still uses the injected manual clock.
+    // Dropping the outer handle detaches the case, so a blocked worker cannot hold the harness.
+    let deadline = std::time::Instant::now() + DEADLINE;
+    let (done, outcome) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            four_threads_with_a_budget_of_one_each(deadline);
+        }));
+        let _ = done.send(result);
+    });
+    let received =
+        outcome.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
+    let in_time = std::time::Instant::now() < deadline;
+    drop(worker);
+    match received {
+        Ok(_) if !in_time => panic!("the threaded grant case did not complete by its deadline"),
+        Ok(Ok(())) => {}
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("the threaded grant case did not complete by its deadline")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the threaded grant case ended without reporting its result")
+        }
+    }
+}
+
+/// The whole threaded case of IT-39: the world, the broker, the four connections, the scoped
+/// threads, the barrier, every broker call, the joins, the checks and the cleanup.
+fn four_threads_with_a_budget_of_one_each(deadline: std::time::Instant) {
     /// The turns as the lease's holder each thread takes: one delivery, then refusals.
     const ROUNDS: usize = 10;
-    /// A bound that can only fail the test: no thread waits on the clock or sleeps.
-    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
     const CLIENTS: usize = 4;
     let world = World::new();
     let broker = world.broker(McpConfig::default(), CLIENTS);
@@ -5025,15 +5070,12 @@ fn it_39_four_threads_with_a_budget_of_one_each_deliver_exactly_four_times() {
                 let barrier = &barrier;
                 scope.spawn(move || {
                     barrier.wait();
-                    let start = std::time::Instant::now();
                     let mut live = Vec::new();
-                    // A round is one turn as the holder. Asking again keeps a waiter's place,
-                    // and the holder releases at the end of its turn, so every waiter is served
-                    // in order; acting only as the holder makes every live outcome a delivery
-                    // or the budget's refusal.
+                    // A round is one turn as holder. A waiter asks again without losing its place.
+                    // The holder releases after each attempt. Check the recorded live outcomes after the joins.
                     while live.len() < ROUNDS {
                         assert!(
-                            start.elapsed() < DEADLINE,
+                            std::time::Instant::now() < deadline,
                             "thread {thread} ran out of time"
                         );
                         let _ = conn.acquire();
@@ -5067,21 +5109,17 @@ fn it_39_four_threads_with_a_budget_of_one_each_deliver_exactly_four_times() {
         assert_eq!(
             reported.len(),
             1,
-            "one delivery for {:?}: {live:?}",
+            "one result reporting input for {:?}: {live:?}",
             conn.client()
         );
         assert_eq!(retained.spent.get(&conn.client()), Some(&1));
-        let first = live.iter().position(delivered).unwrap();
         assert!(
-            live[first + 1..]
-                .iter()
-                .all(|r| refused_for(r, BUDGET_SPENT)),
-            "every later live action is refused for the budget: {live:?}"
+            delivered(&live[0]),
+            "the first live attempt must deliver: {live:?}"
         );
         assert!(
-            live.len() > first + 1,
-            "the budget refused something for {:?}",
-            conn.client()
+            live[1..].iter().all(|r| refused_for(r, BUDGET_SPENT)),
+            "every live attempt after the first must be refused for the budget: {live:?}"
         );
     }
     assert_eq!(

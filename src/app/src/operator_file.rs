@@ -96,10 +96,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// `NUL` opens on Windows and is a character device: refused before any read.
+    /// The Windows NUL handle opens and is refused as NotARegularFile.
     #[cfg(windows)]
     #[test]
-    fn ut_76_a_device_that_opens_is_refused_before_any_read() {
+    fn ut_76_an_opened_nul_handle_is_refused_as_not_a_regular_file() {
         assert!(File::open("NUL").is_ok(), "the device opens");
         assert_eq!(
             open_regular(Path::new("NUL")).unwrap_err(),

@@ -51,11 +51,10 @@
 //!    the client's ledger when it reported input. Neither a dry run, a retry nor a refusal
 //!    spends anything. `get_engine_metrics` is answered as by the stdio server.
 //!
-//! Both limits are checked at the call's entry under the broker's one lock, which also covers
-//! the engine call and the count, and a connection's calls are sequential: two deliveries
-//! cannot both pass a budget of one. An action that passed the check completes, both phases of a
-//! `type` included, even if its term ends meanwhile. The agent is told neither its budget nor
-//! its term, only the refusal.
+//! The broker uses the call's entry instant for both limits. Its one lock covers the grant read,
+//! the checks, the engine call and the debit, so two new actions cannot both spend a budget of one.
+//! An action admitted before the term ends runs without a term recheck, including between the two
+//! phases of a type. Responses carry no numeric budget or term. A refusal names the limit.
 //!
 //! Responses have the stdio server's shape, with one addition in `_meta`: on `observe_screen`
 //! and `execute_action`, when the request carried `lease` or more than one client is connected,
@@ -968,10 +967,10 @@ impl Backend for Member {
                 }
                 tools::observation(engine, result)
             }
-            // A dry run, and a client's own retry, are answered by the engine before any limit
-            // or the lease is asked for: a dry run spends nothing (ADR-0040, decision 4), and a
-            // known identifier is answered from the journal, never delivered again (ADR-0039,
-            // decision 11; D24).
+            // A dry run or a request already in this client's journal goes to the engine
+            // without a term, budget or lease refusal from this dispatch. A dry run spends
+            // nothing. The engine replays a known request or reports REQUEST_CONFLICT without
+            // delivering again (ADR-0039, decision 11; D24).
             ToolCall::Act(request)
                 if request.dry_run || engine.knows_request(self.client, &request.request_id) =>
             {

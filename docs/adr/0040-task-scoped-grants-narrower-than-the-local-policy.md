@@ -60,11 +60,11 @@ model cannot read it.
    when it satisfies both pins and both class lists; values are returned when both say so;
    actuation is enabled when both enable it. The operator's stop is not part of a grant and always
    wins.
-2. **A grant carries only limits:** the client it is bound to; a subset of the applications, with
-   optional window classes for each; an optional window pin; the kinds of action the client may
-   deliver; whether it may read values; a budget of delivered actions, where zero means it may only
-   observe; a term on the engine's clock, a duration that runs from the client's admission; and an
-   optional region of the frame outside which it has no target.
+2. **A grant carries only limits.** It is bound to a client. Its limits are the allowed
+   applications, optional window classes and pin, permitted action kinds, access to field values, a
+   delivery budget counted as in decision 10, a term measured from admission, and an optional
+   region. A budget of zero bars live input. The action kinds and region remain planned (decision
+   12).
 3. **A grant is bound to a connection, not quoted by the agent.** A client attaches with a one-use
    ticket that the operator's side creates and the host passes to the `attach` mode of ADR-0039.
    The policy store lists the SHA-256 of each ticket next to its grant, so the engine only reads and
@@ -79,14 +79,13 @@ model cannot read it.
    on it (`src/acceptance/tests/repository.rs`, lines 288–295). The ticket never enters the
    model's context or a log. The handshake is part of
    [ADR-0043](0043-local-named-pipe-transport-for-several-clients.md), decision 9.
-4. **Tickets, budgets and terms are per engine process.** Because the engine writes nothing to the
-   store, that a ticket was spent, what a budget has left and when a term started are kept in the
-   engine process, by the broker: the spent tickets in its spent set, and for each connected
-   client a ledger of its deliveries, of the instant it was admitted and of the ceilings of its
-   budget and term (decision 11). After the engine process restarts, a ticket that the store still lists can
-   attach again, with a full budget and a new term. A restart is an operator's act; an operator who
-   does not want a ticket reused removes it from the store. A spent-list written by the engine
-   would be the first thing the engine writes to the store, and is not adopted.
+4. **Tickets, budgets and terms are per engine process.** The broker keeps the spent ticket hashes
+   in memory. For each connected client it keeps the count defined in decision 10, the admission
+   instant and the two ceilings. Disconnect deletes that client's ledger. After a process restart, a
+   new admission with a ticket the operator still lists gets a new ledger, a full budget and a term
+   measured from that admission. Removing the listing before restart denies that ticket its previous
+   grant. An unlisted ticket can still be admitted without a grant. The engine does not persist a
+   spent list.
 5. **Grants live in the policy store, which needs a new section and a new read path.** The
    operator, or an orchestrator's harness running with the operator's authority, writes grants as
    it writes the rest of the policy. "A change or a withdrawal takes effect at the next action, as
@@ -98,13 +97,13 @@ model cannot read it.
    gains no way to write a grant.
 6. **Where a grant is applied.** The policy-shaped part (applications, window classes, pin,
    actuation, values) is applied by a policy store that decorates the operator's store: the broker
-   sets the calling client's grant under the engine's lock for the length of the call, and every
+   sets the calling client's grant under the broker's lock for the length of the call, and every
    read of the policy, the gate's, the last look's and the view's, then returns the meet. The
-   budget and the term are checked by the broker, under its one lock, at the entry of each call:
-   a live action new to the client's journal is refused when the term has ended, then when the
-   budget is spent, then when the client does not hold the lease, and only otherwise reaches the
-   gate; the lock also covers the engine call and the count, so two deliveries cannot both pass a
-   budget of one. The kinds of action are to be checked in the broker too, and the region in the
+   broker reads the grant and evaluates its ceilings under the same lock, using the call's entry
+   instant. A new live action is refused for an ended term, a spent budget or absence of the
+   lease, in that order. A dry run and a known request bypass those refusals and go to the engine.
+   The lock covers checking and debiting a new action, so two actions cannot both spend a budget
+   of one. The kinds of action are to be checked in the broker too, and the region in the
    engine, because the region needs the target's box, which only the engine's registry knows. The
    policy-shaped part is built this way: `Grant::narrow` and `Grant::meet`, and `GrantedPolicy`,
    the decorating store, into which the broker installs the calling client's grant under its one
@@ -116,13 +115,13 @@ model cannot read it.
    a single client too: the transparency of ADR-0039 covers the lease only. With the broker off
    nothing changes. As built, such a client is served under the default grant, which allows no
    application, no live input and no values: installing no grant installs that one, never the
-   operator's policy unchanged. The term is evaluated once, at the entry of each call, with that
-   call's instant, and it has ended when the instant reaches the admission plus the term: an action
-   that passed the check completes, both phases of a `type` included, even if the term ends while
-   it runs, and the next call is judged at its own entry. A client whose term has ended may still
-   dry-run, have its own requests replayed, read the metrics, and ask for, hold or leave the lease;
-   its new live actions are refused. A client whose budget is spent keeps everything its grant
-   gives except live input, values included.
+   operator's policy unchanged. The broker uses the instant sampled at the entry of each tool call.
+   The term ends when that instant reaches or passes admission plus the term. An unrepresentable sum
+   is treated as an ended term. The broker does not recheck the term during an admitted action,
+   including between the two phases of `type`. Crossing the end does not interrupt the action. After
+   expiry a client observes without values, can still dry-run, replay a known request, read metrics,
+   and ask for, hold or leave the lease. The broker refuses new live actions. A spent budget removes
+   live input and leaves the other permissions subject to the grant and the operator's policy.
 8. **What is observed is not filtered by application.** A grant filters the values (both the policy
    and the grant must allow them) and, when it has a region, leaves out of the client's page every
    element that is not inside the region. It does not filter elements by application: an element
@@ -130,38 +129,28 @@ model cannot read it.
    act on. Nothing is lost against the present state, whose policy does not scope observation by
    application either; adding window evidence to elements would be a change of the dossier and
    needs its own decision. The page and its cursor are built per client.
-9. **A refusal names the limit, not the screen.** A grant limit refuses with `POLICY_DENIED`, as the
-   policy's own refusals do today (`act.rs`, lines 118–134), and the message names which limit
-   applied without quoting the screen or the agent. As built, the broker's refusals for the term
-   and the budget each name their limit in a static English sentence. A refusal by a grant's
-   applications, windows or actuation still carries the engine's policy-shaped text, which does
-   not say that a grant rather than the operator's policy refused, and so does a withdrawn grant
-   whose term has not ended.
-10. **What spends a budget.** A grant's delivery budget is spent by every action whose result the
-    journal keeps for the session as possible input: a result that reports delivered input
-    (`input_delivered`, `effect_observed`) or an `indeterminate` one, with or without delivered
-    input (`ActionResult::reported_input`, `src/application/src/contract.rs`, the one predicate
-    the journal and the broker both call). An attempt whose effect is unknown may have reached the
-    desktop, so it counts: that fails closed. A two-phase `type`
-    ([ADR-0018](0018-two-phase-type-with-element-level-focus-confirmation.md)) is one action and
-    counts once, whether its keys were sent or only its click. A dry run, a replay of a request the
-    client's journal holds, a `REQUEST_CONFLICT` and a refusal (the engine's or the broker's) spend
-    nothing. Putting the count on the research record, with the lease number of ADR-0039, is not
-    built: the broker keeps it per client and shows it only to tests. This is the counting
-    [ADR-0034](0034-propose-fail-closed-retained-state-budgets.md) asks any budget to define.
-11. **What restores a budget: only a new ticket.** A grant's spent budget lasts as long as the
-    engine process (decision 4) and belongs to the grant, identified by its ticket's hash. An
-    operator's purge ([ADR-0028](0028-operator-purge-file.md)) deletes perception state and the
-    journal and does not restore a budget; reading the grants file again, changed or not, does not
-    restore it either. A grant issued again under a new ticket starts a new budget. A count of
-    deliveries is not screen data, so a purge has no reason to delete it, and restoring authority
-    as a side effect of deleting data would fail open; issuing a new ticket is the operator's
-    explicit act. The same holds for the term. While a client is connected, its budget and its
-    term are ceilings: each is the meet of every value read for its ticket so far, so an edit of
-    the grants file lowers them at the client's next call and never raises them, and a withdrawal
-    followed by a new listing leaves both the count and the ceilings as they were. The broker keeps
-    them per client; a ticket admits one client in a broker's life, so per client and per ticket
-    are the same.
+9. **The broker's refusal names the limit.** The messages for an ended term and a spent budget are
+   static English text with `POLICY_DENIED` and quote neither the screen nor the agent. If a new
+   live request reaches the engine's gate and the effective policy refuses it, the reply uses the
+   engine's existing policy text. This also applies when the grant was withdrawn and the request
+   reaches the gate. A withdrawn grant can still receive the broker's term, budget or lease refusal
+   first.
+10. **What spends a budget.** One unit is charged for a new live action sent to the engine after the
+    broker's term, budget and lease checks if its result reports delivered input or is
+    `indeterminate`, even with `delivered = false`. The journal and ledger use the same predicate,
+    `ActionResult::reported_input`. A two-phase `type`
+    ([ADR-0018](0018-two-phase-type-with-element-level-focus-confirmation.md)) counts once, whether
+    it sends its keys or only its click. Dry runs, replays, `REQUEST_CONFLICT` and broker or engine
+    refusals spend nothing. The count is available per client through `BrokerState::spent` for
+    tests. It stays off the wire and out of the research record.
+11. **What restores a budget within one broker process.** A new ticket gives the client a new
+    ledger. A spent ticket cannot admit another client in the same broker. A purge, reload or
+    withdrawal preserves a connected client's accumulated count and ceilings. Both ceilings are the
+    meet of every grant read for that client. The first tool call that reads a lower value can lower
+    a ceiling even below an existing count, which then prevents further live deliveries. Reading a
+    higher value or no grant leaves the ceilings in place. A new listing also cannot raise either
+    ceiling or restore the count, and a lower listing can narrow a ceiling when read. A process
+    restart follows decision 4.
 12. **A grant's remaining limits come later, in units of their own.** The kinds of action and the
     region are added on their own, because the broker and the engine must each check one of them
     and they are better reviewed alone. Until then a grant cannot express them, and the grants
@@ -265,9 +254,9 @@ move):
   grant under its one lock for the length of each tool call; a client admitted without a grant is
   served under the default grant (decision 7).
 - **Tickets and the grants file** (`feat/transport-core` and `feat/broker-attach`): the ticket
-  handshake, the spent set and `Broker::admit` in `broker.rs`; `GrantsFile`, the reader of
-  `[safety] grants_file` read at every call and invalid as a whole on any problem
-  (`src/app/src/grants.rs`); the executable serves them over the pipe of ADR-0043.
+  handshake, spent set and `Broker::admit` in `broker.rs`. For each tool call by a ticket client the
+  broker asks `GrantsFile` for the grant under the ticket hash. The entire file is refused if it is
+  invalid. The executable serves this path over the optional pipe of ADR-0043.
 - **The delivery budget and the term** (`feat/grant-limits`): `Grant::delivery_budget` and
   `Grant::term` with their meet, `GrantLedger` (`grant.rs`), the grants file's optional keys
   `delivery_budget` and `term_ms`, and the broker's checks and refusals of decisions 6, 7, 9, 10
@@ -312,18 +301,20 @@ Cada agente recibe una concesión ligada a su conexión que sólo puede estrecha
 aplicaciones, ventana, tipos de acción, lectura de valores, un presupuesto de entregas, un plazo y,
 si se quiere, una región. Con el intermediario encendido rige para todo cliente, también uno solo:
 sin concesión válida se observa sin valores y no se entrega nada. Tiques, presupuestos y plazos
-valen por proceso del motor. Lo observado no se filtra por aplicación, porque los elementos no la
-llevan; se filtran los valores y la región. Las concesiones necesitan una sección y una lectura
-nueva del almacén de política; la parte con forma de política se aplica decorando ese almacén, el
-presupuesto y el plazo los comprueba el intermediario bajo su cerrojo a la entrada de cada llamada,
-y la región se comprobará en el motor. El presupuesto lo gasta toda acción entregada o
-indeterminada (un `type` en dos fases cuenta una vez); un ensayo, una repetición y un rechazo no
-gastan nada; ni una purga ni una recarga lo restauran, sólo un tique nuevo. Mientras el cliente está
-conectado, su presupuesto y su plazo son techos que un cambio del archivo puede bajar y nunca subir.
-El tique llega a `attach` como ruta de un archivo, viaja en una primera línea del tubo y el
-intermediario de `adapter-mcp` calcula su SHA-256 (ADR-0043). Existen en ramas sin fusionar `Grant`
-con su estrechamiento y su encuentro, el almacén que aplica la concesión bajo el cerrojo del motor,
-el intermediario, que sirve sin concesión válida bajo la concesión por defecto, los tiques, el
-archivo de concesiones y el presupuesto y el plazo; los tipos de acción y la región no existen y
-llegarán en unidades propias. No queda ningún punto abierto en esta ADR.
+valen por proceso del motor.
+La observación filtra los valores según la concesión y la política. El filtro por región sigue
+pendiente y los elementos no se filtran por aplicación. La parte con forma de política se aplica
+decorando el almacén del operador. El intermediario comprueba el presupuesto y el plazo bajo su
+cerrojo con el instante de entrada de la llamada. El plazo empieza en la admisión, termina al llegar
+a su fin y se trata como terminado si la suma no cabe. Alcanzar el fin no interrumpe ni vuelve a
+comprobar una acción ya admitida. Una acción en vivo nueva que llega al motor por esa vía gasta una
+unidad si el resultado informa de entrada entregada o es `indeterminate`. Un `type` en dos fases
+cuenta una vez. Un ensayo, una repetición, un conflicto de petición y un rechazo no gastan. Una
+purga, una recarga y una retirada conservan lo gastado. En el mismo proceso un tique nuevo inicia un
+libro nuevo. Tras reiniciar el intermediario, otra admisión con un tique que siga listado también
+inicia un libro nuevo. Mientras el cliente está conectado, una lectura puede bajar el presupuesto o
+el plazo y nunca subirlos. El intermediario calcula el SHA-256 del tique presentado por `attach`
+(ADR-0043). En las ramas sin fusionar existen `Grant`, su estrechamiento y encuentro, el
+intermediario, los tiques, el archivo de concesiones, el presupuesto y el plazo. Los tipos de acción
+y la región siguen pendientes.
 Revisada el 2026-11-24 contra el código; la aceptación es del responsable.

@@ -13,23 +13,24 @@
 //! # optional:
 //! window_pin = 1234567
 //! delivery_budget = 20      # results that report input, from admission; 0 = observe only
-//! term_ms = 600000          # how long after admission the client may deliver
+//! term_ms = 600000          # the broker checks this term at the entry of the tool call
 //! [grant.window_classes]
 //! "notepad.exe" = ["Notepad"]
 //! ```
 //!
-//! `delivery_budget` is an integer from 0 to 4294967295 and `term_ms` one from 0 to
-//! 9223372036854775807 (TOML's largest integer). A negative value, a float, a string or a value
-//! above the bound makes the whole file invalid. Absent means no limit. `delivery_budget = 0`
-//! lets the client observe and deliver nothing; `term_ms = 0` ends the term at admission, and the
-//! client is then served as one without a grant. The broker enforces both (ADR-0040, proposed):
-//! each is a ceiling that an edit of the file can lower for a connected client and never raise.
+//! The integer ranges are 0 through 4294967295 for `delivery_budget` and 0 through
+//! 9223372036854775807 for `term_ms`. A negative value, a float, a string or a value above the
+//! range makes the whole file invalid. An absent key sets no limit in the file. A zero budget
+//! bars live input. A zero term ends at admission and leaves the client with the default grant.
+//! The broker samples the term for a new live call at entry, measured from admission. The term
+//! does not interrupt a call that has passed that check. A connected client's ceilings take the
+//! meet of each grant read at a tool call and can only go down.
 //!
-//! [`GrantsFile`] reads it on **every** question (ADR-0040, decision 5), the way the stop, pin
-//! and purge files of [`crate::policy`] are read on every action: it opens the file once, reads
-//! at most [`MAX_GRANTS_FILE_BYTES`] plus one byte, parses it and answers the grant whose hash
-//! matches, or none. So a grant the operator removes or changes takes effect at the client's next
-//! call. It fails closed: the **whole** file is invalid, and answers none for every ticket, when it
+//! For each grant lookup from the broker, [`GrantsFile`] opens the file once, reads at most
+//! [`MAX_GRANTS_FILE_BYTES`] plus one byte, parses it and returns the grant whose hash matches,
+//! or none. The broker performs this lookup for the ticket at each tool call. A withdrawal
+//! supplies no grant and leaves the ledger ceilings in place. It fails closed: the **whole**
+//! file is invalid, and answers none for every ticket, when it
 //! is missing, unreadable, over the bound, not valid TOML of this form (an unknown, missing or
 //! mistyped key included), has a malformed hash, two grants with the same hash, more than
 //! [`MAX_GRANTS`] grants, or an entry whose names or pin could not be what the operator meant.
@@ -390,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn ut_76_every_way_a_file_can_be_invalid_answers_none_for_every_ticket() {
+    fn ut_76_the_listed_invalid_file_cases_answer_no_grant_for_the_test_tickets() {
         let valid = entry(&hash(1), "");
         let cases: Vec<(String, GrantsProblem)> = vec![
             ("[[grant]\n".to_owned(), GrantsProblem::NotTheForm),
@@ -477,7 +478,7 @@ mod tests {
             assert_eq!(store.count(), Err(*expected));
         }
 
-        // Not UTF-8, missing, a directory, over the bound.
+        // Non-UTF-8 data, a missing path and a directory.
         let store = GrantsFile::new(dir.write(b"\xff\xfe[[grant]]\n"));
         assert_eq!(store.count(), Err(GrantsProblem::Unreadable));
         assert_eq!(store.grant(&hash(1)), None);
@@ -497,11 +498,10 @@ mod tests {
         assert_eq!(store.grant(&hash(1)), None);
     }
 
-    /// A device that opens is not a grants file: refused before any read (without the check it
-    /// would read as empty, a valid file without grants).
+    /// The Windows NUL case reports NotARegularFile and returns no grant.
     #[cfg(windows)]
     #[test]
-    fn ut_76_a_device_that_opens_is_refused_before_any_read() {
+    fn ut_76_a_nul_grants_source_reports_not_a_regular_file_and_no_grant() {
         let store = GrantsFile::new("NUL");
         assert_eq!(store.count(), Err(GrantsProblem::NotARegularFile));
         assert_eq!(store.grant(&[1; 32]), None);
@@ -530,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn ut_76_the_file_is_read_again_on_every_question_and_never_written() {
+    fn ut_76_rereads_the_edits_and_leaves_the_observed_file_state_unchanged() {
         let dir = Dir::new("reread");
         let path = dir.write(entry(&hash(1), "").as_bytes());
         let store = GrantsFile::new(&path);
@@ -550,7 +550,7 @@ mod tests {
         std::fs::write(&path, entry(&hash(2), "")).unwrap();
         assert!(store.grant(&hash(2)).is_some());
 
-        // A read-only file is enough, and the questions leave it and its directory unchanged.
+        // Compare the bytes, modification time and directory-entry count around the read-only lookups.
         let mut permissions = std::fs::metadata(&path).unwrap().permissions();
         permissions.set_readonly(true);
         std::fs::set_permissions(&path, permissions.clone()).unwrap();
@@ -580,7 +580,7 @@ mod tests {
         let grant = parse(&text).unwrap().remove(&hash(1)).unwrap();
         assert_eq!(grant.delivery_budget, Some(3));
         assert_eq!(grant.term, Some(Duration::from_secs(60)));
-        // Zero is accepted for both: observe only, and a term that ended at admission.
+        // Both optional keys accept zero and return Some(0) and Some(Duration::ZERO).
         let zero = parse(&entry(&hash(1), "delivery_budget = 0\nterm_ms = 0\n")).unwrap();
         assert_eq!(zero[&hash(1)].delivery_budget, Some(0));
         assert_eq!(zero[&hash(1)].term, Some(Duration::ZERO));
@@ -684,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn ut_76_a_problem_names_its_cause_and_nothing_of_the_file() {
+    fn ut_76_invalid_form_is_reported_without_the_fixture_key_or_hash() {
         let secret = "Zephyrquartz";
         let text = entry(&hash(1), &format!("{secret} = 1\n"));
         let problem = parse(&text).unwrap_err();

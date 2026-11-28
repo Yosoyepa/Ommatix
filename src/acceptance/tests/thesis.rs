@@ -23,11 +23,10 @@
 //! argument of `observe_screen` and reported in `_meta`, each client under its own grant.
 //! BDD-68..71 (ADR-0040 and ADR-0043, proposed) admit those agents by the ticket handshake, on
 //! in-memory streams, with their grants read from the product's grants file
-//! ([`GrantsFile`]) in a temporary directory, at every call. BDD-72, BDD-74 and BDD-77 (ADR-0040,
-//! proposed) give that file's grant a delivery budget or a term, with the world's manual clock.
-//! The executable serves the broker
-//! only on a Windows build with `broker-pipe` and the switch on; the pipe itself is tested in
-//! the MCP adapter and the app, not here.
+//! ([`GrantsFile`]) in a temporary directory, at each tool call for the ticket. BDD-72, BDD-74
+//! and BDD-77 give that file's grant a budget or term. BDD-74 advances the world's manual clock.
+//! The executable serves the broker only on a Windows build with `broker-pipe` and the switch on.
+//! The pipe is tested in the MCP adapter and the app.
 
 // cucumber passes captured step parameters by value.
 #![allow(clippy::needless_pass_by_value)]
@@ -4150,8 +4149,7 @@ fn its_live_action_on_that_page_is_refused(e: &mut Engine) {
 
 // ---- BDD-72, BDD-74, BDD-77: a grant's delivery budget and term (ADR-0040, proposed) ----
 
-/// A refusal before the gate with `POLICY_DENIED`, nothing delivered, whose message names
-/// `limit` (the broker's texts are static English).
+/// Check the rejection code and status, the delivery flag, and the expected words in the message.
 fn assert_refused_naming(result: &Value, limit: &str) {
     assert_eq!(result["error"]["code"], "POLICY_DENIED", "{result}");
     assert_eq!(result["status"], "rejected", "{result}");
@@ -4198,15 +4196,20 @@ fn it_repeats_the_same_request(e: &mut Engine) {
     cohort.results[0] = Some(again);
 }
 
-#[then("recibe el mismo resultado sin ningún evento nuevo")]
-fn it_gets_the_same_result_and_no_new_event(e: &mut Engine) {
+#[then("recibe el mismo resultado estructurado sin ningún evento nuevo")]
+fn it_gets_the_same_structured_result_and_no_new_event(e: &mut Engine) {
     let cohort = e.cohort();
     let (_, first) = cohort.recorded.clone().expect("a recorded request");
     let again = cohort.results[0].clone().expect("a repeated result");
-    assert_eq!(again["status"], first["status"], "{again}");
-    assert_eq!(again["request_id"], first["request_id"]);
-    assert_eq!(again["input_delivered"], true);
-    assert_eq!(cohort.events(), 1, "a replay delivers nothing new");
+    assert_eq!(
+        again, first,
+        "the retry must return the same structured result"
+    );
+    assert_eq!(
+        cohort.events(),
+        1,
+        "the retry must hand no new action to the desktop"
+    );
 }
 
 #[then(
@@ -4231,8 +4234,8 @@ fn a_dry_run_is_still_simulated(e: &mut Engine) {
     assert_eq!(cohort.events(), 1);
 }
 
-#[when("el reloj pasa el plazo de la concesión")]
-fn the_clock_passes_the_term(e: &mut Engine) {
+#[when("el reloj llega al fin del plazo de la concesión")]
+fn the_clock_reaches_the_end_of_the_term(e: &mut Engine) {
     let cohort = e.cohort();
     cohort
         .clock
