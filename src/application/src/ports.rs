@@ -409,7 +409,10 @@ pub trait PolicyStore: Send + Sync {
 /// - never writes: that a ticket was spent is kept by the broker, in memory, for the life of
 ///   the engine process (ADR-0040, decision 4).
 ///
-/// It is given the ticket's hash, never the ticket itself.
+/// It is given the ticket's hash, never the ticket itself. A grant's delivery budget and term
+/// are read here like its other limits, but the broker keeps, per connected client, the meet of
+/// every value read so far ([`GrantLedger`](crate::GrantLedger)): the operator's lowering takes
+/// effect at the client's next call, and a raise does not reach a connected client.
 pub trait GrantStore: Send + Sync {
     /// The grant listed for the ticket whose SHA-256 is `ticket_sha256`, or `None` when none
     /// is, or when the grants cannot be read.

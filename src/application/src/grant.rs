@@ -1,5 +1,5 @@
-//! A grant: limits a client holds over the policy-shaped part of the local policy, and the
-//! meet that applies them (ADR-0040, decisions 1 and 2).
+//! A grant: limits a client holds over the policy-shaped part of the local policy, its delivery
+//! budget and its term, and the meet that applies them (ADR-0040, decisions 1 and 2).
 //!
 //! A grant never widens the operator's policy. The policy the engine acts under for a client
 //! is [`Grant::narrow`] of the local policy, and a meet is never above either operand: an
@@ -10,22 +10,30 @@
 //! store that wraps the operator's store, into which the caller serving one client installs
 //! that client's grant for the length of the call.
 //!
-//! No clock, no I/O, no serialisation. The broker of the MCP adapter (ADR-0040, proposed)
-//! installs each client's grant through [`GrantedPolicy`] for the length of its call; nothing in
-//! the executable constructs a broker yet.
+//! A grant's delivery budget and term are not part of the policy: [`Grant::narrow`] ignores them.
+//! [`GrantLedger`] keeps, for one connected client, the count of its results that reported input
+//! and the ceilings of its budget and term, and says what the client may still do at a call
+//! (ADR-0040, decisions 2, 6 and 11; proposed). The broker of the MCP adapter keeps one ledger per
+//! client and checks both limits under its one lock at each call's entry.
+//!
+//! No clock, no I/O, no serialisation: the caller passes the instant in. The broker of the MCP
+//! adapter (ADR-0040, proposed) installs each client's grant through [`GrantedPolicy`] for the
+//! length of its call.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
+use crate::contract::ActionResult;
 use crate::ports::{LocalPolicy, PolicyStore, WindowPin};
 
-/// What a client may do within the local policy (ADR-0040, decision 2), limited to the
-/// policy-shaped limits: applications, window classes, a window pin, live input and the
-/// reading of values.
+/// What a client may do within the local policy (ADR-0040, decision 2): the policy-shaped
+/// limits (applications, window classes, a window pin, live input and the reading of values),
+/// and two limits the broker keeps outside the policy, a delivery budget and a term.
 ///
-/// The default grant allows nothing: no application, no live input, no values. Collections
-/// are ordered, so two grants that allow the same things compare equal whatever the order
-/// they were built in.
+/// The default grant allows nothing: no application, no live input, no values; its budget and
+/// term are `None`, no limit, as an absent key of the grants file is. Collections are ordered, so
+/// two grants that allow the same things compare equal whatever the order they were built in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Grant {
     /// The applications the grant allows, compared as exact strings, as the action gate does.
@@ -40,6 +48,12 @@ pub struct Grant {
     pub deliver_input: bool,
     /// Whether the client may read field values.
     pub read_values: bool,
+    /// The ceiling for new live actions whose results report input, counted from admission.
+    /// None supplies no ceiling, and Some(0) bars live input. The broker enforces this limit.
+    pub delivery_budget: Option<u32>,
+    /// The duration from admission used at a tool call's entry. None supplies no term.
+    /// The broker enforces this limit without rechecking an action already admitted.
+    pub term: Option<Duration>,
 }
 
 impl Grant {
@@ -58,6 +72,9 @@ impl Grant {
     ///   live input.
     /// - `stopped` is copied from the policy: the operator's stop is not part of a grant, so
     ///   a grant can neither set nor clear it.
+    ///
+    /// The delivery budget and the term play no part here: two grants that differ only in them
+    /// narrow every policy to the same policy. The broker enforces them ([`GrantLedger`]).
     #[must_use]
     pub fn narrow(&self, policy: &LocalPolicy) -> LocalPolicy {
         let allowed_applications: BTreeSet<&String> = policy
@@ -89,7 +106,8 @@ impl Grant {
     /// The grant that allows exactly what this grant and `other` both allow (ADR-0040,
     /// decision 1), under the same rules as [`Grant::narrow`]. It is commutative,
     /// associative and idempotent, and narrowing a policy by one grant and then by the other
-    /// gives the same policy as narrowing it by their meet.
+    /// gives the same policy as narrowing it by their meet. The delivery budget and the term are
+    /// each the smaller of the two sides, `None` (no limit) being the identity.
     #[must_use]
     pub fn meet(&self, other: &Grant) -> Grant {
         let mut window_classes = BTreeMap::new();
@@ -116,7 +134,91 @@ impl Grant {
             window_pin: meet_pins(self.window_pin, other.window_pin),
             deliver_input: self.deliver_input && other.deliver_input,
             read_values: self.read_values && other.read_values,
+            delivery_budget: meet_limits(self.delivery_budget, other.delivery_budget),
+            term: meet_limits(self.term, other.term),
         }
+    }
+}
+
+/// One connected client's account of its grant's delivery budget and term (ADR-0040, decisions
+/// 2, 6 and 11; proposed): what it has spent, and the ceilings of both limits. Pure: the caller
+/// passes the instant in, as to [`LeaseTable`](crate::LeaseTable).
+///
+/// - The term runs from `admitted_at`, the client's admission, whether or not a grant was read
+///   then, and it has ended once the instant reaches `admitted_at + term`. A sum that cannot be
+///   represented is an ended term (fail closed).
+/// - Each ceiling is the meet of every value read for the client so far ([`GrantLedger::read`]),
+///   `None` (no limit) being the identity: a later read can lower it, never raise it. Before the
+///   first read there is no ceiling.
+/// - The count grows by one for every result passed to [`GrantLedger::record`] that reported
+///   input ([`ActionResult::reported_input`]), from admission and whether or not a ceiling exists
+///   yet, and it never decreases. It saturates, and a saturated count is at least every budget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantLedger {
+    admitted_at: Duration,
+    spent: u64,
+    budget: Option<u32>,
+    term: Option<Duration>,
+}
+
+impl GrantLedger {
+    /// The ledger of a client admitted at `admitted_at`: nothing spent, no ceiling.
+    pub fn new(admitted_at: Duration) -> Self {
+        Self {
+            admitted_at,
+            spent: 0,
+            budget: None,
+            term: None,
+        }
+    }
+
+    /// Reads the budget and term of the grant listed for the client now: each ceiling becomes
+    /// the meet of the stored ceiling and the value read.
+    pub fn read(&mut self, grant: &Grant) {
+        self.budget = meet_limits(self.budget, grant.delivery_budget);
+        self.term = meet_limits(self.term, grant.term);
+    }
+
+    /// Whether the term has ended at `now`: a term ceiling exists and `now` has reached the
+    /// admission plus the term, or that sum cannot be represented.
+    pub fn term_ended(&self, now: Duration) -> bool {
+        self.term.is_some_and(|term| {
+            self.admitted_at
+                .checked_add(term)
+                .is_none_or(|end| end <= now)
+        })
+    }
+
+    /// Whether the budget is spent: a budget ceiling exists and the count has reached it.
+    pub fn budget_spent(&self) -> bool {
+        self.budget
+            .is_some_and(|budget| self.spent >= u64::from(budget))
+    }
+
+    /// Counts `result` when it reported input, or may have.
+    pub fn record(&mut self, result: &ActionResult) {
+        if result.reported_input() {
+            self.spent = self.spent.saturating_add(1);
+        }
+    }
+
+    /// The grant the client is served under at `now`: `None`, which installs the default grant
+    /// (ADR-0040, decision 7), once its term has ended; `grant` without live input once its
+    /// budget is spent; `grant` unchanged otherwise.
+    pub fn effective(&self, grant: Option<Grant>, now: Duration) -> Option<Grant> {
+        if self.term_ended(now) {
+            return None;
+        }
+        let mut grant = grant?;
+        if self.budget_spent() {
+            grant.deliver_input = false;
+        }
+        Some(grant)
+    }
+
+    /// How many results that reported input the client has had since its admission.
+    pub fn spent(&self) -> u64 {
+        self.spent
     }
 }
 
@@ -225,6 +327,15 @@ fn meet_classes(
     }
 }
 
+/// The smaller of two limits, `None` (no limit) being the identity.
+fn meet_limits<T: Ord>(first: Option<T>, second: Option<T>) -> Option<T> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(first.min(second)),
+        (Some(only), None) | (None, Some(only)) => Some(only),
+        (None, None) => None,
+    }
+}
+
 /// The pin of two sides: one pin gives that pin, two equal pins give it, and two different
 /// pins give `Unset`, so that no live input goes anywhere (ADR-0020, ADR-0040).
 fn meet_pins(first: Option<WindowPin>, second: Option<WindowPin>) -> Option<WindowPin> {
@@ -240,6 +351,7 @@ mod tests {
     use super::*;
     use crate::ports::TopLevelWindow;
     use crate::window_scope::window_scope_problem;
+    use ommatix_domain::identity::ActionStatus;
 
     const APPLICATIONS: [&str; 4] = ["a.exe", "b.exe", "c.exe", "d.exe"];
     const CLASSES: [&str; 3] = ["K1", "K2", "K3"];
@@ -283,6 +395,20 @@ mod tests {
                 _ => Some(WindowPin::Window(HANDLES[self.below(HANDLES.len())])),
             }
         }
+
+        /// No limit, zero, or a small positive limit.
+        fn limit(&mut self) -> Option<u32> {
+            match self.below(5) {
+                0 | 1 => None,
+                2 => Some(0),
+                _ => Some(u32::try_from(1 + self.below(3)).unwrap()),
+            }
+        }
+
+        fn term(&mut self) -> Option<Duration> {
+            self.limit()
+                .map(|seconds| Duration::from_millis(u64::from(seconds) * 1_000))
+        }
     }
 
     fn policy(rng: &mut Rng) -> LocalPolicy {
@@ -318,6 +444,8 @@ mod tests {
             window_pin: rng.pin(),
             deliver_input: rng.chance(2, 3),
             read_values: rng.chance(2, 3),
+            delivery_budget: rng.limit(),
+            term: rng.term(),
         }
     }
 
@@ -700,6 +828,244 @@ mod tests {
                 "{grant:?}"
             );
         }
+    }
+
+    // ---- UT-81: the meet of a delivery budget and a term ----
+
+    /// A limit read as a number, `None` (no limit) above every bound.
+    fn at_most<T: Ord + Copy>(limit: Option<T>, other: Option<T>) -> bool {
+        match (limit, other) {
+            (_, None) => true,
+            (None, Some(_)) => false,
+            (Some(limit), Some(other)) => limit <= other,
+        }
+    }
+
+    #[test]
+    fn ut_81_the_meet_of_budgets_and_terms_is_the_smaller_side_with_no_limit_as_identity() {
+        let mut rng = Rng(0x0040_0081);
+        let (mut budgets, mut terms) = (Seen::default(), Seen::default());
+        for case in 0..CASES {
+            let (a, b) = (grant(&mut rng), grant(&mut rng));
+            let met = a.meet(&b);
+            for side in [&a, &b] {
+                assert!(
+                    at_most(met.delivery_budget, side.delivery_budget),
+                    "budget above a side, case {case}: {a:?} {b:?}"
+                );
+                assert!(
+                    at_most(met.term, side.term),
+                    "term above a side, case {case}"
+                );
+            }
+            let expected_budget = match (a.delivery_budget, b.delivery_budget) {
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, None) => x,
+                (None, y) => y,
+            };
+            assert_eq!(met.delivery_budget, expected_budget, "case {case}");
+            let expected_term = match (a.term, b.term) {
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, None) => x,
+                (None, y) => y,
+            };
+            assert_eq!(met.term, expected_term, "case {case}");
+            budgets.record(a.delivery_budget.is_some(), b.delivery_budget.is_some());
+            terms.record(a.term.is_some(), b.term.is_some());
+            // The default grant has no limit: its meet keeps the other side's budget and term.
+            let with_default = Grant::default().meet(&a);
+            assert_eq!(with_default.delivery_budget, a.delivery_budget);
+            assert_eq!(with_default.term, a.term);
+        }
+        budgets.assert_all_outcomes("budget limits");
+        terms.assert_all_outcomes("term limits");
+    }
+
+    #[test]
+    fn ut_81_the_generator_reaches_no_limit_zero_and_a_positive_limit_for_both_fields() {
+        let mut rng = Rng(0x0040_0082);
+        let mut budgets = BTreeSet::new();
+        let mut terms = BTreeSet::new();
+        for _ in 0..CASES {
+            let g = grant(&mut rng);
+            budgets.insert(g.delivery_budget.map(|b| b.min(1)));
+            terms.insert(g.term.map(|t| t.min(Duration::from_millis(1))));
+        }
+        assert_eq!(budgets, BTreeSet::from([None, Some(0), Some(1)]));
+        assert_eq!(
+            terms,
+            BTreeSet::from([None, Some(Duration::ZERO), Some(Duration::from_millis(1))])
+        );
+    }
+
+    #[test]
+    fn ut_81_different_budgets_and_terms_narrow_the_generated_policies_alike() {
+        let mut rng = Rng(0x0040_0083);
+        let mut differed = 0;
+        for case in 0..CASES {
+            let policy = policy(&mut rng);
+            let first = grant(&mut rng);
+            let second = Grant {
+                delivery_budget: rng.limit(),
+                term: rng.term(),
+                ..first.clone()
+            };
+            differed += usize::from(first != second);
+            assert_eq!(first.narrow(&policy), second.narrow(&policy), "case {case}");
+        }
+        assert!(differed > CASES / 2, "{differed} pairs differed");
+    }
+
+    // ---- UT-93: one client's ledger of its budget and term ----
+
+    fn result(status: ActionStatus, delivered: bool) -> ActionResult {
+        ActionResult {
+            request_id: "r".to_owned(),
+            status,
+            target_id: "t".to_owned(),
+            snapshot_id: "s".to_owned(),
+            error: None,
+            observed_effect: None,
+            delivered,
+        }
+    }
+
+    fn limits(budget: Option<u32>, term_ms: Option<u64>) -> Grant {
+        Grant {
+            delivery_budget: budget,
+            term: term_ms.map(Duration::from_millis),
+            deliver_input: true,
+            read_values: true,
+            ..Grant::default()
+        }
+    }
+
+    #[test]
+    fn ut_93_reported_input_is_delivered_or_indeterminate_and_nothing_else() {
+        use ActionStatus::{EffectObserved, Indeterminate, InputDelivered, Rejected, Simulated};
+        assert!(result(InputDelivered, true).reported_input());
+        assert!(result(EffectObserved, true).reported_input());
+        assert!(result(Indeterminate, true).reported_input());
+        assert!(result(Indeterminate, false).reported_input());
+        assert!(!result(Simulated, false).reported_input());
+        assert!(!result(Rejected, false).reported_input());
+        // The ledger counts by that predicate alone.
+        let mut ledger = GrantLedger::new(Duration::ZERO);
+        for (status, delivered) in [
+            (InputDelivered, true),
+            (EffectObserved, true),
+            (Indeterminate, true),
+            (Indeterminate, false),
+            (Simulated, false),
+            (Rejected, false),
+        ] {
+            ledger.record(&result(status, delivered));
+        }
+        assert_eq!(ledger.spent(), 4);
+    }
+
+    #[test]
+    fn ut_93_a_ceiling_is_the_meet_of_every_value_read_and_a_later_read_never_raises_it() {
+        let mut ledger = GrantLedger::new(Duration::ZERO);
+        // Before any read there is no ceiling, whatever was spent.
+        for _ in 0..3 {
+            ledger.record(&result(ActionStatus::InputDelivered, true));
+        }
+        assert!(!ledger.budget_spent());
+        assert!(!ledger.term_ended(Duration::MAX));
+        // No limit read: still no ceiling.
+        ledger.read(&limits(None, None));
+        assert!(!ledger.budget_spent());
+        // 10 → 5 → 8 keeps 5; the three already spent count.
+        ledger.read(&limits(Some(10), Some(10_000)));
+        ledger.read(&limits(Some(5), Some(5_000)));
+        ledger.read(&limits(Some(8), Some(8_000)));
+        ledger.read(&limits(None, None));
+        assert!(!ledger.budget_spent());
+        ledger.record(&result(ActionStatus::InputDelivered, true));
+        assert!(!ledger.budget_spent(), "4 of 5");
+        ledger.record(&result(ActionStatus::Indeterminate, false));
+        assert!(ledger.budget_spent(), "5 of 5");
+        assert!(!ledger.term_ended(Duration::from_millis(4_999)));
+        assert!(ledger.term_ended(Duration::from_millis(5_000)));
+        // A lowering takes effect at once, counting what was spent.
+        let mut lowered = GrantLedger::new(Duration::ZERO);
+        lowered.read(&limits(Some(4), None));
+        lowered.record(&result(ActionStatus::InputDelivered, true));
+        lowered.record(&result(ActionStatus::InputDelivered, true));
+        assert!(!lowered.budget_spent());
+        lowered.read(&limits(Some(2), None));
+        assert!(lowered.budget_spent());
+        lowered.read(&limits(Some(100), None));
+        assert!(lowered.budget_spent(), "a raise is ignored");
+    }
+
+    #[test]
+    fn ut_93_the_term_runs_from_admission_ends_inclusively_and_an_overflow_is_an_ended_term() {
+        let admitted = Duration::from_secs(7);
+        let mut ledger = GrantLedger::new(admitted);
+        ledger.read(&limits(None, Some(2_000)));
+        let end = admitted + Duration::from_secs(2);
+        assert!(!ledger.term_ended(end.checked_sub(Duration::from_millis(1)).unwrap()));
+        assert!(ledger.term_ended(end));
+        assert!(ledger.term_ended(end + Duration::from_secs(1)));
+        // A zero term ended at admission.
+        let mut zero = GrantLedger::new(admitted);
+        zero.read(&limits(None, Some(0)));
+        assert!(zero.term_ended(admitted));
+        // A term that cannot be added to the admission: ended, at every instant.
+        let mut overflow = GrantLedger::new(Duration::MAX);
+        overflow.read(&limits(None, Some(1)));
+        assert!(overflow.term_ended(Duration::ZERO));
+        assert!(overflow.term_ended(Duration::MAX));
+        // No term ceiling: never ended, even at the largest instant.
+        let mut open = GrantLedger::new(Duration::MAX);
+        open.read(&limits(Some(3), None));
+        assert!(!open.term_ended(Duration::MAX));
+    }
+
+    #[test]
+    fn ut_93_a_saturated_count_spends_even_the_largest_budget() {
+        let mut ledger = GrantLedger {
+            admitted_at: Duration::ZERO,
+            spent: u64::MAX - 1,
+            budget: None,
+            term: None,
+        };
+        ledger.record(&result(ActionStatus::InputDelivered, true));
+        ledger.record(&result(ActionStatus::InputDelivered, true));
+        assert_eq!(ledger.spent(), u64::MAX);
+        ledger.read(&limits(Some(u32::MAX), None));
+        assert!(ledger.budget_spent());
+    }
+
+    #[test]
+    fn ut_93_the_effective_grant_is_none_after_the_term_and_observe_only_after_the_budget() {
+        let grant = limits(Some(1), Some(1_000));
+        let mut ledger = GrantLedger::new(Duration::ZERO);
+        ledger.read(&grant);
+        let now = Duration::from_millis(500);
+        assert_eq!(
+            ledger.effective(Some(grant.clone()), now),
+            Some(grant.clone())
+        );
+        assert_eq!(ledger.effective(None, now), None, "no grant stays none");
+        ledger.record(&result(ActionStatus::EffectObserved, true));
+        let spent = ledger.effective(Some(grant.clone()), now).unwrap();
+        assert!(!spent.deliver_input, "a spent budget delivers nothing");
+        assert_eq!(
+            Grant {
+                deliver_input: true,
+                ..spent
+            },
+            grant,
+            "everything else is kept, values included"
+        );
+        assert_eq!(
+            ledger.effective(Some(grant.clone()), Duration::from_millis(1_000)),
+            None,
+            "an ended term is the default grant"
+        );
     }
 
     /// The operator's store as the wrapper sees it: a policy the operator may change between

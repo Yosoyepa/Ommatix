@@ -362,7 +362,9 @@ ran the client of decision 12 in the same crate. What this ADR takes from them:
    of that client, never once at connect. The grants file (`[safety] grants_file`) is TOML of at
    most 64 KiB: a list of at most 64 `[[grant]]` tables, each with exactly `ticket_sha256` (64
    hexadecimal characters), `applications`, `deliver_input` and `read_values`, and optionally
-   `window_classes` and `window_pin`; a file that is missing, unreadable, over the bound, not of
+   `window_classes`, `window_pin`, `delivery_budget` (an integer from 0 to 4294967295) and
+   `term_ms` (an integer from 0 to 9223372036854775807; ADR-0040, decisions 2 and 11, enforced by
+   the broker); a file that is missing, unreadable, over the bound, not of
    that form (an unknown key included), with a malformed or repeated hash, too many grants or an
    impossible name or pin grants nothing to anyone until it is fixed. A connection whose
    handshake is empty, or names a ticket the file does not list, has no grant and falls under

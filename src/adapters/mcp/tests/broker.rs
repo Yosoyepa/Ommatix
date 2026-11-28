@@ -28,9 +28,10 @@ use ommatix_application::lease::{
     Acquired, ClientId, LeaseChange, LeaseRefusal, Released, Standing,
 };
 use ommatix_application::{
-    CapturedFrame, Clock, DeliveryReceipt, Engine, EngineConfig, FrameCapturer, Grant, GrantStore,
-    LeaseTable, LocalPolicy, ManualClock, NoAccessibility, OsActuator, PolicyStore, PortError,
-    Ports, TopLevelWindow, WindowOpacity,
+    AccessibilityProvider, AccessibleElement, AccessiblePatterns, AccessibleRead, CapturedFrame,
+    Clock, DeliveryReceipt, Engine, EngineConfig, FrameCapturer, Grant, GrantStore, LeaseTable,
+    LocalPolicy, ManualClock, NoAccessibility, OsActuator, PolicyStore, PortError, Ports,
+    TopLevelWindow, WindowOpacity, WindowPin,
 };
 use ommatix_domain::bbox::BBox;
 use ommatix_domain::fusion::Role;
@@ -144,6 +145,70 @@ impl FrameCapturer for Counted {
 struct Live {
     inner: FixtureActuator,
     fail: Arc<AtomicBool>,
+    /// The OS inserts fewer events than were submitted: `indeterminate`, not delivered.
+    short: Arc<AtomicBool>,
+    /// `type` in two phases (ADR-0018), with the accessibility provider of [`Focus`].
+    phases: Option<Arc<Phases>>,
+}
+
+/// What a two-phase `type` did: its focusing clicks are handed to the simulated desktop as one
+/// action each, and its key phases are counted here.
+#[derive(Default)]
+struct Phases {
+    keys: AtomicUsize,
+    /// Keyboard-focus reads answered so far.
+    polls: AtomicUsize,
+    /// The read from which focus is reported on the input field; `usize::MAX` never.
+    focus_from: AtomicUsize,
+}
+
+impl Live {
+    fn receipt(&self) -> DeliveryReceipt {
+        let short = self.short.load(Ordering::SeqCst);
+        DeliveryReceipt {
+            submitted: 2,
+            inserted: if short { 1 } else { 2 },
+        }
+    }
+}
+
+/// The accessibility provider of a two-phase world: no elements, and keyboard focus on the
+/// scene's input field from the read [`Phases::focus_from`] on. Each read is one poll of the
+/// engine's focus wait, which sleeps on the manual clock between reads.
+struct Focus(Arc<Phases>);
+
+impl AccessibilityProvider for Focus {
+    fn name(&self) -> &'static str {
+        "broker-test-focus"
+    }
+
+    fn snapshot(&mut self, _: &[BBox]) -> Result<AccessibleRead, PortError> {
+        Ok(AccessibleRead::complete(Vec::new()))
+    }
+
+    fn reads_keyboard_focus(&self) -> bool {
+        true
+    }
+
+    fn keyboard_focus(&mut self) -> Result<Option<AccessibleElement>, PortError> {
+        let read = self.0.polls.fetch_add(1, Ordering::SeqCst);
+        if read < self.0.focus_from.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        Ok(Some(AccessibleElement {
+            bbox: bx(10.0, 70.0, 220.0, 100.0),
+            role: Role::Input,
+            name: String::new(),
+            enabled: true,
+            offscreen: false,
+            password: false,
+            patterns: AccessiblePatterns {
+                editable_value: true,
+                ..AccessiblePatterns::default()
+            },
+            native: None,
+        }))
+    }
 }
 
 impl OsActuator for Live {
@@ -181,10 +246,31 @@ impl OsActuator for Live {
             "the test actuator fails while the broker holds its lock"
         );
         self.inner.deliver(action)?;
+        if self.short.load(Ordering::SeqCst) {
+            return Ok(self.receipt());
+        }
         Ok(DeliveryReceipt {
             submitted: 1,
             inserted: 1,
         })
+    }
+
+    fn delivers_in_phases(&self) -> bool {
+        self.phases.is_some()
+    }
+
+    fn deliver_focus_click(
+        &mut self,
+        action: &ValidatedAction,
+    ) -> Result<DeliveryReceipt, PortError> {
+        self.inner.deliver(action)?;
+        Ok(self.receipt())
+    }
+
+    fn deliver_keys(&mut self, _action: &ValidatedAction) -> Result<DeliveryReceipt, PortError> {
+        let phases = self.phases.as_ref().expect("a two-phase world");
+        phases.keys.fetch_add(1, Ordering::SeqCst);
+        Ok(self.receipt())
     }
 }
 
@@ -195,6 +281,10 @@ struct World {
     operator: Arc<Operator>,
     captures: Arc<AtomicUsize>,
     fail: Arc<AtomicBool>,
+    /// The OS inserts fewer events than were submitted ([`Live::receipt`]).
+    short: Arc<AtomicBool>,
+    /// A two-phase `type` with keyboard focus reported by [`Focus`]; `None` for one phase.
+    phases: Option<Arc<Phases>>,
 }
 
 impl World {
@@ -210,7 +300,24 @@ impl World {
             operator: Operator::new(),
             captures: Arc::default(),
             fail: Arc::default(),
+            short: Arc::default(),
+            phases: None,
         }
+    }
+
+    /// A world whose `type` goes in two phases, with keyboard focus on the input field from the
+    /// focus read `focus_from` on (`usize::MAX`: never).
+    fn phased(focus_from: usize) -> Self {
+        let phases = Phases::default();
+        phases.focus_from.store(focus_from, Ordering::SeqCst);
+        Self {
+            phases: Some(Arc::new(phases)),
+            ..Self::new()
+        }
+    }
+
+    fn phases(&self) -> &Phases {
+        self.phases.as_deref().expect("a two-phase world")
     }
 
     fn ports(&self) -> Ports {
@@ -218,10 +325,15 @@ impl World {
             capturer: Box::new(Counted(self.desktop.capturer(), self.captures.clone())),
             detector: Box::new(self.desktop.detector()),
             recognizer: Box::new(self.desktop.recognizer()),
-            accessibility: Box::new(NoAccessibility),
+            accessibility: match &self.phases {
+                Some(phases) => Box::new(Focus(phases.clone())),
+                None => Box::new(NoAccessibility),
+            },
             actuator: Box::new(Live {
                 inner: self.desktop.actuator(),
                 fail: self.fail.clone(),
+                short: self.short.clone(),
+                phases: self.phases.clone(),
             }),
             policy: self.operator.clone(),
             clock: self.clock.clone(),
@@ -686,7 +798,7 @@ fn it_13_an_operator_purge_honoured_at_the_next_request_ends_the_lease() {
 // ---- 6. grants ----
 
 #[test]
-fn it_14_a_client_without_a_grant_observes_without_values_and_never_delivers() {
+fn it_14_a_client_without_a_grant_observes_without_values_and_its_live_attempt_is_refused() {
     // Alone: it holds the lease implicitly, and still delivers nothing.
     let rig = rig();
     let mut alone = rig.connect(None);
@@ -1061,9 +1173,6 @@ struct Twin {
 
 impl Twin {
     fn new(config: McpConfig, modern: bool) -> Self {
-        let stdio_world = World::new();
-        let broker_world = World::new();
-        let stdio = stdio_world.server(config).connect();
         let policy = live_policy();
         let equal_to_policy = Grant {
             applications: policy.allowed_applications.iter().cloned().collect(),
@@ -1071,10 +1180,15 @@ impl Twin {
             read_values: policy.include_values,
             ..Grant::default()
         };
-        let broker = broker_world
-            .broker(config, 8)
-            .connect(Some(equal_to_policy))
-            .unwrap();
+        Self::with_grant(config, modern, equal_to_policy)
+    }
+
+    /// The stdio server and a broker whose sole client holds `grant`.
+    fn with_grant(config: McpConfig, modern: bool, grant: Grant) -> Self {
+        let stdio_world = World::new();
+        let broker_world = World::new();
+        let stdio = stdio_world.server(config).connect();
+        let broker = broker_world.broker(config, 8).connect(Some(grant)).unwrap();
         Self {
             _stdio_world: stdio_world,
             _broker_world: broker_world,
@@ -3953,5 +4067,1067 @@ fn it_23_a_grant_wider_than_the_operators_policy_is_still_bounded_by_the_policy(
             assert_eq!(code(&live), Some("POLICY_DENIED"), "{what}: {live}");
             assert_eq!(world.events(), 0, "{what}");
         }
+    }
+}
+
+// ---- IT-37 and IT-38: a grant's delivery budget and term (ADR-0040, proposed) ----
+
+/// The broker's refusal once a grant's term has ended (copied from the broker, so that a change
+/// of the text fails here).
+const TERM_ENDED: &str = "live input is refused: this client's grant has reached the end of its \
+                          term; nothing was delivered";
+/// The broker's refusal once a grant's delivery budget is spent.
+const BUDGET_SPENT: &str = "live input is refused: this client's grant has no delivery left in \
+                            its budget; nothing was delivered";
+
+/// A refusal before the gate with `POLICY_DENIED`, nothing delivered, and exactly `message`.
+fn refused_for(structured: &Value, message: &str) -> bool {
+    code(structured) == Some("POLICY_DENIED")
+        && structured["status"] == "rejected"
+        && !delivered(structured)
+        && structured["error"]["message"] == message
+}
+
+/// A refusal by any of the broker's three limits before the gate.
+fn refused_by_the_broker(structured: &Value) -> bool {
+    refused_without_lease(structured)
+        || refused_for(structured, TERM_ENDED)
+        || refused_for(structured, BUDGET_SPENT)
+}
+
+/// Everything the operator's policy allows, with a budget and a term in milliseconds.
+fn limited(budget: Option<u32>, term_ms: Option<u64>) -> Grant {
+    Grant {
+        delivery_budget: budget,
+        term: term_ms.map(Duration::from_millis),
+        ..full()
+    }
+}
+
+/// What the broker counts for the client: its results that reported input since admission.
+fn spent_by(broker: &Broker, conn: &BrokerConnection) -> Option<u64> {
+    broker
+        .retained()
+        .expect("the broker is available")
+        .spent
+        .get(&conn.client())
+        .copied()
+}
+
+/// A `type` into the input field of `page`.
+fn type_into(page: &Value, request_id: &str, live: bool) -> Value {
+    let mut arguments = target(page, "input", request_id, live);
+    arguments["action"] = json!("type");
+    arguments["text"] = json!("hello");
+    arguments
+}
+
+/// Observes, then clicks the button live under a new request identifier.
+fn observe_and_click(conn: &mut BrokerConnection, request_id: &str) -> Value {
+    let page = observe(conn);
+    act(conn, click(&page, request_id, true))
+}
+
+fn ms(n: u64) -> Duration {
+    Duration::from_millis(n)
+}
+
+#[test]
+fn it_37_a_budget_of_two_is_spent_by_two_deliveries_and_a_third_live_action_is_refused_naming_it() {
+    let rig = rig();
+    // A grant handed in by the caller is limited as one read from the store is.
+    let mut conn = rig.connect(Some(limited(Some(2), None)));
+    let page = observe(&mut conn);
+    let first = click(&page, "b1", true);
+    let first_result = act(&mut conn, first.clone());
+    assert!(delivered(&first_result), "{first_result}");
+    assert!(delivered(&observe_and_click(&mut conn, "b2")));
+    assert_eq!(rig.world.events(), 2);
+    assert_eq!(spent_by(&rig.broker, &conn), Some(2));
+
+    let page = observe(&mut conn);
+    let journaled = rig.engine_sizes()["journal_entries"];
+    let third = act(&mut conn, click(&page, "b3", true));
+    assert!(refused_for(&third, BUDGET_SPENT), "{third}");
+    assert_no_screen_text(&third);
+    assert_eq!(rig.world.events(), 2, "nothing reached the desktop");
+    assert_eq!(
+        rig.engine_sizes()["journal_entries"],
+        journaled,
+        "the refusal is not journaled"
+    );
+    // The same request again is new to the journal, so it is refused again.
+    assert!(refused_for(
+        &act(&mut conn, click(&page, "b3", true)),
+        BUDGET_SPENT
+    ));
+
+    // A replay of a delivered request is answered after the spend, and spends nothing.
+    assert_eq!(act(&mut conn, first.clone()), first_result);
+    // Other arguments under a known identifier: REQUEST_CONFLICT, nothing spent.
+    let conflict = act(&mut conn, target(&page, "input", "b1", true));
+    assert_eq!(code(&conflict), Some("REQUEST_CONFLICT"), "{conflict}");
+    // A dry run is still judged by the gate.
+    assert_eq!(
+        act(&mut conn, click(&page, "b4", false))["status"],
+        "simulated"
+    );
+    assert_eq!(rig.world.events(), 2);
+    assert_eq!(spent_by(&rig.broker, &conn), Some(2));
+}
+
+#[test]
+fn it_37_an_engine_refusal_spends_nothing_and_an_indeterminate_result_spends_one() {
+    let rig = rig();
+    let mut conn = rig.connect(Some(limited(Some(1), None)));
+    let old = observe(&mut conn);
+    let _new = observe(&mut conn);
+    let stale = act(&mut conn, click(&old, "s1", true));
+    assert_eq!(code(&stale), Some("STALE_SNAPSHOT"), "{stale}");
+    assert_eq!(spent_by(&rig.broker, &conn), Some(0));
+
+    // The fixture reports fewer inserted events than were submitted: indeterminate, delivered=false.
+    rig.world.short.store(true, Ordering::SeqCst);
+    let uncertain = observe_and_click(&mut conn, "s2");
+    assert_eq!(uncertain["status"], "indeterminate", "{uncertain}");
+    assert_eq!(uncertain["input_delivered"], false);
+    assert_eq!(spent_by(&rig.broker, &conn), Some(1));
+    assert_eq!(rig.world.events(), 1, "handed to the desktop once");
+    assert!(refused_for(
+        &observe_and_click(&mut conn, "s3"),
+        BUDGET_SPENT
+    ));
+    assert_eq!(rig.world.events(), 1);
+}
+
+#[test]
+fn it_37_a_two_phase_type_spends_one_whether_its_keys_were_sent_or_only_its_click() {
+    // Focus confirmed at the first read: click and keys. Never confirmed: the click alone.
+    for (focus_from, keys) in [(0, 1), (usize::MAX, 0)] {
+        let world = World::phased(focus_from);
+        let broker = world.broker(McpConfig::default(), 8);
+        let mut conn = broker.connect(Some(limited(Some(1), None))).unwrap();
+        let page = observe(&mut conn);
+        let typed = act(&mut conn, type_into(&page, "t1", true));
+        assert_eq!(typed["input_delivered"], true, "{typed}");
+        if keys == 0 {
+            assert_eq!(typed["status"], "indeterminate", "{typed}");
+        }
+        assert_eq!(world.phases().keys.load(Ordering::SeqCst), keys, "{typed}");
+        assert_eq!(world.events(), 1, "one focusing click");
+        assert_eq!(spent_by(&broker, &conn), Some(1), "one action, one spend");
+        let next = observe(&mut conn);
+        assert!(refused_for(
+            &act(&mut conn, type_into(&next, "t2", true)),
+            BUDGET_SPENT
+        ));
+        assert_eq!(world.events(), 1);
+        assert_eq!(world.phases().keys.load(Ordering::SeqCst), keys);
+    }
+}
+
+#[test]
+fn it_37_a_budget_of_zero_refuses_the_first_live_action_and_a_spent_budget_keeps_the_values() {
+    let rig = rig();
+    let mut zero = rig.connect(Some(limited(Some(0), None)));
+    let page = see(&mut zero);
+    assert_eq!(
+        value_of(&page),
+        Some(FIELD_VALUE),
+        "observe only, with values"
+    );
+    assert!(refused_for(
+        &act(&mut zero, click(&page, "z1", true)),
+        BUDGET_SPENT
+    ));
+    assert_eq!(rig.world.events(), 0);
+    drop(zero);
+
+    let mut one = rig.connect(Some(limited(Some(1), None)));
+    assert!(delivered(&observe_and_click(&mut one, "o1")));
+    let page = see(&mut one);
+    assert_eq!(
+        value_of(&page),
+        Some(FIELD_VALUE),
+        "a spent budget keeps the values"
+    );
+    // Without values in the grant, a spent budget shows none either.
+    drop(one);
+    let mut blind_one = rig.connect(Some(Grant {
+        delivery_budget: Some(1),
+        ..blind()
+    }));
+    assert!(delivered(&observe_and_click(&mut blind_one, "o2")));
+    assert_eq!(value_of(&see(&mut blind_one)), None);
+}
+
+/// A broker with an in-memory grant store and one client admitted with ticket 1 under grant.
+fn ticketed(grant: Grant) -> (World, Arc<Grants>, Broker, BrokerConnection) {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    let broker = world.ticket_broker(grants.clone(), 8);
+    grants.set(&ticket(1), Some(grant));
+    let conn = broker.admit(ticket(1).into_bytes()).unwrap();
+    (world, grants, broker, conn)
+}
+
+#[test]
+fn it_37_a_lowered_budget_counts_what_was_spent_and_a_raise_is_ignored() {
+    let (world, grants, broker, mut conn) = ticketed(limited(Some(4), None));
+    assert!(delivered(&observe_and_click(&mut conn, "l1")));
+    assert!(delivered(&observe_and_click(&mut conn, "l2")));
+    // Lowered to what was already spent: the next live action is refused at once.
+    grants.set(&ticket(1), Some(limited(Some(2), None)));
+    assert!(refused_for(
+        &observe_and_click(&mut conn, "l3"),
+        BUDGET_SPENT
+    ));
+    // Raised again: ignored for this client.
+    grants.set(&ticket(1), Some(limited(Some(10), None)));
+    assert!(refused_for(
+        &observe_and_click(&mut conn, "l4"),
+        BUDGET_SPENT
+    ));
+    grants.set(&ticket(1), Some(limited(None, None)));
+    assert!(refused_for(
+        &observe_and_click(&mut conn, "l5"),
+        BUDGET_SPENT
+    ));
+    assert_eq!(world.events(), 2);
+    assert_eq!(spent_by(&broker, &conn), Some(2));
+}
+
+#[test]
+fn it_37_ten_then_five_then_eight_keeps_five() {
+    let (world, grants, broker, mut conn) = ticketed(limited(Some(10), None));
+    metrics(&mut conn);
+    grants.set(&ticket(1), Some(limited(Some(5), None)));
+    metrics(&mut conn);
+    grants.set(&ticket(1), Some(limited(Some(8), None)));
+    for n in 0..8 {
+        let result = observe_and_click(&mut conn, &format!("k{n}"));
+        if n < 5 {
+            assert!(delivered(&result), "delivery {n}: {result}");
+        } else {
+            assert!(refused_for(&result, BUDGET_SPENT), "attempt {n}: {result}");
+        }
+    }
+    assert_eq!(world.events(), 5);
+    assert_eq!(spent_by(&broker, &conn), Some(5));
+}
+
+#[test]
+fn it_37_withdrawing_and_relisting_with_a_higher_budget_keeps_the_count_and_ceiling() {
+    let (world, grants, broker, mut conn) = ticketed(limited(Some(2), None));
+    assert!(delivered(&observe_and_click(&mut conn, "w1")));
+    // This client holds the lease and has deliveries left. With its grant withdrawn, the gate refuses it.
+    grants.set(&ticket(1), None);
+    let withdrawn = observe_and_click(&mut conn, "w2");
+    assert_eq!(code(&withdrawn), Some("POLICY_DENIED"), "{withdrawn}");
+    assert!(!refused_by_the_broker(&withdrawn), "{withdrawn}");
+    assert_eq!(spent_by(&broker, &conn), Some(1));
+    // Listed again with a larger budget: the ceiling of 2 stands, and the count of 1.
+    grants.set(&ticket(1), Some(limited(Some(5), None)));
+    assert!(delivered(&observe_and_click(&mut conn, "w3")));
+    assert!(refused_for(
+        &observe_and_click(&mut conn, "w4"),
+        BUDGET_SPENT
+    ));
+    assert_eq!(world.events(), 2);
+}
+
+#[test]
+fn it_37_a_purge_leaves_a_connected_clients_count_and_another_clients_leaving_too() {
+    let (world, grants, broker, mut conn) = ticketed(limited(Some(2), None));
+    assert!(delivered(&observe_and_click(&mut conn, "p1")));
+    // This request honors the operator's purge. The ledger count is still one.
+    world.operator.request_purge();
+    let page = observe(&mut conn);
+    assert!(!world.operator.purge_pending(), "the purge was honoured");
+    assert_eq!(spent_by(&broker, &conn), Some(1));
+    // A second client comes and goes. The first client's count remains one.
+    grants.set(&ticket(2), Some(full()));
+    let other = broker.admit(ticket(2).into_bytes()).unwrap();
+    other.close();
+    assert_eq!(spent_by(&broker, &conn), Some(1));
+    assert!(delivered(&act(&mut conn, click(&page, "p2", true))));
+    assert!(refused_for(
+        &observe_and_click(&mut conn, "p3"),
+        BUDGET_SPENT
+    ));
+    assert_eq!(world.events(), 2);
+}
+
+#[test]
+fn it_37_a_new_ticket_starts_at_zero_a_restart_admits_a_listed_ticket_with_a_full_budget_and_leaving_deletes_the_ledger()
+ {
+    let (world, grants, broker, mut conn) = ticketed(limited(Some(1), None));
+    assert!(delivered(&observe_and_click(&mut conn, "n1")));
+    assert!(refused_for(
+        &observe_and_click(&mut conn, "n2"),
+        BUDGET_SPENT
+    ));
+    let first = conn.client();
+    conn.close();
+    let retained = broker.retained().unwrap();
+    assert!(!retained.clients.contains(&first));
+    assert!(
+        !retained.spent.contains_key(&first),
+        "leaving deletes the ledger"
+    );
+
+    // A new ticket for the same grant is a new client with a new ledger.
+    grants.set(&ticket(2), Some(limited(Some(1), None)));
+    let mut second = broker.admit(ticket(2).into_bytes()).unwrap();
+    assert_eq!(spent_by(&broker, &second), Some(0));
+    assert!(delivered(&observe_and_click(&mut second, "n3")));
+    second.close();
+
+    // A fresh broker using the same in-memory store admits the first ticket with a fresh budget.
+    let restarted = world.ticket_broker(grants.clone(), 8);
+    let mut again = restarted.admit(ticket(1).into_bytes()).unwrap();
+    assert_eq!(spent_by(&restarted, &again), Some(0));
+    assert!(delivered(&observe_and_click(&mut again, "n4")));
+    assert!(refused_for(
+        &observe_and_click(&mut again, "n5"),
+        BUDGET_SPENT
+    ));
+    assert_eq!(world.events(), 3);
+}
+
+#[test]
+fn it_37_a_sole_client_with_the_same_policy_and_a_budget_matches_stdio_in_the_fixture_until_refusal()
+ {
+    let policy = live_policy();
+    let equal_with_budget = Grant {
+        applications: policy.allowed_applications.iter().cloned().collect(),
+        deliver_input: policy.actuation_enabled,
+        read_values: policy.include_values,
+        delivery_budget: Some(2),
+        ..Grant::default()
+    };
+    let mut twin = Twin::with_grant(McpConfig::default(), true, equal_with_budget);
+    twin.request("server/discover", json!({}));
+    twin.request("tools/list", json!({}));
+    let page = twin.structured("observe_screen", json!({ "include_values": true }));
+    assert_eq!(
+        twin.structured("execute_action", click(&page, "d0", false))["status"],
+        "simulated"
+    );
+    assert!(delivered(
+        &twin.structured("execute_action", click(&page, "d1", true))
+    ));
+    let page = twin.structured("observe_screen", json!({}));
+    assert!(delivered(
+        &twin.structured("execute_action", click(&page, "d2", true))
+    ));
+    twin.structured("execute_action", click(&page, "d1", true));
+    let page = twin.structured("observe_screen", json!({}));
+    assert!(twin.compared >= 8);
+    // On the next new live request, the stdio fixture delivers and the broker refuses for the budget.
+    let message = json!({ "jsonrpc": "2.0", "id": 99, "method": "tools/call",
+        "params": { "_meta": modern_meta(), "name": "execute_action",
+                    "arguments": click(&page, "d3", true) } })
+    .to_string();
+    let stdio: Value =
+        serde_json::from_str(&twin.stdio.handle_message(message.as_bytes()).unwrap()).unwrap();
+    let broker: Value = serde_json::from_str(
+        &twin
+            .broker
+            .connection()
+            .handle_message(message.as_bytes())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(delivered(&stdio["result"]["structuredContent"]));
+    assert!(refused_for(
+        &broker["result"]["structuredContent"],
+        BUDGET_SPENT
+    ));
+}
+
+#[test]
+fn it_38_an_action_one_millisecond_before_the_end_is_delivered_and_one_at_the_end_is_refused() {
+    let rig = rig();
+    let mut conn = rig.connect(Some(limited(None, Some(1_000))));
+    rig.world.advance(ms(999));
+    assert!(delivered(&observe_and_click(&mut conn, "e1")));
+    rig.world.advance(ms(1));
+    let page = see(&mut conn);
+    let refused = act(&mut conn, click(&page, "e2", true));
+    assert!(refused_for(&refused, TERM_ENDED), "{refused}");
+    assert_no_screen_text(&refused);
+    assert_eq!(rig.world.events(), 1);
+    assert_eq!(spent_by(&rig.broker, &conn), Some(1));
+}
+
+#[test]
+fn it_38_after_the_end_the_page_has_no_values_and_dry_runs_replays_and_metrics_are_answered() {
+    let rig = rig();
+    let mut conn = rig.connect(Some(limited(None, Some(1_000))));
+    let page = see(&mut conn);
+    assert_eq!(value_of(&page), Some(FIELD_VALUE));
+    let first = click(&page, "a1", true);
+    let first_result = act(&mut conn, first.clone());
+    assert!(delivered(&first_result));
+    rig.world.advance(ms(1_000));
+    let page = see(&mut conn);
+    assert_eq!(
+        value_of(&page),
+        None,
+        "served under the default grant although read_values is true"
+    );
+    assert_eq!(
+        act(&mut conn, click(&page, "a2", false))["status"],
+        "simulated"
+    );
+    assert_eq!(act(&mut conn, first), first_result, "a replay");
+    assert_eq!(metrics(&mut conn)["delivered_actions"], 1);
+    assert!(refused_for(
+        &act(&mut conn, click(&page, "a3", true)),
+        TERM_ENDED
+    ));
+    assert_eq!(rig.world.events(), 1);
+}
+
+#[test]
+fn it_38_the_term_runs_while_the_client_waits_for_the_lease() {
+    let rig = rig();
+    let mut holder = rig.connect(Some(full()));
+    let mut waiter = rig.connect(Some(limited(None, Some(1_000))));
+    holder.acquire().expect("the first client holds the lease");
+    assert_eq!(waiter.acquire(), Ok(Acquired::Queued { position: 1 }));
+    rig.world.advance(ms(1_500));
+    observe(&mut holder);
+    holder.release().expect("the holder releases");
+    // The lease passed to the waiter after its term ended: its live action is refused for the
+    // term, while `_meta` says it holds the lease.
+    let page = observe(&mut waiter);
+    let whole = act_result(&mut waiter, click(&page, "q1", true));
+    assert!(
+        refused_for(&whole["structuredContent"], TERM_ENDED),
+        "{whole}"
+    );
+    assert_eq!(
+        lease_of(&whole).map(|lease| lease["state"].clone()),
+        Some(json!("holder")),
+        "{whole}"
+    );
+    assert_eq!(rig.world.events(), 0);
+}
+
+#[test]
+fn it_38_the_term_starts_at_admission_not_at_the_first_grant_read() {
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    let broker = world.ticket_broker(grants.clone(), 8);
+    // Admitted while the store lists nothing for its ticket (an invalid file reads the same).
+    let mut conn = broker.admit(ticket(1).into_bytes()).unwrap();
+    let page = observe(&mut conn);
+    assert_eq!(
+        code(&act(&mut conn, click(&page, "f1", true))),
+        Some("POLICY_DENIED")
+    );
+    world.advance(ms(1_500));
+    // Listed only after its term would have ended, counted from admission.
+    grants.set(&ticket(1), Some(limited(None, Some(1_000))));
+    let refused = observe_and_click(&mut conn, "f2");
+    assert!(refused_for(&refused, TERM_ENDED), "{refused}");
+    assert_eq!(world.events(), 0);
+}
+
+#[test]
+fn it_38_a_two_phase_type_admitted_before_the_end_sends_keys_and_later_live_input_is_refused() {
+    // The fixture reports focus on the fourth read. The clock is past the term after the action.
+    let world = World::phased(3);
+    let broker = world.broker(McpConfig::default(), 8);
+    let mut conn = broker.connect(Some(limited(None, Some(1_000)))).unwrap();
+    world.advance(ms(990));
+    let page = observe(&mut conn);
+    assert!(
+        world.clock.now() < ms(1_000),
+        "the manual clock must be before the term at the action call"
+    );
+    let typed = act(&mut conn, type_into(&page, "p1", true));
+    assert_eq!(typed["input_delivered"], true, "{typed}");
+    assert_eq!(world.phases().keys.load(Ordering::SeqCst), 1, "{typed}");
+    assert!(
+        world.clock.now() > ms(1_000),
+        "the manual clock was past the term after the action: {:?}",
+        world.clock.now()
+    );
+    let next = observe(&mut conn);
+    assert!(refused_for(
+        &act(&mut conn, type_into(&next, "p2", true)),
+        TERM_ENDED
+    ));
+    assert_eq!(world.phases().keys.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn it_38_a_term_of_zero_is_served_as_no_grant() {
+    let (world, _grants, _broker, mut conn) = ticketed(limited(None, Some(0)));
+    let page = see(&mut conn);
+    assert_eq!(value_of(&page), None);
+    assert_eq!(
+        act(&mut conn, click(&page, "z1", false))["status"],
+        "simulated"
+    );
+    assert!(refused_for(
+        &act(&mut conn, click(&page, "z2", true)),
+        TERM_ENDED
+    ));
+    assert_eq!(world.events(), 0);
+}
+
+#[test]
+fn it_38_a_lowered_term_refuses_the_next_live_action_and_a_raise_does_not_restore_it() {
+    let (world, grants, _broker, mut conn) = ticketed(limited(None, Some(5_000)));
+    world.advance(ms(1_000));
+    assert!(delivered(&observe_and_click(&mut conn, "t1")));
+    grants.set(&ticket(1), Some(limited(None, Some(1_000))));
+    assert!(refused_for(&observe_and_click(&mut conn, "t2"), TERM_ENDED));
+    grants.set(&ticket(1), Some(limited(None, Some(10_000))));
+    assert!(refused_for(&observe_and_click(&mut conn, "t3"), TERM_ENDED));
+    assert_eq!(world.events(), 1);
+}
+
+#[test]
+fn it_38_a_term_that_cannot_be_added_to_the_admission_is_an_ended_term() {
+    let rig = rig();
+    // A page from a client without limits, then the clock at its largest instant.
+    let mut first = rig.connect(Some(full()));
+    let page = observe(&mut first);
+    rig.world.advance(Duration::MAX);
+    let mut late = rig.connect(Some(limited(None, Some(1))));
+    let refused = act(&mut late, click(&page, "m1", true));
+    assert!(refused_for(&refused, TERM_ENDED), "{refused}");
+    assert_eq!(rig.world.events(), 0);
+}
+
+// ---- IT-14: a grant's window classes and pin, refused at the gate ----
+
+#[test]
+fn it_14_a_grant_whose_window_class_or_pin_the_window_does_not_match_is_refused_at_the_gate() {
+    let refusals = [
+        (
+            "class",
+            Grant {
+                window_classes: BTreeMap::from([(
+                    APP.to_owned(),
+                    BTreeSet::from(["Other".to_owned()]),
+                )]),
+                ..full()
+            },
+            "class",
+        ),
+        (
+            "pin",
+            Grant {
+                window_pin: Some(WindowPin::Window(2)),
+                ..full()
+            },
+            "pins",
+        ),
+    ];
+    for (what, grant, says) in refusals {
+        let rig = rig();
+        let mut conn = rig.connect(Some(grant));
+        let refused = observe_and_click(&mut conn, "w1");
+        assert_eq!(code(&refused), Some("POLICY_DENIED"), "{what}: {refused}");
+        assert!(
+            !refused_by_the_broker(&refused),
+            "{what}: the gate's refusal"
+        );
+        let message = refused["error"]["message"].as_str().unwrap();
+        assert!(message.contains(says), "{what}: {message}");
+        assert_no_screen_text(&refused);
+        assert_eq!(rig.world.events(), 0, "{what}");
+    }
+    // The fixture attests this class and handle. Each matching limit is a separate positive control.
+    let controls = [
+        Grant {
+            window_classes: BTreeMap::from([(
+                APP.to_owned(),
+                BTreeSet::from(["FixtureWindow".to_owned()]),
+            )]),
+            ..full()
+        },
+        Grant {
+            window_pin: Some(WindowPin::Window(1)),
+            ..full()
+        },
+    ];
+    for grant in controls {
+        let rig = rig();
+        let mut conn = rig.connect(Some(grant.clone()));
+        assert!(
+            delivered(&observe_and_click(&mut conn, "w2")),
+            "{grant:?} delivers"
+        );
+        assert_eq!(rig.world.events(), 1);
+    }
+}
+
+// ---- IT-39: generated interleavings with budgets and terms, and real threads ----
+
+/// One client's limits as the test predicts them, independently of the broker's ledger.
+struct Account {
+    admitted_at: Duration,
+    spent: u64,
+    budget: Option<u32>,
+    term: Option<Duration>,
+}
+
+impl Account {
+    fn new(admitted_at: Duration) -> Self {
+        Self {
+            admitted_at,
+            spent: 0,
+            budget: None,
+            term: None,
+        }
+    }
+
+    /// The grant read at a call: each ceiling the smaller of what it was and what is read.
+    /// Returns whether a ceiling went down.
+    fn read(&mut self, grant: &Grant) -> bool {
+        let budget = match (self.budget, grant.delivery_budget) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, None) => a,
+            (None, b) => b,
+        };
+        let term = match (self.term, grant.term) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, None) => a,
+            (None, b) => b,
+        };
+        let lowered = (self.budget.is_some() && budget != self.budget)
+            || (self.term.is_some() && term != self.term);
+        self.budget = budget;
+        self.term = term;
+        lowered
+    }
+
+    /// The instant the term ends, `None` without a term; an overflow ends it at admission.
+    fn end(&self) -> Option<Duration> {
+        self.term.map(|term| {
+            self.admitted_at
+                .checked_add(term)
+                .unwrap_or(self.admitted_at)
+        })
+    }
+
+    fn term_ended(&self, now: Duration) -> bool {
+        self.end().is_some_and(|end| end <= now)
+    }
+
+    fn budget_spent(&self) -> bool {
+        self.budget.is_some_and(|b| self.spent >= u64::from(b))
+    }
+}
+
+/// A limited client of the generated run.
+struct Limited {
+    conn: BrokerConnection,
+    account: Account,
+    /// The ticket it attached with, or the grant it was handed.
+    ticket: Option<String>,
+    handed: Option<Grant>,
+    page: Option<Value>,
+    /// The latest requests the engine answered for it (so its journal holds them): arguments
+    /// and the result. Kept short, far below the journal's share, so none is forgotten.
+    recent: Vec<(Value, Value)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum LimitSeen {
+    Delivered,
+    BudgetSpent,
+    TermEnded,
+    ReplayAfterSpend,
+    LoweredByEdit,
+    Conflict,
+    DryRun,
+    Other,
+}
+
+fn random_limits(rng: &mut Rng) -> (Option<u32>, Option<u64>) {
+    let budget = match rng.below(6) {
+        0 | 1 => None,
+        2 => Some(0),
+        n => Some(u32::try_from(n - 2).unwrap()),
+    };
+    let term = match rng.below(6) {
+        0 | 1 => None,
+        2 => Some(0),
+        _ => Some(u64::try_from(2_000 + rng.below(20_000)).unwrap()),
+    };
+    (budget, term)
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // one generated run: each kind of step beside its prediction
+fn it_39_generated_steps_match_the_ledger_and_new_input_respects_entry_limits() {
+    const STEPS: usize = 4_000;
+    const SLOTS: usize = 4;
+    let world = World::new();
+    let grants = Arc::new(Grants::default());
+    let broker = world.ticket_broker(grants.clone(), SLOTS);
+    let mut rng = Rng(0x0040_D139);
+    let mut slots: Vec<Option<Limited>> = (0..SLOTS).map(|_| None).collect();
+    let (mut issued, mut next_request) = (0_u64, 0_u64);
+    let mut seen: BTreeMap<LimitSeen, usize> = BTreeMap::new();
+    let mut reported = 0_usize;
+    let mut checked = 0_usize;
+
+    for step in 0..STEPS {
+        let now = world.clock.now();
+        let index = rng.below(SLOTS);
+        let dice = rng.below(100);
+        'step: {
+            let Some(slot) = slots[index].as_mut() else {
+                // Admit a client, by ticket or by hand, with random limits.
+                let (budget, term_ms) = random_limits(&mut rng);
+                let grant = limited(budget, term_ms);
+                let (conn, ticket, handed) = if rng.chance(50) {
+                    issued += 1;
+                    let presented = ticket(issued);
+                    grants.set(&presented, Some(grant));
+                    let conn = broker.admit(presented.clone().into_bytes()).unwrap();
+                    (conn, Some(presented), None)
+                } else {
+                    (
+                        broker.connect(Some(grant.clone())).unwrap(),
+                        None,
+                        Some(grant),
+                    )
+                };
+                slots[index] = Some(Limited {
+                    conn,
+                    account: Account::new(now),
+                    ticket,
+                    handed,
+                    page: None,
+                    recent: Vec::new(),
+                });
+                break 'step;
+            };
+            // The grant this call will read: the store's, or the one handed in.
+            let reads = |slot: &Limited| match &slot.ticket {
+                Some(presented) => grants.listed().get(&sha256(presented)).cloned(),
+                None => slot.handed.clone(),
+            };
+            match dice {
+                // Leave.
+                0..=3 => {
+                    let slot = slots[index].take().unwrap();
+                    let client = slot.conn.client();
+                    slot.conn.close();
+                    let retained = broker.retained().unwrap();
+                    assert!(!retained.spent.contains_key(&client), "step {step}");
+                }
+                // Edit the in-memory grant store: lower, raise, withdraw or list the grant again.
+                4..=13 => {
+                    if let Some(presented) = &slot.ticket {
+                        let edit = if rng.chance(15) {
+                            None
+                        } else {
+                            let (budget, term_ms) = random_limits(&mut rng);
+                            Some(limited(budget, term_ms))
+                        };
+                        grants.set(presented, edit);
+                    }
+                }
+                // Time passes.
+                14..=23 => world.advance(ms(u64::try_from(100 + rng.below(1_400)).unwrap())),
+                // The lease, through the methods (no tool call: the store is not asked).
+                24..=33 => {
+                    if rng.chance(60) {
+                        let _ = slot.conn.acquire();
+                    } else {
+                        let _ = slot.conn.release();
+                    }
+                }
+                // The operator's purge: perception state goes, every count stays. It is honoured at
+                // the next request and forgets every journal, so nothing before it is retried.
+                34..=35 => {
+                    world.operator.request_purge();
+                    for slot in slots.iter_mut().flatten() {
+                        slot.recent.clear();
+                    }
+                }
+                // Observe.
+                36..=55 => {
+                    if let Some(grant) = reads(slot)
+                        && slot.account.read(&grant)
+                    {
+                        *seen.entry(LimitSeen::LoweredByEdit).or_default() += 1;
+                    }
+                    let page = observe(&mut slot.conn);
+                    assert!(!world.operator.purge_pending(), "step {step}: honoured");
+                    if page["elements"].is_array() {
+                        slot.page = Some(page);
+                    }
+                }
+                // Act: a new request (live or dry), a retry or a conflict.
+                _ => {
+                    let retry = dice >= 90 && !slot.recent.is_empty();
+                    let conflict = !retry && dice >= 86 && !slot.recent.is_empty();
+                    let (arguments, known) = if retry || conflict {
+                        let (arguments, result) = slot.recent[rng.below(slot.recent.len())].clone();
+                        if conflict {
+                            let mut other = arguments.clone();
+                            other["dry_run"] = json!(arguments["dry_run"] != true);
+                            (other, Some((arguments, result)))
+                        } else {
+                            (arguments, Some((Value::Null, result)))
+                        }
+                    } else {
+                        let Some(page) = &slot.page else { break 'step };
+                        next_request += 1;
+                        let live = rng.chance(80);
+                        (click(page, &format!("g{next_request}"), live), None)
+                    };
+                    // The grant this call reads, as the broker reads it at the call's entry.
+                    if reads(slot).is_some_and(|grant| slot.account.read(&grant)) {
+                        *seen.entry(LimitSeen::LoweredByEdit).or_default() += 1;
+                    }
+                    let live = arguments["dry_run"] == false;
+                    let response = act(&mut slot.conn, arguments.clone());
+                    assert_no_screen_text(&response);
+                    let outcome = match &known {
+                        Some((_, stored)) if !conflict => {
+                            assert_eq!(&response, stored, "step {step}: a retry replays");
+                            if slot.account.budget_spent() {
+                                LimitSeen::ReplayAfterSpend
+                            } else {
+                                LimitSeen::Other
+                            }
+                        }
+                        Some(_) => {
+                            assert_eq!(code(&response), Some("REQUEST_CONFLICT"), "step {step}");
+                            LimitSeen::Conflict
+                        }
+                        None if !live => {
+                            assert!(!refused_by_the_broker(&response), "step {step}");
+                            LimitSeen::DryRun
+                        }
+                        None if slot.account.term_ended(now) => {
+                            assert!(
+                                refused_for(&response, TERM_ENDED),
+                                "step {step}: {response}"
+                            );
+                            LimitSeen::TermEnded
+                        }
+                        None if slot.account.budget_spent() => {
+                            assert!(
+                                refused_for(&response, BUDGET_SPENT),
+                                "step {step}: {response}"
+                            );
+                            LimitSeen::BudgetSpent
+                        }
+                        None => {
+                            assert!(
+                                !refused_for(&response, TERM_ENDED)
+                                    && !refused_for(&response, BUDGET_SPENT),
+                                "step {step}: {response}"
+                            );
+                            if delivered(&response) || response["status"] == "indeterminate" {
+                                // A new result that reports input must fit the budget in force at this call's entry.
+                                assert!(
+                                slot.account
+                                    .budget
+                                    .is_none_or(|budget| slot.account.spent < u64::from(budget)),
+                                "step {step}: new input exceeded the budget ceiling at entry"
+                            );
+                                assert!(
+                                    slot.account.end().is_none_or(|end| now < end),
+                                    "step {step}: new input was reported for a call at or after the term's end"
+                                );
+                                slot.account.spent += 1;
+                                reported += 1;
+                                LimitSeen::Delivered
+                            } else {
+                                LimitSeen::Other
+                            }
+                        }
+                    };
+                    // What the engine answered is in the client's journal; the broker's refusals
+                    // are not.
+                    if known.is_none() && !refused_by_the_broker(&response) {
+                        slot.recent.push((arguments, response));
+                        if slot.recent.len() > 8 {
+                            slot.recent.remove(0);
+                        }
+                    }
+                    *seen.entry(outcome).or_default() += 1;
+                }
+            }
+        }
+        // After every step, compare connected clients, ledger counts and desktop handoffs with the model.
+        checked += 1;
+        let retained = broker.retained().unwrap();
+        let mut connected = BTreeSet::new();
+        for slot in slots.iter().flatten() {
+            let client = slot.conn.client();
+            connected.insert(client);
+            assert_eq!(
+                retained.spent.get(&client),
+                Some(&slot.account.spent),
+                "step {step}: the count of {client:?}"
+            );
+        }
+        assert_eq!(retained.clients, connected, "step {step}");
+        assert_eq!(
+            retained.spent.keys().copied().collect::<BTreeSet<_>>(),
+            connected
+        );
+        assert!(
+            !retained.grant_installed,
+            "step {step}: the effective policy differs from the operator's between calls"
+        );
+        assert_eq!(
+            world.events(),
+            reported,
+            "step {step}: desktop handoffs differ from the modeled total"
+        );
+    }
+    assert_eq!(checked, STEPS, "the generated run did not check every step");
+    for outcome in [
+        LimitSeen::Delivered,
+        LimitSeen::BudgetSpent,
+        LimitSeen::TermEnded,
+        LimitSeen::ReplayAfterSpend,
+        LimitSeen::LoweredByEdit,
+        LimitSeen::Conflict,
+        LimitSeen::DryRun,
+    ] {
+        assert!(
+            seen.get(&outcome).copied().unwrap_or(0) > 0,
+            "{outcome:?} never occurred: {seen:?}"
+        );
+    }
+}
+
+/// Four real clients with a budget of one each race for the lease and the desktop.
+///
+/// Why two actions of **one** client cannot race here, and are not tested for it: a connection's
+/// calls are sequential (each message is answered before the next is read), and every call of
+/// every client holds the broker's one lock from the read of its grant through the check, the
+/// engine call and the count (ADR-0040, proposed; G1). What can race is several clients, which
+/// is what this test drives.
+#[test]
+fn it_39_four_threads_with_a_budget_of_one_each_deliver_exactly_four_times() {
+    /// Wall-clock allowance for the whole case, including its cleanup.
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+    // Use one wall-clock deadline for the whole case, including its worker joins and cleanup.
+    // The broker still uses the injected manual clock.
+    // Dropping the outer handle detaches the case, so a blocked worker cannot hold the harness.
+    let deadline = std::time::Instant::now() + DEADLINE;
+    let (done, outcome) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            four_threads_with_a_budget_of_one_each(deadline);
+        }));
+        let _ = done.send(result);
+    });
+    let received =
+        outcome.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()));
+    let in_time = std::time::Instant::now() < deadline;
+    drop(worker);
+    match received {
+        Ok(_) if !in_time => panic!("the threaded grant case did not complete by its deadline"),
+        Ok(Ok(())) => {}
+        Ok(Err(panic)) => std::panic::resume_unwind(panic),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("the threaded grant case did not complete by its deadline")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the threaded grant case ended without reporting its result")
+        }
+    }
+}
+
+/// The whole threaded case of IT-39: the world, the broker, the four connections, the scoped
+/// threads, the barrier, every broker call, the joins, the checks and the cleanup.
+fn four_threads_with_a_budget_of_one_each(deadline: std::time::Instant) {
+    /// The turns as the lease's holder each thread takes: one delivery, then refusals.
+    const ROUNDS: usize = 10;
+    const CLIENTS: usize = 4;
+    let world = World::new();
+    let broker = world.broker(McpConfig::default(), CLIENTS);
+    let connections: Vec<BrokerConnection> = (0..CLIENTS)
+        .map(|_| broker.connect(Some(limited(Some(1), None))).unwrap())
+        .collect();
+    let barrier = std::sync::Barrier::new(CLIENTS);
+
+    let results: Vec<(BrokerConnection, Vec<Value>)> = std::thread::scope(|scope| {
+        let handles: Vec<_> = connections
+            .into_iter()
+            .enumerate()
+            .map(|(thread, mut conn)| {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    let mut live = Vec::new();
+                    // A round is one turn as holder. A waiter asks again without losing its place.
+                    // The holder releases after each attempt. Check the recorded live outcomes after the joins.
+                    while live.len() < ROUNDS {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "thread {thread} ran out of time"
+                        );
+                        let _ = conn.acquire();
+                        let whole = observe_with(&mut conn, json!({}));
+                        let holds =
+                            lease_of(&whole).is_some_and(|lease| lease["state"] == "holder");
+                        if holds {
+                            let page = whole["structuredContent"].clone();
+                            let id = format!("h{thread}-{}", live.len());
+                            let response = act(&mut conn, click(&page, &id, true));
+                            assert_no_screen_text(&response);
+                            live.push(response);
+                            conn.release().expect("the holder releases");
+                        } else {
+                            std::thread::yield_now();
+                        }
+                    }
+                    (conn, live)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+
+    let retained = broker.retained().unwrap();
+    for (conn, live) in &results {
+        let reported: Vec<&Value> = live
+            .iter()
+            .filter(|r| delivered(r) || r["status"] == "indeterminate")
+            .collect();
+        assert_eq!(
+            reported.len(),
+            1,
+            "one result reporting input for {:?}: {live:?}",
+            conn.client()
+        );
+        assert_eq!(retained.spent.get(&conn.client()), Some(&1));
+        assert!(
+            delivered(&live[0]),
+            "the first live attempt must deliver: {live:?}"
+        );
+        assert!(
+            live[1..].iter().all(|r| refused_for(r, BUDGET_SPENT)),
+            "every live attempt after the first must be refused for the budget: {live:?}"
+        );
+    }
+    assert_eq!(
+        world.events(),
+        CLIENTS,
+        "exactly four actions reached the desktop"
+    );
+    for (conn, _) in results {
+        conn.close();
     }
 }

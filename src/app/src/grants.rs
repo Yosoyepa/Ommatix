@@ -12,15 +12,25 @@
 //! read_values = false
 //! # optional:
 //! window_pin = 1234567
+//! delivery_budget = 20      # results that report input, from admission; 0 = observe only
+//! term_ms = 600000          # the broker checks this term at the entry of the tool call
 //! [grant.window_classes]
 //! "notepad.exe" = ["Notepad"]
 //! ```
 //!
-//! [`GrantsFile`] reads it on **every** question (ADR-0040, decision 5), the way the stop, pin
-//! and purge files of [`crate::policy`] are read on every action: it opens the file once, reads
-//! at most [`MAX_GRANTS_FILE_BYTES`] plus one byte, parses it and answers the grant whose hash
-//! matches, or none. So a grant the operator removes or changes takes effect at the client's next
-//! call. It fails closed: the **whole** file is invalid, and answers none for every ticket, when it
+//! The integer ranges are 0 through 4294967295 for `delivery_budget` and 0 through
+//! 9223372036854775807 for `term_ms`. A negative value, a float, a string or a value above the
+//! range makes the whole file invalid. An absent key sets no limit in the file. A zero budget
+//! bars live input. A zero term ends at admission and leaves the client with the default grant.
+//! The broker samples the term for a new live call at entry, measured from admission. The term
+//! does not interrupt a call that has passed that check. A connected client's ceilings take the
+//! meet of each grant read at a tool call and can only go down.
+//!
+//! For each grant lookup from the broker, [`GrantsFile`] opens the file once, reads at most
+//! [`MAX_GRANTS_FILE_BYTES`] plus one byte, parses it and returns the grant whose hash matches,
+//! or none. The broker performs this lookup for the ticket at each tool call. A withdrawal
+//! supplies no grant and leaves the ledger ceilings in place. It fails closed: the **whole**
+//! file is invalid, and answers none for every ticket, when it
 //! is missing, unreadable, over the bound, not valid TOML of this form (an unknown, missing or
 //! mistyped key included), has a malformed hash, two grants with the same hash, more than
 //! [`MAX_GRANTS`] grants, or an entry whose names or pin could not be what the operator meant.
@@ -33,6 +43,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use ommatix_application::{Grant, GrantStore, WindowPin};
 use serde::Deserialize;
@@ -48,6 +59,10 @@ pub const MAX_GRANTS: usize = 64;
 
 /// The longest application or window-class name, in characters, as in `[safety]`.
 const MAX_NAME_CHARS: usize = 256;
+
+/// The largest `term_ms`: TOML's largest integer. The `toml` crate reads larger integers into a
+/// `u64` field, so the bound is checked here.
+const MAX_TERM_MS: u64 = 9_223_372_036_854_775_807;
 
 /// Why a grants file was found invalid: a closed list of causes, which carries nothing of the
 /// file's text (no key, value or hash), so that it can be reported on stderr.
@@ -89,8 +104,9 @@ impl fmt::Display for GrantsProblem {
             Self::TooLarge => "it is larger than 65536 bytes",
             Self::NotTheForm => {
                 "it is not a list of [[grant]] tables with exactly the keys ticket_sha256, \
-                 applications, deliver_input, read_values and, optionally, window_classes and \
-                 window_pin"
+                 applications, deliver_input, read_values and, optionally, window_classes, \
+                 window_pin, delivery_budget (an integer from 0 to 4294967295) and term_ms (an \
+                 integer from 0 to 9223372036854775807)"
             }
             Self::MalformedHash => "a ticket_sha256 is not 64 hexadecimal characters",
             Self::DuplicateHash => "two grants have the same ticket_sha256",
@@ -114,7 +130,7 @@ struct GrantsText {
     grant: Vec<Entry>,
 }
 
-/// One `[[grant]]`: the four keys every grant states, and the two optional limits.
+/// One `[[grant]]`: the four keys every grant states, and the four optional limits.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Entry {
@@ -126,6 +142,10 @@ struct Entry {
     window_classes: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     window_pin: Option<u64>,
+    #[serde(default)]
+    delivery_budget: Option<u32>,
+    #[serde(default)]
+    term_ms: Option<u64>,
 }
 
 /// A name the gate could match: non-empty, at most 256 characters, no control character.
@@ -152,6 +172,9 @@ fn parse_sha256(hex: &str) -> Option<[u8; 32]> {
 
 impl Entry {
     fn into_grant(self) -> Result<([u8; 32], Grant), GrantsProblem> {
+        if self.term_ms.is_some_and(|term| term > MAX_TERM_MS) {
+            return Err(GrantsProblem::NotTheForm);
+        }
         let hash = parse_sha256(&self.ticket_sha256).ok_or(GrantsProblem::MalformedHash)?;
         let applications: BTreeSet<String> = self.applications.into_iter().collect();
         let names_valid = applications.iter().all(|a| valid_name(a))
@@ -171,6 +194,8 @@ impl Entry {
             window_pin: self.window_pin.map(WindowPin::Window),
             deliver_input: self.deliver_input,
             read_values: self.read_values,
+            delivery_budget: self.delivery_budget,
+            term: self.term_ms.map(Duration::from_millis),
         };
         Ok((hash, grant))
     }
@@ -343,6 +368,8 @@ mod tests {
                 window_pin: Some(WindowPin::Window(42)),
                 deliver_input: false,
                 read_values: true,
+                delivery_budget: None,
+                term: None,
             }
         );
         // Upper-case hexadecimal names the same hash; an empty file lists nothing.
@@ -364,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn ut_76_every_way_a_file_can_be_invalid_answers_none_for_every_ticket() {
+    fn ut_76_the_listed_invalid_file_cases_answer_no_grant_for_the_test_tickets() {
         let valid = entry(&hash(1), "");
         let cases: Vec<(String, GrantsProblem)> = vec![
             ("[[grant]\n".to_owned(), GrantsProblem::NotTheForm),
@@ -451,7 +478,7 @@ mod tests {
             assert_eq!(store.count(), Err(*expected));
         }
 
-        // Not UTF-8, missing, a directory, over the bound.
+        // Non-UTF-8 data, a missing path and a directory.
         let store = GrantsFile::new(dir.write(b"\xff\xfe[[grant]]\n"));
         assert_eq!(store.count(), Err(GrantsProblem::Unreadable));
         assert_eq!(store.grant(&hash(1)), None);
@@ -471,11 +498,10 @@ mod tests {
         assert_eq!(store.grant(&hash(1)), None);
     }
 
-    /// A device that opens is not a grants file: refused before any read (without the check it
-    /// would read as empty, a valid file without grants).
+    /// The Windows NUL case reports NotARegularFile and returns no grant.
     #[cfg(windows)]
     #[test]
-    fn ut_76_a_device_that_opens_is_refused_before_any_read() {
+    fn ut_76_a_nul_grants_source_reports_not_a_regular_file_and_no_grant() {
         let store = GrantsFile::new("NUL");
         assert_eq!(store.count(), Err(GrantsProblem::NotARegularFile));
         assert_eq!(store.grant(&[1; 32]), None);
@@ -504,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn ut_76_the_file_is_read_again_on_every_question_and_never_written() {
+    fn ut_76_rereads_the_edits_and_leaves_the_observed_file_state_unchanged() {
         let dir = Dir::new("reread");
         let path = dir.write(entry(&hash(1), "").as_bytes());
         let store = GrantsFile::new(&path);
@@ -524,7 +550,7 @@ mod tests {
         std::fs::write(&path, entry(&hash(2), "")).unwrap();
         assert!(store.grant(&hash(2)).is_some());
 
-        // A read-only file is enough, and the questions leave it and its directory unchanged.
+        // Compare the bytes, modification time and directory-entry count around the read-only lookups.
         let mut permissions = std::fs::metadata(&path).unwrap().permissions();
         permissions.set_readonly(true);
         std::fs::set_permissions(&path, permissions.clone()).unwrap();
@@ -549,7 +575,116 @@ mod tests {
     }
 
     #[test]
-    fn ut_76_a_problem_names_its_cause_and_nothing_of_the_file() {
+    fn ut_76_a_valid_file_with_a_budget_and_a_term_answers_them_in_the_grant() {
+        let text = entry(&hash(1), "delivery_budget = 3\nterm_ms = 60000\n");
+        let grant = parse(&text).unwrap().remove(&hash(1)).unwrap();
+        assert_eq!(grant.delivery_budget, Some(3));
+        assert_eq!(grant.term, Some(Duration::from_secs(60)));
+        // Both optional keys accept zero and return Some(0) and Some(Duration::ZERO).
+        let zero = parse(&entry(&hash(1), "delivery_budget = 0\nterm_ms = 0\n")).unwrap();
+        assert_eq!(zero[&hash(1)].delivery_budget, Some(0));
+        assert_eq!(zero[&hash(1)].term, Some(Duration::ZERO));
+        // Absent is no limit.
+        let absent = parse(&entry(&hash(1), "")).unwrap();
+        assert_eq!(absent[&hash(1)].delivery_budget, None);
+        assert_eq!(absent[&hash(1)].term, None);
+        // Through the file, as the broker asks it.
+        let dir = Dir::new("limits");
+        let store = GrantsFile::new(dir.write(text.as_bytes()));
+        assert_eq!(store.grant(&hash(1)), Some(grant));
+    }
+
+    #[test]
+    fn ut_76_the_largest_budget_and_term_parse_and_the_next_values_do_not() {
+        let largest = entry(
+            &hash(1),
+            "delivery_budget = 4294967295\nterm_ms = 9223372036854775807\n",
+        );
+        let grant = parse(&largest).unwrap().remove(&hash(1)).unwrap();
+        assert_eq!(grant.delivery_budget, Some(u32::MAX));
+        assert_eq!(
+            grant.term,
+            Some(Duration::from_millis(9_223_372_036_854_775_807))
+        );
+        let refused = [
+            "delivery_budget = 4294967296\n",
+            "delivery_budget = -1\n",
+            "delivery_budget = 1.0\n",
+            "delivery_budget = \"1\"\n",
+            "delivery_budget = true\n",
+            "term_ms = 9223372036854775808\n",
+            "term_ms = 18446744073709551615\n",
+            "term_ms = 18446744073709551616\n",
+            "term_ms = -1\n",
+            "term_ms = 1.5\n",
+            "term_ms = \"60000\"\n",
+            "term_ms = 1e3\n",
+        ];
+        let dir = Dir::new("limit-bounds");
+        for extra in refused {
+            let text = entry(&hash(1), extra);
+            assert_eq!(
+                parse(&text).err(),
+                Some(GrantsProblem::NotTheForm),
+                "{extra}"
+            );
+            let store = GrantsFile::new(dir.write(text.as_bytes()));
+            assert_eq!(store.grant(&hash(1)), None, "{extra}");
+        }
+    }
+
+    /// A key accepted by mistake fails the named test of its family: each file is valid but for
+    /// one key, inside a `[[grant]]` or at the top level, and must void the whole file.
+    fn assert_every_key_voids_the_file(family: &str, keys: &[&str]) {
+        let dir = Dir::new(family);
+        for key in keys {
+            for value in ["1", "[\"click\"]", "\"x\""] {
+                let inside = entry(&hash(1), &format!("{key} = {value}\n"));
+                let top = format!("{key} = {value}\n{}", entry(&hash(1), ""));
+                for text in [inside, top] {
+                    assert_eq!(
+                        parse(&text).err(),
+                        Some(GrantsProblem::NotTheForm),
+                        "{text}"
+                    );
+                    let store = GrantsFile::new(dir.write(text.as_bytes()));
+                    for ticket in [hash(1), hash(2)] {
+                        assert_eq!(store.grant(&ticket), None, "{text}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ut_76_keys_for_action_kinds_are_refused_with_the_whole_file() {
+        assert_every_key_voids_the_file(
+            "kinds",
+            &[
+                "action_kinds",
+                "kinds",
+                "action_kind",
+                "actions",
+                "allowed_actions",
+            ],
+        );
+    }
+
+    #[test]
+    fn ut_76_keys_for_a_region_are_refused_with_the_whole_file() {
+        assert_every_key_voids_the_file("region", &["region", "regions", "frame_size", "bbox"]);
+    }
+
+    #[test]
+    fn ut_76_other_names_for_a_budget_or_a_term_are_refused_with_the_whole_file() {
+        assert_every_key_voids_the_file(
+            "aliases",
+            &["budget", "term", "term_s", "term_secs", "max_deliveries"],
+        );
+    }
+
+    #[test]
+    fn ut_76_invalid_form_is_reported_without_the_fixture_key_or_hash() {
         let secret = "Zephyrquartz";
         let text = entry(&hash(1), &format!("{secret} = 1\n"));
         let problem = parse(&text).unwrap_err();

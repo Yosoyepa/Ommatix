@@ -394,11 +394,9 @@ Of Required validation, on `feat/lease-on-the-wire` (the IT and CT tests in
 The same branch also has IT-14 (ADR-0040's grants per client) and IT-20 (a call that panics under
 the broker's lock leaves the broker closed to every request).
 
-What does not exist yet: a transport and the `attach` mode (ADR-0043); the switch in the
-executable, which still serves stdio to one client; a grant's other limits, grants read from a
-file, and tickets (ADR-0040); a research record of lease grants and refusals; and the text of the
-chapters that still describe one agent (02, 04, 05 and 08, among others), which the branch that
-puts the lease on the wire leaves to a later documentation commit of its own.
+On 2026-11-24 the executable in this branch served one client on stdio. There was no transport for the broker, no `attach` mode or transport switch, and no grants file or tickets. Grants had only their policy-shaped limits. The research record of lease grants and refusals and the dossier's multi-agent documentation were still pending.
+
+Later work added the optional pipe transport, `attach` and the switch in ADR-0043, and the grants file and tickets in ADR-0040. The `feat/grant-limits` branch adds the delivery budget and term. The action-kind and region limits and the research record remain pending.
 
 ## Reversibility
 
